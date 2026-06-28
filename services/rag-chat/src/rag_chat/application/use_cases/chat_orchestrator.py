@@ -269,6 +269,105 @@ def _is_named_tool_call_object(blob: str, tool_names: frozenset[str]) -> bool:
     return bool(m and m.group("key") in tool_names)
 
 
+# RC-3 follow-up (2026-06-28) — the RAW-ARGUMENTS leak shape. The fourth observed
+# stub form is the tool's bare ARGUMENT object with NO ``name``/``arguments``
+# wrapper and NO ``{"<tool_name>": …}`` wrapper — e.g. the live
+# ``iter3_tesla_revenue_since_2023`` leak shipped a fenced block of literally
+#   {"ticker": "TSLA", "periods": , "period_type": "quarterly"}
+# i.e. the planner's query_fundamentals arguments emitted verbatim as the answer.
+# The BP-675 (name+arguments) and chat-eval#3 (single-key) detectors both miss it
+# because its top-level keys are the PARAMETER names, not ``name``/a tool name.
+#
+# Detection is keyword-based (the object is frequently INVALID JSON — note the
+# empty ``"periods":`` value above — so we never ``json.loads``). We require the
+# object's top-level quoted keys to be DRAWN FROM a curated tool-argument
+# vocabulary AND to include >= 2 such keys with at least one STRONG identifier/
+# planning key. A real answer object (``{"revenue": 25000000000}``,
+# ``{"verdict": "..."}``) shares few/none of these keys, so this stays
+# conservative — and it only feeds the collapse-gated stub detector, never strips
+# blindly.
+_TOOL_ARG_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "ticker",
+        "tickers",
+        "symbol",
+        "symbols",
+        "periods",
+        "period_type",
+        "metrics",
+        "metric",
+        "entity_id",
+        "entity_name",
+        "entity",
+        "query",
+        "window",
+        "days",
+        "sector",
+        "limit",
+        "relation_type",
+        "max_hops",
+        "lookback_days",
+        "include_snapshot",
+    }
+)
+# A subset whose presence is a STRONG planning signal — an argument object almost
+# never appears in a genuine prose answer carrying one of these as a top-level key.
+_TOOL_ARG_STRONG_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "ticker",
+        "tickers",
+        "symbol",
+        "symbols",
+        "periods",
+        "period_type",
+        "entity_id",
+        "max_hops",
+        "lookback_days",
+        "include_snapshot",
+    }
+)
+# Top-level quoted keys of a (possibly malformed) flat JSON object: ``"key":`` not
+# nested inside another object. We approximate "top-level" by scanning keys that
+# are immediately preceded by ``{`` or ``,`` (with optional whitespace) — robust to
+# the missing-value malformations the planner emits.
+_FLAT_JSON_KEY_RE = re.compile(r'(?:[{,])\s*"([a-zA-Z_][a-zA-Z0-9_]*)"\s*:')
+
+
+def _is_raw_tool_args_object(blob: str) -> bool:
+    """True when *blob* is a bare tool-ARGUMENTS object (RC-3 follow-up leak shape).
+
+    Keyword-based (never ``json.loads`` — the live leak is invalid JSON). Returns
+    True only when EVERY top-level key is a known tool-argument name, there are at
+    least two such keys, and at least one is a STRONG planning/identifier key. This
+    keeps a genuine single-field data object (``{"revenue": …}``) or any answer JSON
+    with a non-argument key from ever matching.
+    """
+    keys = _FLAT_JSON_KEY_RE.findall(blob)
+    if len(keys) < 2:
+        return False
+    # Every top-level key must be a known argument name — a single non-arg key
+    # (e.g. ``"answer"``, ``"revenue"``) disqualifies the blob as an args stub.
+    if not all(k in _TOOL_ARG_KEYWORDS for k in keys):
+        return False
+    return any(k in _TOOL_ARG_STRONG_KEYWORDS for k in keys)
+
+
+def _strip_raw_tool_args_json(text: str) -> str:
+    """Strip fenced/bare bare-arguments objects (RC-3 follow-up leak shape).
+
+    Companion to :func:`_strip_tool_call_json` / :func:`_strip_named_tool_call_json`.
+    Only objects whose top-level keys are ALL tool-argument names (per
+    :func:`_is_raw_tool_args_object`) are removed; ordinary answer JSON is untouched.
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        return "" if _is_raw_tool_args_object(m.group(1)) else m.group(0)
+
+    text = _FENCED_JSON_BLOCK_RE.sub(_repl, text)
+    text = _BARE_JSON_OBJECT_RE.sub(_repl, text)
+    return text
+
+
 def _strip_named_tool_call_json(text: str, tool_names: frozenset[str]) -> str:
     """Strip fenced/bare ``{"<tool_name>": {…}}`` single-key tool-call objects.
 
@@ -342,6 +441,11 @@ def _strip_tool_narration(text: str, tool_names: frozenset[str] | None = None) -
     # 5. Strip {"<tool_name>": {…}} single-key tool-call objects (chat-eval #3).
     if tool_names:
         text = _strip_named_tool_call_json(text, tool_names)
+    # 6. RC-3 follow-up: strip bare tool-ARGUMENTS objects
+    #    (``{"ticker": …, "periods": …}``) — the planner's raw arguments leaked as
+    #    the answer. Registry-independent (keyword-gated), so no ``tool_names``
+    #    requirement.
+    text = _strip_raw_tool_args_json(text)
     return text.strip()
 
 
@@ -503,6 +607,9 @@ def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> b
     has_json_tool_call = any(_is_json_tool_call_object(b) for b in _json_blobs)
     _names = tool_names or frozenset()
     has_named_tool_call = bool(_names) and any(_is_named_tool_call_object(b, _names) for b in _json_blobs)
+    # RC-3 follow-up: a bare tool-ARGUMENTS object (``{"ticker": …, "periods": …}``)
+    # is a planning signal too — the planner emitted its raw arguments as the answer.
+    has_raw_args_call = any(_is_raw_tool_args_object(b) for b in _json_blobs)
     has_tool_signal = bool(
         _TOOL_XML_RE.search(text)
         or _TOOL_PLAN_BLOCK_RE.search(text)
@@ -512,6 +619,7 @@ def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> b
         or _TOOL_NARRATION_LEAD_RE.search(text)
         or has_json_tool_call
         or has_named_tool_call
+        or has_raw_args_call
     )
     if not has_tool_signal:
         return False
@@ -520,13 +628,23 @@ def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> b
     # plan prose under them survives). Flag it directly.
     if _is_plan_only_narration(text):
         return True
-    # Measure collapse against the content MINUS any trailing grounding banner —
-    # the banner is appended post-rewrite and is not "real answer" content.
-    base = _GROUNDING_BANNER_RE.sub("", text).strip()
+
+    # Measure collapse against the content MINUS any trailing grounding banner AND
+    # the canonical "Note: some figures … could not be matched" disclaimer — both
+    # are appended post-rewrite and are NOT "real answer" content. RC-3 follow-up:
+    # the live raw-args leak shipped the disclaimer appended to the stub, and
+    # counting it as real content kept the collapse ratio above the stub threshold
+    # (the stub was flagged as a signal but slipped the size gate). Discount it.
+    def _discount_artifacts(s: str) -> str:
+        s = _GROUNDING_BANNER_RE.sub("", s)
+        s = s.replace(_CANONICAL_UNVERIFIED_DISCLAIMER, "")
+        return s.strip()
+
+    base = _discount_artifacts(text)
     if not base:
-        # Nothing but a banner around the stub → pure stub.
+        # Nothing but a banner/disclaimer around the stub → pure stub.
         return True
-    scrubbed = _GROUNDING_BANNER_RE.sub("", _strip_tool_narration(text, tool_names)).strip()
+    scrubbed = _discount_artifacts(_strip_tool_narration(text, tool_names))
     # Empty after scrub → pure stub. Otherwise flag when the scrub removed the
     # large majority of the content (the remainder is leftover argument
     # fragments, not a real answer).

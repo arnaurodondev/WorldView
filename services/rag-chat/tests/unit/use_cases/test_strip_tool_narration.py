@@ -234,3 +234,68 @@ def test_plan_only_table_answer_not_stub() -> None:
     """A markdown table (pipe present) is substantive, never a plan-only stub."""
     text = "**Step 1: Compare**\n\n| Company | Revenue |\n|---|---|\n| AMD | $22.7B |"
     assert _is_tool_call_stub(text) is False
+
+
+# ── RC-3 follow-up (2026-06-28): the RAW-ARGUMENTS leak shape ─────────────────
+#
+# The live ``iter3_tesla_revenue_since_2023`` smoke shipped a fenced block of the
+# planner's query_fundamentals ARGUMENTS verbatim as the answer:
+#   ```json
+#   {"ticker": "TSLA", "periods": , "period_type": "quarterly"}
+#   ```
+# plus the canonical "Note: some figures …" disclaimer. The object is INVALID JSON
+# (empty ``"periods":``) and has neither a ``name``/``arguments`` wrapper nor a
+# ``{"<tool_name>": …}`` wrapper, so the prior detectors missed it.
+
+_RAW_ARGS_LEAK = (
+    "```json\n"
+    '{\n "ticker": "TSLA",\n "periods": ,\n "period_type": "quarterly"\n}\n'
+    "```\n\n"
+    "Note: some figures or names above could not be matched to a retrieved source."
+)
+
+
+def test_raw_tool_args_object_leak_is_stub() -> None:
+    """The verbatim raw-arguments leak (incl. trailing disclaimer) is a stub."""
+    assert _is_tool_call_stub(_RAW_ARGS_LEAK, _REGISTRY) is True
+
+
+def test_raw_tool_args_object_stripped() -> None:
+    """``_strip_tool_narration`` removes the bare-arguments object, leaving only
+    the (non-answer) disclaimer line."""
+    out = _strip_tool_narration(_RAW_ARGS_LEAK, _REGISTRY)
+    assert "ticker" not in out
+    assert "period_type" not in out
+    assert "could not be matched" in out  # disclaimer survives (it is not a stub)
+
+
+def test_raw_tool_args_object_detected_without_registry() -> None:
+    """The raw-args detector is registry-INDEPENDENT (keyword-gated) — it fires
+    even when no tool_names are supplied."""
+    assert _is_tool_call_stub(_RAW_ARGS_LEAK) is True
+
+
+def test_real_answer_with_disclaimer_not_stub() -> None:
+    """A genuine multi-quarter table answer that carries the SAME trailing
+    disclaimer must NOT be flagged (the disclaimer is discounted, not the answer)."""
+    text = (
+        "**Tesla (TSLA) Quarterly Revenue**\n\n"
+        "| Year | Q1 | Q2 |\n|---|---|---|\n"
+        "| 2023 | - | $24.93B |\n| 2024 | $21.30B | $25.50B |\n\n"
+        "Revenue trended upward [get_fundamentals_history row 0].\n\n"
+        "Note: some figures or names above could not be matched to a retrieved source."
+    )
+    assert _is_tool_call_stub(text, _REGISTRY) is False
+
+
+def test_single_field_data_object_not_stub() -> None:
+    """A one-field data object (``{"revenue": …}``) is not an arguments stub —
+    too few keys and ``revenue`` is not a tool-argument name."""
+    assert _is_tool_call_stub('{"revenue": 25000000000}', _REGISTRY) is False
+
+
+def test_args_object_with_answer_key_not_stub() -> None:
+    """An object mixing a tool-arg key with a NON-arg key (e.g. ``verdict``) is a
+    real answer object, not a pure arguments stub."""
+    text = '{"ticker": "TSLA", "verdict": "revenue grew steadily"}'
+    assert _is_tool_call_stub(text, _REGISTRY) is False
