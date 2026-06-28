@@ -90,6 +90,26 @@ get to second-guess. The opposite of fabrication is just as wrong:
 - Only state that something cannot be answered when NO tool result above
   contains the needed value or success — and then say exactly what is missing.
 
+## ANTI-FABRICATION POLICY — REPORT WHAT IS THERE, INVENT NOTHING
+These three rules forbid fabrication. They are NOT a licence to withhold: report
+every value the tools DID return, in full, with its citation — refuse ONLY the
+specific part that is genuinely unavailable, never the whole answer.
+
+1. NEVER invent periods, quarters, or rows the tools did not return. If a
+   fundamentals tool returns a SINGLE period, report THAT period's value(s) in
+   full (with its [tool_name row N] citation) and state plainly that the
+   historical series is not available — do NOT manufacture quarter labels and
+   figures to fill out a trajectory the payload does not contain.
+2. NEVER add entities, tickers, or companies that are absent from a tool result.
+   If a screener returns three names, your answer lists those three — do NOT pad
+   it with well-known names (large-caps, household tickers) the tool did not
+   return to make a list "look complete."
+3. NEVER claim returned data is missing without checking first. Before you write
+   "not available" / "not included" / "not in the data", READ the returned
+   scalar fields (high, low, revenue, eps, …) on the rows above. Decline ONLY
+   the specific field that is genuinely absent — never the whole row or answer
+   when other fields on it are present.
+
 ## FORBIDDEN — DO NOT EMIT
 The user MUST NOT see any of the following in your answer:
 
@@ -149,7 +169,18 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # not return, REMOVES the refusal escape-hatch, and ADDS a counter-instruction
     # to report every groundable value IN FULL WITH its inline citation tag.
     # The C1 #1 pin and #2 fabricated-series gate are unchanged (both exonerated).
-    version="1.4",
+    # 1.5 (RC-2 grounding-floor root-cause, 2026-06-28): the v1.4 finding-run
+    # still showed the model FABRICATING — inventing missing quarters from a
+    # single-period payload, padding screener output with off-payload mega-caps,
+    # and claiming returned high/low/revenue fields were "missing." Added the
+    # ANTI-FABRICATION POLICY block with three explicit rules (no invented
+    # periods/rows; no off-payload entities; read the scalar fields before
+    # declaring data missing), each carrying the v1.4 balance counter-instruction
+    # so it does NOT swing back into the over-refusal/withholding 1.4 fixed:
+    # report every returned value in full with its citation, refuse only the
+    # specific genuinely-absent part. KEEPS every 1.4 win (digit-for-digit copy,
+    # report-in-full, keep-the-tag, TRUST YOUR TOOL RESULTS).
+    version="1.5",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -159,7 +190,10 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "v1.2 adds the trust-your-tool-results constraint (FINAL-67 C3). "
         "v1.3 adds the transcribe-don't-compute constraint (FINAL-67 C1). "
         "v1.4 softens v1.3: keeps digit-for-digit copy, removes the withholding/"
-        "refusal language that regressed grounding, requires full cited reporting."
+        "refusal language that regressed grounding, requires full cited reporting. "
+        "v1.5 adds the ANTI-FABRICATION POLICY (no invented periods/rows, no "
+        "off-payload entities, read scalar fields before declaring data missing) "
+        "while preserving the v1.4 report-in-full balance (RC-2)."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

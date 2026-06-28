@@ -262,6 +262,29 @@ is unchanged.
 
 ## chat_synthesis_system
 
+### 1.5 — 2026-06-28 (RC-2 anti-fabrication policy)
+
+- The v1.4 finding-run grounding-floor root-cause
+  (`docs/audits/2026-06-28-grounding-floor-rootcause.md`, RC-2) found the answer
+  LLM still **fabricating** along three axes: (1) inventing missing
+  quarters/rows from a single-period fundamentals payload (8 questions, e.g.
+  `ru_nvda_amd_revenue_4q`, `da_tsla_revenue_2024_full_year`); (2) padding a
+  screener result with off-payload mega-cap tickers it never returned (MRVL,
+  UBER, SHOP, CRM — `ru_ai_semi_screener`, `iter3_top5_tech_marketcap`); and
+  (3) claiming returned scalar fields were "missing" (`high`/`low` present in
+  `tc_price_history_msft_ytd_range`; `status=ok` over-refusals).
+- v1.5 adds the **ANTI-FABRICATION POLICY** block with three explicit rules:
+  (1) never invent periods/quarters/rows — report the single returned period in
+  full + state the series is unavailable; (2) never add entities absent from a
+  tool result; (3) read the returned scalar fields before declaring data missing,
+  declining only the genuinely-absent field.
+- **Balance preserved (does NOT fight v1.4):** each rule carries the v1.4
+  counter-instruction — "report every value the tools DID return, in full, with
+  its citation; refuse ONLY the specific part that is genuinely unavailable,
+  never the whole answer." This is anti-fabrication, not anti-answering; all v1.4
+  wins (digit-for-digit copy, report-in-full, keep-the-tag, TRUST YOUR TOOL
+  RESULTS) are unchanged.
+
 ### 1.4 — 2026-06-28 (FINAL-67 grounding regression — soften C1)
 
 - v1.3's "TRANSCRIBE, DO NOT COMPUTE" block OVER-corrected. Two read-only audits

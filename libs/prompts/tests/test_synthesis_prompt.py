@@ -59,8 +59,8 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.4 (FINAL-67 grounding regression) softened the C1 block.
-    assert ident.startswith("chat_synthesis_system@1.4#")
+    # v1.5 (RC-2) added the ANTI-FABRICATION POLICY block.
+    assert ident.startswith("chat_synthesis_system@1.5#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -79,6 +79,28 @@ def test_synthesis_prompt_requires_exact_number_transcription() -> None:
     # The over-broad escape hatch that drove wrongful refusals must be GONE.
     assert "not in the retrieved data" not in rendered
     assert "TRANSCRIBE, DO NOT COMPUTE" not in rendered
+
+
+def test_synthesis_prompt_anti_fabrication_policy_with_balance() -> None:
+    """v1.5 (RC-2): the ANTI-FABRICATION POLICY must state all three rules AND
+    carry the v1.4 report-in-full balance so it does not regress into withholding.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    assert "ANTI-FABRICATION POLICY" in rendered
+    # Rule 1 — no invented periods/quarters/rows; report the single period in full.
+    assert "NEVER invent periods" in rendered
+    assert "SINGLE period" in rendered
+    assert "historical series is not available" in rendered
+    # Rule 2 — no off-payload entities.
+    assert "NEVER add entities" in rendered
+    assert "pad" in rendered  # forbid padding a list with well-known names
+    # Rule 3 — read scalar fields before declaring data missing.
+    assert "NEVER claim returned data is missing without checking" in rendered
+    assert "READ the returned" in rendered
+    # The BALANCE line — anti-fabrication, NOT anti-answering (the 1.4 trap).
+    assert "report" in rendered.lower()
+    assert "refuse ONLY the" in rendered
+    assert "never the whole answer" in rendered
 
 
 def test_synthesis_prompt_forbids_refusing_present_data() -> None:
