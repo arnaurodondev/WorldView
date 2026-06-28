@@ -1,0 +1,568 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_entity_health"
+    ]
+  },
+  "heuristics": {
+    "char_count": 602,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_health"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_health"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 21.331,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 151,
+    "phase_timings_ms": {
+      "check_cache": 11.161332979099825,
+      "entity_resolution": 775.7675419852603,
+      "grounding_validation": 6200.634793989593,
+      "llm_direct_text_generation": 6570.192502986174,
+      "llm_tool_planning": 11533.139712992124,
+      "load_history": 127.13412501034327,
+      "persist_and_cache": 76.73591599450447,
+      "tool_execution": 972.0439180091489,
+      "validate_input": 766.8185829825234
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_health"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_health"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      }
+    ],
+    "ttft_s": 0.993,
+    "word_count": 92
+  },
+  "id": "tc_entity_health_palantir",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Shallow question answered concisely with appropriate depth; no unnecessary elaboration.",
+        "reason": "Shallow question answered concisely with appropriate depth; no unnecessary elaboration.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims grounded in tool_results; health score 0.40 and source contributions match sampled values. Minor deduction for the unverifiable 'Note' banner.",
+        "reason": "Claims grounded in tool_results; health score 0.40 and source contributions match sampled values. Minor deduction for the unverifiable 'Note' banner.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present; answer provides substantive data.",
+        "reason": "No refusal phrase present; answer provides substantive data.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_health, which is in the expected_tools set.",
+        "reason": "Called get_entity_health, which is in the expected_tools set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_entity_health and produced a well-grounded, appropriately concise answer. The only minor issue is the 'Note' banner about unverifiable numbers, which adds noise without value. Next iteration should suppress that banner when all key claims are directly traceable to tool results.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_health, which is in the expected_tools set.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Claims grounded in tool_results; health score 0.40 and source contributions match sampled values. Minor deduction for the unverifiable 'Note' banner.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Shallow question answered concisely with appropriate depth; no unnecessary elaboration.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present; answer provides substantive data.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_entity_health and produced a well-grounded, appropriately concise answer. The only minor issue is the 'Note' banner about unverifiable numbers, which adds noise without value. Next iteration should suppress that banner when all key claims are directly traceable to tool results.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_entity_health and produced a well-grounded, appropriately concise answer. The only minor issue is the 'Note' banner about unverifiable numbers, which adds noise without value. Next iteration should suppress that banner when all key claims are directly traceable to tool results.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "How comprehensive is your data coverage for Palantir?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Palantir\u2019s coverage in our system is moderate. The entity health assessment shows a health score of **0.40** [1], indicating that the data set is reasonably complete but still has gaps. The source distribution is split between two primary data providers: **eodhd_ticker_news** contributes **0.4035** of the coverage, while **eodhd** contributes **0.2105** [1]. These figures reflect the proportion of available data that comes from each source, giving you a sense of where the information originates and how balanced it is.\n\nNote: some figures or names above could not be matched to a retrieved source.",
+    "citations": [
+      {
+        "confidence": 0.88,
+        "entity_name": "data",
+        "id": "tool:health:5d4df4c3-32b6-4e19-b668-2858820d9203",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "narrative",
+        "title": "Health: data",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        992741
+      ],
+      [
+        "status",
+        1106548
+      ],
+      [
+        "thinking",
+        1885101
+      ],
+      [
+        "agent_iteration",
+        1886193
+      ],
+      [
+        "status",
+        6905325
+      ],
+      [
+        "tool_call",
+        6905368
+      ],
+      [
+        "tool_result",
+        7837861
+      ],
+      [
+        "agent_iteration",
+        8205622
+      ],
+      [
+        "token",
+        14872893
+      ],
+      [
+        "token",
+        14873502
+      ],
+      [
+        "token",
+        14874467
+      ],
+      [
+        "token",
+        14874982
+      ],
+      [
+        "token",
+        14875708
+      ],
+      [
+        "token",
+        14876091
+      ],
+      [
+        "token",
+        14876647
+      ],
+      [
+        "token",
+        14876900
+      ],
+      [
+        "token",
+        14877151
+      ],
+      [
+        "token",
+        14877302
+      ],
+      [
+        "token",
+        14883526
+      ],
+      [
+        "status",
+        14885148
+      ],
+      [
+        "final_answer",
+        21098761
+      ],
+      [
+        "citations",
+        21099520
+      ],
+      [
+        "contradictions",
+        21107865
+      ],
+      [
+        "suggestions",
+        21116360
+      ],
+      [
+        "metadata",
+        21178554
+      ],
+      [
+        "done",
+        21185598
+      ]
+    ],
+    "latency_s": 21.331,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 20906,
+      "message_id": "019f0f77-f911-7a1a-9547-42310ca4bb8d",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "919a05b3-2f34-46a0-9b45-162a77a9259c"
+    },
+    "output_tokens": 151,
+    "phase_timings_ms": {
+      "check_cache": 11.161332979099825,
+      "entity_resolution": 775.7675419852603,
+      "grounding_validation": 6200.634793989593,
+      "llm_direct_text_generation": 6570.192502986174,
+      "llm_tool_planning": 11533.139712992124,
+      "load_history": 127.13412501034327,
+      "persist_and_cache": 76.73591599450447,
+      "tool_execution": 972.0439180091489,
+      "validate_input": 766.8185829825234
+    },
+    "question": "How comprehensive is your data coverage for Palantir?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_health\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "PLTR"
+          },
+          "label": "Computing health score for PLTR",
+          "status": "running",
+          "tool": "get_entity_health",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 970,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "data"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Computing health score for PLTR",
+          "result_preview": [
+            {
+              "id": "tool:health:5d4df4c3-32b6-4e19-b668-2858820d9203",
+              "title": "Health: data"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_health",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 6313,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Palantir (ticker\u202fPLTR) has a health score of "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**0.40** in our system, indicating relatively limited coverage. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "The available data comes primarily from two sources:\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Source | Share of coverage |\n|--------|-------------------|\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| eodhd_ticker_news | 40.35\u202f% |\n| eodhd "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 21.05\u202f% |\n\nThe remaining portion of "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the score reflects gaps in other data feeds "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(e.g., filings, analyst reports). Overall, the data for "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Palantir is modest and may lack the depth "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "found for higher\u2011scored entities.\u202f[Health data from\u202fget_entity_health "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f0]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Palantir\u2019s coverage in our system is moderate. The entity health assessment shows a health score of **0.40** [1], indicating that the data set is reasonably complete but still has gaps. The source distribution is split between two primary data providers: **eodhd_ticker_news** contributes **0.4035** of the coverage, while **eodhd** contributes **0.2105** [1]. These figures reflect the proportion of available data that comes from each source, giving you a sense of where the information originates and how balanced it is.\n\nNote: some figures or names above could not be matched to a retrieved source."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.88,
+            "entity_name": "data",
+            "id": "tool:health:5d4df4c3-32b6-4e19-b668-2858820d9203",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "narrative",
+            "title": "Health: data",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on data?",
+          "How has data performed recently?",
+          "How do data's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 20906,
+          "message_id": "019f0f77-f911-7a1a-9547-42310ca4bb8d",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "919a05b3-2f34-46a0-9b45-162a77a9259c"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 11.161332979099825,
+            "entity_resolution": 775.7675419852603,
+            "grounding_validation": 6200.634793989593,
+            "llm_direct_text_generation": 6570.192502986174,
+            "llm_tool_planning": 11533.139712992124,
+            "load_history": 127.13412501034327,
+            "persist_and_cache": 76.73591599450447,
+            "tool_execution": 972.0439180091489,
+            "validate_input": 766.8185829825234
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "PLTR"
+        },
+        "name": "get_entity_health"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "data"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      }
+    ],
+    "tps": 7.424,
+    "tps_streaming": 22.983,
+    "ttft_s": 0.993
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_entity_health"
+    ],
+    "forbidden_facts": [
+      "generic_palantir_summary_no_health_data"
+    ],
+    "required_facts": [
+      "palantir_identified",
+      "health_or_coverage_score",
+      "source_distribution_or_trend"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_health"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (data coverage for Palantir) and made a single, appropriate call to get_entity_health, which returned the health score and source distribution. The trajectory is minimal, correct, and fully aligned with the rubric. No process changes needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "single well-chosen call returns all needed coverage data; no wasted steps.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraint to evaluate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_entity_health is exactly the right tool for a data-coverage question about Palantir.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

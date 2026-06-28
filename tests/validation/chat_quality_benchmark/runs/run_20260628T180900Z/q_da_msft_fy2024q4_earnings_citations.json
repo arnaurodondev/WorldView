@@ -1,0 +1,692 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "query_fundamentals",
+      "get_entity_news",
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 273,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_news",
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 63.729,
+    "latency_within_budget": false,
+    "missing_expected_tools": [
+      "get_entity_news",
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 69,
+    "phase_timings_ms": {
+      "check_cache": 21.981541998684406,
+      "entity_resolution": 598.7350420036819,
+      "grounding_validation": 24508.65163700655,
+      "llm_direct_text_generation": 9967.982795991702,
+      "llm_tool_planning": 32991.15968099795,
+      "load_history": 89.2431249958463,
+      "persist_and_cache": 104.66349998023361,
+      "tool_execution": 2731.86021001311,
+      "validate_input": 732.7933339984156
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.931,
+    "word_count": 48
+  },
+  "id": "da_msft_fy2024q4_earnings_citations",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for specific earnings figures; answer is a generic refusal with no data, completely mismatched to the request.",
+        "reason": "Question asks for specific earnings figures; answer is a generic refusal with no data, completely mismatched to the request.",
+        "score": 0
+      },
+      "grounding": {
+        "feedback": "Answer refuses to present any numbers despite tool_results returning data (status=ok items=1). No claims to ground, but the refusal itself is unsupported by the data.",
+        "reason": "Answer refuses to present any numbers despite tool_results returning data (status=ok items=1). No claims to ground, but the refusal itself is unsupported by the data.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'I could not verify this against the data I actually retrieved' and 'I won't present unverified figures' while tool_results contain the requested data (status=ok items=1) and appropriate_refusal_ok=false.",
+        "reason": "Contains refusal phrase 'I could not verify this against the data I actually retrieved' and 'I won't present unverified figures' while tool_results contain the requested data (status=ok items=1) and appropriate_refusal_ok=false.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals, which is in the expected_tools equivalence set.",
+        "reason": "Called query_fundamentals, which is in the expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=25 would otherwise have been FAIL). The agent incorrectly refused to answer despite query_fundamentals returning data for MSFT. The answer fabricates a data-unavailability narrative that contradicts the tool trace. The single most impactful fix: ensure the LLM is instructed to use the tool results it actually received, and to never claim data is missing when status=ok items>=1. Additionally, the refusal_judgment failure is critical \u2014 the rubric explicitly disallows refusal (appropriate_refusal_ok=false) and the data was present.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals, which is in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 0,\n    \"feedback\": \"Answer refuses to present any numbers despite tool_results returning data (status=ok items=1). No claims to ground, but the refusal itself is unsupported by the data.\"\n  },\n  \"framing\": {\n    \"score\": 0,\n    \"feedback\": \"Question asks for specific earnings figures; answer is a generic refusal with no data, completely mismatched to the request.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'I could not verify this against the data I actually retrieved' and 'I won't present unverified figures' while tool_results contain the requested data (status=ok items=1) and appropriate_refusal_ok=false.\"\n  },\n  \"reviewer_summary\": \"The agent incorrectly refused to answer despite query_fundamentals returning data for MSFT. The answer fabricates a data-unavailability narrative that contradicts the tool trace. The single most impactful fix: ensure the LLM is instructed to use the tool results it actually received, and to never claim data is missing when status=ok items>=1. Additionally, the refusal_judgment failure is critical \u2014 the rubric explicitly disallows refusal (appropriate_refusal_ok=false) and the data was present.\"\n}",
+    "reviewer_summary": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=25 would otherwise have been FAIL). The agent incorrectly refused to answer despite query_fundamentals returning data for MSFT. The answer fabricates a data-unavailability narrative that contradicts the tool trace. The single most impactful fix: ensure the LLM is instructed to use the tool results it actually received, and to never claim data is missing when status=ok items>=1. Additionally, the refusal_judgment failure is critical \u2014 the rubric explicitly disallows refusal (appropriate_refusal_ok=false) and the data was present.",
+    "score": 25,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 0,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 25
+      },
+      "fail_reason": "GROUNDING_FLOOR",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": false,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 25,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=25 would otherwise have been FAIL).",
+      "floor": 12,
+      "grounding": 0,
+      "pre_veto_verdict": "FAIL",
+      "reason": "grounding_below_floor",
+      "type": "grounding"
+    }
+  },
+  "prompt": "What did Microsoft report in its fiscal Q4 2024 earnings (quarter ending June 30, 2024)? Cite the source for each number.",
+  "reasons": [
+    "slow latency_s=63.729"
+  ],
+  "result": {
+    "answer_text": "I could not verify this against the data I actually retrieved \u2014 the answer referenced tool results that were not part of this query. I won't present unverified figures. Please rephrase your question, or ask about a specific ticker or metric so I can pull the data directly.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        931247
+      ],
+      [
+        "status",
+        999723
+      ],
+      [
+        "thinking",
+        1620732
+      ],
+      [
+        "agent_iteration",
+        1622822
+      ],
+      [
+        "status",
+        13824872
+      ],
+      [
+        "tool_call",
+        13837794
+      ],
+      [
+        "tool_result",
+        15978275
+      ],
+      [
+        "agent_iteration",
+        16930644
+      ],
+      [
+        "tool_call",
+        27737987
+      ],
+      [
+        "tool_result",
+        28279224
+      ],
+      [
+        "agent_iteration",
+        29106825
+      ],
+      [
+        "token",
+        39050366
+      ],
+      [
+        "token",
+        39050689
+      ],
+      [
+        "token",
+        39050712
+      ],
+      [
+        "token",
+        39051361
+      ],
+      [
+        "token",
+        39051386
+      ],
+      [
+        "token",
+        39051404
+      ],
+      [
+        "token",
+        39051419
+      ],
+      [
+        "token",
+        39051434
+      ],
+      [
+        "token",
+        39051449
+      ],
+      [
+        "token",
+        39051463
+      ],
+      [
+        "status",
+        39065506
+      ],
+      [
+        "final_answer",
+        63580168
+      ],
+      [
+        "citations",
+        63580414
+      ],
+      [
+        "contradictions",
+        63600369
+      ],
+      [
+        "suggestions",
+        63600426
+      ],
+      [
+        "metadata",
+        63687253
+      ],
+      [
+        "done",
+        63687998
+      ]
+    ],
+    "latency_s": 63.729,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 63450,
+      "message_id": "019f0f88-a0ce-7235-8afb-be9cb7b99c03",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "cb5ac5b2-b9de-420c-bc2d-773a4602a5ed"
+    },
+    "output_tokens": 69,
+    "phase_timings_ms": {
+      "check_cache": 21.981541998684406,
+      "entity_resolution": 598.7350420036819,
+      "grounding_validation": 24508.65163700655,
+      "llm_direct_text_generation": 9967.982795991702,
+      "llm_tool_planning": 32991.15968099795,
+      "load_history": 89.2431249958463,
+      "persist_and_cache": 104.66349998023361,
+      "tool_execution": 2731.86021001311,
+      "validate_input": 732.7933339984156
+    },
+    "question": "What did Microsoft report in its fiscal Q4 2024 earnings (quarter ending June 30, 2024)? Cite the source for each number.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "revenue",
+              "net_income",
+              "eps",
+              "gross_profit",
+              "operating_income"
+            ],
+            "period_type": "quarterly",
+            "periods": 5,
+            "ticker": "MSFT"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 2143,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "MSFT"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:MSFT",
+              "title": "Fundamentals query: MSFT"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 15172,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "revenue",
+              "net_income",
+              "eps",
+              "gross_profit",
+              "operating_income"
+            ],
+            "period_type": "quarterly",
+            "periods": 8,
+            "ticker": "MSFT"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 548,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "MSFT"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:MSFT",
+              "title": "Fundamentals query: MSFT"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 27458,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to locate any data for Microsoft\u2019s "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "fiscal\u202fQ4\u202f2024 results (the quarter that ended\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "June\u202f30\u202f2024). The most recent quarterly figures "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "returned by the fundamentals query include Q4\u202fFY2025 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and earlier quarters, but there is no entry "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for Q4\u202fFY2024. Consequently, I cannot provide the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue, net income, EPS, gross profit, or operating "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "income that Microsoft reported for that period. If "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "you\u2019d like information for a different quarter that "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is available, let me know."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I could not verify this against the data I actually retrieved \u2014 the answer referenced tool results that were not part of this query. I won't present unverified figures. Please rephrase your question, or ask about a specific ticker or metric so I can pull the data directly."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Microsoft Corporation?",
+          "How has MSFT performed recently?",
+          "How do Microsoft Corporation's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 63450,
+          "message_id": "019f0f88-a0ce-7235-8afb-be9cb7b99c03",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "cb5ac5b2-b9de-420c-bc2d-773a4602a5ed"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 21.981541998684406,
+            "entity_resolution": 598.7350420036819,
+            "grounding_validation": 24508.65163700655,
+            "llm_direct_text_generation": 9967.982795991702,
+            "llm_tool_planning": 32991.15968099795,
+            "load_history": 89.2431249958463,
+            "persist_and_cache": 104.66349998023361,
+            "tool_execution": 2731.86021001311,
+            "validate_input": 732.7933339984156
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "revenue",
+            "net_income",
+            "eps",
+            "gross_profit",
+            "operating_income"
+          ],
+          "period_type": "quarterly",
+          "periods": 5,
+          "ticker": "MSFT"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "revenue",
+            "net_income",
+            "eps",
+            "gross_profit",
+            "operating_income"
+          ],
+          "period_type": "quarterly",
+          "periods": 8,
+          "ticker": "MSFT"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "MSFT"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "MSFT"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 1.099,
+    "tps_streaming": 6.922,
+    "ttft_s": 0.931
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "query_fundamentals",
+      "get_entity_news",
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [
+      "earnings_data_from_a_different_quarter",
+      "uncited_numbers"
+    ],
+    "required_facts": [
+      "msft_fy2024_q4_revenue",
+      "msft_fy2024_q4_eps_or_net_income",
+      "citation_marker_per_number"
+    ]
+  },
+  "tags": [
+    "date_anchored",
+    "regression_stable",
+    "financials",
+    "citations"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly routed to query_fundamentals for Microsoft's earnings data, and there are no ordering or recovery issues. However, the trajectory is inefficient: call 2 repeats the same query with a different period count but the same metrics, and the first call already covered the target quarter. The agent should have used a single call with the appropriate period count (e.g., 5 or 8) and then proceeded to cite the numbers. The most impactful change is to drop the duplicate query_fundamentals call.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Call 2 is a near-duplicate of call 1 (same tool, same ticker, same metrics, only periods changed from 5 to 8). The first call already returned the needed Q4 data; the second call is redundant and wastes a tool invocation.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "Only one tool type is used; there are no cross-tool dependencies to order. The two calls are independent and could be run in any order.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No call failed or returned empty (both status=ok, items=1). Nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "Call 1 and 2 both use query_fundamentals, which is exactly the right tool for an earnings-metric question. The tool choice matches the intent perfectly.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 85,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

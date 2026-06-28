@@ -1,0 +1,12 @@
+{
+  "baseline": {
+    "available": false,
+    "label": null,
+    "regressions": [],
+    "shared_questions": 0
+  },
+  "has_regressions": false,
+  "quality_drop_threshold": 5,
+  "total_regressions": 0,
+  "window": null
+}

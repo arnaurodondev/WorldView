@@ -1,0 +1,785 @@
+{
+  "bucket": "PASS",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_entity_news",
+      "search_documents"
+    ]
+  },
+  "heuristics": {
+    "char_count": 755,
+    "citation_count": 5,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_news"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_news",
+      "search_documents"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 36.714,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "search_documents"
+    ],
+    "output_tokens": 189,
+    "phase_timings_ms": {
+      "check_cache": 50.96008299733512,
+      "entity_resolution": 1064.1032920102589,
+      "grounding_validation": 12298.891754995566,
+      "llm_direct_text_generation": 11530.162631010171,
+      "llm_tool_planning": 16117.858465993777,
+      "load_history": 196.310250001261,
+      "persist_and_cache": 164.2507079814095,
+      "tool_execution": 2141.7789599800017,
+      "validate_input": 1505.1255419966765
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "days_back",
+          "max_results",
+          "ticker"
+        ],
+        "tool": "get_entity_news"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_news"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 9,
+        "status": "ok",
+        "tool": "get_entity_news"
+      }
+    ],
+    "ttft_s": 1.807,
+    "word_count": 127
+  },
+  "id": "ru_mstr_news",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for latest news summary; answer provides a concise bullet list of key headlines. Depth matches the factual, list-oriented nature of the query.",
+        "reason": "Question asks for latest news summary; answer provides a concise bullet list of key headlines. Depth matches the factual, list-oriented nature of the query.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided \u2014 presumed band. Answer cites tool rows [1]\u2013[5] and stays within scope. The transparency banner flags unverified figures, which is appropriate.",
+        "reason": "No grounding sample provided \u2014 presumed band. Answer cites tool rows [1]\u2013[5] and stays within scope. The transparency banner flags unverified figures, which is appropriate.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer delivers substantive news items with citations.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer delivers substantive news items with citations.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_news, which is one of the expected tools (equivalence set). Correct routing.",
+        "reason": "Called get_entity_news, which is one of the expected tools (equivalence set). Correct routing.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_entity_news and produced a well-structured, concise news summary. The transparency banner is a good practice for unverified figures. Next step: consider adding a brief synthesis sentence at the top to give context (e.g., 'MSTR continues its aggressive Bitcoin acquisition strategy') so the answer feels more complete than a raw list.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_news, which is one of the expected tools (equivalence set). Correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided \u2014 presumed band. Answer cites tool rows [1]\u2013[5] and stays within scope. The transparency banner flags unverified figures, which is appropriate.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for latest news summary; answer provides a concise bullet list of key headlines. Depth matches the factual, list-oriented nature of the query.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer delivers substantive news items with citations.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_entity_news and produced a well-structured, concise news summary. The transparency banner is a good practice for unverified figures. Next step: consider adding a brief synthesis sentence at the top to give context (e.g., 'MSTR continues its aggressive Bitcoin acquisition strategy') so the answer feels more complete than a raw list.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_entity_news and produced a well-structured, concise news summary. The transparency banner is a good practice for unverified figures. Next step: consider adding a brief synthesis sentence at the top to give context (e.g., 'MSTR continues its aggressive Bitcoin acquisition strategy') so the answer feels more complete than a raw list.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Show me the latest news on MSTR \u2014 what should I know?",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Latest news on MicroStrategy (MSTR)** \n\n- **$100\u202fmillion Bitcoin purchase** \u2013 MSTR added $100\u202fmillion of Bitcoin to its balance sheet, a move that has intensified the dilution debate among investors. [1] \n- **Bitcoin\u2011price tug\u2011of\u2011war** \u2013 An article highlighted MSTR\u2019s buying activity amid a backdrop of three rate\u2011hike expectations. [2] \n- **2\u00d7 MicroStrategy ETF volatility** \u2013 The 2\u00d7 leveraged ETF (MSTX vs. MSTU) has been a focus of volatility discussions. [3] \n- **STRC record low & slide** \u2013 MicroStrategy\u2019s STRC share hit a record low, with the monthly slide topping 10\u202f%. [4] \n- **STRC discount to par** \u2013 The STRC is trading at a 17.5\u202f% discount to its par value. [5]\n\nNote: some figures or names above could not be matched to a retrieved source.",
+    "citations": [
+      {
+        "confidence": 0.6797068811728049,
+        "entity_name": "MSTR",
+        "id": "tool:entity_news:019edbd5-084f-7783-932e-a6cda599b867",
+        "item_type": "chunk",
+        "published_at": "2026-06-18T11:13:06+00:00",
+        "ref": 1,
+        "source_name": "news",
+        "title": "Strategy (MSTR) Buys $100 Million Of Bitcoin As Dilution Debate Gets Louder",
+        "url": "https://finance.yahoo.com/markets/stocks/articles/strategy-mstr-buys-100-million-111306013.html"
+      },
+      {
+        "confidence": 0.641382821945239,
+        "entity_name": "MSTR",
+        "id": "tool:entity_news:019ef0ab-e21d-7e3a-a1cf-e25adad51de8",
+        "item_type": "chunk",
+        "published_at": "2026-06-22T17:51:48+00:00",
+        "ref": 2,
+        "source_name": "news",
+        "title": "Bitcoin price tug-of-war: ETF outflows, 3 rate hike stance, MSTR buying collide",
+        "url": "https://seekingalpha.com/news/4605586-bitcoin-price-tug-of-war-etf-outflows-3-rate-hike-stance-mstr-buying-collide?utm_source=feed_news_all&amp;utm_medium=referral&amp;feed_item_type=news"
+      },
+      {
+        "confidence": 0.5256712822124785,
+        "entity_name": "MSTR",
+        "id": "tool:entity_news:019ecf62-1dff-708b-b838-16455d6f9b3e",
+        "item_type": "chunk",
+        "published_at": "2026-06-15T17:19:29+00:00",
+        "ref": 3,
+        "source_name": "news",
+        "title": "MSTX vs. MSTU: Which 2x MicroStrategy ETF Survives the Volatility?",
+        "url": "https://finnhub.io/api/news?id=d95bf3f5cc9d957373ccf9d7597ebaa0ba4e367ad19fdbe14ff2ab6e85bd147d"
+      },
+      {
+        "confidence": 0.5040464081873846,
+        "entity_name": "MSTR",
+        "id": "tool:entity_news:019ee5f0-9fb6-7d5b-a26c-2115a9e8c73f",
+        "item_type": "chunk",
+        "published_at": "2026-06-19T11:08:28+00:00",
+        "ref": 4,
+        "source_name": "news",
+        "title": "MicroStrategy\u2019s STRC Hits Record Low as Monthly Slide Tops 10%",
+        "url": "https://finance.yahoo.com/markets/stocks/articles/microstrategy-strc-hits-record-low-110828436.html"
+      },
+      {
+        "confidence": 0.5,
+        "entity_name": "MSTR",
+        "id": "tool:entity_news:019efbf2-f824-766a-97e2-9e7bbbebb6ae",
+        "item_type": "chunk",
+        "published_at": "2026-06-24T13:51:16+00:00",
+        "ref": 5,
+        "source_name": "news",
+        "title": "Strategy Faces Pressure as STRC Trades at 17.5% Discount to Par",
+        "url": "https://finance.yahoo.com/markets/stocks/articles/strategy-faces-pressure-strc-trades-135116978.html"
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1807241
+      ],
+      [
+        "status",
+        2006761
+      ],
+      [
+        "thinking",
+        3141608
+      ],
+      [
+        "agent_iteration",
+        3141644
+      ],
+      [
+        "status",
+        8576379
+      ],
+      [
+        "tool_call",
+        8576843
+      ],
+      [
+        "tool_result",
+        10325215
+      ],
+      [
+        "agent_iteration",
+        12943880
+      ],
+      [
+        "token",
+        24111632
+      ],
+      [
+        "token",
+        24111727
+      ],
+      [
+        "token",
+        24111969
+      ],
+      [
+        "token",
+        24112685
+      ],
+      [
+        "token",
+        24112713
+      ],
+      [
+        "token",
+        24113293
+      ],
+      [
+        "token",
+        24113362
+      ],
+      [
+        "token",
+        24113607
+      ],
+      [
+        "token",
+        24114267
+      ],
+      [
+        "token",
+        24114823
+      ],
+      [
+        "token",
+        24115308
+      ],
+      [
+        "token",
+        24115757
+      ],
+      [
+        "token",
+        24116138
+      ],
+      [
+        "token",
+        24116280
+      ],
+      [
+        "token",
+        24116448
+      ],
+      [
+        "token",
+        24116839
+      ],
+      [
+        "token",
+        24117510
+      ],
+      [
+        "token",
+        24120648
+      ],
+      [
+        "token",
+        24120681
+      ],
+      [
+        "token",
+        24120696
+      ],
+      [
+        "token",
+        24120729
+      ],
+      [
+        "token",
+        24120765
+      ],
+      [
+        "token",
+        24120785
+      ],
+      [
+        "token",
+        24120804
+      ],
+      [
+        "status",
+        24230619
+      ],
+      [
+        "final_answer",
+        36537315
+      ],
+      [
+        "citations",
+        36538066
+      ],
+      [
+        "contradictions",
+        36538356
+      ],
+      [
+        "suggestions",
+        36538383
+      ],
+      [
+        "metadata",
+        36644255
+      ],
+      [
+        "done",
+        36646622
+      ]
+    ],
+    "latency_s": 36.714,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 36232,
+      "message_id": "019f0f6c-3757-7f54-aa3d-5955903e4ae1",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "d7d3fb8d-a501-487f-ab19-5b6cf2195c92"
+    },
+    "output_tokens": 189,
+    "phase_timings_ms": {
+      "check_cache": 50.96008299733512,
+      "entity_resolution": 1064.1032920102589,
+      "grounding_validation": 12298.891754995566,
+      "llm_direct_text_generation": 11530.162631010171,
+      "llm_tool_planning": 16117.858465993777,
+      "load_history": 196.310250001261,
+      "persist_and_cache": 164.2507079814095,
+      "tool_execution": 2141.7789599800017,
+      "validate_input": 1505.1255419966765
+    },
+    "question": "Show me the latest news on MSTR \u2014 what should I know?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_news\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "days_back": 14,
+            "max_results": 10,
+            "ticker": "MSTR"
+          },
+          "label": "Searching news for MicroStrategy",
+          "status": "running",
+          "tool": "get_entity_news",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 2139,
+          "item_count": 9,
+          "label": "Searching news for MicroStrategy",
+          "result_preview": [
+            {
+              "id": "tool:entity_news:019efbf2-f824-766a-97e2-9e7bbbebb6ae",
+              "title": "Strategy Faces Pressure as STRC Trades at 17.5% Discount to Par"
+            },
+            {
+              "id": "tool:entity_news:019ef0ab-e21d-7e3a-a1cf-e25adad51de8",
+              "title": "Bitcoin price tug-of-war: ETF outflows, 3 rate hike stance, MSTR buying collide"
+            },
+            {
+              "id": "tool:entity_news:019ef0da-2bfb-7205-8a6a-77e9bfb68656",
+              "title": "Strategy Inc (MSTR) Is a Trending Stock: Facts to Know Before Betting on It"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_news",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9423,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Key recent developments for MicroStrategy (MSTR)**  \n\n- The "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "stock has been highlighted as a \u201ctrending\u201d ticker, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "with analysts urging investors to understand the underlying "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "factors before taking a position\u202f[1].  \n- MicroStrategy "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "disclosed a $100\u202fmillion Bitcoin purchase, reigniting debate "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "over the dilution impact of its crypto\u2011funding strategy\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[2].  \n- Bitcoin market dynamics (ETF outflows and "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "a potential rate\u2011hike stance) are intersecting with MSTR\u2019s "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "recent Bitcoin buying activity, influencing the company\u2019s exposure "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "to crypto price swings\u202f[3].  \n- Two 2\u00d7 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "leveraged MicroStrategy ETFs (MSTX and MSTU) are under "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "scrutiny for how they handle the heightened volatility "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in the underlying stock\u202f[4][6].  \n- The company\u2019s "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "preferred equity (STRC) fell to a record low, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "with the share price sliding more than 10\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "% in a month\u202f[5].  \n- STRC is "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "trading at roughly a 17.5\u202f% discount to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "its par value, adding pressure on the equity "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "structure\u202f[8].  \n- Recent filings suggest MicroStrategy may "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "be selling more stock than it is using "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "to buy Bitcoin, raising concerns about cash\u2011flow sustainability\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[7].  \n- A broader market narrative notes a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u201cBitcoin whale\u201d facing higher borrowing costs, which could "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "indirectly affect MSTR\u2019s crypto\u2011related financing\u202f[9]."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Latest news on MicroStrategy (MSTR)** \n\n- **$100\u202fmillion Bitcoin purchase** \u2013 MSTR added $100\u202fmillion of Bitcoin to its balance sheet, a move that has intensified the dilution debate among investors. [1] \n- **Bitcoin\u2011price tug\u2011of\u2011war** \u2013 An article highlighted MSTR\u2019s buying activity amid a backdrop of three rate\u2011hike expectations. [2] \n- **2\u00d7 MicroStrategy ETF volatility** \u2013 The 2\u00d7 leveraged ETF (MSTX vs. MSTU) has been a focus of volatility discussions. [3] \n- **STRC record low & slide** \u2013 MicroStrategy\u2019s STRC share hit a record low, with the monthly slide topping 10\u202f%. [4] \n- **STRC discount to par** \u2013 The STRC is trading at a 17.5\u202f% discount to its par value. [5]\n\nNote: some figures or names above could not be matched to a retrieved source."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.6797068811728049,
+            "entity_name": "MSTR",
+            "id": "tool:entity_news:019edbd5-084f-7783-932e-a6cda599b867",
+            "item_type": "chunk",
+            "published_at": "2026-06-18T11:13:06+00:00",
+            "ref": 1,
+            "source_name": "news",
+            "title": "Strategy (MSTR) Buys $100 Million Of Bitcoin As Dilution Debate Gets Louder",
+            "url": "https://finance.yahoo.com/markets/stocks/articles/strategy-mstr-buys-100-million-111306013.html"
+          },
+          {
+            "confidence": 0.641382821945239,
+            "entity_name": "MSTR",
+            "id": "tool:entity_news:019ef0ab-e21d-7e3a-a1cf-e25adad51de8",
+            "item_type": "chunk",
+            "published_at": "2026-06-22T17:51:48+00:00",
+            "ref": 2,
+            "source_name": "news",
+            "title": "Bitcoin price tug-of-war: ETF outflows, 3 rate hike stance, MSTR buying collide",
+            "url": "https://seekingalpha.com/news/4605586-bitcoin-price-tug-of-war-etf-outflows-3-rate-hike-stance-mstr-buying-collide?utm_source=feed_news_all&amp;utm_medium=referral&amp;feed_item_type=news"
+          },
+          {
+            "confidence": 0.5256712822124785,
+            "entity_name": "MSTR",
+            "id": "tool:entity_news:019ecf62-1dff-708b-b838-16455d6f9b3e",
+            "item_type": "chunk",
+            "published_at": "2026-06-15T17:19:29+00:00",
+            "ref": 3,
+            "source_name": "news",
+            "title": "MSTX vs. MSTU: Which 2x MicroStrategy ETF Survives the Volatility?",
+            "url": "https://finnhub.io/api/news?id=d95bf3f5cc9d957373ccf9d7597ebaa0ba4e367ad19fdbe14ff2ab6e85bd147d"
+          },
+          {
+            "confidence": 0.5040464081873846,
+            "entity_name": "MSTR",
+            "id": "tool:entity_news:019ee5f0-9fb6-7d5b-a26c-2115a9e8c73f",
+            "item_type": "chunk",
+            "published_at": "2026-06-19T11:08:28+00:00",
+            "ref": 4,
+            "source_name": "news",
+            "title": "MicroStrategy\u2019s STRC Hits Record Low as Monthly Slide Tops 10%",
+            "url": "https://finance.yahoo.com/markets/stocks/articles/microstrategy-strc-hits-record-low-110828436.html"
+          },
+          {
+            "confidence": 0.5,
+            "entity_name": "MSTR",
+            "id": "tool:entity_news:019efbf2-f824-766a-97e2-9e7bbbebb6ae",
+            "item_type": "chunk",
+            "published_at": "2026-06-24T13:51:16+00:00",
+            "ref": 5,
+            "source_name": "news",
+            "title": "Strategy Faces Pressure as STRC Trades at 17.5% Discount to Par",
+            "url": "https://finance.yahoo.com/markets/stocks/articles/strategy-faces-pressure-strc-trades-135116978.html"
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has MSTR performed recently?",
+          "How do MicroStrategy Incorporated's fundamentals look?",
+          "Who are MicroStrategy Incorporated's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 36232,
+          "message_id": "019f0f6c-3757-7f54-aa3d-5955903e4ae1",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "d7d3fb8d-a501-487f-ab19-5b6cf2195c92"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 50.96008299733512,
+            "entity_resolution": 1064.1032920102589,
+            "grounding_validation": 12298.891754995566,
+            "llm_direct_text_generation": 11530.162631010171,
+            "llm_tool_planning": 16117.858465993777,
+            "load_history": 196.310250001261,
+            "persist_and_cache": 164.2507079814095,
+            "tool_execution": 2141.7789599800017,
+            "validate_input": 1505.1255419966765
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "days_back": 14,
+          "max_results": 10,
+          "ticker": "MSTR"
+        },
+        "name": "get_entity_news"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 9,
+        "status": "ok",
+        "tool": "get_entity_news"
+      }
+    ],
+    "tps": 5.414,
+    "tps_streaming": 16.392,
+    "ttft_s": 1.807
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_news",
+      "search_documents"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "real_user",
+    "smoke",
+    "news",
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent as a news retrieval task and made a single, well-parameterized call to get_entity_news. No redundant calls, no ordering issues, and no recovery needed. The trajectory is a textbook example of efficient tool use for a straightforward question. The only minor improvement would be to consider a longer lookback if the user expects more context, but the current 14-day window is reasonable for 'latest news'.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call with appropriate parameters (14 days, 10 results) \u2014 no waste.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraint \u2014 perfect.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_entity_news is exactly the right tool for a 'latest news' question; no other tool needed.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

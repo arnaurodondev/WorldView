@@ -1,0 +1,452 @@
+{
+  "bucket": "PASS",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_claims",
+      "search_documents"
+    ]
+  },
+  "heuristics": {
+    "char_count": 282,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_claims"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_claims",
+      "search_documents"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 17.358,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "search_documents"
+    ],
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 38.08691698941402,
+      "entity_resolution": 1000.080459023593,
+      "grounding_validation": 4.062709020217881,
+      "llm_direct_text_generation": 2527.6844180189073,
+      "llm_tool_planning": 11153.359922027448,
+      "load_history": 95.76770800049417,
+      "persist_and_cache": 110.74420798104256,
+      "tool_execution": 1609.24616799457,
+      "validate_input": 2355.4625010001473
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "claim_type",
+          "date_from",
+          "entity_name"
+        ],
+        "tool": "search_claims"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_claims"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_claims"
+      }
+    ],
+    "ttft_s": 3.299,
+    "word_count": 50
+  },
+  "id": "tc_search_claims_ai_chip_demand",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a broad data-availability lookup; concise refusal with guidance to narrow scope is appropriately calibrated depth.",
+        "reason": "Question is a broad data-availability lookup; concise refusal with guidance to narrow scope is appropriately calibrated depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; answer honestly states data is unavailable and does not fabricate any numbers. Appropriate refusal given empty tool results.",
+        "reason": "No grounding sample provided; answer honestly states data is unavailable and does not fabricate any numbers. Appropriate refusal given empty tool results.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'couldn't retrieve any data' but rubric.appropriate_refusal_ok=true and tool_results show empty data. Correct refusal.",
+        "reason": "Contains refusal phrase 'couldn't retrieve any data' but rubric.appropriate_refusal_ok=true and tool_results show empty data. Correct refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_claims, which is one of the expected_tools (equivalence set). Correct routing.",
+        "reason": "Called search_claims, which is one of the expected_tools (equivalence set). Correct routing.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to search_claims, found no data, and issued a clean refusal without fabricating figures. This is the ideal behaviour for a data-missing scenario when appropriate_refusal_ok is true. The only improvement would be to also call search_documents as an alternative before refusing, since the expected_tools equivalence set includes both; doing so would make the refusal even more robust. Otherwise, the answer is safe, honest, and well-calibrated.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_claims, which is one of the expected_tools (equivalence set). Correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided; answer honestly states data is unavailable and does not fabricate any numbers. Appropriate refusal given empty tool results.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a broad data-availability lookup; concise refusal with guidance to narrow scope is appropriately calibrated depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Contains refusal phrase 'couldn't retrieve any data' but rubric.appropriate_refusal_ok=true and tool_results show empty data. Correct refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to search_claims, found no data, and issued a clean refusal without fabricating figures. This is the ideal behaviour for a data-missing scenario when appropriate_refusal_ok is true. The only improvement would be to also call search_documents as an alternative before refusing, since the expected_tools equivalence set includes both; doing so would make the refusal even more robust. Otherwise, the answer is safe, honest, and well-calibrated.\"\n}",
+    "reviewer_summary": "The agent correctly routed to search_claims, found no data, and issued a clean refusal without fabricating figures. This is the ideal behaviour for a data-missing scenario when appropriate_refusal_ok is true. The only improvement would be to also call search_documents as an alternative before refusing, since the expected_tools equivalence set includes both; doing so would make the refusal even more robust. Otherwise, the answer is safe, honest, and well-calibrated.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Find recent claims about AI semiconductor demand.",
+  "reasons": [],
+  "result": {
+    "answer_text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        3299056
+      ],
+      [
+        "status",
+        3337199
+      ],
+      [
+        "thinking",
+        4362242
+      ],
+      [
+        "agent_iteration",
+        4362290
+      ],
+      [
+        "status",
+        13464045
+      ],
+      [
+        "tool_call",
+        13470750
+      ],
+      [
+        "tool_result",
+        14635689
+      ],
+      [
+        "agent_iteration",
+        14635725
+      ],
+      [
+        "token",
+        17164508
+      ],
+      [
+        "token",
+        17164577
+      ],
+      [
+        "token",
+        17172216
+      ],
+      [
+        "status",
+        17172642
+      ],
+      [
+        "final_answer",
+        17178835
+      ],
+      [
+        "citations",
+        17179712
+      ],
+      [
+        "contradictions",
+        17191080
+      ],
+      [
+        "suggestions",
+        17196236
+      ],
+      [
+        "metadata",
+        17300801
+      ],
+      [
+        "done",
+        17305717
+      ]
+    ],
+    "latency_s": 17.358,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 16381,
+      "message_id": "019f0f7c-2782-75dc-a56f-36794a1a39f4",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "89352d48-fbe7-4aae-9e39-4487f90d6069"
+    },
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 38.08691698941402,
+      "entity_resolution": 1000.080459023593,
+      "grounding_validation": 4.062709020217881,
+      "llm_direct_text_generation": 2527.6844180189073,
+      "llm_tool_planning": 11153.359922027448,
+      "load_history": 95.76770800049417,
+      "persist_and_cache": 110.74420798104256,
+      "tool_execution": 1609.24616799457,
+      "validate_input": 2355.4625010001473
+    },
+    "question": "Find recent claims about AI semiconductor demand.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_claims\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "claim_type": "strategic_move",
+            "date_from": "2026-06-01",
+            "entity_name": "AI semiconductor demand"
+          },
+          "label": "Checking analyst claims on AI semiconductor demand",
+          "status": "running",
+          "tool": "search_claims",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1606,
+          "item_count": 0,
+          "label": "Checking analyst claims on AI semiconductor demand",
+          "status": "empty",
+          "tool": "search_claims",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 10256,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I could not find any analyst claims about "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "AI semiconductor demand for C3.ai, Inc. (AI) or "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "SJ Semiconductor. No matching rows were returned."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on C3.ai, Inc.?",
+          "Compare C3.ai, Inc. and SJ Semiconductor side by side.",
+          "How has AI performed recently?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 16381,
+          "message_id": "019f0f7c-2782-75dc-a56f-36794a1a39f4",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "89352d48-fbe7-4aae-9e39-4487f90d6069"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 38.08691698941402,
+            "entity_resolution": 1000.080459023593,
+            "grounding_validation": 4.062709020217881,
+            "llm_direct_text_generation": 2527.6844180189073,
+            "llm_tool_planning": 11153.359922027448,
+            "load_history": 95.76770800049417,
+            "persist_and_cache": 110.74420798104256,
+            "tool_execution": 1609.24616799457,
+            "validate_input": 2355.4625010001473
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "claim_type": "strategic_move",
+          "date_from": "2026-06-01",
+          "entity_name": "AI semiconductor demand"
+        },
+        "name": "search_claims"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_claims"
+      }
+    ],
+    "tps": 5.05,
+    "tps_streaming": 28.089,
+    "ttft_s": 3.299
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_claims",
+      "search_documents"
+    ],
+    "forbidden_facts": [
+      "generic_market_commentary_no_sources"
+    ],
+    "required_facts": [
+      "claim_or_evidence_items",
+      "ai_or_semiconductor_topic"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_claims"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly selected search_claims for the question about AI semiconductor demand. When the call returned empty, it issued a clean refusal without hallucinating data \u2014 exactly the right behaviour. The trajectory is a single, appropriate tool call followed by an honest 'no data' answer. No process changes needed; this is a textbook example of appropriate refusal after a valid empty result.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "A single well-chosen call for a single-fact question. No wasted or redundant calls. The chain is minimal and non-redundant.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Only one call was made, so there is no ordering constraint to evaluate. The single call is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "call 1 returned empty. The agent correctly refused to fabricate data and explained the data gap. This is an appropriate recovery \u2014 no further retry was warranted given the empty result.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 used search_claims, which is exactly the right tool for finding claims about AI semiconductor demand. The tool choice matches the question's intent perfectly.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 1,
+    "verdict": "GRADED"
+  }
+}

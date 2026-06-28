@@ -1,0 +1,41 @@
+# id=tc_movers_week_losers prompt='Show me the biggest losers this week.'
+# bucket=WARN reasons=['slow latency_s=43.872']
+# latency_s=43.872 ttft_s=0.679439 status=200
+
+[   679.44 ms] status             {"step": "loading_context"}
+[   686.45 ms] status             {"step": "entity_resolution"}
+[  1119.78 ms] thinking           {"stage": "tool_classification"}
+[  1120.48 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  6135.06 ms] status             {"step": "Loading get_market_movers\u2026"}
+[  6135.14 ms] tool_call          {"type": "tool_call", "tool": "get_market_movers", "label": "Fetching market movers...", "input": {"mover_type": "losers", "limit": 10, "period": "1W"}, "status": "running"}
+[  9321.78 ms] tool_result        {"type": "tool_result", "tool": "get_market_movers", "status": "ok", "item_count": 1, "label": "Fetching market movers...", "duration_ms": 3149, "result_preview": [{"id": "tool:movers:losers:1W", "title": "Market movers: losers (1W)"}], "grounding_sample": {"fields": {"ticker": "MSTR", "ticker_2": "ACN", "ticker_3": "ORCL", "ticker_4": "SLV", "ticker_5": "CTSH", "ticker_6": "PARA", "ticker_7": "RD
+[ 10088.76 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 9058}
+[ 13587.31 ms] token              {"text": "**Top 10 losers this week (1\u2011week period)**  \n\n- "}
+[ 13587.42 ms] token              {"text": "MSTR  \n- ACN  \n- ORCL  \n- SLV  \n- "}
+[ 13587.45 ms] token              {"text": "CTSH  \n- PARA  \n- RDW  \n- CBOE  \n- "}
+[ 13587.46 ms] token              {"text": "EPAM  \n- PLTR  \n\n[ get_market_movers row 0 ]"}
+[ 13600.93 ms] status             {"step": "verifying"}
+[ 43753.94 ms] final_answer       {"text": "**Top 10 losers this week (1\u2011week period)** \n\n- MSTR \n- ACN \n- ORCL \n- SLV \n- CTSH \n- PARA \n- RDW \n- CBOE \n- EPAM \n- PLTR \n\n[ get_market_movers row 0 ]\n\nNote: some figures or names above could not be matched to a retrieved source."}
+[ 43755.68 ms] citations          []
+[ 43759.08 ms] contradictions     []
+[ 43766.22 ms] suggestions        ["What are today's biggest market movers?", "What's in my morning brief today?", "Are there any notable earnings coming up this week?"]
+[ 43831.44 ms] metadata           {"thread_id": "8f8d9dbe-241d-45a3-8653-6409cff7c0e2", "message_id": "019f0f79-7acb-7b85-bd26-d2df86fb4bcd", "intent": "GENERAL", "provider": "", "latency_ms": 43633, "protocol_version": 2}
+[ 43831.58 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 8.52337499964051, "validate_input": 606.0515419812873, "load_history": 11.198624997632578, "entity_resolution": 330.0545839883853, "llm_tool_planning": 8555.798879999202, "tool_execution": 3155.979334987933, "llm_direct_text_generation": 3499.6691690175794, "grounding_validation": 30052.61638900265, "persist_and_cache": 12
+
+# --- final answer ---
+**Top 10 losers this week (1‑week period)**
+
+- MSTR
+- ACN
+- ORCL
+- SLV
+- CTSH
+- PARA
+- RDW
+- CBOE
+- EPAM
+- PLTR
+
+[ get_market_movers row 0 ]
+
+Note: some figures or names above could not be matched to a retrieved source.

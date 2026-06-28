@@ -1,0 +1,900 @@
+{
+  "bucket": "PASS",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_contradictions"
+    ]
+  },
+  "heuristics": {
+    "char_count": 1409,
+    "citation_count": 8,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_contradictions"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_contradictions"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 54.617,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 353,
+    "phase_timings_ms": {
+      "check_cache": 1.436666992958635,
+      "entity_resolution": 320.98979101283476,
+      "grounding_validation": 30136.40001299791,
+      "llm_direct_text_generation": 16094.237424986204,
+      "llm_tool_planning": 20037.307176971808,
+      "load_history": 3.221791994292289,
+      "persist_and_cache": 152.31583299464546,
+      "tool_execution": 2088.52066801046,
+      "validate_input": 865.7661250035744
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "confidence_threshold",
+          "entity_name"
+        ],
+        "tool": "get_contradictions"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_contradictions"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 10,
+        "status": "ok",
+        "tool": "get_contradictions"
+      }
+    ],
+    "ttft_s": 0.896,
+    "word_count": 235
+  },
+  "id": "agg_q7_tsla_contradictions",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for contradictions; answer provides a structured list of detected contradictions with citations, matching medium depth.",
+        "reason": "Question asks for contradictions; answer provides a structured list of detected contradictions with citations, matching medium depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Most claims cite tool rows; the fleet-size claim (20 vehicles) is not verifiable from the grounding sample but no contradiction with returned data. Attribution is good.",
+        "reason": "Most claims cite tool rows; the fleet-size claim (20 vehicles) is not verifiable from the grounding sample but no contradiction with returned data. Attribution is good.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_contradictions, which is in the expected_tools equivalence set.",
+        "reason": "Called get_contradictions, which is in the expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_contradictions and produced a well-structured answer listing detected contradictions with citations. The grounding is solid, though the fleet-size claim (20 vehicles) is not clearly supported by the returned data \u2014 ensure all cited figures are directly traceable to tool output. Overall, a strong response that meets the rubric's expectations.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_contradictions, which is in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Most claims cite tool rows; the fleet-size claim (20 vehicles) is not verifiable from the grounding sample but no contradiction with returned data. Attribution is good.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for contradictions; answer provides a structured list of detected contradictions with citations, matching medium depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_contradictions and produced a well-structured answer listing detected contradictions with citations. The grounding is solid, though the fleet-size claim (20 vehicles) is not clearly supported by the returned data \u2014 ensure all cited figures are directly traceable to tool output. Overall, a strong response that meets the rubric's expectations.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_contradictions and produced a well-structured answer listing detected contradictions with citations. The grounding is solid, though the fleet-size claim (20 vehicles) is not clearly supported by the returned data \u2014 ensure all cited figures are directly traceable to tool output. Overall, a strong response that meets the rubric's expectations.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Are there any contradictions in the recent narrative around Tesla?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Yes. The recent narrative about Tesla contains several contradictory statements that the system has flagged:\n\n- **Market\u2011share vs. earnings** \u2013 One source says Tesla\u2019s market share rose to\u202f2.3\u202f% in May (up from\u202f0.9\u202f% in 2025)\u202f[1], while another reports a sharp drop in GAAP net earnings to\u202f$3.4\u202fbillion, down from\u202f$15\u202fbillion in 2023\u202f[1].\n\n- **Revenue growth vs. revenue decline** \u2013 A claim highlights a 2.3\u202f% market\u2011share increase\u202f[1], yet another notes full\u2011year\u202f2025 revenue fell to\u202f$94.8\u202fbillion, a 3\u202f% decline and the company\u2019s first annual revenue drop\u202f[4][5].\n\n- **Automotive revenue trend** \u2013 One statement says automotive revenue fell 10\u202f% in\u202f2025, dragging overall revenue down\u202f[2], while a different source reports automotive gross margins expanding to\u202f21.1\u202f% (up from\u202f16.2\u202f% a year earlier)\u202f[7][8].\n\n- **Vehicle deliveries vs. earnings** \u2013 Tesla is said to have delivered roughly\u202f1.6\u202fmillion vehicles in\u202f2025, making it a top EV maker\u202f[3], yet another claim points to a decline in GAAP net earnings and a negative earnings trend\u202f[3].\n\n- **Fleet size vs. market share** \u2013 The market\u2011share growth claim (2.3\u202f% in May)\u202f[1][6] conflicts with a report that Tesla\u2019s fleet size has shrunk to around\u202f20\u202fvehicles\u202f[6].\n\nThese examples illustrate the polarity\u2011conflict contradictions detected across recent Tesla\u2011related reports.\n\nNote: some figures or names above could not be matched to a retrieved source.",
+    "citations": [
+      {
+        "confidence": 0.95,
+        "entity_name": "Tesla",
+        "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+        "item_type": "claim",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "knowledge_graph",
+        "title": "Contradiction: polarity_conflict",
+        "url": null
+      },
+      {
+        "confidence": 0.96,
+        "entity_name": "Tesla",
+        "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+        "item_type": "claim",
+        "published_at": null,
+        "ref": 2,
+        "source_name": "knowledge_graph",
+        "title": "Contradiction: polarity_conflict",
+        "url": null
+      },
+      {
+        "confidence": 0.95,
+        "entity_name": "Tesla",
+        "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+        "item_type": "claim",
+        "published_at": null,
+        "ref": 3,
+        "source_name": "knowledge_graph",
+        "title": "Contradiction: polarity_conflict",
+        "url": null
+      },
+      {
+        "confidence": 0.95,
+        "entity_name": "Tesla",
+        "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+        "item_type": "claim",
+        "published_at": null,
+        "ref": 4,
+        "source_name": "knowledge_graph",
+        "title": "Contradiction: polarity_conflict",
+        "url": null
+      },
+      {
+        "confidence": 0.95,
+        "entity_name": "Tesla",
+        "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+        "item_type": "claim",
+        "published_at": null,
+        "ref": 5,
+        "source_name": "knowledge_graph",
+        "title": "Contradiction: polarity_conflict",
+        "url": null
+      },
+      {
+        "confidence": 0.96,
+        "entity_name": "Tesla",
+        "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+        "item_type": "claim",
+        "published_at": null,
+        "ref": 6,
+        "source_name": "knowledge_graph",
+        "title": "Contradiction: polarity_conflict",
+        "url": null
+      },
+      {
+        "confidence": 0.95,
+        "entity_name": "Tesla",
+        "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+        "item_type": "claim",
+        "published_at": null,
+        "ref": 7,
+        "source_name": "knowledge_graph",
+        "title": "Contradiction: polarity_conflict",
+        "url": null
+      },
+      {
+        "confidence": 0.95,
+        "entity_name": "Tesla",
+        "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+        "item_type": "claim",
+        "published_at": null,
+        "ref": 8,
+        "source_name": "knowledge_graph",
+        "title": "Contradiction: polarity_conflict",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        895895
+      ],
+      [
+        "status",
+        899279
+      ],
+      [
+        "thinking",
+        1228941
+      ],
+      [
+        "agent_iteration",
+        1228971
+      ],
+      [
+        "status",
+        5236673
+      ],
+      [
+        "tool_call",
+        5236864
+      ],
+      [
+        "tool_result",
+        7293464
+      ],
+      [
+        "agent_iteration",
+        8082589
+      ],
+      [
+        "token",
+        24541699
+      ],
+      [
+        "token",
+        24542340
+      ],
+      [
+        "token",
+        24544214
+      ],
+      [
+        "token",
+        24544509
+      ],
+      [
+        "token",
+        24546476
+      ],
+      [
+        "token",
+        24546759
+      ],
+      [
+        "token",
+        24548061
+      ],
+      [
+        "token",
+        24548638
+      ],
+      [
+        "token",
+        24550971
+      ],
+      [
+        "token",
+        24551865
+      ],
+      [
+        "token",
+        24551913
+      ],
+      [
+        "token",
+        24553791
+      ],
+      [
+        "token",
+        24553809
+      ],
+      [
+        "token",
+        24553822
+      ],
+      [
+        "token",
+        24554449
+      ],
+      [
+        "token",
+        24554737
+      ],
+      [
+        "token",
+        24555786
+      ],
+      [
+        "token",
+        24556255
+      ],
+      [
+        "token",
+        24556495
+      ],
+      [
+        "token",
+        24559786
+      ],
+      [
+        "token",
+        24559818
+      ],
+      [
+        "token",
+        24559834
+      ],
+      [
+        "token",
+        24559847
+      ],
+      [
+        "token",
+        24559860
+      ],
+      [
+        "token",
+        24560014
+      ],
+      [
+        "token",
+        24560224
+      ],
+      [
+        "token",
+        24562105
+      ],
+      [
+        "token",
+        24562538
+      ],
+      [
+        "status",
+        24562585
+      ],
+      [
+        "final_answer",
+        54393459
+      ],
+      [
+        "citations",
+        54395639
+      ],
+      [
+        "contradictions",
+        54419024
+      ],
+      [
+        "suggestions",
+        54419150
+      ],
+      [
+        "metadata",
+        54556860
+      ],
+      [
+        "done",
+        54559532
+      ]
+    ],
+    "latency_s": 54.617,
+    "metadata": {
+      "intent": "CONTRADICTION",
+      "latency_ms": 54365,
+      "message_id": "019f0f6f-c5b4-7c9e-906c-382d525dff93",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "229bbfce-5159-4ffa-99fa-66c9ca3da94a"
+    },
+    "output_tokens": 353,
+    "phase_timings_ms": {
+      "check_cache": 1.436666992958635,
+      "entity_resolution": 320.98979101283476,
+      "grounding_validation": 30136.40001299791,
+      "llm_direct_text_generation": 16094.237424986204,
+      "llm_tool_planning": 20037.307176971808,
+      "load_history": 3.221791994292289,
+      "persist_and_cache": 152.31583299464546,
+      "tool_execution": 2088.52066801046,
+      "validate_input": 865.7661250035744
+    },
+    "question": "Are there any contradictions in the recent narrative around Tesla?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_contradictions\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "confidence_threshold": 0.5,
+            "entity_name": "Tesla"
+          },
+          "label": "Detecting contradictions for Tesla",
+          "status": "running",
+          "tool": "get_contradictions",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 2082,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Tesla",
+              "ticker_2": "Tesla",
+              "ticker_3": "Tesla"
+            },
+            "sampled_rows": 3,
+            "total_rows": 10,
+            "truncated": false
+          },
+          "item_count": 10,
+          "label": "Detecting contradictions for Tesla",
+          "result_preview": [
+            {
+              "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000",
+              "title": "Contradiction: polarity_conflict"
+            },
+            {
+              "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000",
+              "title": "Contradiction: polarity_conflict"
+            },
+            {
+              "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000",
+              "title": "Contradiction: polarity_conflict"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_contradictions",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 6848,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Yes. The recent narrative about Tesla contains several "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "contradictory statements that the system has flagged:\n\n- "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Market\u2011share vs. earnings** \u2013 One source says Tesla\u2019s "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "market share rose to\u202f2.3\u202f% in May "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(up from\u202f0.9\u202f% in 2025)\u202f[1], while "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "another reports a sharp drop in GAAP net "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "earnings to\u202f$3.4\u202fbillion, down from\u202f$15\u202fbillion "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in 2023\u202f[1].\n\n- **Revenue growth vs. revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "decline** \u2013 A claim highlights a 2.3\u202f% "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "market\u2011share increase\u202f[1], yet another notes full\u2011year\u202f2025 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue fell to\u202f$94.8\u202fbillion, a 3\u202f% "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "decline and the company\u2019s first annual revenue drop\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[4][5].\n\n- **Automotive revenue trend** \u2013 One statement "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "says automotive revenue fell 10\u202f% in\u202f2025, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "dragging overall revenue down\u202f[2], while a different "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "source reports automotive gross margins expanding to\u202f21.1\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "% (up from\u202f16.2\u202f% a year earlier)\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[7][8].\n\n- **Vehicle deliveries vs. earnings** \u2013 Tesla "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is said to have delivered roughly\u202f1.6\u202fmillion "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "vehicles in\u202f2025, making it a top EV "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "maker\u202f[3], yet another claim points to a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "decline in GAAP net earnings and a negative "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "earnings trend\u202f[3].\n\n- **Fleet size vs. market "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "share** \u2013 The market\u2011share growth claim (2.3\u202f% "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in May)\u202f[1][6] conflicts with a report that "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Tesla\u2019s fleet size has shrunk to around\u202f20\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "vehicles\u202f[6].\n\nThese examples illustrate the polarity\u2011conflict contradictions "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "detected across recent Tesla\u2011related reports."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Yes. The recent narrative about Tesla contains several contradictory statements that the system has flagged:\n\n- **Market\u2011share vs. earnings** \u2013 One source says Tesla\u2019s market share rose to\u202f2.3\u202f% in May (up from\u202f0.9\u202f% in 2025)\u202f[1], while another reports a sharp drop in GAAP net earnings to\u202f$3.4\u202fbillion, down from\u202f$15\u202fbillion in 2023\u202f[1].\n\n- **Revenue growth vs. revenue decline** \u2013 A claim highlights a 2.3\u202f% market\u2011share increase\u202f[1], yet another notes full\u2011year\u202f2025 revenue fell to\u202f$94.8\u202fbillion, a 3\u202f% decline and the company\u2019s first annual revenue drop\u202f[4][5].\n\n- **Automotive revenue trend** \u2013 One statement says automotive revenue fell 10\u202f% in\u202f2025, dragging overall revenue down\u202f[2], while a different source reports automotive gross margins expanding to\u202f21.1\u202f% (up from\u202f16.2\u202f% a year earlier)\u202f[7][8].\n\n- **Vehicle deliveries vs. earnings** \u2013 Tesla is said to have delivered roughly\u202f1.6\u202fmillion vehicles in\u202f2025, making it a top EV maker\u202f[3], yet another claim points to a decline in GAAP net earnings and a negative earnings trend\u202f[3].\n\n- **Fleet size vs. market share** \u2013 The market\u2011share growth claim (2.3\u202f% in May)\u202f[1][6] conflicts with a report that Tesla\u2019s fleet size has shrunk to around\u202f20\u202fvehicles\u202f[6].\n\nThese examples illustrate the polarity\u2011conflict contradictions detected across recent Tesla\u2011related reports.\n\nNote: some figures or names above could not be matched to a retrieved source."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.95,
+            "entity_name": "Tesla",
+            "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+            "item_type": "claim",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "knowledge_graph",
+            "title": "Contradiction: polarity_conflict",
+            "url": null
+          },
+          {
+            "confidence": 0.96,
+            "entity_name": "Tesla",
+            "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+            "item_type": "claim",
+            "published_at": null,
+            "ref": 2,
+            "source_name": "knowledge_graph",
+            "title": "Contradiction: polarity_conflict",
+            "url": null
+          },
+          {
+            "confidence": 0.95,
+            "entity_name": "Tesla",
+            "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+            "item_type": "claim",
+            "published_at": null,
+            "ref": 3,
+            "source_name": "knowledge_graph",
+            "title": "Contradiction: polarity_conflict",
+            "url": null
+          },
+          {
+            "confidence": 0.95,
+            "entity_name": "Tesla",
+            "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+            "item_type": "claim",
+            "published_at": null,
+            "ref": 4,
+            "source_name": "knowledge_graph",
+            "title": "Contradiction: polarity_conflict",
+            "url": null
+          },
+          {
+            "confidence": 0.95,
+            "entity_name": "Tesla",
+            "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+            "item_type": "claim",
+            "published_at": null,
+            "ref": 5,
+            "source_name": "knowledge_graph",
+            "title": "Contradiction: polarity_conflict",
+            "url": null
+          },
+          {
+            "confidence": 0.96,
+            "entity_name": "Tesla",
+            "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+            "item_type": "claim",
+            "published_at": null,
+            "ref": 6,
+            "source_name": "knowledge_graph",
+            "title": "Contradiction: polarity_conflict",
+            "url": null
+          },
+          {
+            "confidence": 0.95,
+            "entity_name": "Tesla",
+            "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+            "item_type": "claim",
+            "published_at": null,
+            "ref": 7,
+            "source_name": "knowledge_graph",
+            "title": "Contradiction: polarity_conflict",
+            "url": null
+          },
+          {
+            "confidence": 0.95,
+            "entity_name": "Tesla",
+            "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000000001004",
+            "item_type": "claim",
+            "published_at": null,
+            "ref": 8,
+            "source_name": "knowledge_graph",
+            "title": "Contradiction: polarity_conflict",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Alexandria Real Estate Equities Inc?",
+          "How has ARE performed recently?",
+          "How do Alexandria Real Estate Equities Inc's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "CONTRADICTION",
+          "latency_ms": 54365,
+          "message_id": "019f0f6f-c5b4-7c9e-906c-382d525dff93",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "229bbfce-5159-4ffa-99fa-66c9ca3da94a"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 1.436666992958635,
+            "entity_resolution": 320.98979101283476,
+            "grounding_validation": 30136.40001299791,
+            "llm_direct_text_generation": 16094.237424986204,
+            "llm_tool_planning": 20037.307176971808,
+            "load_history": 3.221791994292289,
+            "persist_and_cache": 152.31583299464546,
+            "tool_execution": 2088.52066801046,
+            "validate_input": 865.7661250035744
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "confidence_threshold": 0.5,
+          "entity_name": "Tesla"
+        },
+        "name": "get_contradictions"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Tesla",
+            "ticker_2": "Tesla",
+            "ticker_3": "Tesla"
+          },
+          "sampled_rows": 3,
+          "total_rows": 10,
+          "truncated": false
+        },
+        "item_count": 10,
+        "status": "ok",
+        "tool": "get_contradictions"
+      }
+    ],
+    "tps": 6.571,
+    "tps_streaming": 21.933,
+    "ttft_s": 0.896
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_contradictions"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (contradiction detection) and made a single, appropriate tool call (get_contradictions) that returned 10 items. The chain is minimal, dependency-free, and perfectly aligned with the question. No process improvements needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call returns all needed data; no wasted or redundant calls.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraints to violate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_contradictions, which is exactly the right tool for a contradiction-detection question about Tesla.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

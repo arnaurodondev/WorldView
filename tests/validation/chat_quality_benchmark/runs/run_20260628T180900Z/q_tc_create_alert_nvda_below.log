@@ -1,0 +1,27 @@
+# id=tc_create_alert_nvda_below prompt='Set an alert to notify me when NVDA drops below $400.'
+# bucket=PASS reasons=[]
+# latency_s=25.444 ttft_s=0.751305 status=200
+
+[   751.30 ms] status             {"step": "loading_context"}
+[   926.12 ms] status             {"step": "entity_resolution"}
+[  1764.08 ms] thinking           {"stage": "tool_classification"}
+[  1764.16 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  6120.95 ms] status             {"step": "Loading create_alert\u2026"}
+[  6122.02 ms] tool_call          {"type": "tool_call", "tool": "create_alert", "label": "Creating alert for 01900000-0000-7000-8000-000000001006", "input": {"entity_id": "01900000-0000-7000-8000-000000001006", "condition": "price_below", "threshold": {"value": 400.0}}, "status": "running"}
+[  6361.33 ms] pending_action     {"type": "pending_action", "proposal_id": "019f0f75-9003-7ee9-9ea4-bc5624b0086e", "tool": "create_alert", "description": "Create alert: price_below", "params": {"entity_id": "01900000-0000-7000-8000-000000001006", "condition": "price_below", "threshold": {"value": 400.0}, "severity": "low"}}
+[  6362.67 ms] tool_result        {"type": "tool_result", "tool": "create_alert", "status": "ok", "item_count": 1, "label": "Creating alert for 01900000-0000-7000-8000-000000001006", "duration_ms": 26, "result_preview": [{"id": "tool:create_alert:019f0f75-9003-7ee9-9ea4-bc5624b0086e", "title": "Pending alert creation"}]}
+[  6432.58 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 4190}
+[  8322.52 ms] token              {"text": "Your alert request has been received and is "}
+[  8325.21 ms] token              {"text": "pending confirmation."}
+[  8334.51 ms] status             {"step": "verifying"}
+[ 25342.51 ms] final_answer       {"text": "Your alert request has been received and is pending confirmation.\n\nNote: some figures or names above could not be matched to a retrieved source."}
+[ 25342.55 ms] citations          []
+[ 25348.92 ms] contradictions     []
+[ 25364.03 ms] suggestions        ["What's the latest news on NVIDIA Corporation?", "How has NVDA performed recently?", "How do NVIDIA Corporation's fundamentals look?"]
+[ 25404.46 ms] metadata           {"thread_id": "34aac836-ce87-49ed-8425-34fa43477cec", "message_id": "019f0f75-dc07-7940-b5b1-3c0e18df555c", "intent": "GENERAL", "provider": "", "latency_ms": 25275, "protocol_version": 2}
+[ 25404.65 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 2.365041000302881, "validate_input": 671.8993329850491, "load_history": 178.92679199576378, "entity_resolution": 822.3722919938155, "llm_tool_planning": 5954.42658601678, "tool_execution": 58.69233299745247, "llm_direct_text_generation": 1996.6775430075359, "grounding_validation": 16986.27284099348, "persist_and_cache": 61
+
+# --- final answer ---
+Your alert request has been received and is pending confirmation.
+
+Note: some figures or names above could not be matched to a retrieved source.

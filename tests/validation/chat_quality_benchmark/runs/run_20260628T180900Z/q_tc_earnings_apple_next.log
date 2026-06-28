@@ -1,0 +1,31 @@
+# id=tc_earnings_apple_next prompt='When does Apple next report earnings?'
+# bucket=PASS reasons=[]
+# latency_s=28.728 ttft_s=1.029222 status=200
+
+[  1029.22 ms] status             {"step": "loading_context"}
+[  1206.86 ms] status             {"step": "entity_resolution"}
+[  3451.37 ms] thinking           {"stage": "tool_classification"}
+[  3451.42 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  8221.14 ms] status             {"step": "Loading get_earnings_calendar\u2026"}
+[  8224.50 ms] tool_call          {"type": "tool_call", "tool": "get_earnings_calendar", "label": "Loading earnings calendar...", "input": {"from_date": "2026-06-28"}, "status": "running"}
+[  9061.98 ms] tool_result        {"type": "tool_result", "tool": "get_earnings_calendar", "status": "ok", "item_count": 1, "label": "Loading earnings calendar...", "duration_ms": 843, "result_preview": [{"id": "tool:earnings_calendar", "title": "Earnings calendar"}]}
+[  9405.12 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 5988}
+[ 12873.13 ms] tool_call          {"type": "tool_call", "tool": "get_earnings_calendar", "label": "Loading earnings calendar...", "input": {"from_date": "2026-06-28", "to_date": "2026-07-31"}, "status": "running"}
+[ 13379.55 ms] tool_result        {"type": "tool_result", "tool": "get_earnings_calendar", "status": "ok", "item_count": 1, "label": "Loading earnings calendar...", "duration_ms": 628, "result_preview": [{"id": "tool:earnings_calendar", "title": "Earnings calendar"}]}
+[ 13615.68 ms] agent_iteration    {"iteration": 2, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 2, "elapsed_ms": 10192}
+[ 20379.06 ms] tool_call          {"type": "tool_call", "tool": "search_events", "label": "Looking up corporate events...", "input": {"entity_name": "Apple", "event_type": "earnings"}, "status": "running"}
+[ 20939.85 ms] tool_result        {"type": "tool_result", "tool": "search_events", "status": "empty", "item_count": 0, "label": "Looking up corporate events...", "duration_ms": 532}
+[ 21361.64 ms] agent_iteration    {"iteration": 3, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 3, "elapsed_ms": 17942}
+[ 28059.06 ms] token              {"text": "I\u2019m unable to locate Apple\u2019s upcoming earnings\u2011report date. "}
+[ 28059.09 ms] token              {"text": "The earnings\u2011calendar query returned no entries for Apple "}
+[ 28101.28 ms] token              {"text": "in the requested period\u202f[1]."}
+[ 28107.56 ms] status             {"step": "verifying"}
+[ 28111.88 ms] final_answer       {"text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period."}
+[ 28113.47 ms] citations          []
+[ 28193.71 ms] contradictions     []
+[ 28209.08 ms] suggestions        ["What are today's biggest market movers?", "What's in my morning brief today?", "Are there any notable earnings coming up this week?"]
+[ 28432.26 ms] metadata           {"thread_id": "26d4c363-a824-4b5a-82e5-0c12f0b7e5ce", "message_id": "019f0f76-b42c-7c58-84ff-fa2a88cdf56d", "intent": "GENERAL", "provider": "", "latency_ms": 28013, "protocol_version": 2}
+[ 28432.40 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 15.680499986046925, "validate_input": 809.2241259873845, "load_history": 208.56808297685347, "entity_resolution": 2197.0975429867394, "llm_tool_planning": 21166.04871902382, "tool_execution": 2012.9990849818569, "llm_direct_text_generation": 6320.297794998623, "grounding_validation": 7.320000004256144, "persist_and_cache":
+
+# --- final answer ---
+I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request — please try again, or narrow the question to a specific ticker, metric, or time period.

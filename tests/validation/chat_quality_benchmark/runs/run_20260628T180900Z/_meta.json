@@ -1,0 +1,17 @@
+{
+  "base_url": "http://localhost:8000",
+  "concurrency_note": "58 q at --concurrency 3 + 9 recovery q at --concurrency 1 (host-load GC blip at q59-61)",
+  "ended_at": "2026-06-28T18:47:05.578294+00:00",
+  "ids_filter": null,
+  "judge_model_id": "deepseek-ai/DeepSeek-V4-Flash",
+  "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+  "judge_prompt_version": "3.0",
+  "max_runs_per_q": 1,
+  "out_dir_label": "run_20260628T180900Z",
+  "questions_file": "/Users/arnaurodon/Projects/University/final_thesis/worldview-consolidation/tests/validation/chat_quality_benchmark/questions",
+  "started_at": "2026-06-28T18:09:00+00:00",
+  "tags_filter": null,
+  "total_questions": 67,
+  "total_runs": 67,
+  "verdict_model_version": "1.1"
+}

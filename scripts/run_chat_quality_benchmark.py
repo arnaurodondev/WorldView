@@ -55,6 +55,7 @@ There are two question catalogues and they are NOT duplicates:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import statistics
@@ -1623,6 +1624,199 @@ class _StandaloneClient(RagChatClient):
 
 
 # --------------------------------------------------------------------------
+# Per-slot execution (shared by the sequential and concurrent dispatchers)
+# --------------------------------------------------------------------------
+
+
+class _SlotOutcome:
+    """Self-contained result of running ONE (question, attempt) slot.
+
+    The per-slot work — chat call, heuristics, pass/fail derivation, LLM
+    answer judge, trajectory judge, and the q_<slot>.json artefact write —
+    is byte-identical to the original in-line loop body (PLAN-0104 W33 /
+    W1 / W2). The ONLY structural change is that it now returns its results
+    in this object instead of mutating shared lists/counters from inside the
+    loop. That makes the work safe to run concurrently: each slot owns its
+    own ``_StandaloneClient`` and never touches another slot's state. The
+    caller aggregates these outcomes AFTER collection, in original question
+    order, so counters / records / the JSON summaries are deterministic and
+    independent of how the slots were scheduled.
+
+    A slot that raised carries ``error`` (the ``q_<slot>.json`` error file is
+    still written inside ``_execute_slot`` so the artefact layout is
+    preserved); the aggregator records it as an EXCEPTION bucket.
+    """
+
+    __slots__ = (
+        "q_id",
+        "category",
+        "slot",
+        "idx",
+        "bucket",
+        "per_q_record",
+        "judge_record",
+        "trajectory_record",
+        "console_line",
+        "error",
+    )
+
+    def __init__(
+        self,
+        *,
+        q_id: str,
+        category: str,
+        slot: str,
+        idx: int,
+        bucket: str,
+        per_q_record: dict[str, Any],
+        judge_record: dict[str, Any] | None,
+        trajectory_record: dict[str, Any] | None,
+        console_line: str,
+        error: bool,
+    ) -> None:
+        self.q_id = q_id
+        self.category = category
+        self.slot = slot
+        self.idx = idx
+        self.bucket = bucket
+        self.per_q_record = per_q_record
+        self.judge_record = judge_record
+        self.trajectory_record = trajectory_record
+        self.console_line = console_line
+        self.error = error
+
+
+def _execute_slot(
+    *,
+    client: _StandaloneClient,
+    q: dict[str, Any],
+    q_id: str,
+    category: str,
+    slot: str,
+    idx: int,
+    total: int,
+    out_dir: Path,
+    judge_enabled: bool,
+    trajectory_enabled: bool,
+) -> _SlotOutcome:
+    """Run a single slot end-to-end and return its outcome.
+
+    This is the EXACT body of the original per-attempt loop, lifted verbatim
+    so the scoring path is unchanged — only the shared-state mutation and the
+    console ``print`` are deferred to the caller (returned on the outcome).
+    The artefact writes (q_<slot>.json / error file) stay here because they
+    are per-slot and independently safe (distinct paths per slot).
+    """
+    try:
+        result = client.ask(q.get("prompt") or "")
+        heur = compute_heuristics(q, result)
+        bucket, reasons = derive_pass_fail(heur)
+        # PLAN-0104 W33 — call the LLM judge per-Q when --judge is
+        # set. We grade after the chat call so a judge failure
+        # never affects the captured chat artefact.
+        judge_result: dict[str, Any] | None = None
+        judge_record: dict[str, Any] | None = None
+        if judge_enabled:
+            judge_input = JudgeInput(
+                prompt=q.get("prompt") or "",
+                rubric=Rubric.from_question(q),
+                answer_text=result.answer_text or "",
+                tool_calls=[{"name": tc.name, "arguments": tc.arguments} for tc in result.tool_calls],
+                tool_results=list(result.tool_results),
+            )
+            judge_result = judge_answer(judge_input)
+            judge_record = {"id": q_id, "slot": slot, **judge_result}
+        # --- W2 trajectory layer ---
+        # Grade the tool-chain TRAJECTORY from the SAME JudgeInput the
+        # answer judge used (so both judges see the identical ordered
+        # trace). This NEVER mutates ``judge_result`` / the answer
+        # verdict — it is a separate ``trajectory`` block. We reuse
+        # ``judge_input`` from the --judge branch above; trajectory is
+        # only enabled when --judge is on, so it is always populated.
+        trajectory_result: dict[str, Any] | None = None
+        trajectory_record: dict[str, Any] | None = None
+        if trajectory_enabled:
+            trajectory_result = judge_trajectory(judge_input)
+            trajectory_record = {"id": q_id, "slot": slot, **trajectory_result}
+        write_question_artifacts(
+            out_dir=out_dir,
+            slot=slot,
+            q=q,
+            result=result,
+            heur=heur,
+            bucket=bucket,
+            reasons=reasons,
+            judge_result=judge_result,
+            trajectory_result=trajectory_result,  # --- W2 trajectory layer ---
+        )
+        # PLAN-0099-W4: removed legacy heuristic fields
+        # (entities_mentioned, entities_missing, must_not_say_hits)
+        # from the per-Q summary — they no longer exist in the
+        # computed heuristics. The LLM judge replaces these checks.
+        per_q_record = {
+            "id": q_id,
+            "slot": slot,
+            "category": category,
+            "bucket": bucket,
+            "reasons": reasons,
+            "latency_s": heur["latency_s"],
+            "ttft_s": heur["ttft_s"],
+            "word_count": heur["word_count"],
+            "tool_overlap_with_expected": heur["tool_overlap_with_expected"],
+            "missing_expected_tools": heur["missing_expected_tools"],
+            "is_refusal": heur["is_refusal"],
+            "is_empty": heur["is_empty"],
+        }
+        # PLAN-0104 W33 — append the judge verdict to the per-Q
+        # console line so the operator sees rubric grading inline.
+        judge_suffix = ""
+        if judge_result is not None:
+            v = judge_result.get("verdict")
+            s = judge_result.get("score")
+            judge_suffix = f" | judge={v} score={s}"
+        console_line = (
+            f"[{idx + 1:>2}/{total}] {q_id:<35} {bucket:<5} "
+            f"latency={heur['latency_s']:>5.1f}s words={heur['word_count']:>4} "
+            f"tools={','.join(heur['distinct_tools_called']) or '-'} "
+            f"{'; '.join(reasons) if reasons else ''}{judge_suffix}"
+        )
+        return _SlotOutcome(
+            q_id=q_id,
+            category=category,
+            slot=slot,
+            idx=idx,
+            bucket=bucket,
+            per_q_record=per_q_record,
+            judge_record=judge_record,
+            trajectory_record=trajectory_record,
+            console_line=console_line,
+            error=False,
+        )
+    except Exception as exc:  # — script-level catch-all
+        write_error_file(out_dir, slot, exc)
+        per_q_record = {
+            "id": q_id,
+            "slot": slot,
+            "category": category,
+            "bucket": "EXCEPTION",
+            "reasons": [f"exception: {exc!r}"],
+        }
+        console_line = f"[{idx + 1:>2}/{total}] {q_id:<35} EXCEPTION {exc!r}"
+        return _SlotOutcome(
+            q_id=q_id,
+            category=category,
+            slot=slot,
+            idx=idx,
+            bucket="EXCEPTION",
+            per_q_record=per_q_record,
+            judge_record=None,
+            trajectory_record=None,
+            console_line=console_line,
+            error=True,
+        )
+
+
+# --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
 
@@ -1647,10 +1841,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="tests/validation/chat_quality_benchmark/runs",
         help="Parent directory; the script appends a run_<ts> subdirectory.",
     )
-    # NOTE: the old ``--concurrency`` flag was REMOVED (audit 2026-06-11 F9) —
-    # it was advertised but never wired (the runner is strictly sequential), so
-    # it silently lied about parallelism. Re-add it only alongside real
-    # concurrency. TODO(PRD-scoring-redesign): parallel question execution.
+    # ``--concurrency`` re-introduced (2026-06-28) WITH real parallelism. The
+    # old flag (removed audit 2026-06-11 F9) only ever pretended to parallelize.
+    # This one genuinely runs up to N slots at once via asyncio (a semaphore
+    # gates how many ``_execute_slot`` calls are in flight, each off-loaded to a
+    # worker thread because the chat client + judges are blocking httpx). Only
+    # the DISPATCH is concurrent — per-slot scoring is byte-identical and each
+    # slot owns its own client. DEFAULT 1 preserves the exact in-order
+    # sequential behavior (and the original single shared client) for back-compat.
+    p.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help=(
+            "Max questions to run in parallel (asyncio + thread off-load). "
+            "Default 1 = strictly sequential (exact legacy behavior). N>1 runs "
+            "at most N slots concurrently; scoring is unchanged."
+        ),
+    )
     p.add_argument(
         "--baseline",
         default="",
@@ -1848,122 +2056,124 @@ def main(argv: list[str] | None = None) -> int:
     print(f"out_dir    : {out_dir}")
     print()
 
-    client = _StandaloneClient(args.base_url, timeout_s=args.timeout_s)
+    # --- W2 trajectory layer ---
+    # Trajectory grading rides along with the answer judge: ON when --judge is
+    # set unless explicitly disabled with --no-trajectory. Its records aggregate
+    # into the ``trajectory`` block of _judge_summary.json / the report.
+    trajectory_enabled = args.judge and (args.trajectory is not False)
+    concurrency = max(1, int(args.concurrency or 1))
+    if concurrency > 1:
+        print(f"concurrency: {concurrency} (parallel dispatch; scoring unchanged)")
+        print()
 
     started_at = datetime.now(tz=UTC).isoformat()
+
+    # Build the flat list of slot specs in deterministic order. Each spec is
+    # one (question, attempt) pair; ``idx`` is the QUESTION index used purely
+    # for the console ``[ n/total ]`` counter (kept stable so the output reads
+    # like the sequential run regardless of completion order).
+    slot_specs: list[dict[str, Any]] = []
+    for idx, q in enumerate(filtered):
+        q_id = q.get("id") or f"unnamed_{idx}"
+        category = q.get("category") or "uncategorized"
+        for attempt in range(args.max_runs_per_q):
+            slot = _safe_slot(q_id, attempt, args.max_runs_per_q)
+            slot_specs.append({"q": q, "q_id": q_id, "category": category, "slot": slot, "idx": idx})
+
+    outcomes: list[_SlotOutcome] = []
+    if concurrency == 1:
+        # Strictly sequential — exact legacy behavior, including a SINGLE shared
+        # client reused across every slot (connection-pool reuse + one login).
+        client = _StandaloneClient(args.base_url, timeout_s=args.timeout_s)
+        try:
+            for spec in slot_specs:
+                outcome = _execute_slot(
+                    client=client,
+                    q=spec["q"],
+                    q_id=spec["q_id"],
+                    category=spec["category"],
+                    slot=spec["slot"],
+                    idx=spec["idx"],
+                    total=len(filtered),
+                    out_dir=out_dir,
+                    judge_enabled=bool(args.judge),
+                    trajectory_enabled=trajectory_enabled,
+                )
+                # Print as we go so a long sequential run streams progress.
+                print(outcome.console_line)
+                outcomes.append(outcome)
+        finally:
+            client.close()
+    else:
+        # Concurrent dispatch. A semaphore caps how many slots are in flight;
+        # each slot runs the BLOCKING ``_execute_slot`` on its own worker thread
+        # (asyncio.to_thread) with its OWN client, so there is no shared mutable
+        # state and no contention on a single httpx connection pool. We gather
+        # all slot coroutines and collect their outcomes; aggregation happens
+        # afterwards, in original spec order, so the summaries are deterministic.
+        async def _dispatch() -> list[_SlotOutcome]:
+            sem = asyncio.Semaphore(concurrency)
+            done = 0
+            total_slots = len(slot_specs)
+
+            async def _run(spec: dict[str, Any]) -> _SlotOutcome:
+                nonlocal done
+                async with sem:
+                    # Each concurrent slot gets a fresh client (own connection
+                    # pool + own login token) — never share one httpx.Client
+                    # across threads.
+                    slot_client = _StandaloneClient(args.base_url, timeout_s=args.timeout_s)
+                    try:
+                        outcome = await asyncio.to_thread(
+                            _execute_slot,
+                            client=slot_client,
+                            q=spec["q"],
+                            q_id=spec["q_id"],
+                            category=spec["category"],
+                            slot=spec["slot"],
+                            idx=spec["idx"],
+                            total=len(filtered),
+                            out_dir=out_dir,
+                            judge_enabled=bool(args.judge),
+                            trajectory_enabled=trajectory_enabled,
+                        )
+                    finally:
+                        slot_client.close()
+                # Stream each slot's line as it completes (out of order under
+                # concurrency — the leading counter is the question index, not
+                # completion order). A small ``(done/total)`` prefix makes the
+                # interleaved output legible.
+                done += 1
+                print(f"({done}/{total_slots}) {outcome.console_line}")
+                return outcome
+
+            return await asyncio.gather(*(_run(s) for s in slot_specs))
+
+        gathered = asyncio.run(_dispatch())
+        # Re-order strictly by spec position so aggregation is independent of
+        # completion order (gather preserves input order, but we sort defensively
+        # by (idx, slot) in case that ever changes).
+        outcomes = sorted(gathered, key=lambda o: (o.idx, o.slot))
+
+    ended_at = datetime.now(tz=UTC).isoformat()
+
+    # --- Aggregate outcomes (single-threaded, deterministic order) ----------
     per_q_records: list[dict[str, Any]] = []
     bucket_counts = {"PASS": 0, "WARN": 0, "FAIL": 0, "EXCEPTION": 0}
     category_buckets: dict[str, dict[str, int]] = {}
     # PLAN-0104 W33 — per-Q judge records, aggregated into _judge_summary.json.
     judge_records: list[dict[str, Any]] = []
     # --- W2 trajectory layer ---
-    # Trajectory grading rides along with the answer judge: ON when --judge is
-    # set unless explicitly disabled with --no-trajectory. Its records aggregate
-    # into the ``trajectory`` block of _judge_summary.json / the report.
-    trajectory_enabled = args.judge and (args.trajectory is not False)
     trajectory_records: list[dict[str, Any]] = []
-
-    try:
-        for idx, q in enumerate(filtered):
-            q_id = q.get("id") or f"unnamed_{idx}"
-            category = q.get("category") or "uncategorized"
-            for attempt in range(args.max_runs_per_q):
-                slot = _safe_slot(q_id, attempt, args.max_runs_per_q)
-                try:
-                    result = client.ask(q.get("prompt") or "")
-                    heur = compute_heuristics(q, result)
-                    bucket, reasons = derive_pass_fail(heur)
-                    # PLAN-0104 W33 — call the LLM judge per-Q when --judge is
-                    # set. We grade after the chat call so a judge failure
-                    # never affects the captured chat artefact.
-                    judge_result: dict[str, Any] | None = None
-                    if args.judge:
-                        judge_input = JudgeInput(
-                            prompt=q.get("prompt") or "",
-                            rubric=Rubric.from_question(q),
-                            answer_text=result.answer_text or "",
-                            tool_calls=[{"name": tc.name, "arguments": tc.arguments} for tc in result.tool_calls],
-                            tool_results=list(result.tool_results),
-                        )
-                        judge_result = judge_answer(judge_input)
-                        judge_records.append({"id": q_id, "slot": slot, **judge_result})
-                    # --- W2 trajectory layer ---
-                    # Grade the tool-chain TRAJECTORY from the SAME JudgeInput the
-                    # answer judge used (so both judges see the identical ordered
-                    # trace). This NEVER mutates ``judge_result`` / the answer
-                    # verdict — it is a separate ``trajectory`` block. We reuse
-                    # ``judge_input`` from the --judge branch above; trajectory is
-                    # only enabled when --judge is on, so it is always populated.
-                    trajectory_result: dict[str, Any] | None = None
-                    if trajectory_enabled:
-                        trajectory_result = judge_trajectory(judge_input)
-                        trajectory_records.append({"id": q_id, "slot": slot, **trajectory_result})
-                    write_question_artifacts(
-                        out_dir=out_dir,
-                        slot=slot,
-                        q=q,
-                        result=result,
-                        heur=heur,
-                        bucket=bucket,
-                        reasons=reasons,
-                        judge_result=judge_result,
-                        trajectory_result=trajectory_result,  # --- W2 trajectory layer ---
-                    )
-                    bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
-                    cb = category_buckets.setdefault(category, {"PASS": 0, "WARN": 0, "FAIL": 0, "EXCEPTION": 0})
-                    cb[bucket] = cb.get(bucket, 0) + 1
-                    # PLAN-0099-W4: removed legacy heuristic fields
-                    # (entities_mentioned, entities_missing, must_not_say_hits)
-                    # from the per-Q summary — they no longer exist in the
-                    # computed heuristics. The LLM judge replaces these checks.
-                    per_q_records.append(
-                        {
-                            "id": q_id,
-                            "slot": slot,
-                            "category": category,
-                            "bucket": bucket,
-                            "reasons": reasons,
-                            "latency_s": heur["latency_s"],
-                            "ttft_s": heur["ttft_s"],
-                            "word_count": heur["word_count"],
-                            "tool_overlap_with_expected": heur["tool_overlap_with_expected"],
-                            "missing_expected_tools": heur["missing_expected_tools"],
-                            "is_refusal": heur["is_refusal"],
-                            "is_empty": heur["is_empty"],
-                        }
-                    )
-                    # PLAN-0104 W33 — append the judge verdict to the per-Q
-                    # console line so the operator sees rubric grading inline.
-                    judge_suffix = ""
-                    if judge_result is not None:
-                        v = judge_result.get("verdict")
-                        s = judge_result.get("score")
-                        judge_suffix = f" | judge={v} score={s}"
-                    print(
-                        f"[{idx + 1:>2}/{len(filtered)}] {q_id:<35} {bucket:<5} "
-                        f"latency={heur['latency_s']:>5.1f}s words={heur['word_count']:>4} "
-                        f"tools={','.join(heur['distinct_tools_called']) or '-'} "
-                        f"{'; '.join(reasons) if reasons else ''}{judge_suffix}"
-                    )
-                except Exception as exc:  # — script-level catch-all
-                    write_error_file(out_dir, slot, exc)
-                    bucket_counts["EXCEPTION"] += 1
-                    cb = category_buckets.setdefault(category, {"PASS": 0, "WARN": 0, "FAIL": 0, "EXCEPTION": 0})
-                    cb["EXCEPTION"] = cb.get("EXCEPTION", 0) + 1
-                    per_q_records.append(
-                        {
-                            "id": q_id,
-                            "slot": slot,
-                            "category": category,
-                            "bucket": "EXCEPTION",
-                            "reasons": [f"exception: {exc!r}"],
-                        }
-                    )
-                    print(f"[{idx + 1:>2}/{len(filtered)}] {q_id:<35} EXCEPTION {exc!r}")
-    finally:
-        client.close()
-
-    ended_at = datetime.now(tz=UTC).isoformat()
+    for outcome in outcomes:
+        per_q_records.append(outcome.per_q_record)
+        bucket_counts[outcome.bucket] = bucket_counts.get(outcome.bucket, 0) + 1
+        cb = category_buckets.setdefault(outcome.category, {"PASS": 0, "WARN": 0, "FAIL": 0, "EXCEPTION": 0})
+        cb[outcome.bucket] = cb.get(outcome.bucket, 0) + 1
+        if outcome.judge_record is not None:
+            judge_records.append(outcome.judge_record)
+        if outcome.trajectory_record is not None:
+            trajectory_records.append(outcome.trajectory_record)
 
     meta = {
         "base_url": args.base_url,

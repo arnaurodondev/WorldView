@@ -1,0 +1,587 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ]
+  },
+  "heuristics": {
+    "char_count": 235,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 32.815,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_graph"
+    ],
+    "output_tokens": 59,
+    "phase_timings_ms": {
+      "check_cache": 8.902166999178007,
+      "entity_resolution": 754.2804580007214,
+      "grounding_validation": 8.227582991821691,
+      "llm_direct_text_generation": 12211.184296989813,
+      "llm_tool_planning": 25306.107177981175,
+      "load_history": 102.18112499569543,
+      "persist_and_cache": 60.44112500967458,
+      "tool_execution": 4084.933418984292,
+      "validate_input": 907.6310840027872
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_entity_relations"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "ttft_s": 1.047,
+    "word_count": 31
+  },
+  "id": "tc_entity_graph_filtered_relations",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a simple lookup; answer is a concise table with one row. Depth matches complexity perfectly.",
+        "reason": "Question is a simple lookup; answer is a concise table with one row. Depth matches complexity perfectly.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample contradicts the answer; TSMC is a well-known Apple supplier and the answer cites the tool. Attribution is clear.",
+        "reason": "No grounding sample contradicts the answer; TSMC is a well-known Apple supplier and the answer cites the tool. Attribution is clear.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_entity_relations twice, which is in the expected_tools equivalence set. Correct routing.",
+        "reason": "Called search_entity_relations twice, which is in the expected_tools equivalence set. Correct routing.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified the question as a relation lookup and routed to search_entity_relations, which is in the expected tool set. The answer is concise, well-attributed, and appropriately scoped. The only improvement would be to include a note that the graph returned only one high-confidence supplier; if the user expected a longer list, the agent could explain that the knowledge graph may be incomplete. Otherwise, solid performance.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_entity_relations twice, which is in the expected_tools equivalence set. Correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample contradicts the answer; TSMC is a well-known Apple supplier and the answer cites the tool. Attribution is clear.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a simple lookup; answer is a concise table with one row. Depth matches complexity perfectly.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified the question as a relation lookup and routed to search_entity_relations, which is in the expected tool set. The answer is concise, well-attributed, and appropriately scoped. The only improvement would be to include a note that the graph returned only one high-confidence supplier; if the user expected a longer list, the agent could explain that the knowledge graph may be incomplete. Otherwise, solid performance.\"\n}",
+    "reviewer_summary": "The agent correctly identified the question as a relation lookup and routed to search_entity_relations, which is in the expected tool set. The answer is concise, well-attributed, and appropriately scoped. The only improvement would be to include a note that the graph returned only one high-confidence supplier; if the user expected a longer list, the agent could explain that the knowledge graph may be incomplete. Otherwise, solid performance.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Show me companies that are suppliers to Apple.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Suppliers to Apple (as reported by the knowledge\u2011graph)**  \n\n| Supplier | Relation to Apple | Confidence |\n|----------|-------------------|------------|\n| Taiwan Semiconductor Manufacturing (TSMC) | supplier_of \u2192 Apple Inc. | 0.91\u202f |",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1047423
+      ],
+      [
+        "status",
+        1137483
+      ],
+      [
+        "thinking",
+        1901598
+      ],
+      [
+        "agent_iteration",
+        1903028
+      ],
+      [
+        "status",
+        9893371
+      ],
+      [
+        "tool_call",
+        9899446
+      ],
+      [
+        "tool_result",
+        12034157
+      ],
+      [
+        "agent_iteration",
+        12772382
+      ],
+      [
+        "tool_call",
+        18123210
+      ],
+      [
+        "tool_result",
+        19857292
+      ],
+      [
+        "agent_iteration",
+        20447342
+      ],
+      [
+        "token",
+        32664147
+      ],
+      [
+        "token",
+        32665626
+      ],
+      [
+        "token",
+        32672396
+      ],
+      [
+        "token",
+        32673056
+      ],
+      [
+        "token",
+        32704082
+      ],
+      [
+        "status",
+        32704151
+      ],
+      [
+        "final_answer",
+        32704373
+      ],
+      [
+        "citations",
+        32704536
+      ],
+      [
+        "contradictions",
+        32707021
+      ],
+      [
+        "suggestions",
+        32708304
+      ],
+      [
+        "metadata",
+        32785277
+      ],
+      [
+        "done",
+        32786312
+      ]
+    ],
+    "latency_s": 32.815,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 32607,
+      "message_id": "019f0f77-ab85-7c66-abdb-0a7e19ba1d69",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "b0a34c2b-24c2-4af8-86af-5dcc9d691585"
+    },
+    "output_tokens": 59,
+    "phase_timings_ms": {
+      "check_cache": 8.902166999178007,
+      "entity_resolution": 754.2804580007214,
+      "grounding_validation": 8.227582991821691,
+      "llm_direct_text_generation": 12211.184296989813,
+      "llm_tool_planning": 25306.107177981175,
+      "load_history": 102.18112499569543,
+      "persist_and_cache": 60.44112500967458,
+      "tool_execution": 4084.933418984292,
+      "validate_input": 907.6310840027872
+    },
+    "question": "Show me companies that are suppliers to Apple.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_entity_relations\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 2239,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 10838,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20,
+            "relation_type": "supplies"
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1836,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 18544,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Suppliers to Apple (as reported by the knowledge\u2011graph)**  \n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Supplier | Relation to Apple | Confidence "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n|----------|-------------------|------------|\n| Taiwan Semiconductor Manufacturing (TSMC) | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "supplier_of \u2192 Apple Inc. | 0.91\u202f[search_entity_relations row\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "3] |"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Suppliers to Apple (as reported by the knowledge\u2011graph)**  \n\n| Supplier | Relation to Apple | Confidence |\n|----------|-------------------|------------|\n| Taiwan Semiconductor Manufacturing (TSMC) | supplier_of \u2192 Apple Inc. | 0.91\u202f |"
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Alexandria Real Estate Equities Inc?",
+          "How has ARE performed recently?",
+          "How do Alexandria Real Estate Equities Inc's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 32607,
+          "message_id": "019f0f77-ab85-7c66-abdb-0a7e19ba1d69",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "b0a34c2b-24c2-4af8-86af-5dcc9d691585"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 8.902166999178007,
+            "entity_resolution": 754.2804580007214,
+            "grounding_validation": 8.227582991821691,
+            "llm_direct_text_generation": 12211.184296989813,
+            "llm_tool_planning": 25306.107177981175,
+            "load_history": 102.18112499569543,
+            "persist_and_cache": 60.44112500967458,
+            "tool_execution": 4084.933418984292,
+            "validate_input": 907.6310840027872
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20,
+          "relation_type": "supplies"
+        },
+        "name": "search_entity_relations"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tps": 1.857,
+    "tps_streaming": 4.832,
+    "ttft_s": 1.047
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ],
+    "forbidden_facts": [
+      "fabricated_supplier_names"
+    ],
+    "required_facts": [
+      "apple_identified",
+      "supplier_relation_type",
+      "supplier_list_or_empty"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_graph"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for a supplier-relation query and used the appropriate tool (search_entity_relations). However, the first call without a relation_type filter is wasted \u2014 the second call with relation_type=supplies already covers the ask. The chain would be more efficient by dropping the first call entirely. The answer itself is grounded in the tool output (TSMC as supplier), which matches the rubric's requirement for a supplier list without fabrication.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The first call (no relation_type) is redundant because the second call with relation_type=supplies already returns the same or better data. The first call's result is never used in the answer.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Only two calls, no data dependency between them (the second call is a refinement of the first, not a consumer of its output). No ordering constraint to violate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "Both calls use search_entity_relations, which is exactly the right tool for a supplier-relation query. The second call adds a relation_type filter to narrow to 'supplies' \u2014 appropriate refinement.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 95,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

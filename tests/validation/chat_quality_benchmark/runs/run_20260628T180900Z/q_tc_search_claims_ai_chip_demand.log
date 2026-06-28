@@ -1,0 +1,25 @@
+# id=tc_search_claims_ai_chip_demand prompt='Find recent claims about AI semiconductor demand.'
+# bucket=PASS reasons=[]
+# latency_s=17.358 ttft_s=3.299056 status=200
+
+[  3299.06 ms] status             {"step": "loading_context"}
+[  3337.20 ms] status             {"step": "entity_resolution"}
+[  4362.24 ms] thinking           {"stage": "tool_classification"}
+[  4362.29 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[ 13464.05 ms] status             {"step": "Loading search_claims\u2026"}
+[ 13470.75 ms] tool_call          {"type": "tool_call", "tool": "search_claims", "label": "Checking analyst claims on AI semiconductor demand", "input": {"entity_name": "AI semiconductor demand", "claim_type": "strategic_move", "date_from": "2026-06-01"}, "status": "running"}
+[ 14635.69 ms] tool_result        {"type": "tool_result", "tool": "search_claims", "status": "empty", "item_count": 0, "label": "Checking analyst claims on AI semiconductor demand", "duration_ms": 1606}
+[ 14635.73 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 10256}
+[ 17164.51 ms] token              {"text": "I could not find any analyst claims about "}
+[ 17164.58 ms] token              {"text": "AI semiconductor demand for C3.ai, Inc. (AI) or "}
+[ 17172.22 ms] token              {"text": "SJ Semiconductor. No matching rows were returned."}
+[ 17172.64 ms] status             {"step": "verifying"}
+[ 17178.83 ms] final_answer       {"text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period."}
+[ 17179.71 ms] citations          []
+[ 17191.08 ms] contradictions     []
+[ 17196.24 ms] suggestions        ["What's the latest news on C3.ai, Inc.?", "Compare C3.ai, Inc. and SJ Semiconductor side by side.", "How has AI performed recently?"]
+[ 17300.80 ms] metadata           {"thread_id": "89352d48-fbe7-4aae-9e39-4487f90d6069", "message_id": "019f0f7c-2782-75dc-a56f-36794a1a39f4", "intent": "FACTUAL_LOOKUP", "provider": "", "latency_ms": 16381, "protocol_version": 2}
+[ 17305.72 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 38.08691698941402, "validate_input": 2355.4625010001473, "load_history": 95.76770800049417, "entity_resolution": 1000.080459023593, "llm_tool_planning": 11153.359922027448, "tool_execution": 1609.24616799457, "llm_direct_text_generation": 2527.6844180189073, "grounding_validation": 4.062709020217881, "persist_and_cache": 1
+
+# --- final answer ---
+I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request — please try again, or narrow the question to a specific ticker, metric, or time period.

@@ -1,0 +1,617 @@
+{
+  "bucket": "WARN",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 607,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence",
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 97.899,
+    "latency_within_budget": false,
+    "missing_expected_tools": [
+      "compare_entities"
+    ],
+    "output_tokens": 152,
+    "phase_timings_ms": {
+      "check_cache": 58.42433299403638,
+      "entity_resolution": 8675.81621199497,
+      "grounding_validation": 30376.74188899109,
+      "llm_direct_text_generation": 13477.937965013552,
+      "llm_tool_planning": 29346.99868102325,
+      "load_history": 1560.468709009001,
+      "persist_and_cache": 307.410165987676,
+      "tool_execution": 9682.364711974515,
+      "validate_input": 4264.859418995911
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "ttft_s": 17.281,
+    "word_count": 88
+  },
+  "id": "agg_q1_apple_competitors",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for competitors; answer provides a concise table with context, matching medium depth appropriately.",
+        "reason": "Question asks for competitors; answer provides a concise table with context, matching medium depth appropriately.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims cite tool rows; no grounding sample contradicts them. Minor deduction for the unverified-note banner, but body claims are well-attributed.",
+        "reason": "Claims cite tool rows; no grounding sample contradicts them. Minor deduction for the unverified-note banner, but body claims are well-attributed.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_intelligence and search_entity_relations, which are in the expected_tools equivalence set.",
+        "reason": "Called get_entity_intelligence and search_entity_relations, which are in the expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to entity intelligence and relation search, producing a well-structured answer with proper citations. The only minor issue is the 'unverified' banner, which is unnecessary here since all claims are grounded. Next time, avoid appending that note when sources are clearly cited.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_intelligence and search_entity_relations, which are in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Claims cite tool rows; no grounding sample contradicts them. Minor deduction for the unverified-note banner, but body claims are well-attributed.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for competitors; answer provides a concise table with context, matching medium depth appropriately.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to entity intelligence and relation search, producing a well-structured answer with proper citations. The only minor issue is the 'unverified' banner, which is unnecessary here since all claims are grounded. Next time, avoid appending that note when sources are clearly cited.\"\n}",
+    "reviewer_summary": "The agent correctly routed to entity intelligence and relation search, producing a well-structured answer with proper citations. The only minor issue is the 'unverified' banner, which is unnecessary here since all claims are grounded. Next time, avoid appending that note when sources are clearly cited.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Who are Apple's main competitors?",
+  "reasons": [
+    "slow latency_s=97.899"
+  ],
+  "result": {
+    "answer_text": "Apple\u2019s primary rivals are:\n\n| Competitor | Context |\n|------------|---------|\n| Microsoft\u202fCorporation | The Apple intelligence narrative notes that Apple \u201ccompetes with Microsoft Corporation in the global market for personal computers and software.\u201d\u30101\u2020L1-L3\u3011 |\n| Dell\u202fTechnologies (Dell) | The knowledge\u2011graph relations list a \u201ccompetes_with\u201d edge linking Dell to Apple, describing Dell\u2019s competition with Apple in the PC market\u30102\u2020L2-L4\u3011 |\n\nThese are the main competitors identified by the platform\u2019s structured data for Apple.\n\nNote: some figures or names above could not be matched to a retrieved source.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        17280644
+      ],
+      [
+        "status",
+        17666893
+      ],
+      [
+        "thinking",
+        26405413
+      ],
+      [
+        "agent_iteration",
+        26405470
+      ],
+      [
+        "status",
+        37827724
+      ],
+      [
+        "tool_call",
+        37827842
+      ],
+      [
+        "tool_result",
+        42343938
+      ],
+      [
+        "agent_iteration",
+        43092575
+      ],
+      [
+        "tool_call",
+        47578161
+      ],
+      [
+        "tool_result",
+        52643428
+      ],
+      [
+        "agent_iteration",
+        53081011
+      ],
+      [
+        "token",
+        66777724
+      ],
+      [
+        "token",
+        66778176
+      ],
+      [
+        "token",
+        66784342
+      ],
+      [
+        "token",
+        66787891
+      ],
+      [
+        "token",
+        66789244
+      ],
+      [
+        "token",
+        66793209
+      ],
+      [
+        "token",
+        66795233
+      ],
+      [
+        "token",
+        66795261
+      ],
+      [
+        "token",
+        66795726
+      ],
+      [
+        "token",
+        66795755
+      ],
+      [
+        "status",
+        66842281
+      ],
+      [
+        "final_answer",
+        97448421
+      ],
+      [
+        "citations",
+        97448506
+      ],
+      [
+        "contradictions",
+        97448529
+      ],
+      [
+        "suggestions",
+        97448559
+      ],
+      [
+        "metadata",
+        97693571
+      ],
+      [
+        "done",
+        97693716
+      ]
+    ],
+    "latency_s": 97.899,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 85664,
+      "message_id": "019f0f6e-5a72-7ad3-aab7-bed84bca1cc4",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "50e61f52-3b4d-4ae2-b6f9-b7e462d61dcc"
+    },
+    "output_tokens": 152,
+    "phase_timings_ms": {
+      "check_cache": 58.42433299403638,
+      "entity_resolution": 8675.81621199497,
+      "grounding_validation": 30376.74188899109,
+      "llm_direct_text_generation": 13477.937965013552,
+      "llm_tool_planning": 29346.99868102325,
+      "load_history": 1560.468709009001,
+      "persist_and_cache": 307.410165987676,
+      "tool_execution": 9682.364711974515,
+      "validate_input": 4264.859418995911
+    },
+    "question": "Who are Apple's main competitors?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_intelligence\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "AAPL"
+          },
+          "label": "Loading intelligence for Apple",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 4527,
+          "item_count": 1,
+          "label": "Loading intelligence for Apple",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:01900000-0000-7000-8000-000000001001",
+              "title": "Intelligence: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 16739,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 10,
+            "min_confidence": 0.6,
+            "relation_type": "competitor_of"
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 5151,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 26751,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Apple\u2019s primary rivals are:\n\n| Competitor | Context "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n|------------|---------|\n| Microsoft\u202fCorporation | The Apple "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "intelligence narrative notes that Apple \u201ccompetes with Microsoft "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Corporation in the global market for personal computers "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and software.\u201d\u30101\u2020L1-L3\u3011 |\n| Dell\u202fTechnologies (Dell) | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "The knowledge\u2011graph relations list a \u201ccompetes_with\u201d edge linking "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Dell to Apple, describing Dell\u2019s competition with Apple "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in the PC market\u30102\u2020L2-L4\u3011 |\n\nThese are the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "main competitors identified by the platform\u2019s structured data "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for Apple."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Apple\u2019s primary rivals are:\n\n| Competitor | Context |\n|------------|---------|\n| Microsoft\u202fCorporation | The Apple intelligence narrative notes that Apple \u201ccompetes with Microsoft Corporation in the global market for personal computers and software.\u201d\u30101\u2020L1-L3\u3011 |\n| Dell\u202fTechnologies (Dell) | The knowledge\u2011graph relations list a \u201ccompetes_with\u201d edge linking Dell to Apple, describing Dell\u2019s competition with Apple in the PC market\u30102\u2020L2-L4\u3011 |\n\nThese are the main competitors identified by the platform\u2019s structured data for Apple.\n\nNote: some figures or names above could not be matched to a retrieved source."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 85664,
+          "message_id": "019f0f6e-5a72-7ad3-aab7-bed84bca1cc4",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "50e61f52-3b4d-4ae2-b6f9-b7e462d61dcc"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 58.42433299403638,
+            "entity_resolution": 8675.81621199497,
+            "grounding_validation": 30376.74188899109,
+            "llm_direct_text_generation": 13477.937965013552,
+            "llm_tool_planning": 29346.99868102325,
+            "load_history": 1560.468709009001,
+            "persist_and_cache": 307.410165987676,
+            "tool_execution": 9682.364711974515,
+            "validate_input": 4264.859418995911
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "AAPL"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 10,
+          "min_confidence": 0.6,
+          "relation_type": "competitor_of"
+        },
+        "name": "search_entity_relations"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tps": 1.885,
+    "tps_streaming": 11.278,
+    "ttft_s": 17.281
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent cleanly answered 'Apple's main competitors' by first fetching entity intelligence (call 1) and then querying competitor relations (call 2). Both calls succeeded and returned non-overlapping data that directly supported the answer. No wasted steps, no ordering issues, no recovery needed. The only minor improvement would be to consider whether a single compare_entities call could have covered both needs, but the current two-call approach is still efficient and fully correct.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Two calls, each returning distinct useful data (entity profile + competitor relations), no redundancy or waste.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Only two calls with no data dependency between them; order is irrelevant \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "Call 1 get_entity_intelligence and call 2 search_entity_relations are exactly the right tools for a 'who are the competitors' question \u2014 no mismatch.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

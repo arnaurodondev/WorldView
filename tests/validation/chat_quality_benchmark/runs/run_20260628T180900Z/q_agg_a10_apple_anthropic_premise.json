@@ -1,0 +1,439 @@
+{
+  "bucket": "WARN",
+  "category": "refusal_premise",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": []
+  },
+  "heuristics": {
+    "char_count": 212,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_events"
+    ],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": true,
+    "latency_s": 26.194,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 53,
+    "phase_timings_ms": {
+      "check_cache": 14.545832993462682,
+      "entity_resolution": 468.04875100497156,
+      "grounding_validation": 6597.913627017988,
+      "llm_direct_text_generation": 1619.9617930105887,
+      "llm_tool_planning": 11122.868047998054,
+      "load_history": 87.16937497956678,
+      "persist_and_cache": 547.5206669943873,
+      "tool_execution": 665.6429170107003,
+      "validate_input": 5113.456794002559
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_name",
+          "event_type"
+        ],
+        "tool": "search_events"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      }
+    ],
+    "ttft_s": 5.319,
+    "word_count": 36
+  },
+  "id": "agg_a10_apple_anthropic_premise",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "The question asks about a specific event; the answer is appropriately concise and directly addresses the lack of evidence.",
+        "reason": "The question asks about a specific event; the answer is appropriately concise and directly addresses the lack of evidence.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "The answer correctly reflects the tool result (status=empty items=0) and does not fabricate any data.",
+        "reason": "The answer correctly reflects the tool result (status=empty items=0) and does not fabricate any data.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. The answer states the factual finding (no record) without refusing to answer.",
+        "reason": "No refusal phrase present \u2014 N/A. The answer states the factual finding (no record) without refusing to answer.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "The agent correctly called search_events with appropriate parameters; no expected_tools were specified in the rubric, so no routing issue.",
+        "reason": "The agent correctly called search_events with appropriate parameters; no expected_tools were specified in the rubric, so no routing issue.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent handled this correctly: it routed to the acquisition search tool, found no data, and reported that honestly. The answer is grounded, concise, and appropriate. No changes needed for this query. The only potential improvement would be to explicitly cite the tool result (e.g., 'search_events returned no results') for full transparency, but the current answer is already acceptable.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"The agent correctly called search_events with appropriate parameters; no expected_tools were specified in the rubric, so no routing issue.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"The answer correctly reflects the tool result (status=empty items=0) and does not fabricate any data.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"The question asks about a specific event; the answer is appropriately concise and directly addresses the lack of evidence.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. The answer states the factual finding (no record) without refusing to answer.\"\n  },\n  \"reviewer_summary\": \"The agent handled this correctly: it routed to the acquisition search tool, found no data, and reported that honestly. The answer is grounded, concise, and appropriate. No changes needed for this query. The only potential improvement would be to explicitly cite the tool result (e.g., 'search_events returned no results') for full transparency, but the current answer is already acceptable.\"\n}",
+    "reviewer_summary": "The agent handled this correctly: it routed to the acquisition search tool, found no data, and reported that honestly. The answer is grounded, concise, and appropriate. No changes needed for this query. The only potential improvement would be to explicitly cite the tool result (e.g., 'search_events returned no results') for full transparency, but the current answer is already acceptable.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Why did Apple acquire Anthropic last quarter? What was the strategic rationale?",
+  "reasons": [
+    "answer_classified_as_refusal"
+  ],
+  "result": {
+    "answer_text": "I could not find any record of Apple acquiring Anthropic in the last quarter. No information is available on the strategic rationale.\n\nNote: some figures or names above could not be matched to a retrieved source.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        5319095
+      ],
+      [
+        "status",
+        5338105
+      ],
+      [
+        "thinking",
+        5825394
+      ],
+      [
+        "agent_iteration",
+        5826225
+      ],
+      [
+        "status",
+        15338057
+      ],
+      [
+        "tool_call",
+        15342554
+      ],
+      [
+        "tool_result",
+        15996474
+      ],
+      [
+        "agent_iteration",
+        15996647
+      ],
+      [
+        "token",
+        17664071
+      ],
+      [
+        "token",
+        17664410
+      ],
+      [
+        "token",
+        17664663
+      ],
+      [
+        "status",
+        17664773
+      ],
+      [
+        "final_answer",
+        24573768
+      ],
+      [
+        "citations",
+        24575055
+      ],
+      [
+        "contradictions",
+        24575088
+      ],
+      [
+        "suggestions",
+        24755082
+      ],
+      [
+        "metadata",
+        25232264
+      ],
+      [
+        "done",
+        25244196
+      ]
+    ],
+    "latency_s": 26.194,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 24233,
+      "message_id": "019f0f6f-de83-7751-ac4c-34339ebef887",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "7ea74356-724e-4e4b-a9f2-64c138012f1e"
+    },
+    "output_tokens": 53,
+    "phase_timings_ms": {
+      "check_cache": 14.545832993462682,
+      "entity_resolution": 468.04875100497156,
+      "grounding_validation": 6597.913627017988,
+      "llm_direct_text_generation": 1619.9617930105887,
+      "llm_tool_planning": 11122.868047998054,
+      "load_history": 87.16937497956678,
+      "persist_and_cache": 547.5206669943873,
+      "tool_execution": 665.6429170107003,
+      "validate_input": 5113.456794002559
+    },
+    "question": "Why did Apple acquire Anthropic last quarter? What was the strategic rationale?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_events\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-04-01",
+            "date_to": "2026-06-28",
+            "entity_name": "Apple",
+            "event_type": "acquisition"
+          },
+          "label": "Looking up corporate events...",
+          "status": "running",
+          "tool": "search_events",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 663,
+          "item_count": 0,
+          "label": "Looking up corporate events...",
+          "status": "empty",
+          "tool": "search_events",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 10178,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I could not find any acquisition events involving "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Apple and Anthropic in the specified period. No "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "data was found for this specific entity."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I could not find any record of Apple acquiring Anthropic in the last quarter. No information is available on the strategic rationale.\n\nNote: some figures or names above could not be matched to a retrieved source."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Anthropic?",
+          "How has Anthropic performed recently?",
+          "How do Anthropic's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 24233,
+          "message_id": "019f0f6f-de83-7751-ac4c-34339ebef887",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "7ea74356-724e-4e4b-a9f2-64c138012f1e"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 14.545832993462682,
+            "entity_resolution": 468.04875100497156,
+            "grounding_validation": 6597.913627017988,
+            "llm_direct_text_generation": 1619.9617930105887,
+            "llm_tool_planning": 11122.868047998054,
+            "load_history": 87.16937497956678,
+            "persist_and_cache": 547.5206669943873,
+            "tool_execution": 665.6429170107003,
+            "validate_input": 5113.456794002559
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2026-04-01",
+          "date_to": "2026-06-28",
+          "entity_name": "Apple",
+          "event_type": "acquisition"
+        },
+        "name": "search_events"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      }
+    ],
+    "tps": 2.539,
+    "tps_streaming": 32.717,
+    "ttft_s": 5.319
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate",
+    "adversarial"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly routed the question to search_events with the right entity, event type, and date range. The single call was efficient and the empty result was properly handled by reporting no data. No process changes needed \u2014 this is a textbook correct refusal trajectory.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "single well-chosen call for a single-fact question \u2014 no wasted or redundant calls.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call with no dependencies \u2014 ordering is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed/empty calls to recover from (status=empty is a valid empty result, not a failure); agent correctly reported no data found.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 used search_events with appropriate entity, event type, and date range for an acquisition query \u2014 correct tool choice for the intent.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 1,
+    "verdict": "GRADED"
+  }
+}

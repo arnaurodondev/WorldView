@@ -1,0 +1,443 @@
+{
+  "bucket": "PASS",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_events"
+    ]
+  },
+  "heuristics": {
+    "char_count": 282,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_events"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 15.065,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 1.7909160233102739,
+      "entity_resolution": 2514.735375996679,
+      "grounding_validation": 2.668749977601692,
+      "llm_direct_text_generation": 1303.3618339977693,
+      "llm_tool_planning": 10582.5070879946,
+      "load_history": 139.8772920074407,
+      "persist_and_cache": 59.31491599767469,
+      "tool_execution": 465.4256250069011,
+      "validate_input": 866.300667024916
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_name",
+          "event_type"
+        ],
+        "tool": "search_events"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_events"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      }
+    ],
+    "ttft_s": 1.181,
+    "word_count": 50
+  },
+  "id": "tc_search_events_healthcare_ma_2024",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a lookup for M&A events; answer is appropriately concise and transparent about the empty result set.",
+        "reason": "Question is a lookup for M&A events; answer is appropriately concise and transparent about the empty result set.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; answer correctly reports empty results (status=empty items=0) and does not fabricate any numbers.",
+        "reason": "No grounding sample provided; answer correctly reports empty results (status=empty items=0) and does not fabricate any numbers.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Answer contains refusal phrasing ('couldn't retrieve any data') but rubric.appropriate_refusal_ok=true and tool_results show empty data \u2014 correct refusal.",
+        "reason": "Answer contains refusal phrasing ('couldn't retrieve any data') but rubric.appropriate_refusal_ok=true and tool_results show empty data \u2014 correct refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_events with correct parameters (healthcare, merger, 2024 window) \u2014 exactly the expected tool.",
+        "reason": "Called search_events with correct parameters (healthcare, merger, 2024 window) \u2014 exactly the expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to search_events with the right parameters and honestly reported the empty result set. No fabrication, no hallucination. The only improvement would be to offer a more helpful fallback (e.g., suggest a specific ticker or broader sector) rather than a generic 'try again' message, but the current behaviour is safe and appropriate for a missing-data scenario.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_events with correct parameters (healthcare, merger, 2024 window) \u2014 exactly the expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided; answer correctly reports empty results (status=empty items=0) and does not fabricate any numbers.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a lookup for M&A events; answer is appropriately concise and transparent about the empty result set.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Answer contains refusal phrasing ('couldn't retrieve any data') but rubric.appropriate_refusal_ok=true and tool_results show empty data \u2014 correct refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to search_events with the right parameters and honestly reported the empty result set. No fabrication, no hallucination. The only improvement would be to offer a more helpful fallback (e.g., suggest a specific ticker or broader sector) rather than a generic 'try again' message, but the current behaviour is safe and appropriate for a missing-data scenario.\"\n}",
+    "reviewer_summary": "The agent correctly routed to search_events with the right parameters and honestly reported the empty result set. No fabrication, no hallucination. The only improvement would be to offer a more helpful fallback (e.g., suggest a specific ticker or broader sector) rather than a generic 'try again' message, but the current behaviour is safe and appropriate for a missing-data scenario.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Show me M&A events involving healthcare companies in 2024.",
+  "reasons": [],
+  "result": {
+    "answer_text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1181379
+      ],
+      [
+        "status",
+        1258959
+      ],
+      [
+        "thinking",
+        3787695
+      ],
+      [
+        "agent_iteration",
+        3795502
+      ],
+      [
+        "status",
+        13249311
+      ],
+      [
+        "tool_call",
+        13251072
+      ],
+      [
+        "tool_result",
+        13613065
+      ],
+      [
+        "agent_iteration",
+        13615136
+      ],
+      [
+        "token",
+        14929567
+      ],
+      [
+        "token",
+        14929594
+      ],
+      [
+        "status",
+        14966944
+      ],
+      [
+        "final_answer",
+        14967845
+      ],
+      [
+        "citations",
+        14968192
+      ],
+      [
+        "contradictions",
+        14968220
+      ],
+      [
+        "suggestions",
+        14984933
+      ],
+      [
+        "metadata",
+        15029802
+      ],
+      [
+        "done",
+        15030031
+      ]
+    ],
+    "latency_s": 15.065,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 14805,
+      "message_id": "019f0f7c-c0ac-7243-8e25-07711b616968",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "2e8af293-2f4c-40e7-abf6-01f1af74cf7a"
+    },
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 1.7909160233102739,
+      "entity_resolution": 2514.735375996679,
+      "grounding_validation": 2.668749977601692,
+      "llm_direct_text_generation": 1303.3618339977693,
+      "llm_tool_planning": 10582.5070879946,
+      "load_history": 139.8772920074407,
+      "persist_and_cache": 59.31491599767469,
+      "tool_execution": 465.4256250069011,
+      "validate_input": 866.300667024916
+    },
+    "question": "Show me M&A events involving healthcare companies in 2024.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 1,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_events\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2024-01-01",
+            "date_to": "2024-12-31",
+            "entity_name": "healthcare",
+            "event_type": "merger"
+          },
+          "label": "Looking up corporate events...",
+          "status": "running",
+          "tool": "search_events",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 449,
+          "item_count": 0,
+          "label": "Looking up corporate events...",
+          "status": "empty",
+          "tool": "search_events",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9832,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I\u2019m sorry, but no M&A (merger) events involving "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "healthcare companies were found for 2024."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 14805,
+          "message_id": "019f0f7c-c0ac-7243-8e25-07711b616968",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "2e8af293-2f4c-40e7-abf6-01f1af74cf7a"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 1.7909160233102739,
+            "entity_resolution": 2514.735375996679,
+            "grounding_validation": 2.668749977601692,
+            "llm_direct_text_generation": 1303.3618339977693,
+            "llm_tool_planning": 10582.5070879946,
+            "load_history": 139.8772920074407,
+            "persist_and_cache": 59.31491599767469,
+            "tool_execution": 465.4256250069011,
+            "validate_input": 866.300667024916
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2024-01-01",
+          "date_to": "2024-12-31",
+          "entity_name": "healthcare",
+          "event_type": "merger"
+        },
+        "name": "search_events"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      }
+    ],
+    "tps": 5.114,
+    "tps_streaming": 54.475,
+    "ttft_s": 1.181
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_events"
+    ],
+    "forbidden_facts": [
+      "fabricated_events",
+      "non_ma_events_returned"
+    ],
+    "required_facts": [
+      "event_list_or_empty",
+      "ma_event_type",
+      "year_2024_window",
+      "healthcare_sector"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_events"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for M&A events in healthcare for 2024 and made a single, well-parameterized search_events call. The tool returned empty, and the agent responded with a clean refusal \u2014 no fabricated events, no redundant retries. The trajectory is minimal and appropriate. The only process improvement would be to consider a fallback tool (e.g., a broader news search) if the primary event database lacks coverage, but given the rubric's 'appropriate_refusal_ok' flag, the current behaviour is acceptable.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call with all required parameters; no redundancy or wasted steps.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraint to evaluate \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "call 1 returned empty; the agent did not loop or fabricate data, and issued a correct refusal acknowledging the empty result \u2014 appropriate recovery.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 used search_events with the correct event_type=merger, healthcare sector, and 2024 date window \u2014 exactly the right tool for the intent.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 1,
+    "verdict": "GRADED"
+  }
+}

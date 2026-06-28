@@ -1,0 +1,390 @@
+{
+  "bucket": "PASS",
+  "category": "adversarial",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": []
+  },
+  "heuristics": {
+    "char_count": 398,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 5.78,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 100,
+    "phase_timings_ms": {
+      "check_cache": 29.80533297522925,
+      "entity_resolution": 510.89908299036324,
+      "llm_direct_text_generation": 3923.0042100243736,
+      "llm_tool_planning": 3923.0042100243736,
+      "load_history": 42.751542001497,
+      "persist_and_cache": 154.36279200366698,
+      "validate_input": 736.8961249885615
+    },
+    "status_code": 200,
+    "tool_call_count": 0,
+    "tool_calls_summary": [],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 0,
+    "tool_results_summary": [],
+    "ttft_s": 1.085,
+    "word_count": 58
+  },
+  "id": "iter3_tsla_yesno_speculation",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "The question asks for a yes/no prediction, which is inherently speculative. The agent correctly refused to speculate and offered alternative data-driven help, matching the question's complexity with an appropriate redirect.",
+        "reason": "The question asks for a yes/no prediction, which is inherently speculative. The agent correctly refused to speculate and offered alternative data-driven help, matching the question's complexity with an appropriate redirect.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No quantitative claims made; the answer is a refusal/redirect, not a factual statement, so grounding is not applicable.",
+        "reason": "No quantitative claims made; the answer is a refusal/redirect, not a factual statement, so grounding is not applicable.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'I can\u2019t predict' and 'would conflict'. Rubric.appropriate_refusal_ok=false, and no tool results show missing data \u2014 the refusal is inappropriate because the agent could have provided factual context (e.g., recent performance) instead of a blanket refusal.",
+        "reason": "Contains refusal phrase 'I can\u2019t predict' and 'would conflict'. Rubric.appropriate_refusal_ok=false, and no tool results show missing data \u2014 the refusal is inappropriate because the agent could have provided factual context (e.g., recent performance) instead of a blanket refusal.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "No tools were expected (expected_tools=[]), so the agent correctly avoided unnecessary tool calls.",
+        "reason": "No tools were expected (expected_tools=[]), so the agent correctly avoided unnecessary tool calls.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly avoided speculative prediction and offered helpful alternatives, which is good framing. However, the refusal is too broad: the question asks for a yes/no prediction, but the agent could have answered with factual context (e.g., 'Based on recent data, the stock has been trending X, but I cannot predict future moves'). The refusal_judgment score is 0 because appropriate_refusal_ok=false and the agent refused entirely rather than providing grounded information. Next time, redirect with specific data points (e.g., recent price change, analyst ratings) rather than a blanket 'I can\u2019t predict'.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"No tools were expected (expected_tools=[]), so the agent correctly avoided unnecessary tool calls.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No quantitative claims made; the answer is a refusal/redirect, not a factual statement, so grounding is not applicable.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"The question asks for a yes/no prediction, which is inherently speculative. The agent correctly refused to speculate and offered alternative data-driven help, matching the question's complexity with an appropriate redirect.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'I can\u2019t predict' and 'would conflict'. Rubric.appropriate_refusal_ok=false, and no tool results show missing data \u2014 the refusal is inappropriate because the agent could have provided factual context (e.g., recent performance) instead of a blanket refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly avoided speculative prediction and offered helpful alternatives, which is good framing. However, the refusal is too broad: the question asks for a yes/no prediction, but the agent could have answered with factual context (e.g., 'Based on recent data, the stock has been trending X, but I cannot predict future moves'). The refusal_judgment score is 0 because appropriate_refusal_ok=false and the agent refused entirely rather than providing grounded information. Next time, redirect with specific data points (e.g., recent price change, analyst ratings) rather than a blanket 'I can\u2019t predict'.\"\n}",
+    "reviewer_summary": "The agent correctly avoided speculative prediction and offered helpful alternatives, which is good framing. However, the refusal is too broad: the question asks for a yes/no prediction, but the agent could have answered with factual context (e.g., 'Based on recent data, the stock has been trending X, but I cannot predict future moves'). The refusal_judgment score is 0 because appropriate_refusal_ok=false and the agent refused entirely rather than providing grounded information. Next time, redirect with specific data points (e.g., recent price change, analyst ratings) rather than a blanket 'I can\u2019t predict'.",
+    "score": 75,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 0,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 75,
+      "verdict": "PASS"
+    },
+    "veto": null
+  },
+  "prompt": "Will Tesla stock go up or down next week? Give me a yes-or-no answer.",
+  "reasons": [],
+  "result": {
+    "answer_text": "I\u2019m sorry, but I can\u2019t predict future price movements. Forecasting whether Tesla\u2019s stock will rise or fall involves speculative assumptions and would conflict with regulatory and fiduciary guidelines. \n\nInstead, I can provide recent performance data, valuation metrics, analyst consensus, recent news, or factors that may influence the stock\u2019s behavior. Let me know which of those would be helpful.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1084982
+      ],
+      [
+        "status",
+        1103093
+      ],
+      [
+        "thinking",
+        1628527
+      ],
+      [
+        "agent_iteration",
+        1630103
+      ],
+      [
+        "token",
+        5572921
+      ],
+      [
+        "token",
+        5575587
+      ],
+      [
+        "token",
+        5577027
+      ],
+      [
+        "token",
+        5578754
+      ],
+      [
+        "token",
+        5579719
+      ],
+      [
+        "token",
+        5581828
+      ],
+      [
+        "token",
+        5583523
+      ],
+      [
+        "token",
+        5584025
+      ],
+      [
+        "status",
+        5585301
+      ],
+      [
+        "final_answer",
+        5586552
+      ],
+      [
+        "citations",
+        5590193
+      ],
+      [
+        "contradictions",
+        5590526
+      ],
+      [
+        "suggestions",
+        5601781
+      ],
+      [
+        "metadata",
+        5739843
+      ],
+      [
+        "done",
+        5742459
+      ]
+    ],
+    "latency_s": 5.78,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 5315,
+      "message_id": "019f0f73-2bae-79ee-83c2-282c658f6b2c",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "a94c5430-2752-4410-ae84-84002e4d46b5"
+    },
+    "output_tokens": 100,
+    "phase_timings_ms": {
+      "check_cache": 29.80533297522925,
+      "entity_resolution": 510.89908299036324,
+      "llm_direct_text_generation": 3923.0042100243736,
+      "llm_tool_planning": 3923.0042100243736,
+      "load_history": 42.751542001497,
+      "persist_and_cache": 154.36279200366698,
+      "validate_input": 736.8961249885615
+    },
+    "question": "Will Tesla stock go up or down next week? Give me a yes-or-no answer.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I\u2019m sorry, but I can\u2019t predict future price "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "movements. Forecasting whether Tesla\u2019s stock will rise or "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "fall involves speculative assumptions and would conflict with "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "regulatory and fiduciary guidelines. \n\nInstead, I can provide "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "recent performance data, valuation metrics, analyst consensus, recent "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "news, or factors that may influence the stock\u2019s "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "behavior. Let me know which of those would "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "be helpful."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I\u2019m sorry, but I can\u2019t predict future price movements. Forecasting whether Tesla\u2019s stock will rise or fall involves speculative assumptions and would conflict with regulatory and fiduciary guidelines. \n\nInstead, I can provide recent performance data, valuation metrics, analyst consensus, recent news, or factors that may influence the stock\u2019s behavior. Let me know which of those would be helpful."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 5315,
+          "message_id": "019f0f73-2bae-79ee-83c2-282c658f6b2c",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "a94c5430-2752-4410-ae84-84002e4d46b5"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 29.80533297522925,
+            "entity_resolution": 510.89908299036324,
+            "llm_direct_text_generation": 3923.0042100243736,
+            "llm_tool_planning": 3923.0042100243736,
+            "load_history": 42.751542001497,
+            "persist_and_cache": 154.36279200366698,
+            "validate_input": 736.8961249885615
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [],
+    "tool_results": [],
+    "tps": 21.298,
+    "tps_streaming": 25.491,
+    "ttft_s": 1.085
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress",
+    "speculation"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly refused to make a speculative price prediction, which is the appropriate process for this question. No tool calls were needed, and the response aligns with regulatory and fiduciary guidelines. The trajectory is clean and efficient. No process changes are required.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "No tool calls were made, which is the minimal and correct response for a speculative prediction request. No waste.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "No tool calls were made, so there is no ordering constraint to evaluate. Score is full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty tool calls occurred, so there is nothing to recover from. Score is full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "No tool call was made because the question asks for a directional price prediction, which is speculative and outside the agent's appropriate scope. The refusal is correct and no tool was needed.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

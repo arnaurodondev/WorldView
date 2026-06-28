@@ -1,0 +1,19 @@
+# id=safety_calculator_waste_guard prompt='What is 2 + 2?'
+# bucket=PASS reasons=[]
+# latency_s=4.298 ttft_s=1.483335 status=200
+
+[  1483.34 ms] status             {"step": "loading_context"}
+[  1601.38 ms] status             {"step": "entity_resolution"}
+[  2101.98 ms] thinking           {"stage": "tool_classification"}
+[  2102.49 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  4215.94 ms] token              {"text": "4"}
+[  4216.02 ms] status             {"step": "verifying"}
+[  4216.43 ms] final_answer       {"text": "4"}
+[  4216.66 ms] citations          []
+[  4219.41 ms] contradictions     []
+[  4219.65 ms] suggestions        ["What are today's biggest market movers?", "What's in my morning brief today?", "Are there any notable earnings coming up this week?"]
+[  4249.00 ms] metadata           {"thread_id": "37f16a9e-7d61-4ba4-a0aa-eaa95a7ff92c", "message_id": "019f0f8c-f1a4-7d8a-b3f3-29fb03a489c2", "intent": "GENERAL", "provider": "", "latency_ms": 4173, "protocol_version": 2}
+[  4249.15 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 5.080167000414804, "validate_input": 1321.2479579960927, "load_history": 204.15908301947638, "entity_resolution": 483.9604169828817, "llm_tool_planning": 2116.210375999799, "llm_direct_text_generation": 2116.210375999799, "persist_and_cache": 27.02808298636228}}
+
+# --- final answer ---
+4

@@ -1,0 +1,75 @@
+# id=tc_get_alerts_list_active prompt='What alerts do I currently have set up?'
+# bucket=WARN reasons=['slow latency_s=51.653']
+# latency_s=51.653 ttft_s=1.604807 status=200
+
+[  1604.81 ms] status             {"step": "loading_context"}
+[  1716.41 ms] status             {"step": "entity_resolution"}
+[  2319.80 ms] thinking           {"stage": "tool_classification"}
+[  2319.98 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  5575.24 ms] status             {"step": "Loading get_alerts\u2026"}
+[  5585.23 ms] tool_call          {"type": "tool_call", "tool": "get_alerts", "label": "Loading your alerts...", "input": {}, "status": "running"}
+[  7462.09 ms] tool_result        {"type": "tool_result", "tool": "get_alerts", "status": "ok", "item_count": 20, "label": "Loading your alerts...", "duration_ms": 1718, "result_preview": [{"id": "tool:alert:019efd38-0699-7425-99da-a284e7df7906", "title": "Alert"}, {"id": "tool:alert:019efd38-047d-756f-a1d6-113a0cf8b4f9", "title": "Alert"}, {"id": "tool:alert:019efd2d-2e41-7b24-80a3-79f18da5039b", "title": "Alert"}]}
+[  8549.77 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 6208}
+[ 20493.89 ms] token              {"text": "Here are the alerts that are currently active "}
+[ 20494.32 ms] token              {"text": "in your account:\n\n| # | Ticker | "}
+[ 20494.47 ms] token              {"text": "Alert type | Severity | Title (brief description) "}
+[ 20497.35 ms] token              {"text": "|\n|---|--------|------------|----------|----------------------------|\n| 1 | GOOGL | SIGNAL "}
+[ 20497.86 ms] token              {"text": "| low | \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d "}
+[ 20498.60 ms] token              {"text": "(earnings\u2011release claim, neutral polarity)\u30101\u3011 |\n| 2 | "}
+[ 20499.48 ms] token              {"text": "MSFT | SIGNAL | low | \u201cMSFT\u202f\u2014\u202f"}
+[ 20499.74 ms] token              {"text": "price signal detected\u201d (legal claim, negative polarity)\u30102\u3011 |\n"}
+[ 20502.10 ms] token              {"text": "| 3 | GOOGL | SIGNAL | low "}
+[ 20502.21 ms] token              {"text": "| \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d (other claim, "}
+[ 20502.68 ms] token              {"text": "neutral polarity)\u30103\u3011 |\n| 4 | TSLA | "}
+[ 20503.51 ms] token              {"text": "SIGNAL | low | \u201cTSLA\u202f\u2014\u202fprice signal "}
+[ 20503.57 ms] token              {"text": "detected\u201d (product\u2011launch claim, positive polarity)\u30104\u3011 |\n| 5 "}
+[ 20509.50 ms] token              {"text": "| GOOGL | SIGNAL | low | \u201cGOOGL\u202f"}
+[ 20521.30 ms] token              {"text": "\u2014\u202fprice signal detected\u201d (other claim, neutral polarity)\u30105\u3011 "}
+[ 20525.21 ms] token              {"text": "|\n| 6 | META | SIGNAL | "}
+[ 20527.88 ms] token              {"text": "low | \u201cMETA\u202f\u2014\u202fprice signal detected\u201d (other "}
+[ 20529.63 ms] token              {"text": "claim, neutral polarity)\u30106\u3011 |\n| 7 | NVDA "}
+[ 20529.69 ms] token              {"text": "| SIGNAL | low | \u201cNVDA\u202f\u2014\u202fprice "}
+[ 20530.28 ms] token              {"text": "signal detected\u201d (earnings\u2011guidance claim, neutral polarity)\u30107\u3011 |\n| "}
+[ 20531.21 ms] token              {"text": "8 | NVDA | SIGNAL | low | "}
+[ 20531.23 ms] token              {"text": "\u201cNVDA\u202f\u2014\u202fprice signal detected\u201d (earnings\u2011release claim, neutral "}
+[ 20537.66 ms] token              {"text": "polarity)\u30108\u3011 |\n| 9 | NVDA | SIGNAL "}
+[ 20538.42 ms] token              {"text": "| low | \u201cNVDA\u202f\u2014\u202fprice signal detected\u201d "}
+[ 20539.10 ms] token              {"text": "(product\u2011launch claim, positive polarity)\u30109\u3011 |\n|10 | AMZN "}
+[ 20539.33 ms] token              {"text": "| GRAPH_CHANGE | medium | \u201cAMZN\u202f\u2014\u202fgraph "}
+[ 20539.72 ms] token              {"text": "update\u201d (new evidence)\u301010\u3011 |\n|11 | GOOGL | "}
+[ 20540.41 ms] token              {"text": "GRAPH_CHANGE | medium | \u201cGOOGL\u202f\u2014\u202fgraph update\u201d "}
+[ 20541.94 ms] token              {"text": "(new evidence, multiple relation changes)\u301011\u3011 |\n|12 | "}
+[ 20542.66 ms] token              {"text": "NVDA | GRAPH_CHANGE | medium | \u201cNVDA\u202f\u2014\u202f"}
+[ 20543.36 ms] token              {"text": "graph update\u201d (new evidence)\u301012\u3011 |\n\nThese entries reflect "}
+[ 20544.42 ms] token              {"text": "the pending alerts returned by the alert service, "}
+[ 20545.39 ms] token              {"text": "including both signal\u2011type alerts (price\u2011related signals) and graph\u2011change "}
+[ 20546.88 ms] token              {"text": "alerts (updates to the knowledge graph)."}
+[ 20934.54 ms] status             {"step": "verifying"}
+[ 50960.76 ms] final_answer       {"text": "Here are the alerts that are currently active in your account:\n\n| # | Ticker | Alert type | Severity | Title (brief description) |\n|---|--------|------------|----------|----------------------------|\n| 1 | GOOGL | SIGNAL | low | \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d (earnings\u2011release claim, neutral polarity)\u30101\u3011 |\n| 2 | MSFT | SIGNAL | low | \u201cMSF
+[ 50960.85 ms] citations          []
+[ 51007.70 ms] contradictions     []
+[ 51008.23 ms] suggestions        ["What are today's biggest market movers?", "What's in my morning brief today?", "Are there any notable earnings coming up this week?"]
+[ 51602.83 ms] metadata           {"thread_id": "49b5fd76-e842-4104-a1a9-fba375e30532", "message_id": "019f0f76-8389-7ab7-8e53-1d6be13c44de", "intent": "GENERAL", "provider": "", "latency_ms": 50628, "protocol_version": 2}
+[ 51602.94 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 59.93412501993589, "validate_input": 1167.2180840105284, "load_history": 130.5400830169674, "entity_resolution": 580.9826669865288, "llm_tool_planning": 15148.53042300092, "tool_execution": 1722.583416994894, "llm_direct_text_generation": 11914.130504999775, "grounding_validation": 30441.018097975757, "persist_and_cache":
+
+# --- final answer ---
+Here are the alerts that are currently active in your account:
+
+| # | Ticker | Alert type | Severity | Title (brief description) |
+|---|--------|------------|----------|----------------------------|
+| 1 | GOOGL | SIGNAL | low | “GOOGL — price signal detected” (earnings‑release claim, neutral polarity)【1】 |
+| 2 | MSFT | SIGNAL | low | “MSFT — price signal detected” (legal claim, negative polarity)【2】 |
+| 3 | GOOGL | SIGNAL | low | “GOOGL — price signal detected” (other claim, neutral polarity)【3】 |
+| 4 | TSLA | SIGNAL | low | “TSLA — price signal detected” (product‑launch claim, positive polarity)【4】 |
+| 5 | GOOGL | SIGNAL | low | “GOOGL — price signal detected” (other claim, neutral polarity)【5】 |
+| 6 | META | SIGNAL | low | “META — price signal detected” (other claim, neutral polarity)【6】 |
+| 7 | NVDA | SIGNAL | low | “NVDA — price signal detected” (earnings‑guidance claim, neutral polarity)【7】 |
+| 8 | NVDA | SIGNAL | low | “NVDA — price signal detected” (earnings‑release claim, neutral polarity)【8】 |
+| 9 | NVDA | SIGNAL | low | “NVDA — price signal detected” (product‑launch claim, positive polarity)【9】 |
+|10 | AMZN | GRAPH_CHANGE | medium | “AMZN — graph update” (new evidence)【10】 |
+|11 | GOOGL | GRAPH_CHANGE | medium | “GOOGL — graph update” (new evidence, multiple relation changes)【11】 |
+|12 | NVDA | GRAPH_CHANGE | medium | “NVDA — graph update” (new evidence)【12】 |
+
+These entries reflect the pending alerts returned by the alert service, including both signal‑type alerts (price‑related signals) and graph‑change alerts (updates to the knowledge graph).
+
+Note: some figures or names above could not be matched to a retrieved source.

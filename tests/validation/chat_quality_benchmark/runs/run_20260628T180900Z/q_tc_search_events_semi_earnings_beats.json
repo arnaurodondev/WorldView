@@ -1,0 +1,746 @@
+{
+  "bucket": "PASS",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_events",
+      "search_documents"
+    ]
+  },
+  "heuristics": {
+    "char_count": 304,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence",
+      "search_claims",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_documents",
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 49.544,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "search_events"
+    ],
+    "output_tokens": 76,
+    "phase_timings_ms": {
+      "check_cache": 24.46399998734705,
+      "entity_resolution": 717.8392500209156,
+      "grounding_validation": 0.9175420273095369,
+      "llm_direct_text_generation": 20086.68234202196,
+      "llm_tool_planning": 38499.950891011395,
+      "load_history": 181.00574999698438,
+      "persist_and_cache": 149.66841600835323,
+      "tool_execution": 2270.0674179941416,
+      "validate_input": 1703.4387929888908
+    },
+    "status_code": 200,
+    "tool_call_count": 5,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_name"
+        ],
+        "tool": "search_claims"
+      },
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_documents"
+    ],
+    "tool_result_count": 5,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_claims"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 2.084,
+    "word_count": 45
+  },
+  "id": "tc_search_events_semi_earnings_beats",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a factual lookup; concise refusal with clear explanation matches expected medium depth.",
+        "reason": "Question is a factual lookup; concise refusal with clear explanation matches expected medium depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; answer correctly reports empty results and does not fabricate numbers.",
+        "reason": "No grounding sample provided; answer correctly reports empty results and does not fabricate numbers.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Refusal phrase 'unable to locate' present, but rubric.appropriate_refusal_ok=true and tool results show empty data; correct refusal.",
+        "reason": "Refusal phrase 'unable to locate' present, but rubric.appropriate_refusal_ok=true and tool results show empty data; correct refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Agent called search_documents (expected tool) multiple times; routing to the correct tool class.",
+        "reason": "Agent called search_documents (expected tool) multiple times; routing to the correct tool class.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified the question as a sector-level earnings-beat lookup, routed to search_documents (an expected tool), and honestly refused when all tool calls returned empty results. No fabricated data, no hallucinated EPS numbers. The only improvement would be to try a broader date range or a different source type (e.g., 'transcripts') before concluding no data exists, but given the rubric's appropriate_refusal_ok flag, this is a clean, safe answer.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Agent called search_documents (expected tool) multiple times; routing to the correct tool class.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided; answer correctly reports empty results and does not fabricate numbers.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a factual lookup; concise refusal with clear explanation matches expected medium depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Refusal phrase 'unable to locate' present, but rubric.appropriate_refusal_ok=true and tool results show empty data; correct refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified the question as a sector-level earnings-beat lookup, routed to search_documents (an expected tool), and honestly refused when all tool calls returned empty results. No fabricated data, no hallucinated EPS numbers. The only improvement would be to try a broader date range or a different source type (e.g., 'transcripts') before concluding no data exists, but given the rubric's appropriate_refusal_ok flag, this is a clean, safe answer.\"\n}",
+    "reviewer_summary": "The agent correctly identified the question as a sector-level earnings-beat lookup, routed to search_documents (an expected tool), and honestly refused when all tool calls returned empty results. No fabricated data, no hallucinated EPS numbers. The only improvement would be to try a broader date range or a different source type (e.g., 'transcripts') before concluding no data exists, but given the rubric's appropriate_refusal_ok flag, this is a clean, safe answer.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Any recent earnings beats in the semiconductor space?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I\u2019m unable to locate any recent semiconductor earnings\u2011beat events in the available data. The most recent document retrieved (an intelligence bundle for SJ\u202fSemiconductor) does not mention an earnings beat, and no other earnings\u2011beat records were found for the semiconductor sector in the current sources.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        2083770
+      ],
+      [
+        "status",
+        2252295
+      ],
+      [
+        "thinking",
+        2955394
+      ],
+      [
+        "agent_iteration",
+        2955842
+      ],
+      [
+        "status",
+        14090562
+      ],
+      [
+        "tool_call",
+        14090659
+      ],
+      [
+        "tool_result",
+        15604047
+      ],
+      [
+        "tool_call",
+        20103018
+      ],
+      [
+        "tool_result",
+        20103550
+      ],
+      [
+        "tool_call",
+        20103728
+      ],
+      [
+        "tool_result",
+        20103744
+      ],
+      [
+        "tool_call",
+        20104109
+      ],
+      [
+        "tool_result",
+        20104261
+      ],
+      [
+        "agent_iteration",
+        20538826
+      ],
+      [
+        "tool_call",
+        27836396
+      ],
+      [
+        "tool_result",
+        28576231
+      ],
+      [
+        "agent_iteration",
+        29239531
+      ],
+      [
+        "token",
+        49328171
+      ],
+      [
+        "token",
+        49328579
+      ],
+      [
+        "token",
+        49331047
+      ],
+      [
+        "token",
+        49333370
+      ],
+      [
+        "token",
+        49333445
+      ],
+      [
+        "token",
+        49333990
+      ],
+      [
+        "status",
+        49342535
+      ],
+      [
+        "final_answer",
+        49344091
+      ],
+      [
+        "citations",
+        49345401
+      ],
+      [
+        "contradictions",
+        49345920
+      ],
+      [
+        "suggestions",
+        49379219
+      ],
+      [
+        "metadata",
+        49498982
+      ],
+      [
+        "done",
+        49499086
+      ]
+    ],
+    "latency_s": 49.544,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 49060,
+      "message_id": "019f0f7d-530d-72e4-a884-0ae0e2fac152",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "fb4c9ba0-3254-4294-8d60-95e5441b96cc"
+    },
+    "output_tokens": 76,
+    "phase_timings_ms": {
+      "check_cache": 24.46399998734705,
+      "entity_resolution": 717.8392500209156,
+      "grounding_validation": 0.9175420273095369,
+      "llm_direct_text_generation": 20086.68234202196,
+      "llm_tool_planning": 38499.950891011395,
+      "load_history": 181.00574999698438,
+      "persist_and_cache": 149.66841600835323,
+      "tool_execution": 2270.0674179941416,
+      "validate_input": 1703.4387929888908
+    },
+    "question": "Any recent earnings beats in the semiconductor space?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-28",
+            "entity_tickers": [],
+            "source_types": [
+              "earnings"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1505,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "date_from": "2026-03-03",
+            "date_to": "2026-09-26",
+            "entity_tickers": []
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 2596,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_name": "SJ Semiconductor"
+          },
+          "is_fallback": true,
+          "label": "Checking analyst claims on SJ Semiconductor",
+          "status": "running",
+          "tool": "search_claims",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1108,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_claims",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_id": "e90caaac-b550-4698-8909-8d19cf034ee6"
+          },
+          "is_fallback": true,
+          "label": "Loading intelligence for e90caaac-b550-4698-8909-8d19cf034ee6",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 753,
+          "item_count": 1,
+          "result_preview": [
+            {
+              "id": "tool:intelligence:e90caaac-b550-4698-8909-8d19cf034ee6",
+              "title": "Intelligence: SJ Semiconductor"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 17554,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-28",
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 762,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 26272,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to locate any recent semiconductor earnings\u2011beat "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "events in the available data. The most recent "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "document retrieved (an intelligence bundle for SJ\u202fSemiconductor) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "does not mention an earnings beat, and no "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "other earnings\u2011beat records were found for the semiconductor "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "sector in the current sources."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to locate any recent semiconductor earnings\u2011beat events in the available data. The most recent document retrieved (an intelligence bundle for SJ\u202fSemiconductor) does not mention an earnings beat, and no other earnings\u2011beat records were found for the semiconductor sector in the current sources."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has SJ Semiconductor performed recently?",
+          "How do SJ Semiconductor's fundamentals look?",
+          "Who are SJ Semiconductor's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 49060,
+          "message_id": "019f0f7d-530d-72e4-a884-0ae0e2fac152",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "fb4c9ba0-3254-4294-8d60-95e5441b96cc"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 24.46399998734705,
+            "entity_resolution": 717.8392500209156,
+            "grounding_validation": 0.9175420273095369,
+            "llm_direct_text_generation": 20086.68234202196,
+            "llm_tool_planning": 38499.950891011395,
+            "load_history": 181.00574999698438,
+            "persist_and_cache": 149.66841600835323,
+            "tool_execution": 2270.0674179941416,
+            "validate_input": 1703.4387929888908
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2026-06-01",
+          "date_to": "2026-06-28",
+          "entity_tickers": [],
+          "source_types": [
+            "earnings"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-03-03",
+          "date_to": "2026-09-26",
+          "entity_tickers": []
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_name": "SJ Semiconductor"
+        },
+        "name": "search_claims"
+      },
+      {
+        "arguments": {
+          "entity_id": "e90caaac-b550-4698-8909-8d19cf034ee6"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-01",
+          "date_to": "2026-06-28",
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_claims"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 1.601,
+    "tps_streaming": 3.784,
+    "ttft_s": 2.084
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_events",
+      "search_documents"
+    ],
+    "forbidden_facts": [
+      "fabricated_eps_numbers",
+      "generic_sector_commentary"
+    ],
+    "required_facts": [
+      "recent_events_returned",
+      "earnings_or_beat_topic"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_events"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent failed to route to the correct tool for a sector-wide earnings-beat query. It repeatedly called search_documents with empty entity_tickers and no sector filter, which cannot return semiconductor-specific results. It then wasted calls on a single entity (SJ Semiconductor) without any evidence that entity is relevant. The most impactful change would be to use a tool that accepts a sector/industry filter (e.g., 'semiconductors') or to first resolve the sector's constituent tickers before searching for earnings events. The agent also made redundant calls (1 and 2 differ only by date range) and never recovered from empty results by adjusting the tool choice.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The trace contains 5 calls, all of which returned empty or irrelevant data. Calls 1 and 2 are near-duplicates (same tool, same empty entity_tickers, only date range differs). Call 3 and 4 are wasted on a single entity not justified by the question. Call 5 repeats the same pattern as call 1. No call ",
+        "score": 5
+      },
+      "ordering": {
+        "feedback": "No data dependencies exist between the calls (all calls are independent or sequential without chaining). There is no ordering constraint to violate, so full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 returned empty, the agent retried with a wider date range (call 2) but still no sector filter. Then it switched to search_claims on a single entity (call 3) and get_entity_intelligence (call 4), which are mismatched to the question. It never recovered to a tool that could actually find ",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks for 'recent earnings beats in the semiconductor space'. The agent called search_documents with empty entity_tickers and no sector filter, search_claims on a single entity (SJ Semiconductor), and get_entity_intelligence on a random UUID. None of these tools are appropriate for findi",
+        "score": 10
+      }
+    },
+    "trajectory_score": 45,
+    "unrecovered_failures": 4,
+    "verdict": "GRADED"
+  }
+}

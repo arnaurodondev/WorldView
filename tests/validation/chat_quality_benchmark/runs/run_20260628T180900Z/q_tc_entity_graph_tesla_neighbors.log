@@ -1,0 +1,44 @@
+# id=tc_entity_graph_tesla_neighbors prompt='What entities is Tesla directly connected to in your knowledge graph?'
+# bucket=PASS reasons=[]
+# latency_s=44.756 ttft_s=0.7261 status=200
+
+[   726.10 ms] status             {"step": "loading_context"}
+[   740.24 ms] status             {"step": "entity_resolution"}
+[  1243.07 ms] thinking           {"stage": "tool_classification"}
+[  1243.44 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  5253.78 ms] status             {"step": "Loading get_entity_graph\u2026"}
+[  5254.32 ms] tool_call          {"type": "tool_call", "tool": "get_entity_graph", "label": "Building entity map for Tesla", "input": {"entity_name": "Tesla", "depth": 1}, "status": "running"}
+[  6037.07 ms] tool_result        {"type": "tool_result", "tool": "get_entity_graph", "status": "ok", "item_count": 1, "label": "Building entity map for Tesla", "duration_ms": 811, "result_preview": [{"id": "tool:graph:01900000-0000-7000-8000-000000001004", "title": "Knowledge graph: Tesla"}]}
+[  6515.54 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 5274}
+[ 12473.77 ms] tool_call          {"type": "tool_call", "tool": "get_entity_graph", "label": "Building entity map for Tesla", "input": {"entity_name": "Tesla", "depth": 1}, "status": "running"}
+[ 12473.80 ms] tool_result        {"type": "tool_result", "tool": "get_entity_graph", "status": "ok", "item_count": 1, "label": "Building entity map for Tesla", "duration_ms": 0, "result_preview": [{"id": "tool:graph:01900000-0000-7000-8000-000000001004", "title": "Knowledge graph: Tesla"}]}
+[ 12897.51 ms] agent_iteration    {"iteration": 2, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 2, "elapsed_ms": 11639}
+[ 18488.60 ms] tool_call          {"type": "tool_call", "tool": "get_entity_graph", "label": "Building entity map for Tesla", "input": {"entity_name": "Tesla", "depth": 1}, "status": "running"}
+[ 18501.62 ms] tool_result        {"type": "tool_result", "tool": "get_entity_graph", "status": "ok", "item_count": 1, "label": "Building entity map for Tesla", "duration_ms": 0, "result_preview": [{"id": "tool:graph:01900000-0000-7000-8000-000000001004", "title": "Knowledge graph: Tesla"}]}
+[ 19058.17 ms] agent_iteration    {"iteration": 3, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 3, "elapsed_ms": 17799}
+[ 38845.33 ms] token              {"text": "Tesla\u2019s knowledge\u2011graph entry shows direct links to the "}
+[ 38852.00 ms] token              {"text": "following entities:\n\n| Connected Entity | Relationship (as "}
+[ 38853.66 ms] token              {"text": "stored) |\n|------------------|---------------------------|\n| NasdaqGS | The exchange "}
+[ 38855.07 ms] token              {"text": "on which Tesla\u2019s shares trade |\n| Cathie "}
+[ 38855.31 ms] token              {"text": "Wood | Noted investor/holder associated with Tesla |\n\n"}
+[ 38861.88 ms] token              {"text": "These connections are taken directly from the `get_entity_graph` "}
+[ 38862.88 ms] token              {"text": "result for Tesla (depth\u202f=\u202f1)\u202f\u2014\u202fsee "}
+[ 38863.05 ms] token              {"text": "the node list that includes \u201cNasdaqGS\u201d and \u201cCathie "}
+[ 38994.12 ms] token              {"text": "Wood\u201d with confidence\u202f0.85\u30101\u3011."}
+[ 38997.21 ms] status             {"step": "verifying"}
+[ 44597.49 ms] final_answer       {"text": "Tesla is directly connected in the knowledge graph to the following entities:\n\n| Entity | Relationship (as indicated by the graph) |\n|--------|------------------------------------------|\n| **NasdaqGS** | Tesla is listed on the Nasdaq Global Select Market. |\n| **Cathie Wood** | Cathie Wood (founder of ARK Invest) is a notable investor in Tesla. |\n\nThese connections are the only one
+[ 44598.21 ms] citations          []
+[ 44616.05 ms] contradictions     []
+[ 44617.63 ms] suggestions        ["What are today's biggest market movers?", "What's in my morning brief today?", "Are there any notable earnings coming up this week?"]
+[ 44704.44 ms] metadata           {"thread_id": "ea0830ad-4c0e-474c-b5b9-e1d3bf46e622", "message_id": "019f0f77-9084-71c9-9826-9203f4776b20", "intent": "GENERAL", "provider": "", "latency_ms": 44515, "protocol_version": 2}
+[ 44704.80 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 3.2270420051645488, "validate_input": 622.1774589794222, "load_history": 25.746916013304144, "entity_resolution": 496.22266698861495, "llm_tool_planning": 35202.9333509563, "tool_execution": 814.9054579844233, "llm_direct_text_generation": 19779.741759004537, "grounding_validation": 5683.761420019437, "persist_and_cache":
+
+# --- final answer ---
+Tesla is directly connected in the knowledge graph to the following entities:
+
+| Entity | Relationship (as indicated by the graph) |
+|--------|------------------------------------------|
+| **NasdaqGS** | Tesla is listed on the Nasdaq Global Select Market. |
+| **Cathie Wood** | Cathie Wood (founder of ARK Invest) is a notable investor in Tesla. |
+
+These connections are the only ones explicitly shown in the graph output returned by the `get_entity_graph` tool.

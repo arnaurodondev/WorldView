@@ -1,0 +1,36 @@
+# id=tc_entity_narrative_anthropic prompt='Give me the narrative profile for Anthropic.'
+# bucket=PASS reasons=[]
+# latency_s=37.202 ttft_s=0.782927 status=200
+
+[   782.93 ms] status             {"step": "loading_context"}
+[   847.67 ms] status             {"step": "entity_resolution"}
+[  1205.24 ms] thinking           {"stage": "tool_classification"}
+[  1205.35 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  7953.88 ms] status             {"step": "Loading get_entity_intelligence\u2026"}
+[  7991.36 ms] tool_call          {"type": "tool_call", "tool": "get_entity_intelligence", "label": "Loading intelligence for 0195daad-d001-7000-8000-000000000002", "input": {"entity_id": "0195daad-d001-7000-8000-000000000002"}, "status": "running"}
+[  9326.38 ms] tool_result        {"type": "tool_result", "tool": "get_entity_intelligence", "status": "ok", "item_count": 1, "label": "Loading intelligence for 0195daad-d001-7000-8000-000000000002", "duration_ms": 1479, "result_preview": [{"id": "tool:intelligence:0195daad-d001-7000-8000-000000000002", "title": "Intelligence: Anthropic"}]}
+[ 14183.22 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 11007}
+[ 18438.45 ms] token              {"text": "**Anthropic \u2013 Narrative Profile**  \n\nAnthropic is a technology "}
+[ 18438.58 ms] token              {"text": "company that has partnered with Microsoft Corporation and "}
+[ 18439.44 ms] token              {"text": "Amazon Business, and has also partnered with Amazon.com\u202f"}
+[ 18440.11 ms] token              {"text": "Inc. The entity competes with NVIDIA\u202fCorporation and "}
+[ 18440.91 ms] token              {"text": "Amazon Business, and has a supplier relationship with "}
+[ 18441.21 ms] token              {"text": "NVIDIA\u202fCorporation. Additionally, Anthropic has undergone corporate actions "}
+[ 18441.80 ms] token              {"text": "with Alphabet\u202fInc\u202fClass\u202fA and Amazon.com\u202fInc.\u202f"}
+[ 18442.12 ms] token              {"text": "[ get_entity_intelligence row 0 ]\n\n**Health Score**: 0.85 "}
+[ 18475.30 ms] token              {"text": "(confidence\u202f0.90)\u202f[ get_entity_intelligence row 0 ]"}
+[ 18475.32 ms] status             {"step": "verifying"}
+[ 37159.55 ms] final_answer       {"text": "Anthropic is a technology company that has partnered with Microsoft Corporation and Amazon Business, and also with Amazon.com Inc. It competes with NVIDIA Corporation and Amazon Business, and has a supplier relationship with NVIDIA Corporation. It has undergone corporate actions with Alphabet Inc Class\u202fA and Amazon.com Inc. \n\nHealth score: 0.85\u202f[1] \nConfidence: 0.90\u202f[1]
+[ 37159.60 ms] citations          [{"ref": 1, "item_type": "financial", "id": "tool:intelligence:0195daad-d001-7000-8000-000000000002", "title": "Intelligence: Anthropic", "url": null, "source_name": "narrative", "published_at": null, "entity_name": "Anthropic", "confidence": 0.9}]
+[ 37160.88 ms] contradictions     []
+[ 37161.01 ms] suggestions        ["What's the latest news on Anthropic?", "How has Anthropic performed recently?", "How do Anthropic's fundamentals look?"]
+[ 37191.80 ms] metadata           {"thread_id": "30ea587a-b0fc-4d62-999f-997c2d918256", "message_id": "019f0f78-8048-70c4-b6a7-4f72a257215e", "intent": "RELATIONSHIP", "provider": "", "latency_ms": 37081, "protocol_version": 2}
+[ 37191.87 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 11.18679199134931, "validate_input": 680.6591669737827, "load_history": 75.0887090107426, "entity_resolution": 353.1122919812333, "llm_tool_planning": 12579.484131012578, "tool_execution": 1501.8404589791317, "llm_direct_text_generation": 6129.797628003871, "grounding_validation": 18696.6966749751, "persist_and_cache": 30.
+
+# --- final answer ---
+Anthropic is a technology company that has partnered with Microsoft Corporation and Amazon Business, and also with Amazon.com Inc. It competes with NVIDIA Corporation and Amazon Business, and has a supplier relationship with NVIDIA Corporation. It has undergone corporate actions with Alphabet Inc Class A and Amazon.com Inc.
+
+Health score: 0.85 [1]
+Confidence: 0.90 [1]
+
+Note: some figures or names above could not be matched to a retrieved source.

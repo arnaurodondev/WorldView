@@ -1,0 +1,646 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "query_fundamentals",
+      "get_entity_news"
+    ]
+  },
+  "heuristics": {
+    "char_count": 322,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_news",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 42.221,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_news"
+    ],
+    "output_tokens": 81,
+    "phase_timings_ms": {
+      "check_cache": 30.247667018556967,
+      "entity_resolution": 393.0115000111982,
+      "grounding_validation": 6327.368669008138,
+      "llm_direct_text_generation": 11116.889005992562,
+      "llm_tool_planning": 26242.8540129913,
+      "load_history": 185.06325100315735,
+      "persist_and_cache": 1771.92945900606,
+      "tool_execution": 3080.2537919953465,
+      "validate_input": 1090.3777919884305
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 1.384,
+    "word_count": 56
+  },
+  "id": "iter3_msft_earnings_citations",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a single entity's most recent earnings report; a concise table with cited numbers is perfectly calibrated. No unnecessary elaboration.",
+        "reason": "Question asks for a single entity's most recent earnings report; a concise table with cited numbers is perfectly calibrated. No unnecessary elaboration.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Revenue, net income, and EPS match the GROUNDING SAMPLE values. However, the answer labels the period as Q3 FY2026, which is not confirmed by the tool results (the sample shows no period label). Minor attribution gap.",
+        "reason": "Revenue, net income, and EPS match the GROUNDING SAMPLE values. However, the answer labels the period as Q3 FY2026, which is not confirmed by the tool results (the sample shows no period label). Minor attribution gap.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data with citations.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data with citations.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals, which is in the expected_tools equivalence set. Full marks.",
+        "reason": "Called query_fundamentals, which is in the expected_tools equivalence set. Full marks.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to query_fundamentals and produced a well-grounded, appropriately concise answer. The only concern is the period label 'Q3 FY2026' \u2014 the tool results do not explicitly confirm that label, and the answer's own disclaimer flags unmatched figures. Next iteration should either verify the period from the tool's returned metadata or omit the label if unconfirmed. Otherwise, solid performance.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals, which is in the expected_tools equivalence set. Full marks.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Revenue, net income, and EPS match the GROUNDING SAMPLE values. However, the answer labels the period as Q3 FY2026, which is not confirmed by the tool results (the sample shows no period label). Minor attribution gap.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for a single entity's most recent earnings report; a concise table with cited numbers is perfectly calibrated. No unnecessary elaboration.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data with citations.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to query_fundamentals and produced a well-grounded, appropriately concise answer. The only concern is the period label 'Q3 FY2026' \u2014 the tool results do not explicitly confirm that label, and the answer's own disclaimer flags unmatched figures. Next iteration should either verify the period from the tool's returned metadata or omit the label if unconfirmed. Otherwise, solid performance.\"\n}",
+    "reviewer_summary": "The agent correctly routed to query_fundamentals and produced a well-grounded, appropriately concise answer. The only concern is the period label 'Q3 FY2026' \u2014 the tool results do not explicitly confirm that label, and the answer's own disclaimer flags unmatched figures. Next iteration should either verify the period from the tool's returned metadata or omit the label if unconfirmed. Otherwise, solid performance.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 3,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "verified",
+        "examples": [],
+        "matched": 3,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What was Microsoft's most recent earnings report? Cite the source for each number.",
+  "reasons": [],
+  "result": {
+    "answer_text": "Microsoft\u2019s most recent quarterly earnings (Q3\u202fFY\u202f2026) reported:\n\n| Metric | Value |\n|--------|-------|\n| Revenue | **$82.9\u202fB** |\n| Net Income | **$31.8\u202fB** |\n| Diluted EPS | **$4.27** |\n\nSource:\u202f[1] (MSFT quarterly fundamentals, Q3\u202fFY\u202f2026).\n\nNote: some figures or names above could not be matched to a retrieved source.",
+    "citations": [
+      {
+        "confidence": 0.88,
+        "entity_name": "MSFT",
+        "id": "tool:fundamentals:MSFT",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "fundamentals",
+        "title": "Fundamentals: MSFT",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1383705
+      ],
+      [
+        "status",
+        1560466
+      ],
+      [
+        "thinking",
+        1963418
+      ],
+      [
+        "agent_iteration",
+        1963446
+      ],
+      [
+        "status",
+        10751901
+      ],
+      [
+        "tool_call",
+        10758296
+      ],
+      [
+        "tool_result",
+        13417911
+      ],
+      [
+        "agent_iteration",
+        14316077
+      ],
+      [
+        "tool_call",
+        20700030
+      ],
+      [
+        "tool_result",
+        21079729
+      ],
+      [
+        "agent_iteration",
+        21507091
+      ],
+      [
+        "token",
+        32683955
+      ],
+      [
+        "token",
+        32718735
+      ],
+      [
+        "token",
+        32719421
+      ],
+      [
+        "token",
+        32730263
+      ],
+      [
+        "token",
+        32731164
+      ],
+      [
+        "token",
+        32736832
+      ],
+      [
+        "status",
+        32915213
+      ],
+      [
+        "final_answer",
+        39975994
+      ],
+      [
+        "citations",
+        39976435
+      ],
+      [
+        "contradictions",
+        39976467
+      ],
+      [
+        "suggestions",
+        40001398
+      ],
+      [
+        "metadata",
+        41617103
+      ],
+      [
+        "done",
+        41617797
+      ]
+    ],
+    "latency_s": 42.221,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 39471,
+      "message_id": "019f0f72-a43d-7167-9b9e-90e49f0b13e3",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "e2bec76e-5ec6-4ca8-bf13-f19488051440"
+    },
+    "output_tokens": 81,
+    "phase_timings_ms": {
+      "check_cache": 30.247667018556967,
+      "entity_resolution": 393.0115000111982,
+      "grounding_validation": 6327.368669008138,
+      "llm_direct_text_generation": 11116.889005992562,
+      "llm_tool_planning": 26242.8540129913,
+      "load_history": 185.06325100315735,
+      "persist_and_cache": 1771.92945900606,
+      "tool_execution": 3080.2537919953465,
+      "validate_input": 1090.3777919884305
+    },
+    "question": "What was Microsoft's most recent earnings report? Cite the source for each number.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "revenue",
+              "net_income",
+              "eps"
+            ],
+            "period_type": "quarterly",
+            "periods": 1,
+            "ticker": "MSFT"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 2652,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "MSFT"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:MSFT",
+              "title": "Fundamentals query: MSFT"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12347,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "period_type": "quarterly",
+            "periods": 1,
+            "ticker": "MSFT"
+          },
+          "label": "Fetching fundamentals for Microsoft",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 425,
+          "grounding_sample": {
+            "fields": {
+              "eps": "4.27",
+              "gross_profit": "56058000000",
+              "market_cap": "2728761229312",
+              "net_income": "31778000000",
+              "pe_ratio": "21.8785",
+              "revenue": "82886000000",
+              "ticker": "MSFT"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching fundamentals for Microsoft",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:MSFT",
+              "title": "Fundamentals: MSFT"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 19536,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Microsoft\u2019s most recent quarterly earnings (Q3\u202fFY\u202f2026) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "reported:\n\n| Metric | Value |\n|--------|-------|\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Revenue | **$82.9\u202fB** |\n| Net Income "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| **$31.8\u202fB** |\n| Diluted EPS | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**$4.27** |\n\nSource:\u202f[1] (MSFT quarterly fundamentals, Q3\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "FY\u202f2026)."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Microsoft\u2019s most recent quarterly earnings (Q3\u202fFY\u202f2026) reported:\n\n| Metric | Value |\n|--------|-------|\n| Revenue | **$82.9\u202fB** |\n| Net Income | **$31.8\u202fB** |\n| Diluted EPS | **$4.27** |\n\nSource:\u202f[1] (MSFT quarterly fundamentals, Q3\u202fFY\u202f2026).\n\nNote: some figures or names above could not be matched to a retrieved source."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.88,
+            "entity_name": "MSFT",
+            "id": "tool:fundamentals:MSFT",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "fundamentals",
+            "title": "Fundamentals: MSFT",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Microsoft Corporation?",
+          "How has MSFT performed recently?",
+          "Who are Microsoft Corporation's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 39471,
+          "message_id": "019f0f72-a43d-7167-9b9e-90e49f0b13e3",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "e2bec76e-5ec6-4ca8-bf13-f19488051440"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 30.247667018556967,
+            "entity_resolution": 393.0115000111982,
+            "grounding_validation": 6327.368669008138,
+            "llm_direct_text_generation": 11116.889005992562,
+            "llm_tool_planning": 26242.8540129913,
+            "load_history": 185.06325100315735,
+            "persist_and_cache": 1771.92945900606,
+            "tool_execution": 3080.2537919953465,
+            "validate_input": 1090.3777919884305
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "revenue",
+            "net_income",
+            "eps"
+          ],
+          "period_type": "quarterly",
+          "periods": 1,
+          "ticker": "MSFT"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "period_type": "quarterly",
+          "periods": 1,
+          "ticker": "MSFT"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "MSFT"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "eps": "4.27",
+            "gross_profit": "56058000000",
+            "market_cap": "2728761229312",
+            "net_income": "31778000000",
+            "pe_ratio": "21.8785",
+            "revenue": "82886000000",
+            "ticker": "MSFT"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 1.983,
+    "tps_streaming": 7.286,
+    "ttft_s": 1.384
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "query_fundamentals",
+      "get_entity_news"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress",
+    "citations"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly selected fundamental-data tools for an earnings-report question. However, it made two parallel calls (query_fundamentals and get_fundamentals_history) that return largely the same metrics. Dropping the redundant call would make the trajectory leaner without losing any required data. No ordering or recovery issues exist.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Call 1 and call 2 both return overlapping fundamental data (revenue, net_income, eps). One call would have sufficed; the second is redundant.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Two independent calls in parallel; no dependency constraint to violate, ordering is fine.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "Both calls (query_fundamentals, get_fundamentals_history) are appropriate for retrieving earnings metrics; no mismatch with intent.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 95,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

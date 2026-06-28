@@ -1,0 +1,536 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_entity_narrative",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 451,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_intelligence",
+      "get_entity_narrative"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 37.202,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_narrative"
+    ],
+    "output_tokens": 113,
+    "phase_timings_ms": {
+      "check_cache": 11.18679199134931,
+      "entity_resolution": 353.1122919812333,
+      "grounding_validation": 18696.6966749751,
+      "llm_direct_text_generation": 6129.797628003871,
+      "llm_tool_planning": 12579.484131012578,
+      "load_history": 75.0887090107426,
+      "persist_and_cache": 30.921207973733544,
+      "tool_execution": 1501.8404589791317,
+      "validate_input": 680.6591669737827
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "ttft_s": 0.783,
+    "word_count": 69
+  },
+  "id": "tc_entity_narrative_anthropic",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Answer is concise and covers the requested narrative profile (partners, competitors, health score). Depth is appropriate for a medium-depth question, though a bit more structure (e.g., sections) would improve readability.",
+        "reason": "Answer is concise and covers the requested narrative profile (partners, competitors, health score). Depth is appropriate for a medium-depth question, though a bit more structure (e.g., sections) would improve readability.",
+        "score": 20
+      },
+      "grounding": {
+        "feedback": "Claims about partners, competitors, and health score are consistent with tool_results (status=ok items=1). The transparency banner flags unverified items, which is appropriate. No grounding sample provided \u2014 presumed band.",
+        "reason": "Claims about partners, competitors, and health score are consistent with tool_results (status=ok items=1). The transparency banner flags unverified items, which is appropriate. No grounding sample provided \u2014 presumed band.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_intelligence, which is in the expected_tools equivalence set.",
+        "reason": "Called get_entity_intelligence, which is in the expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_entity_intelligence and produced a grounded narrative profile with key facts and a health score. The transparency banner is a good practice. For next iteration, consider structuring the answer with clear sections (e.g., Partners, Competitors, Health) to improve readability, and ensure the tool call explicitly requests narrative fields if available.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_intelligence, which is in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Claims about partners, competitors, and health score are consistent with tool_results (status=ok items=1). The transparency banner flags unverified items, which is appropriate. No grounding sample provided \u2014 presumed band.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"feedback\": \"Answer is concise and covers the requested narrative profile (partners, competitors, health score). Depth is appropriate for a medium-depth question, though a bit more structure (e.g., sections) would improve readability.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_entity_intelligence and produced a grounded narrative profile with key facts and a health score. The transparency banner is a good practice. For next iteration, consider structuring the answer with clear sections (e.g., Partners, Competitors, Health) to improve readability, and ensure the tool call explicitly requests narrative fields if available.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_entity_intelligence and produced a grounded narrative profile with key facts and a health score. The transparency banner is a good practice. For next iteration, consider structuring the answer with clear sections (e.g., Partners, Competitors, Health) to improve readability, and ensure the tool call explicitly requests narrative fields if available.",
+    "score": 90,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 20,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 90,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Give me the narrative profile for Anthropic.",
+  "reasons": [],
+  "result": {
+    "answer_text": "Anthropic is a technology company that has partnered with Microsoft Corporation and Amazon Business, and also with Amazon.com Inc. It competes with NVIDIA Corporation and Amazon Business, and has a supplier relationship with NVIDIA Corporation. It has undergone corporate actions with Alphabet Inc Class\u202fA and Amazon.com Inc. \n\nHealth score: 0.85\u202f[1] \nConfidence: 0.90\u202f[1]\n\nNote: some figures or names above could not be matched to a retrieved source.",
+    "citations": [
+      {
+        "confidence": 0.9,
+        "entity_name": "Anthropic",
+        "id": "tool:intelligence:0195daad-d001-7000-8000-000000000002",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "narrative",
+        "title": "Intelligence: Anthropic",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        782927
+      ],
+      [
+        "status",
+        847672
+      ],
+      [
+        "thinking",
+        1205236
+      ],
+      [
+        "agent_iteration",
+        1205349
+      ],
+      [
+        "status",
+        7953880
+      ],
+      [
+        "tool_call",
+        7991358
+      ],
+      [
+        "tool_result",
+        9326381
+      ],
+      [
+        "agent_iteration",
+        14183216
+      ],
+      [
+        "token",
+        18438449
+      ],
+      [
+        "token",
+        18438583
+      ],
+      [
+        "token",
+        18439436
+      ],
+      [
+        "token",
+        18440107
+      ],
+      [
+        "token",
+        18440909
+      ],
+      [
+        "token",
+        18441211
+      ],
+      [
+        "token",
+        18441800
+      ],
+      [
+        "token",
+        18442123
+      ],
+      [
+        "token",
+        18475296
+      ],
+      [
+        "status",
+        18475322
+      ],
+      [
+        "final_answer",
+        37159554
+      ],
+      [
+        "citations",
+        37159600
+      ],
+      [
+        "contradictions",
+        37160880
+      ],
+      [
+        "suggestions",
+        37161008
+      ],
+      [
+        "metadata",
+        37191802
+      ],
+      [
+        "done",
+        37191873
+      ]
+    ],
+    "latency_s": 37.202,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 37081,
+      "message_id": "019f0f78-8048-70c4-b6a7-4f72a257215e",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "30ea587a-b0fc-4d62-999f-997c2d918256"
+    },
+    "output_tokens": 113,
+    "phase_timings_ms": {
+      "check_cache": 11.18679199134931,
+      "entity_resolution": 353.1122919812333,
+      "grounding_validation": 18696.6966749751,
+      "llm_direct_text_generation": 6129.797628003871,
+      "llm_tool_planning": 12579.484131012578,
+      "load_history": 75.0887090107426,
+      "persist_and_cache": 30.921207973733544,
+      "tool_execution": 1501.8404589791317,
+      "validate_input": 680.6591669737827
+    },
+    "question": "Give me the narrative profile for Anthropic.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_intelligence\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "0195daad-d001-7000-8000-000000000002"
+          },
+          "label": "Loading intelligence for 0195daad-d001-7000-8000-000000000002",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1479,
+          "item_count": 1,
+          "label": "Loading intelligence for 0195daad-d001-7000-8000-000000000002",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:0195daad-d001-7000-8000-000000000002",
+              "title": "Intelligence: Anthropic"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 11007,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Anthropic \u2013 Narrative Profile**  \n\nAnthropic is a technology "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "company that has partnered with Microsoft Corporation and "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Amazon Business, and has also partnered with Amazon.com\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Inc. The entity competes with NVIDIA\u202fCorporation and "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Amazon Business, and has a supplier relationship with "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "NVIDIA\u202fCorporation. Additionally, Anthropic has undergone corporate actions "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "with Alphabet\u202fInc\u202fClass\u202fA and Amazon.com\u202fInc.\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[ get_entity_intelligence row 0 ]\n\n**Health Score**: 0.85 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(confidence\u202f0.90)\u202f[ get_entity_intelligence row 0 ]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Anthropic is a technology company that has partnered with Microsoft Corporation and Amazon Business, and also with Amazon.com Inc. It competes with NVIDIA Corporation and Amazon Business, and has a supplier relationship with NVIDIA Corporation. It has undergone corporate actions with Alphabet Inc Class\u202fA and Amazon.com Inc. \n\nHealth score: 0.85\u202f[1] \nConfidence: 0.90\u202f[1]\n\nNote: some figures or names above could not be matched to a retrieved source."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.9,
+            "entity_name": "Anthropic",
+            "id": "tool:intelligence:0195daad-d001-7000-8000-000000000002",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "narrative",
+            "title": "Intelligence: Anthropic",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Anthropic?",
+          "How has Anthropic performed recently?",
+          "How do Anthropic's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 37081,
+          "message_id": "019f0f78-8048-70c4-b6a7-4f72a257215e",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "30ea587a-b0fc-4d62-999f-997c2d918256"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 11.18679199134931,
+            "entity_resolution": 353.1122919812333,
+            "grounding_validation": 18696.6966749751,
+            "llm_direct_text_generation": 6129.797628003871,
+            "llm_tool_planning": 12579.484131012578,
+            "load_history": 75.0887090107426,
+            "persist_and_cache": 30.921207973733544,
+            "tool_execution": 1501.8404589791317,
+            "validate_input": 680.6591669737827
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "0195daad-d001-7000-8000-000000000002"
+        },
+        "name": "get_entity_intelligence"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tps": 3.103,
+    "tps_streaming": 18.435,
+    "ttft_s": 0.783
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_narrative",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [
+      "generic_web_knowledge_not_platform_curated"
+    ],
+    "required_facts": [
+      "anthropic_identified",
+      "narrative_summary_present"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_narrative"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified Anthropic via get_entity_intelligence and returned structured relationship data (partners, competitors, health score). However, the question explicitly asked for a 'narrative profile', which requires a narrative summary tool (get_entity_narrative). The agent omitted that call entirely, resulting in an answer that provides intelligence data but no narrative. The process is efficient and error-free but incomplete \u2014 the single most impactful change would be to add a call to get_entity_narrative after entity identification to satisfy the narrative requirement.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The single call is not redundant, but it is incomplete for the question's intent. A second call to get_entity_narrative would have been necessary to fully answer the request. The chain is minimal in count but misses a required tool, so slight deduction.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Only one tool call was made, so there are no ordering dependencies to evaluate. The single call is trivially correctly ordered.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls occurred (call 1 returned ok with items=1). There is nothing to recover from, so full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "The question asks for a 'narrative profile', which should involve get_entity_narrative (or similar narrative tool). The agent only called get_entity_intelligence, which returns structured data (partners, competitors, health score) but not a narrative summary. This is a partial mismatch \u2014 the tool is",
+        "score": 12
+      }
+    },
+    "trajectory_score": 82,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

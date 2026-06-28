@@ -1,0 +1,435 @@
+{
+  "bucket": "PASS",
+  "category": "portfolio",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_portfolio_context"
+    ]
+  },
+  "heuristics": {
+    "char_count": 108,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_portfolio_context"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_portfolio_context"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 36.393,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 27,
+    "phase_timings_ms": {
+      "check_cache": 139.31891598622315,
+      "entity_resolution": 3214.7893350047525,
+      "grounding_validation": 3.2099999953061342,
+      "llm_direct_text_generation": 4794.362753018504,
+      "llm_tool_planning": 12094.29075603839,
+      "load_history": 3171.489043015754,
+      "persist_and_cache": 673.8968749996275,
+      "tool_execution": 10404.38767199521,
+      "validate_input": 5115.649336017668
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [],
+        "tool": "get_portfolio_context"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_portfolio_context"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "get_portfolio_context"
+      }
+    ],
+    "ttft_s": 6.852,
+    "word_count": 17
+  },
+  "id": "tc_portfolio_semiconductor_exposure",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Concise refusal matches the simple factual lookup; appropriate depth for a data-missing scenario.",
+        "reason": "Concise refusal matches the simple factual lookup; appropriate depth for a data-missing scenario.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Refusal is fully supported by tool result (status=empty items=0); no fabricated data.",
+        "reason": "Refusal is fully supported by tool result (status=empty items=0); no fabricated data.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Refusal phrase present but appropriate_refusal_ok=true and tool returned empty data; correct refusal.",
+        "reason": "Refusal phrase present but appropriate_refusal_ok=true and tool returned empty data; correct refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called the correct tool (get_portfolio_context) as expected.",
+        "reason": "Called the correct tool (get_portfolio_context) as expected.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_portfolio_context, which returned empty holdings. The refusal is appropriate per rubric (appropriate_refusal_ok=true) and concise. No changes needed; this is a textbook correct handling of a missing-data scenario.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called the correct tool (get_portfolio_context) as expected.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Refusal is fully supported by tool result (status=empty items=0); no fabricated data.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Concise refusal matches the simple factual lookup; appropriate depth for a data-missing scenario.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Refusal phrase present but appropriate_refusal_ok=true and tool returned empty data; correct refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_portfolio_context, which returned empty holdings. The refusal is appropriate per rubric (appropriate_refusal_ok=true) and concise. No changes needed; this is a textbook correct handling of a missing-data scenario.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_portfolio_context, which returned empty holdings. The refusal is appropriate per rubric (appropriate_refusal_ok=true) and concise. No changes needed; this is a textbook correct handling of a missing-data scenario.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "How much of my portfolio is in semiconductors?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I couldn\u2019t retrieve any data for your portfolio; no holdings information was found for the specified entity.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        6851992
+      ],
+      [
+        "status",
+        9189800
+      ],
+      [
+        "thinking",
+        12361344
+      ],
+      [
+        "agent_iteration",
+        12373505
+      ],
+      [
+        "status",
+        20474512
+      ],
+      [
+        "tool_call",
+        20735549
+      ],
+      [
+        "tool_result",
+        30415439
+      ],
+      [
+        "agent_iteration",
+        30415479
+      ],
+      [
+        "token",
+        35487200
+      ],
+      [
+        "token",
+        35490238
+      ],
+      [
+        "token",
+        35490272
+      ],
+      [
+        "status",
+        35494854
+      ],
+      [
+        "final_answer",
+        35494900
+      ],
+      [
+        "citations",
+        35494929
+      ],
+      [
+        "contradictions",
+        35536330
+      ],
+      [
+        "suggestions",
+        35641873
+      ],
+      [
+        "metadata",
+        36124811
+      ],
+      [
+        "done",
+        36128664
+      ]
+    ],
+    "latency_s": 36.393,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 34889,
+      "message_id": "019f0f7a-63d1-78b1-b83e-667d993bff5b",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "335d6a62-649b-4520-954b-d026b8de6186"
+    },
+    "output_tokens": 27,
+    "phase_timings_ms": {
+      "check_cache": 139.31891598622315,
+      "entity_resolution": 3214.7893350047525,
+      "grounding_validation": 3.2099999953061342,
+      "llm_direct_text_generation": 4794.362753018504,
+      "llm_tool_planning": 12094.29075603839,
+      "load_history": 3171.489043015754,
+      "persist_and_cache": 673.8968749996275,
+      "tool_execution": 10404.38767199521,
+      "validate_input": 5115.649336017668
+    },
+    "question": "How much of my portfolio is in semiconductors?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_portfolio_context\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {},
+          "label": "Loading portfolio context...",
+          "status": "running",
+          "tool": "get_portfolio_context",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 10402,
+          "item_count": 0,
+          "label": "Loading portfolio context...",
+          "status": "empty",
+          "tool": "get_portfolio_context",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 17975,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I couldn\u2019t retrieve any data for your portfolio; "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "no holdings information was found for the specified "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "entity."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I couldn\u2019t retrieve any data for your portfolio; no holdings information was found for the specified entity."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "Which of my holdings carry the most risk right now?",
+          "What's the latest news on Portfolio?",
+          "How has Portfolio performed recently?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 34889,
+          "message_id": "019f0f7a-63d1-78b1-b83e-667d993bff5b",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "335d6a62-649b-4520-954b-d026b8de6186"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 139.31891598622315,
+            "entity_resolution": 3214.7893350047525,
+            "grounding_validation": 3.2099999953061342,
+            "llm_direct_text_generation": 4794.362753018504,
+            "llm_tool_planning": 12094.29075603839,
+            "load_history": 3171.489043015754,
+            "persist_and_cache": 673.8968749996275,
+            "tool_execution": 10404.38767199521,
+            "validate_input": 5115.649336017668
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {},
+        "name": "get_portfolio_context"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "get_portfolio_context"
+      }
+    ],
+    "tps": 0.914,
+    "tps_streaming": 5.632,
+    "ttft_s": 6.852
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_portfolio_context"
+    ],
+    "forbidden_facts": [
+      "generic_semiconductor_outlook_no_portfolio_data"
+    ],
+    "required_facts": [
+      "portfolio_holdings_referenced",
+      "sector_exposure_or_percent"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_portfolio_context"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for portfolio holdings data and called get_portfolio_context, which returned empty. Rather than fabricating a semiconductor exposure figure or falling back to a generic sector outlook, it issued a clean refusal stating no holdings were found. This is the ideal process for a data-missing scenario: right tool, single call, honest refusal. No process changes needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One necessary call, no redundancy \u2014 maximally efficient.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call, no ordering constraints \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "The tool returned empty; the agent correctly refused with a clear explanation rather than hallucinating data \u2014 appropriate recovery.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_portfolio_context is exactly the right tool for a portfolio-sector question \u2014 perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 1,
+    "verdict": "GRADED"
+  }
+}

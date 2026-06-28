@@ -1,0 +1,760 @@
+{
+  "bucket": "WARN",
+  "category": "portfolio",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_alerts"
+    ]
+  },
+  "heuristics": {
+    "char_count": 1660,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_alerts"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_alerts"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 51.653,
+    "latency_within_budget": false,
+    "missing_expected_tools": [],
+    "output_tokens": 415,
+    "phase_timings_ms": {
+      "check_cache": 59.93412501993589,
+      "entity_resolution": 580.9826669865288,
+      "grounding_validation": 30441.018097975757,
+      "llm_direct_text_generation": 11914.130504999775,
+      "llm_tool_planning": 15148.53042300092,
+      "load_history": 130.5400830169674,
+      "persist_and_cache": 527.6729579782113,
+      "tool_execution": 1722.583416994894,
+      "validate_input": 1167.2180840105284
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [],
+        "tool": "get_alerts"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_alerts"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 20,
+        "status": "ok",
+        "tool": "get_alerts"
+      }
+    ],
+    "ttft_s": 1.605,
+    "word_count": 284
+  },
+  "id": "tc_get_alerts_list_active",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a shallow list request; answer provides a clear table with all 12 alerts, perfectly matching the expected depth.",
+        "reason": "Question is a shallow list request; answer provides a clear table with all 12 alerts, perfectly matching the expected depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "All 12 alerts are attributed to tool rows [1]\u2013[12]; the final disclaimer about unmatched sources is transparent. No grounding sample provided, but no scope/coverage violations detected.",
+        "reason": "All 12 alerts are attributed to tool rows [1]\u2013[12]; the final disclaimer about unmatched sources is transparent. No grounding sample provided, but no scope/coverage violations detected.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides full alert list.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides full alert list.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Correctly called get_alerts(), which is the expected tool.",
+        "reason": "Correctly called get_alerts(), which is the expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_alerts() and presented the 20 returned items in a clean table. The only minor issue is the final disclaimer about unmatched sources, which is unnecessary since all rows are cited; removing it would tighten the answer. Otherwise, solid performance for a straightforward list query.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Correctly called get_alerts(), which is the expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"All 12 alerts are attributed to tool rows [1]\u2013[12]; the final disclaimer about unmatched sources is transparent. No grounding sample provided, but no scope/coverage violations detected.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a shallow list request; answer provides a clear table with all 12 alerts, perfectly matching the expected depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides full alert list.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_alerts() and presented the 20 returned items in a clean table. The only minor issue is the final disclaimer about unmatched sources, which is unnecessary since all rows are cited; removing it would tighten the answer. Otherwise, solid performance for a straightforward list query.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_alerts() and presented the 20 returned items in a clean table. The only minor issue is the final disclaimer about unmatched sources, which is unnecessary since all rows are cited; removing it would tighten the answer. Otherwise, solid performance for a straightforward list query.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What alerts do I currently have set up?",
+  "reasons": [
+    "slow latency_s=51.653"
+  ],
+  "result": {
+    "answer_text": "Here are the alerts that are currently active in your account:\n\n| # | Ticker | Alert type | Severity | Title (brief description) |\n|---|--------|------------|----------|----------------------------|\n| 1 | GOOGL | SIGNAL | low | \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d (earnings\u2011release claim, neutral polarity)\u30101\u3011 |\n| 2 | MSFT | SIGNAL | low | \u201cMSFT\u202f\u2014\u202fprice signal detected\u201d (legal claim, negative polarity)\u30102\u3011 |\n| 3 | GOOGL | SIGNAL | low | \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d (other claim, neutral polarity)\u30103\u3011 |\n| 4 | TSLA | SIGNAL | low | \u201cTSLA\u202f\u2014\u202fprice signal detected\u201d (product\u2011launch claim, positive polarity)\u30104\u3011 |\n| 5 | GOOGL | SIGNAL | low | \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d (other claim, neutral polarity)\u30105\u3011 |\n| 6 | META | SIGNAL | low | \u201cMETA\u202f\u2014\u202fprice signal detected\u201d (other claim, neutral polarity)\u30106\u3011 |\n| 7 | NVDA | SIGNAL | low | \u201cNVDA\u202f\u2014\u202fprice signal detected\u201d (earnings\u2011guidance claim, neutral polarity)\u30107\u3011 |\n| 8 | NVDA | SIGNAL | low | \u201cNVDA\u202f\u2014\u202fprice signal detected\u201d (earnings\u2011release claim, neutral polarity)\u30108\u3011 |\n| 9 | NVDA | SIGNAL | low | \u201cNVDA\u202f\u2014\u202fprice signal detected\u201d (product\u2011launch claim, positive polarity)\u30109\u3011 |\n|10 | AMZN | GRAPH_CHANGE | medium | \u201cAMZN\u202f\u2014\u202fgraph update\u201d (new evidence)\u301010\u3011 |\n|11 | GOOGL | GRAPH_CHANGE | medium | \u201cGOOGL\u202f\u2014\u202fgraph update\u201d (new evidence, multiple relation changes)\u301011\u3011 |\n|12 | NVDA | GRAPH_CHANGE | medium | \u201cNVDA\u202f\u2014\u202fgraph update\u201d (new evidence)\u301012\u3011 |\n\nThese entries reflect the pending alerts returned by the alert service, including both signal\u2011type alerts (price\u2011related signals) and graph\u2011change alerts (updates to the knowledge graph).\n\nNote: some figures or names above could not be matched to a retrieved source.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1604807
+      ],
+      [
+        "status",
+        1716409
+      ],
+      [
+        "thinking",
+        2319803
+      ],
+      [
+        "agent_iteration",
+        2319983
+      ],
+      [
+        "status",
+        5575240
+      ],
+      [
+        "tool_call",
+        5585235
+      ],
+      [
+        "tool_result",
+        7462086
+      ],
+      [
+        "agent_iteration",
+        8549768
+      ],
+      [
+        "token",
+        20493893
+      ],
+      [
+        "token",
+        20494323
+      ],
+      [
+        "token",
+        20494466
+      ],
+      [
+        "token",
+        20497348
+      ],
+      [
+        "token",
+        20497862
+      ],
+      [
+        "token",
+        20498605
+      ],
+      [
+        "token",
+        20499482
+      ],
+      [
+        "token",
+        20499742
+      ],
+      [
+        "token",
+        20502100
+      ],
+      [
+        "token",
+        20502207
+      ],
+      [
+        "token",
+        20502678
+      ],
+      [
+        "token",
+        20503510
+      ],
+      [
+        "token",
+        20503567
+      ],
+      [
+        "token",
+        20509497
+      ],
+      [
+        "token",
+        20521300
+      ],
+      [
+        "token",
+        20525211
+      ],
+      [
+        "token",
+        20527877
+      ],
+      [
+        "token",
+        20529635
+      ],
+      [
+        "token",
+        20529686
+      ],
+      [
+        "token",
+        20530275
+      ],
+      [
+        "token",
+        20531207
+      ],
+      [
+        "token",
+        20531232
+      ],
+      [
+        "token",
+        20537658
+      ],
+      [
+        "token",
+        20538425
+      ],
+      [
+        "token",
+        20539102
+      ],
+      [
+        "token",
+        20539335
+      ],
+      [
+        "token",
+        20539722
+      ],
+      [
+        "token",
+        20540407
+      ],
+      [
+        "token",
+        20541941
+      ],
+      [
+        "token",
+        20542661
+      ],
+      [
+        "token",
+        20543364
+      ],
+      [
+        "token",
+        20544416
+      ],
+      [
+        "token",
+        20545392
+      ],
+      [
+        "token",
+        20546885
+      ],
+      [
+        "status",
+        20934541
+      ],
+      [
+        "final_answer",
+        50960764
+      ],
+      [
+        "citations",
+        50960851
+      ],
+      [
+        "contradictions",
+        51007703
+      ],
+      [
+        "suggestions",
+        51008226
+      ],
+      [
+        "metadata",
+        51602835
+      ],
+      [
+        "done",
+        51602937
+      ]
+    ],
+    "latency_s": 51.653,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 50628,
+      "message_id": "019f0f76-8389-7ab7-8e53-1d6be13c44de",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "49b5fd76-e842-4104-a1a9-fba375e30532"
+    },
+    "output_tokens": 415,
+    "phase_timings_ms": {
+      "check_cache": 59.93412501993589,
+      "entity_resolution": 580.9826669865288,
+      "grounding_validation": 30441.018097975757,
+      "llm_direct_text_generation": 11914.130504999775,
+      "llm_tool_planning": 15148.53042300092,
+      "load_history": 130.5400830169674,
+      "persist_and_cache": 527.6729579782113,
+      "tool_execution": 1722.583416994894,
+      "validate_input": 1167.2180840105284
+    },
+    "question": "What alerts do I currently have set up?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_alerts\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {},
+          "label": "Loading your alerts...",
+          "status": "running",
+          "tool": "get_alerts",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1718,
+          "item_count": 20,
+          "label": "Loading your alerts...",
+          "result_preview": [
+            {
+              "id": "tool:alert:019efd38-0699-7425-99da-a284e7df7906",
+              "title": "Alert"
+            },
+            {
+              "id": "tool:alert:019efd38-047d-756f-a1d6-113a0cf8b4f9",
+              "title": "Alert"
+            },
+            {
+              "id": "tool:alert:019efd2d-2e41-7b24-80a3-79f18da5039b",
+              "title": "Alert"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_alerts",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 6208,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Here are the alerts that are currently active "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in your account:\n\n| # | Ticker | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Alert type | Severity | Title (brief description) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n|---|--------|------------|----------|----------------------------|\n| 1 | GOOGL | SIGNAL "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| low | \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(earnings\u2011release claim, neutral polarity)\u30101\u3011 |\n| 2 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "MSFT | SIGNAL | low | \u201cMSFT\u202f\u2014\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "price signal detected\u201d (legal claim, negative polarity)\u30102\u3011 |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 3 | GOOGL | SIGNAL | low "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d (other claim, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "neutral polarity)\u30103\u3011 |\n| 4 | TSLA | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "SIGNAL | low | \u201cTSLA\u202f\u2014\u202fprice signal "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "detected\u201d (product\u2011launch claim, positive polarity)\u30104\u3011 |\n| 5 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| GOOGL | SIGNAL | low | \u201cGOOGL\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2014\u202fprice signal detected\u201d (other claim, neutral polarity)\u30105\u3011 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| 6 | META | SIGNAL | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "low | \u201cMETA\u202f\u2014\u202fprice signal detected\u201d (other "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "claim, neutral polarity)\u30106\u3011 |\n| 7 | NVDA "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| SIGNAL | low | \u201cNVDA\u202f\u2014\u202fprice "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "signal detected\u201d (earnings\u2011guidance claim, neutral polarity)\u30107\u3011 |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "8 | NVDA | SIGNAL | low | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u201cNVDA\u202f\u2014\u202fprice signal detected\u201d (earnings\u2011release claim, neutral "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "polarity)\u30108\u3011 |\n| 9 | NVDA | SIGNAL "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| low | \u201cNVDA\u202f\u2014\u202fprice signal detected\u201d "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(product\u2011launch claim, positive polarity)\u30109\u3011 |\n|10 | AMZN "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| GRAPH_CHANGE | medium | \u201cAMZN\u202f\u2014\u202fgraph "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "update\u201d (new evidence)\u301010\u3011 |\n|11 | GOOGL | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "GRAPH_CHANGE | medium | \u201cGOOGL\u202f\u2014\u202fgraph update\u201d "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(new evidence, multiple relation changes)\u301011\u3011 |\n|12 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "NVDA | GRAPH_CHANGE | medium | \u201cNVDA\u202f\u2014\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "graph update\u201d (new evidence)\u301012\u3011 |\n\nThese entries reflect "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the pending alerts returned by the alert service, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "including both signal\u2011type alerts (price\u2011related signals) and graph\u2011change "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "alerts (updates to the knowledge graph)."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Here are the alerts that are currently active in your account:\n\n| # | Ticker | Alert type | Severity | Title (brief description) |\n|---|--------|------------|----------|----------------------------|\n| 1 | GOOGL | SIGNAL | low | \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d (earnings\u2011release claim, neutral polarity)\u30101\u3011 |\n| 2 | MSFT | SIGNAL | low | \u201cMSFT\u202f\u2014\u202fprice signal detected\u201d (legal claim, negative polarity)\u30102\u3011 |\n| 3 | GOOGL | SIGNAL | low | \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d (other claim, neutral polarity)\u30103\u3011 |\n| 4 | TSLA | SIGNAL | low | \u201cTSLA\u202f\u2014\u202fprice signal detected\u201d (product\u2011launch claim, positive polarity)\u30104\u3011 |\n| 5 | GOOGL | SIGNAL | low | \u201cGOOGL\u202f\u2014\u202fprice signal detected\u201d (other claim, neutral polarity)\u30105\u3011 |\n| 6 | META | SIGNAL | low | \u201cMETA\u202f\u2014\u202fprice signal detected\u201d (other claim, neutral polarity)\u30106\u3011 |\n| 7 | NVDA | SIGNAL | low | \u201cNVDA\u202f\u2014\u202fprice signal detected\u201d (earnings\u2011guidance claim, neutral polarity)\u30107\u3011 |\n| 8 | NVDA | SIGNAL | low | \u201cNVDA\u202f\u2014\u202fprice signal detected\u201d (earnings\u2011release claim, neutral polarity)\u30108\u3011 |\n| 9 | NVDA | SIGNAL | low | \u201cNVDA\u202f\u2014\u202fprice signal detected\u201d (product\u2011launch claim, positive polarity)\u30109\u3011 |\n|10 | AMZN | GRAPH_CHANGE | medium | \u201cAMZN\u202f\u2014\u202fgraph update\u201d (new evidence)\u301010\u3011 |\n|11 | GOOGL | GRAPH_CHANGE | medium | \u201cGOOGL\u202f\u2014\u202fgraph update\u201d (new evidence, multiple relation changes)\u301011\u3011 |\n|12 | NVDA | GRAPH_CHANGE | medium | \u201cNVDA\u202f\u2014\u202fgraph update\u201d (new evidence)\u301012\u3011 |\n\nThese entries reflect the pending alerts returned by the alert service, including both signal\u2011type alerts (price\u2011related signals) and graph\u2011change alerts (updates to the knowledge graph).\n\nNote: some figures or names above could not be matched to a retrieved source."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 50628,
+          "message_id": "019f0f76-8389-7ab7-8e53-1d6be13c44de",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "49b5fd76-e842-4104-a1a9-fba375e30532"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 59.93412501993589,
+            "entity_resolution": 580.9826669865288,
+            "grounding_validation": 30441.018097975757,
+            "llm_direct_text_generation": 11914.130504999775,
+            "llm_tool_planning": 15148.53042300092,
+            "load_history": 130.5400830169674,
+            "persist_and_cache": 527.6729579782113,
+            "tool_execution": 1722.583416994894,
+            "validate_input": 1167.2180840105284
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {},
+        "name": "get_alerts"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 20,
+        "status": "ok",
+        "tool": "get_alerts"
+      }
+    ],
+    "tps": 8.292,
+    "tps_streaming": 34.833,
+    "ttft_s": 1.605
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_alerts"
+    ],
+    "forbidden_facts": [
+      "fabricated_alert_thresholds"
+    ],
+    "required_facts": [
+      "alert_list_or_empty_state"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_alerts"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the user's intent to list current alerts and made a single, well-chosen call to get_alerts(), which returned 20 items. The trajectory is clean, with no wasted steps, no failures, and no ordering issues. The only process improvement would be to ensure the answer's table formatting matches the tool's output structure exactly, but that is a presentation concern, not a process flaw. Overall, this is an exemplary minimal trajectory.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one call, no redundancy \u2014 minimal and sufficient.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraint \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_alerts() is exactly the right tool for a 'what alerts do I have' question \u2014 perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,503 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 234,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 18.436,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 59,
+    "phase_timings_ms": {
+      "check_cache": 26.65808398160152,
+      "entity_resolution": 1087.5116669922136,
+      "grounding_validation": 1.710290991468355,
+      "llm_direct_text_generation": 3322.7945849939715,
+      "llm_tool_planning": 9668.1742129731,
+      "load_history": 58.61887501669116,
+      "persist_and_cache": 58.462916989810765,
+      "tool_execution": 1276.6847089806106,
+      "validate_input": 1037.7567510004155
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 1.46,
+    "word_count": 37
+  },
+  "id": "iter3_apple_revenue_precision",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a specific numeric value; answer is a refusal with no data, severely under-developed for a factual lookup.",
+        "reason": "Question asks for a specific numeric value; answer is a refusal with no data, severely under-developed for a factual lookup.",
+        "score": 5
+      },
+      "grounding": {
+        "feedback": "Tool returned status=ok items=1, not 'missing'. Claiming a 'missing coverage flag' contradicts the trace; no grounding sample shows missing data.",
+        "reason": "Tool returned status=ok items=1, not 'missing'. Claiming a 'missing coverage flag' contradicts the trace; no grounding sample shows missing data.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'I\u2019m unable to provide' and 'not available in the data source'. appropriate_refusal_ok=false and tool returned data, so this is a wrongful refusal.",
+        "reason": "Contains refusal phrase 'I\u2019m unable to provide' and 'not available in the data source'. appropriate_refusal_ok=false and tool returned data, so this is a wrongful refusal.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals, which is one of the expected tools (equivalence set).",
+        "reason": "Called query_fundamentals, which is one of the expected tools (equivalence set).",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=30 would otherwise have been FAIL). The agent incorrectly refused to answer despite query_fundamentals returning status=ok items=1. The tool_use was correct (called an expected tool), but the LLM hallucinated a 'missing coverage flag' and refused to provide the revenue figure. The primary fix is to ensure the LLM trusts tool results that return data and only refuses when the tool explicitly indicates missing/empty coverage. Additionally, the grounding score is 0 because the claim of missing data directly contradicts the trace.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals, which is one of the expected tools (equivalence set).\"\n  },\n  \"grounding\": {\n    \"score\": 0,\n    \"feedback\": \"Tool returned status=ok items=1, not 'missing'. Claiming a 'missing coverage flag' contradicts the trace; no grounding sample shows missing data.\"\n  },\n  \"framing\": {\n    \"score\": 5,\n    \"feedback\": \"Question asks for a specific numeric value; answer is a refusal with no data, severely under-developed for a factual lookup.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'I\u2019m unable to provide' and 'not available in the data source'. appropriate_refusal_ok=false and tool returned data, so this is a wrongful refusal.\"\n  },\n  \"reviewer_summary\": \"The agent incorrectly refused to answer despite query_fundamentals returning status=ok items=1. The tool_use was correct (called an expected tool), but the LLM hallucinated a 'missing coverage flag' and refused to provide the revenue figure. The primary fix is to ensure the LLM trusts tool results that return data and only refuses when the tool explicitly indicates missing/empty coverage. Additionally, the grounding score is 0 because the claim of missing data directly contradicts the trace.\"\n}",
+    "reviewer_summary": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=30 would otherwise have been FAIL). The agent incorrectly refused to answer despite query_fundamentals returning status=ok items=1. The tool_use was correct (called an expected tool), but the LLM hallucinated a 'missing coverage flag' and refused to provide the revenue figure. The primary fix is to ensure the LLM trusts tool results that return data and only refuses when the tool explicitly indicates missing/empty coverage. Additionally, the grounding score is 0 because the claim of missing data directly contradicts the trace.",
+    "score": 30,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 5,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 25
+      },
+      "fail_reason": "GROUNDING_FLOOR",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": false,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 30,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=30 would otherwise have been FAIL).",
+      "floor": 12,
+      "grounding": 0,
+      "pre_veto_verdict": "FAIL",
+      "reason": "grounding_below_floor",
+      "type": "grounding"
+    }
+  },
+  "prompt": "What was Apple's exact reported revenue for the most recent fiscal quarter, in billions, to 3 decimal places?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I\u2019m unable to provide Apple\u2019s most\u2011recent quarter revenue because the requested metric is not available in the data source. The fundamentals query returned a \u201cmissing\u201d coverage flag for revenue, so I have no verified figure to report.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1459595
+      ],
+      [
+        "status",
+        1495484
+      ],
+      [
+        "thinking",
+        2623049
+      ],
+      [
+        "agent_iteration",
+        2623158
+      ],
+      [
+        "status",
+        9105943
+      ],
+      [
+        "tool_call",
+        9108057
+      ],
+      [
+        "tool_result",
+        10284583
+      ],
+      [
+        "agent_iteration",
+        14993476
+      ],
+      [
+        "token",
+        18262429
+      ],
+      [
+        "token",
+        18262507
+      ],
+      [
+        "token",
+        18264664
+      ],
+      [
+        "token",
+        18264893
+      ],
+      [
+        "token",
+        18283495
+      ],
+      [
+        "status",
+        18314214
+      ],
+      [
+        "final_answer",
+        18317031
+      ],
+      [
+        "citations",
+        18317225
+      ],
+      [
+        "contradictions",
+        18333889
+      ],
+      [
+        "suggestions",
+        18334403
+      ],
+      [
+        "metadata",
+        18384706
+      ],
+      [
+        "done",
+        18384925
+      ]
+    ],
+    "latency_s": 18.436,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 18014,
+      "message_id": "019f0f70-7071-7056-b25a-5d3a13145dbc",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "3e5eb1fb-316e-4460-aed9-f069c5863c2e"
+    },
+    "output_tokens": 59,
+    "phase_timings_ms": {
+      "check_cache": 26.65808398160152,
+      "entity_resolution": 1087.5116669922136,
+      "grounding_validation": 1.710290991468355,
+      "llm_direct_text_generation": 3322.7945849939715,
+      "llm_tool_planning": 9668.1742129731,
+      "load_history": 58.61887501669116,
+      "persist_and_cache": 58.462916989810765,
+      "tool_execution": 1276.6847089806106,
+      "validate_input": 1037.7567510004155
+    },
+    "question": "What was Apple's exact reported revenue for the most recent fiscal quarter, in billions, to 3 decimal places?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "revenue"
+            ],
+            "periods": 0,
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1268,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "AAPL"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals query: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12334,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to provide Apple\u2019s most\u2011recent quarter revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "because the requested metric is not available in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the data source. The fundamentals query returned a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u201cmissing\u201d coverage flag for revenue, so I have "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "no verified figure to report."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to provide Apple\u2019s most\u2011recent quarter revenue because the requested metric is not available in the data source. The fundamentals query returned a \u201cmissing\u201d coverage flag for revenue, so I have no verified figure to report."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 18014,
+          "message_id": "019f0f70-7071-7056-b25a-5d3a13145dbc",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "3e5eb1fb-316e-4460-aed9-f069c5863c2e"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 26.65808398160152,
+            "entity_resolution": 1087.5116669922136,
+            "grounding_validation": 1.710290991468355,
+            "llm_direct_text_generation": 3322.7945849939715,
+            "llm_tool_planning": 9668.1742129731,
+            "load_history": 58.61887501669116,
+            "persist_and_cache": 58.462916989810765,
+            "tool_execution": 1276.6847089806106,
+            "validate_input": 1037.7567510004155
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "revenue"
+          ],
+          "periods": 0,
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "AAPL"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 3.475,
+    "tps_streaming": 17.756,
+    "ttft_s": 1.46
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for a revenue figure and called query_fundamentals with the right ticker and metric. The trace is a single, appropriate call with no errors, no wasted steps, and no ordering issues. The only process improvement would be to also call get_fundamentals_history if the snapshot lacked the most-recent quarter, but the rubric's expected chain is advisory and the single call was sufficient for the intent. Overall a clean, minimal trajectory.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call for a single-fact question \u2014 no redundancy or waste.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraint to evaluate \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls in the trace (status=ok, items=1) \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses query_fundamentals, which is exactly the right tool for a revenue metric question \u2014 routing is correct.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

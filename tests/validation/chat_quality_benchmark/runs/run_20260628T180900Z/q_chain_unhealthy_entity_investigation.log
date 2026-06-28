@@ -1,0 +1,44 @@
+# id=chain_unhealthy_entity_investigation prompt='Pick a company in our coverage that has poor data quality scores, and tell me what we actually know about it.'
+# bucket=PASS reasons=[]
+# latency_s=41.857 ttft_s=3.001958 status=200
+
+[  3001.96 ms] status             {"step": "loading_context"}
+[  3066.39 ms] status             {"step": "entity_resolution"}
+[  4095.00 ms] thinking           {"stage": "tool_classification"}
+[  4095.12 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[ 15101.26 ms] status             {"step": "Loading get_entity_intelligence\u2026"}
+[ 15101.70 ms] tool_call          {"type": "tool_call", "tool": "get_entity_intelligence", "label": "Loading intelligence for MicroStrategy", "input": {"entity_id": "MSTR"}, "status": "running"}
+[ 16639.25 ms] tool_result        {"type": "tool_result", "tool": "get_entity_intelligence", "status": "ok", "item_count": 1, "label": "Loading intelligence for MicroStrategy", "duration_ms": 1680, "result_preview": [{"id": "tool:intelligence:019e0db6-2e39-7e04-aaf8-9ec675797470", "title": "Intelligence: data"}]}
+[ 17177.20 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 13083}
+[ 25913.46 ms] token              {"text": "**Company:**\u202fMicroStrategy\u202fInc. (ticker\u202fMSTR)  \n\n**What we know "}
+[ 25914.75 ms] token              {"text": "(based on the platform\u2019s intelligence bundle):**  \n\n- **Narrative:**\u202f"}
+[ 25916.63 ms] token              {"text": "MicroStrategy is a publicly\u2011traded business\u2011intelligence company headquartered in "}
+[ 25918.08 ms] token              {"text": "Tysons Corner, Virginia. Founded in\u202f1989, it delivers "}
+[ 25918.43 ms] token              {"text": "cloud\u2011based software for analytics, mobility and security, serving "}
+[ 25919.65 ms] token              {"text": "a diverse enterprise customer base. The firm has "}
+[ 25921.07 ms] token              {"text": "a market\u2011capitalization of\u202fover\u202f$10\u202fbillion and trades "}
+[ 25921.10 ms] token              {"text": "on the NASDAQ under\u202fMSTR.\u202f[1]  \n\n- **Data\u2011quality "}
+[ 25921.11 ms] token              {"text": "(Health) Score:**\u202f0.40\u202f\u2014\u202fa low score indicating "}
+[ 25922.21 ms] token              {"text": "poor data quality coverage for this entity.\u202f[1]  \n\n"}
+[ 25922.23 ms] token              {"text": "- **Key Metric(s) from the bundle:**\u202fSector\u202f=\u202f"}
+[ 25922.24 ms] token              {"text": "Information\u202fTechnology.\u202f[1]"}
+[ 25924.95 ms] status             {"step": "verifying"}
+[ 41666.13 ms] final_answer       {"text": "**Company:**\u202fMicroStrategy\u202fInc. (ticker\u202fMSTR) \n\n**What we know (based on the platform\u2019s intelligence bundle):** \n\n- **Narrative:**\u202fMicroStrategy is a publicly\u2011traded business\u2011intelligence company headquartered in Tysons Corner, Virginia. Founded in\u202f1989, it delivers cloud\u2011based software for analytics, mobility and security, serving a diver
+[ 41669.86 ms] citations          [{"ref": 1, "item_type": "financial", "id": "tool:intelligence:019e0db6-2e39-7e04-aaf8-9ec675797470", "title": "Intelligence: data", "url": null, "source_name": "narrative", "published_at": null, "entity_name": "data", "confidence": 0.9}]
+[ 41669.89 ms] contradictions     []
+[ 41669.90 ms] suggestions        ["What's the latest news on data?", "How has data performed recently?", "How do data's fundamentals look?"]
+[ 41784.64 ms] metadata           {"thread_id": "31a2d2df-dc82-4d8f-b7f2-127c8129a92d", "message_id": "019f0f81-07a2-7f10-b74e-0d1140ba5841", "intent": "RELATIONSHIP", "provider": "", "latency_ms": 41028, "protocol_version": 2}
+[ 41784.69 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 62.23949999548495, "validate_input": 2215.984501002822, "load_history": 125.03450000076555, "entity_resolution": 1025.615293008741, "llm_tool_planning": 19525.104593019933, "tool_execution": 1689.1179590020329, "llm_direct_text_generation": 8706.591546011623, "grounding_validation": 15740.179257001728, "persist_and_cache":
+
+# --- final answer ---
+**Company:** MicroStrategy Inc. (ticker MSTR)
+
+**What we know (based on the platform’s intelligence bundle):**
+
+- **Narrative:** MicroStrategy is a publicly‑traded business‑intelligence company headquartered in Tysons Corner, Virginia. Founded in 1989, it delivers cloud‑based software for analytics, mobility and security, serving a diverse enterprise customer base. The firm has a market‑capitalization of over $10 billion and trades on the NASDAQ under MSTR. [1]
+
+- **Data‑quality (Health) Score:** 0.40 — a low score indicating poor data quality coverage for this entity. [1]
+
+- **Key Metric(s) from the bundle:** Sector = Information Technology. [1]
+
+Note: some figures or names above could not be matched to a retrieved source.

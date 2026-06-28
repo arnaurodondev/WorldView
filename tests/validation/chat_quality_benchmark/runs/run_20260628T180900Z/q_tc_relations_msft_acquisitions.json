@@ -1,0 +1,457 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_entity_relations",
+      "search_events"
+    ]
+  },
+  "heuristics": {
+    "char_count": 151,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_events"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_entity_relations",
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 19.272,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "search_entity_relations"
+    ],
+    "output_tokens": 38,
+    "phase_timings_ms": {
+      "check_cache": 27.735125011531636,
+      "entity_resolution": 945.7622920162976,
+      "grounding_validation": 3137.3785430041607,
+      "llm_direct_text_generation": 7102.601920021698,
+      "llm_tool_planning": 11824.254505016143,
+      "load_history": 433.161042019492,
+      "persist_and_cache": 111.38283400214277,
+      "tool_execution": 825.2427510160487,
+      "validate_input": 1058.0826670047827
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_name",
+          "event_type"
+        ],
+        "tool": "search_events"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_events"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      }
+    ],
+    "ttft_s": 1.752,
+    "word_count": 24
+  },
+  "id": "tc_relations_msft_acquisitions",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a factual lookup; answer is concise and directly addresses the query. Depth appropriate.",
+        "reason": "Question is a factual lookup; answer is concise and directly addresses the query. Depth appropriate.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Answer truthfully reports tool returned zero results; no fabricated claims. Fully grounded in trace.",
+        "reason": "Answer truthfully reports tool returned zero results; no fabricated claims. Fully grounded in trace.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Refusal phrase present but appropriate: rubric.appropriate_refusal_ok=true and tool returned empty data. Correct refusal.",
+        "reason": "Refusal phrase present but appropriate: rubric.appropriate_refusal_ok=true and tool returned empty data. Correct refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_events, which is one of the expected tools (equivalence set). Correct routing.",
+        "reason": "Called search_events, which is one of the expected tools (equivalence set). Correct routing.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed the acquisition question to search_events, which returned zero results. The answer honestly reports the empty result without fabricating any acquisitions. This is the ideal behavior for a case where the data source lacks coverage. The only potential improvement would be to note that the tool may not cover all acquisition types or that the user could try alternative queries (e.g., 'search_entity_relations'), but the current answer is already correct and appropriate given the rubric's refusal allowance.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_events, which is one of the expected tools (equivalence set). Correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Answer truthfully reports tool returned zero results; no fabricated claims. Fully grounded in trace.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a factual lookup; answer is concise and directly addresses the query. Depth appropriate.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Refusal phrase present but appropriate: rubric.appropriate_refusal_ok=true and tool returned empty data. Correct refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed the acquisition question to search_events, which returned zero results. The answer honestly reports the empty result without fabricating any acquisitions. This is the ideal behavior for a case where the data source lacks coverage. The only potential improvement would be to note that the tool may not cover all acquisition types or that the user could try alternative queries (e.g., 'search_entity_relations'), but the current answer is already correct and appropriate given the rubric's refusal allowance.\"\n}",
+    "reviewer_summary": "The agent correctly routed the acquisition question to search_events, which returned zero results. The answer honestly reports the empty result without fabricating any acquisitions. This is the ideal behavior for a case where the data source lacks coverage. The only potential improvement would be to note that the tool may not cover all acquisition types or that the user could try alternative queries (e.g., 'search_entity_relations'), but the current answer is already correct and appropriate given the rubric's refusal allowance.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What companies has Microsoft acquired in the last five years?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I cannot find evidence that Microsoft has acquired any companies in the last five years. The `search_events` tool returned zero results for this query.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1751680
+      ],
+      [
+        "status",
+        2110966
+      ],
+      [
+        "thinking",
+        3128043
+      ],
+      [
+        "agent_iteration",
+        3128083
+      ],
+      [
+        "status",
+        7936905
+      ],
+      [
+        "tool_call",
+        7940427
+      ],
+      [
+        "tool_result",
+        8721345
+      ],
+      [
+        "agent_iteration",
+        8722404
+      ],
+      [
+        "token",
+        15832811
+      ],
+      [
+        "token",
+        15834152
+      ],
+      [
+        "token",
+        15932795
+      ],
+      [
+        "status",
+        15933540
+      ],
+      [
+        "final_answer",
+        19044125
+      ],
+      [
+        "citations",
+        19044701
+      ],
+      [
+        "contradictions",
+        19067378
+      ],
+      [
+        "suggestions",
+        19094016
+      ],
+      [
+        "metadata",
+        19163264
+      ],
+      [
+        "done",
+        19165842
+      ]
+    ],
+    "latency_s": 19.272,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 18516,
+      "message_id": "019f0f7c-80dd-7b80-8707-91b39d19da6d",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "ffb5355b-436d-43ec-879b-2ebcb3d4f2c3"
+    },
+    "output_tokens": 38,
+    "phase_timings_ms": {
+      "check_cache": 27.735125011531636,
+      "entity_resolution": 945.7622920162976,
+      "grounding_validation": 3137.3785430041607,
+      "llm_direct_text_generation": 7102.601920021698,
+      "llm_tool_planning": 11824.254505016143,
+      "load_history": 433.161042019492,
+      "persist_and_cache": 111.38283400214277,
+      "tool_execution": 825.2427510160487,
+      "validate_input": 1058.0826670047827
+    },
+    "question": "What companies has Microsoft acquired in the last five years?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_events\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2021-06-28",
+            "date_to": "2026-06-28",
+            "entity_name": "Microsoft",
+            "event_type": "acquisition"
+          },
+          "label": "Looking up corporate events...",
+          "status": "running",
+          "tool": "search_events",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 822,
+          "item_count": 0,
+          "label": "Looking up corporate events...",
+          "status": "empty",
+          "tool": "search_events",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5619,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "No acquisition events were found for Five\u202fbelow "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(FIVE) in the specified period. The data source "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "returned no matching rows."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I cannot find evidence that Microsoft has acquired any companies in the last five years. The `search_events` tool returned zero results for this query."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Five below?",
+          "How has FIVE performed recently?",
+          "How do Five below's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 18516,
+          "message_id": "019f0f7c-80dd-7b80-8707-91b39d19da6d",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "ffb5355b-436d-43ec-879b-2ebcb3d4f2c3"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 27.735125011531636,
+            "entity_resolution": 945.7622920162976,
+            "grounding_validation": 3137.3785430041607,
+            "llm_direct_text_generation": 7102.601920021698,
+            "llm_tool_planning": 11824.254505016143,
+            "load_history": 433.161042019492,
+            "persist_and_cache": 111.38283400214277,
+            "tool_execution": 825.2427510160487,
+            "validate_input": 1058.0826670047827
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2021-06-28",
+          "date_to": "2026-06-28",
+          "entity_name": "Microsoft",
+          "event_type": "acquisition"
+        },
+        "name": "search_events"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      }
+    ],
+    "tps": 2.169,
+    "tps_streaming": 5.35,
+    "ttft_s": 1.752
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_entity_relations",
+      "search_events"
+    ],
+    "forbidden_facts": [
+      "fabricated_acquisitions",
+      "acquisitions_outside_window"
+    ],
+    "required_facts": [
+      "microsoft_identified",
+      "acquired_company_list",
+      "time_window_respected"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_entity_relations"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (list Microsoft acquisitions in a time window) and selected the appropriate tool (search_events). The single call was efficient and properly parameterised. The tool returned zero results, and the agent correctly reported that no evidence was found \u2014 an appropriate refusal. No process changes needed; this is a textbook correct trajectory.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call for a single-fact question; no redundancy.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraint to violate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed/empty call to recover from \u2014 the tool returned empty but that is a valid data result, not a failure.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1: search_events is exactly the right tool for an acquisition-list question; intent perfectly matched.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 1,
+    "verdict": "GRADED"
+  }
+}

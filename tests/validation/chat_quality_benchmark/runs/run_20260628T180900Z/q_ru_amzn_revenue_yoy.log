@@ -1,0 +1,26 @@
+# id=ru_amzn_revenue_yoy prompt="What's Amazon's YoY revenue growth?"
+# bucket=PASS reasons=[]
+# latency_s=23.689 ttft_s=0.587532 status=200
+
+[   587.53 ms] status             {"step": "loading_context"}
+[   595.59 ms] status             {"step": "entity_resolution"}
+[   976.06 ms] thinking           {"stage": "tool_classification"}
+[   976.12 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  7167.03 ms] status             {"step": "Loading query_fundamentals\u2026"}
+[  7167.39 ms] tool_call          {"type": "tool_call", "tool": "query_fundamentals", "label": "query_fundamentals...", "input": {"ticker": "AMZN", "metrics": ["quarterly_revenue_growth_yoy"], "periods": 1, "period_type": "quarterly", "include_snapshot": false}, "status": "running"}
+[  8290.21 ms] tool_result        {"type": "tool_result", "tool": "query_fundamentals", "status": "ok", "item_count": 1, "label": "query_fundamentals...", "duration_ms": 1163, "result_preview": [{"id": "tool:fundamentals:AMZN", "title": "Fundamentals query: AMZN"}], "grounding_sample": {"fields": {"ticker": "AMZN"}, "sampled_rows": 1, "total_rows": 1, "truncated": false}}
+[  8661.77 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 7687}
+[  9743.04 ms] token              {"text": "Amazon\u2019s YoY revenue growth for the most recent "}
+[  9743.17 ms] token              {"text": "quarter was\u202f17\u202f%\u3010query_fundamentals row 0\u3011."}
+[  9770.76 ms] status             {"step": "verifying"}
+[ 22868.54 ms] final_answer       {"text": "Amazon\u2019s YoY revenue growth for the most recent quarter was\u202f17\u202f%\u3010query_fundamentals row 0\u3011.\n\nNote: some figures or names above could not be matched to a retrieved source."}
+[ 22868.58 ms] citations          []
+[ 22903.65 ms] contradictions     []
+[ 22905.01 ms] suggestions        ["What's the latest news on Amazon?", "How has Amazon performed recently?", "How do Amazon's fundamentals look?"]
+[ 23470.82 ms] metadata           {"thread_id": "8b4bd9bd-b000-47bd-9041-8e4a56591b1b", "message_id": "019f0f74-b414-755b-b2ce-1bf7e78a517c", "intent": "GENERAL", "provider": "", "latency_ms": 22820, "protocol_version": 2}
+[ 23471.04 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 1.154333003796637, "validate_input": 559.4806669978425, "load_history": 7.456332998117432, "entity_resolution": 372.17841699020937, "llm_tool_planning": 7211.8502109951805, "tool_execution": 1165.0716259900946, "llm_direct_text_generation": 1074.493916996289, "grounding_validation": 13083.605339983478, "persist_and_cache":
+
+# --- final answer ---
+Amazon’s YoY revenue growth for the most recent quarter was 17 %【query_fundamentals row 0】.
+
+Note: some figures or names above could not be matched to a retrieved source.

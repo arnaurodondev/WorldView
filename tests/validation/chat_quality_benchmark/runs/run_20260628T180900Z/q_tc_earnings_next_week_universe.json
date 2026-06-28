@@ -1,0 +1,480 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_earnings_calendar"
+    ]
+  },
+  "heuristics": {
+    "char_count": 282,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_earnings_calendar"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_earnings_calendar"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 30.777,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 15.622334001818672,
+      "entity_resolution": 1030.2457090001553,
+      "grounding_validation": 2.084749983623624,
+      "llm_direct_text_generation": 12204.502923006658,
+      "llm_tool_planning": 27688.67793001118,
+      "load_history": 40.01983400667086,
+      "persist_and_cache": 70.54895799956284,
+      "tool_execution": 573.0795839917846,
+      "validate_input": 592.3188340093475
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_earnings_calendar"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "ttft_s": 0.744,
+    "word_count": 50
+  },
+  "id": "tc_earnings_next_week_universe",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a calendar lookup; refusal is appropriate given empty data. Depth matches the situation.",
+        "reason": "Question is a calendar lookup; refusal is appropriate given empty data. Depth matches the situation.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; answer is a refusal consistent with tool returning status=ok items=1 (likely empty payload). No fabricated numbers.",
+        "reason": "No grounding sample provided; answer is a refusal consistent with tool returning status=ok items=1 (likely empty payload). No fabricated numbers.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'couldn't retrieve any data' but rubric.appropriate_refusal_ok=true and tool returned no usable records \u2014 correct refusal.",
+        "reason": "Contains refusal phrase 'couldn't retrieve any data' but rubric.appropriate_refusal_ok=true and tool returned no usable records \u2014 correct refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_earnings_calendar with correct date range \u2014 exactly the expected tool.",
+        "reason": "Called get_earnings_calendar with correct date range \u2014 exactly the expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_earnings_calendar with the right date range, and when the tool returned no usable data (status=ok items=1 likely empty), it issued a clean refusal instead of fabricating tickers. All four dimensions score full marks because the refusal is appropriate per rubric. The only improvement would be to surface the tool's actual status more explicitly (e.g. 'the earnings calendar returned no entries for that week') rather than the generic 'couldn't retrieve any data' phrasing, but that's a polish issue, not a correctness issue.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_earnings_calendar with correct date range \u2014 exactly the expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided; answer is a refusal consistent with tool returning status=ok items=1 (likely empty payload). No fabricated numbers.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a calendar lookup; refusal is appropriate given empty data. Depth matches the situation.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Contains refusal phrase 'couldn't retrieve any data' but rubric.appropriate_refusal_ok=true and tool returned no usable records \u2014 correct refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_earnings_calendar with the right date range, and when the tool returned no usable data (status=ok items=1 likely empty), it issued a clean refusal instead of fabricating tickers. All four dimensions score full marks because the refusal is appropriate per rubric. The only improvement would be to surface the tool's actual status more explicitly (e.g. 'the earnings calendar returned no entries for that week') rather than the generic 'couldn't retrieve any data' phrasing, but that's a polish issue, not a correctness issue.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_earnings_calendar with the right date range, and when the tool returned no usable data (status=ok items=1 likely empty), it issued a clean refusal instead of fabricating tickers. All four dimensions score full marks because the refusal is appropriate per rubric. The only improvement would be to surface the tool's actual status more explicitly (e.g. 'the earnings calendar returned no entries for that week') rather than the generic 'couldn't retrieve any data' phrasing, but that's a polish issue, not a correctness issue.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Which S&P 500 names report earnings next week?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        743609
+      ],
+      [
+        "status",
+        772381
+      ],
+      [
+        "thinking",
+        1823878
+      ],
+      [
+        "agent_iteration",
+        1836465
+      ],
+      [
+        "status",
+        17376605
+      ],
+      [
+        "tool_call",
+        17379111
+      ],
+      [
+        "tool_result",
+        18791119
+      ],
+      [
+        "agent_iteration",
+        18791195
+      ],
+      [
+        "token",
+        30647940
+      ],
+      [
+        "token",
+        30654917
+      ],
+      [
+        "token",
+        30655623
+      ],
+      [
+        "token",
+        30656218
+      ],
+      [
+        "token",
+        30656981
+      ],
+      [
+        "token",
+        30657089
+      ],
+      [
+        "status",
+        30672677
+      ],
+      [
+        "final_answer",
+        30672779
+      ],
+      [
+        "citations",
+        30672892
+      ],
+      [
+        "contradictions",
+        30672914
+      ],
+      [
+        "suggestions",
+        30686441
+      ],
+      [
+        "metadata",
+        30747675
+      ],
+      [
+        "done",
+        30748204
+      ]
+    ],
+    "latency_s": 30.777,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 30563,
+      "message_id": "019f0f77-10b9-7284-ab8c-cb93be571c18",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "b6841e13-4b04-49be-9971-51de9fedf0a6"
+    },
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 15.622334001818672,
+      "entity_resolution": 1030.2457090001553,
+      "grounding_validation": 2.084749983623624,
+      "llm_direct_text_generation": 12204.502923006658,
+      "llm_tool_planning": 27688.67793001118,
+      "load_history": 40.01983400667086,
+      "persist_and_cache": 70.54895799956284,
+      "tool_execution": 573.0795839917846,
+      "validate_input": 592.3188340093475
+    },
+    "question": "Which S&P 500 names report earnings next week?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_earnings_calendar\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-28",
+            "to_date": "2026-07-05"
+          },
+          "label": "Loading earnings calendar...",
+          "status": "running",
+          "tool": "get_earnings_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 572,
+          "item_count": 1,
+          "label": "Loading earnings calendar...",
+          "result_preview": [
+            {
+              "id": "tool:earnings_calendar",
+              "title": "Earnings calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_earnings_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 16612,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to retrieve a list of S&P\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "500 companies that have earnings releases next week. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "The earnings\u2011calendar query did not return any matching "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "entries. If you\u2019d like to explore earnings dates "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for specific tickers, feel free to let me "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "know which companies you\u2019re interested in."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 30563,
+          "message_id": "019f0f77-10b9-7284-ab8c-cb93be571c18",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "b6841e13-4b04-49be-9971-51de9fedf0a6"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 15.622334001818672,
+            "entity_resolution": 1030.2457090001553,
+            "grounding_validation": 2.084749983623624,
+            "llm_direct_text_generation": 12204.502923006658,
+            "llm_tool_planning": 27688.67793001118,
+            "load_history": 40.01983400667086,
+            "persist_and_cache": 70.54895799956284,
+            "tool_execution": 573.0795839917846,
+            "validate_input": 592.3188340093475
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": "2026-06-28",
+          "to_date": "2026-07-05"
+        },
+        "name": "get_earnings_calendar"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "tps": 2.364,
+    "tps_streaming": 5.818,
+    "ttft_s": 0.744
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_earnings_calendar"
+    ],
+    "forbidden_facts": [
+      "fabricated_ticker_list_without_tool_call"
+    ],
+    "required_facts": [
+      "date_range_next_week",
+      "list_of_tickers_or_empty_refusal"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_earnings_calendar"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for an earnings calendar tool and made a single, well-scoped call with the next week's date range. The call returned data (1 item), so the agent had the information to answer. The refusal in the final answer is puzzling given the successful call, but the process itself is clean and efficient. The only process improvement would be to actually use the returned data instead of claiming no data was available.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One well-chosen call is the minimal sensible number of steps for this question. No redundancy.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call, no ordering constraints to evaluate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls to recover from. The call returned ok with 1 item, which is sufficient data.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_earnings_calendar, which is exactly the right tool for an earnings calendar question. Perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

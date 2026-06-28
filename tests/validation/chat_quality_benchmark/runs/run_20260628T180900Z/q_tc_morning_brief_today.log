@@ -1,0 +1,52 @@
+# id=tc_morning_brief_today prompt="What's in my morning brief today?"
+# bucket=WARN reasons=['slow latency_s=45.308']
+# latency_s=45.308 ttft_s=1.776181 status=200
+
+[  1776.18 ms] status             {"step": "loading_context"}
+[  1787.17 ms] status             {"step": "entity_resolution"}
+[  2110.39 ms] thinking           {"stage": "tool_classification"}
+[  2110.52 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  5492.65 ms] status             {"step": "Loading get_morning_brief\u2026"}
+[  5515.09 ms] tool_call          {"type": "tool_call", "tool": "get_morning_brief", "label": "Loading morning brief...", "input": {}, "status": "running"}
+[  5781.68 ms] tool_result        {"type": "tool_result", "tool": "get_morning_brief", "status": "ok", "item_count": 1, "label": "Loading morning brief...", "duration_ms": 239, "result_preview": [{"id": "tool:brief:019f0718-9a4a-713f-8aae-fb62f9ef6eb1", "title": "## Details\n**Market Snapshot**\n- SPY -0.04%, QQQ -0.42%, VIX 19.22 \u2014 risk\u2011off to"}]}
+[  6323.06 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 4220}
+[ 12627.09 ms] token              {"text": "Here\u2019s your morning brief for\u202f2026\u201106\u201128:\n\n**Market snapshot**  \n"}
+[ 12627.15 ms] token              {"text": "- SPY\u202f\u20110.04% | QQQ\u202f\u20110.42% | VIX\u202f"}
+[ 12627.72 ms] token              {"text": "19.22 \u2013 a modest risk\u2011off tone in pre\u2011market "}
+[ 12629.05 ms] token              {"text": "trading.\n\n**Your portfolio today**  \n| Ticker | Pre\u2011market "}
+[ 12629.75 ms] token              {"text": "change | Driver |\n|--------|-------------------|--------|\n| MSTR | "}
+[ 12630.55 ms] token              {"text": "\u20119.23% | Idiosyncratic \u2013 no identifiable driver |\n"}
+[ 12630.93 ms] token              {"text": "| IBIT | \u20113.99% | Idiosyncratic \u2013 no "}
+[ 12630.99 ms] token              {"text": "identifiable driver |\n| GOOGL | \u20110.28% | "}
+[ 12631.39 ms] token              {"text": "Tracking Communication Services sector (\u20110.39%) |\n| XLE "}
+[ 12632.02 ms] token              {"text": "| \u20111.67% | Tracking Energy sector (\u20111.34%) |\n"}
+[ 12632.21 ms] token              {"text": "| PPA | \u20110.50% | Idiosyncratic \u2013 no "}
+[ 12632.45 ms] token              {"text": "identifiable driver |\n| QQQ | \u20110.42% | "}
+[ 12686.20 ms] token              {"text": "Idiosyncratic |\n\n*Source: morning brief (2026\u201106\u201127)\u202f[1]*"}
+[ 12686.59 ms] status             {"step": "verifying"}
+[ 42908.70 ms] final_answer       {"text": "Here\u2019s your morning brief for\u202f2026\u201106\u201128:\n\n**Market snapshot** \n- SPY\u202f\u20110.04% | QQQ\u202f\u20110.42% | VIX\u202f19.22 \u2013 a modest risk\u2011off tone in pre\u2011market trading.\n\n**Your portfolio today** \n| Ticker | Pre\u2011market change | Driver |\n|--------|-------------------|--------|\n| MSTR | \u20119.23% | Idiosyncratic \u2013 no identifiable
+[ 42978.43 ms] citations          [{"ref": 1, "item_type": "financial", "id": "tool:brief:019f0718-9a4a-713f-8aae-fb62f9ef6eb1", "title": "## Details\n**Market Snapshot**\n- SPY -0.04%, QQQ -0.42%, VIX 19.22 \u2014 risk\u2011off tone pre\u2011market  \n\n**Your Portfolio Today**\n- MSTR -9.23% pre\u2011mkt \u2014 idiosyncratic \u2014 no identifiable driver [c9]  \n- IBIT -3.99% pre\u2011mkt \u2014 idiosyncratic \u2014 no identifia
+[ 43089.95 ms] contradictions     []
+[ 43100.04 ms] suggestions        ["What are today's biggest market movers?", "What's in my morning brief today?", "Are there any notable earnings coming up this week?"]
+[ 44598.49 ms] metadata           {"thread_id": "c7f6bdc0-512f-4a30-ac6c-900c8cc5d2c5", "message_id": "019f0f79-ae31-7664-97cd-f84508e5e281", "intent": "GENERAL", "provider": "", "latency_ms": 42923, "protocol_version": 2}
+[ 44608.36 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 21.653665986377746, "validate_input": 1297.1690839913208, "load_history": 333.1255419761874, "entity_resolution": 288.1676669931039, "llm_tool_planning": 9626.285421021748, "tool_execution": 240.81608399865218, "llm_direct_text_generation": 6276.702961011324, "grounding_validation": 30132.77597198612, "persist_and_cache":
+
+# --- final answer ---
+Here’s your morning brief for 2026‑06‑28:
+
+**Market snapshot**
+- SPY ‑0.04% | QQQ ‑0.42% | VIX 19.22 – a modest risk‑off tone in pre‑market trading.
+
+**Your portfolio today**
+| Ticker | Pre‑market change | Driver |
+|--------|-------------------|--------|
+| MSTR | ‑9.23% | Idiosyncratic – no identifiable driver |
+| IBIT | ‑3.99% | Idiosyncratic – no identifiable driver |
+| GOOGL | ‑0.28% | Tracking Communication Services sector (‑0.39%) |
+| XLE | ‑1.67% | Tracking Energy sector (‑1.34%) |
+| PPA | ‑0.50% | Idiosyncratic – no identifiable driver |
+| QQQ | ‑0.42% | Idiosyncratic |
+
+*Source: morning brief (2026‑06‑27) [1]*
+
+Note: some figures or names above could not be matched to a retrieved source.

@@ -1,0 +1,39 @@
+# id=tc_movers_today_gainers prompt="Who were today's biggest gainers?"
+# bucket=PASS reasons=[]
+# latency_s=12.433 ttft_s=1.254193 status=200
+
+[  1254.19 ms] status             {"step": "loading_context"}
+[  1273.52 ms] status             {"step": "entity_resolution"}
+[  1649.58 ms] thinking           {"stage": "tool_classification"}
+[  1650.05 ms] agent_iteration    {"iteration": 0, "max_iterations": 8, "stage": "planning_tools", "tools_completed_total": 0, "elapsed_ms": 0}
+[  6300.75 ms] status             {"step": "Loading get_market_movers\u2026"}
+[  6301.71 ms] tool_call          {"type": "tool_call", "tool": "get_market_movers", "label": "Fetching market movers...", "input": {"mover_type": "gainers", "limit": 10, "period": "1D"}, "status": "running"}
+[  8727.00 ms] tool_result        {"type": "tool_result", "tool": "get_market_movers", "status": "ok", "item_count": 1, "label": "Fetching market movers...", "duration_ms": 2430, "result_preview": [{"id": "tool:movers:gainers:1D", "title": "Market movers: gainers (1D)"}], "grounding_sample": {"fields": {"ticker": "BLDR", "ticker_2": "RH", "ticker_3": "MHK", "ticker_4": "IQV", "ticker_5": "CRL", "ticker_6": "AAL", "ticker_7": "WHG"
+[  9142.65 ms] agent_iteration    {"iteration": 1, "max_iterations": 8, "stage": "reasoning_over_results", "tools_completed_total": 1, "elapsed_ms": 7503}
+[ 12233.28 ms] token              {"text": "Today's top gainers (1\u2011day period) were:\n\n- BLDR  \n"}
+[ 12233.56 ms] token              {"text": "- RH  \n- MHK  \n- IQV  \n- CRL  \n"}
+[ 12233.92 ms] token              {"text": "- AAL  \n- WHG  \n- UAL  \n- BKNG  \n"}
+[ 12234.14 ms] token              {"text": "- PHM  \n\n[1]"}
+[ 12245.54 ms] status             {"step": "verifying"}
+[ 12245.70 ms] final_answer       {"text": "Today's top gainers (1\u2011day period) were:\n\n- BLDR  \n- RH  \n- MHK  \n- IQV  \n- CRL  \n- AAL  \n- WHG  \n- UAL  \n- BKNG  \n- PHM  \n\n[1]"}
+[ 12248.20 ms] citations          [{"ref": 1, "item_type": "financial", "id": "tool:movers:gainers:1D", "title": "Market movers: gainers (1D)", "url": null, "source_name": "market_data", "published_at": null, "entity_name": null, "confidence": 0.85}]
+[ 12248.40 ms] contradictions     []
+[ 12272.36 ms] suggestions        ["What are today's biggest market movers?", "What's in my morning brief today?", "Are there any notable earnings coming up this week?"]
+[ 12404.19 ms] metadata           {"thread_id": "bfec8593-0cb7-4944-8468-5be0d372aabe", "message_id": "019f0f78-7346-7c40-ad44-0b3b2cf001d5", "intent": "GENERAL", "provider": "", "latency_ms": 12109, "protocol_version": 2}
+[ 12404.32 ms] done               {"type": "done", "protocol_version": 2, "phase_timings_ms": {"check_cache": 28.44174997881055, "validate_input": 1045.4902090132236, "load_history": 36.91966601763852, "entity_resolution": 324.6118329989258, "llm_tool_planning": 7707.020463014487, "tool_execution": 2432.9090009850916, "llm_direct_text_generation": 3082.8796270070598, "grounding_validation": 2.086000022245571, "persist_and_cache":
+
+# --- final answer ---
+Today's top gainers (1‑day period) were:
+
+- BLDR
+- RH
+- MHK
+- IQV
+- CRL
+- AAL
+- WHG
+- UAL
+- BKNG
+- PHM
+
+[1]
