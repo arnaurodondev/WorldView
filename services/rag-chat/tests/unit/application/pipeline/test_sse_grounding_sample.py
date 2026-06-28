@@ -5,7 +5,7 @@ Contract under test:
     allow-list-only ``{fields, sampled_rows, total_rows, truncated}`` dict, or
     ``None`` for non-allow-listed tools / when no allow-listed field survives.
   - All four hard caps (rows / fields-per-row / value chars / byte cap) hold;
-    over-cap → ``truncated=true`` and the serialized sample ≤ 1024 bytes.
+    over-cap → ``truncated=true`` and the serialized sample ≤ GROUNDING_SAMPLE_MAX_BYTES.
   - Portfolio / account identifiers are NEVER emitted (FR-8 redaction).
   - ``emit_tool_result`` attaches ``grounding_sample`` ONLY when the env flag is
     on AND status == "ok" AND the sample is non-empty; otherwise the legacy
@@ -107,13 +107,56 @@ class TestBuildGroundingSampleCaps:
         assert sample is not None
         assert len(sample["fields"]["revenue"]) == SSEEmitter.GROUNDING_VALUE_MAX_CHARS
 
-    def test_row_cap_samples_at_most_three(self) -> None:
-        items = [_Row(ticker=f"T{i}", revenue=str(i)) for i in range(10)]
+    def test_row_cap_bounds_sampled_rows(self) -> None:
+        # More rows than the cap → total_rows reflects all returned, but the
+        # number sampled never exceeds GROUNDING_MAX_ROWS.
+        n = SSEEmitter.GROUNDING_MAX_ROWS + 5
+        items = [_Row(ticker=f"T{i}", revenue=str(i)) for i in range(n)]
         sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", items)
         assert sample is not None
-        # 10 returned, but only GROUNDING_MAX_ROWS sampled.
-        assert sample["total_rows"] == 10
+        assert sample["total_rows"] == n
         assert sample["sampled_rows"] <= SSEEmitter.GROUNDING_MAX_ROWS
+
+    def test_ten_row_result_fully_captured(self) -> None:
+        """2026-06-28 cap bump (3→10): a ≤10-row batch/screener result is now
+        sampled in full instead of being truncated at the old 3-row cap.
+
+        Each ticker carries a single short distinct value, so all 10 rows fit
+        well under the 4 KB byte budget and survive without truncation. Distinct
+        per-row tickers land under suffixed keys (ticker, ticker_2, …).
+        """
+        items = [_Row(ticker=f"TCK{i:02d}", revenue=str(1000 + i)) for i in range(10)]
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history_batch", items)
+        assert sample is not None
+        assert sample["total_rows"] == 10
+        # All 10 rows are now sampled (old cap of 3 would have stopped at 3).
+        assert sample["sampled_rows"] == 10
+        assert sample["truncated"] is False
+        # Every distinct ticker value survives (bare + suffixed keys).
+        ticker_vals = {v for k, v in sample["fields"].items() if k.startswith("ticker")}
+        assert ticker_vals == {f"TCK{i:02d}" for i in range(10)}
+
+    def test_oversized_sample_still_trims_gracefully(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A sample whose serialized size exceeds the byte cap is still trimmed:
+        fields are dropped, truncated flips True, and the final serialized
+        payload fits the budget. Proves the byte-trim loop is intact after the
+        3→10 / 1024→4096 cap bump.
+
+        A full 10-row x 8-field x 32-char sample is ~4 KB — just under the new
+        4096 ceiling by design (so ≤10-row batches survive). To force the trim
+        path deterministically we pin a smaller cap; the loop must still drop
+        fields until the payload fits whatever cap is in force."""
+        monkeypatch.setattr(SSEEmitter, "GROUNDING_SAMPLE_MAX_BYTES", 512)
+        big = "8" * SSEEmitter.GROUNDING_VALUE_MAX_CHARS
+        items = [
+            _Row(ticker=big, period=big, revenue=big, eps=big, gross_profit=big, pe_ratio=big, market_cap=big)
+            for _ in range(SSEEmitter.GROUNDING_MAX_ROWS)
+        ]
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history_batch", items)
+        assert sample is not None
+        serialized = json.dumps(sample).encode("utf-8")
+        assert len(serialized) <= SSEEmitter.GROUNDING_SAMPLE_MAX_BYTES
+        assert sample["truncated"] is True
 
     def test_field_per_row_cap(self) -> None:
         # Build a row with MORE allow-listed fields than the per-row cap allows.
@@ -133,8 +176,14 @@ class TestBuildGroundingSampleCaps:
         # All 7 allow-listed fields are ≤ the per-row cap (8) → all survive.
         assert len(sample["fields"]) <= SSEEmitter.GROUNDING_MAX_FIELDS_PER_ROW
 
-    def test_byte_cap_sets_truncated_and_bounds_size(self) -> None:
-        # Many rows each with a near-max value → force the byte cap to fire.
+    def test_byte_cap_sets_truncated_and_bounds_size(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 2026-06-28: with the byte cap raised to 4096 and per-row/value caps
+        # unchanged, the sample's structural ceiling (10 rows x 8 fields x 32
+        # chars ~4 KB) sits just UNDER 4096, so row/field stuffing alone can no
+        # longer overflow it. To exercise the byte-trim loop deterministically we
+        # pin a small cap and confirm: fields are dropped, truncated flips True,
+        # and the serialized payload obeys whatever cap is in force.
+        monkeypatch.setattr(SSEEmitter, "GROUNDING_SAMPLE_MAX_BYTES", 256)
         big = "8" * SSEEmitter.GROUNDING_VALUE_MAX_CHARS
         items = [
             _Row(ticker=big, period=big, revenue=big, eps=big, gross_profit=big, pe_ratio=big, market_cap=big)

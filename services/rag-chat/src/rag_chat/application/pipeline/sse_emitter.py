@@ -620,10 +620,22 @@ class SSEEmitter:
     #   - VALUE_MAX_CHARS: each value is str-coerced then truncated to this.
     #   - SAMPLE_MAX_BYTES:the whole serialized sample is bounded; over → cut +
     #                      ``truncated=true``.
-    GROUNDING_MAX_ROWS = 3
+    #
+    # 2026-06-28 (substantiation-drop fix): raised MAX_ROWS 3->10 and
+    # SAMPLE_MAX_BYTES 1024->4096. The 3-row cap was the Class-B truncation that
+    # silently dropped real multi-row tool data (batch fundamentals, screeners)
+    # before the W3 judge could verify it -- e.g. tc_batch_fundamentals_mag5
+    # returns 5 tickers but rows 4-5 (AAPL/AMZN) were never sampled, capping
+    # substantiation regardless of answer quality. 10 rows covers every
+    # batch/screener result of <=10 rows in the benchmark; the byte cap rises in
+    # step so the added rows survive the post-build byte-trim instead of being
+    # truncated away again (the largest real sample, get_fundamentals_history_batch
+    # at 5 rows is ~1.4 KB, fits comfortably in 4 KB). MAX_FIELDS_PER_ROW and
+    # VALUE_MAX_CHARS are unchanged -- only the row/byte ceilings move.
+    GROUNDING_MAX_ROWS = 10
     GROUNDING_MAX_FIELDS_PER_ROW = 8
     GROUNDING_VALUE_MAX_CHARS = 32
-    GROUNDING_SAMPLE_MAX_BYTES = 1024
+    GROUNDING_SAMPLE_MAX_BYTES = 4096
 
     # Per-tool field allow-list (FR-8). ONLY numeric / short-identifier fields
     # appear here — NEVER document bodies, narrative text, or any
