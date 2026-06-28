@@ -264,17 +264,18 @@ def _grounding_fields_from_row(
 # the matcher's ``_<idx>`` suffix convention so each period's distinct value survives
 # without colliding (the judge + sse_emitter both strip ``_\d+$`` to the base metric).
 #
-# RC-3 (2026-06-28): raised 4 -> 8 in lockstep with the emission-side
-# GROUNDING_MAX_ROWS 3->10 / SAMPLE_MAX_BYTES 1024->4096 bump (sse_emitter.py).
+# RC-3 (2026-06-28): raised 4 -> 8, then 8 -> 13 (RC-3 follow-up) in lockstep with
+# the emission-side caps in sse_emitter.py (GROUNDING_MAX_ROWS 3->10,
+# SAMPLE_MAX_BYTES 1024->4096, and GROUNDING_MAX_FIELDS_PER_ROW 8->14).
 # A fundamentals-history answer ("Tesla revenue since 2023", "last N quarters")
-# quotes one figure per quarter; emitting only 4 periods left every 5th+ quarter
+# quotes one figure per quarter; emitting too few periods left the older quarters
 # unsubstantiated → GROUNDING_FLOOR even though the figures were correct (RC-3 in
-# docs/audits/2026-06-28-grounding-floor-rootcause.md). 8 is the headroom under
-# build_grounding_sample's per-row field cap (GROUNDING_MAX_FIELDS_PER_ROW=8:
-# ticker + up to 7 period values survive into a single packed item) — going
-# higher would be silently trimmed by that cap, so 8 is the effective ceiling
-# for a single-metric trend without also widening the emission-side field cap.
-_GROUNDING_MAX_PERIODS = 8
+# docs/audits/2026-06-28-grounding-floor-rootcause.md). 13 = the headroom under the
+# emission per-row field cap (GROUNDING_MAX_FIELDS_PER_ROW=14: ticker + up to 13
+# period values survive into a single packed item) — covering a full ~3-year
+# quarterly trend. Packing more than the field cap allows would be silently trimmed
+# downstream, so 13 is the effective ceiling for a single-metric trend.
+_GROUNDING_MAX_PERIODS = 13
 
 # Screener multi-instrument cap (STEP B, 2026-06-26). A screen answer cites a few
 # top tickers' P/E / cap; we lift the top N rows' values under suffixed keys so

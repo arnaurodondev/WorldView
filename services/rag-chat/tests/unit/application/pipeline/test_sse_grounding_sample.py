@@ -354,6 +354,34 @@ class TestBuildGroundingSampleReadsGroundingFields:
         assert sample["fields"]["revenue"] == "81600000000"
         assert sample["fields"]["eps"] == "1.87"
 
+    def test_thirteen_period_revenue_survives_field_cap(self) -> None:
+        """RC-3 follow-up: a 13-period single-metric trend survives the 14-field cap.
+
+        The market.py fundamentals handlers pack one revenue value per quarter under
+        suffixed keys (revenue, revenue_2, … revenue_13). Pre-fix the per-row field
+        cap was 8 (ticker + 7 quarters), so a "since 2023" answer's oldest quarters
+        were trimmed out of the sample → unsubstantiated → GROUNDING_FLOOR. With the
+        cap at 14 (ticker + up to 13 quarters), a full ~3-year quarterly trend's
+        figures all survive into the single packed item.
+        """
+        assert SSEEmitter.GROUNDING_MAX_FIELDS_PER_ROW == 14
+        # ticker + revenue + revenue_2 … revenue_13 == 14 fields exactly.
+        fields = (
+            ("ticker", "TSLA"),
+            *(((f"revenue_{i}" if i > 1 else "revenue"), str(20_000_000_000 + i)) for i in range(1, 14)),
+        )
+        item = _fundamentals_item_with_grounding("TSLA", fields)
+        sample = SSEEmitter.build_grounding_sample("query_fundamentals", [item])
+        assert sample is not None
+        f = sample["fields"]
+        # All 13 periods + the ticker survive — nothing trimmed by the field cap.
+        assert f["ticker"] == "TSLA"
+        assert f["revenue"] == str(20_000_000_000 + 1)  # newest
+        assert f["revenue_13"] == str(20_000_000_000 + 13)  # oldest packed quarter
+        assert len([k for k in f if k.startswith("revenue")]) == 13
+        assert len(f) <= SSEEmitter.GROUNDING_MAX_FIELDS_PER_ROW
+        assert sample["truncated"] is False
+
     def test_widened_metrics_surface(self) -> None:
         """net_income / forward_pe / ebitda / free_cash_flow are now allow-listed."""
         item = _fundamentals_item_with_grounding(

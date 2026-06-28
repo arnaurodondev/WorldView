@@ -630,10 +630,25 @@ class SSEEmitter:
     # batch/screener result of <=10 rows in the benchmark; the byte cap rises in
     # step so the added rows survive the post-build byte-trim instead of being
     # truncated away again (the largest real sample, get_fundamentals_history_batch
-    # at 5 rows is ~1.4 KB, fits comfortably in 4 KB). MAX_FIELDS_PER_ROW and
-    # VALUE_MAX_CHARS are unchanged -- only the row/byte ceilings move.
+    # at 5 rows is ~1.4 KB, fits comfortably in 4 KB). VALUE_MAX_CHARS is
+    # unchanged -- only the row/byte ceilings moved here.
+    #
+    # RC-3 follow-up (2026-06-28): raised MAX_FIELDS_PER_ROW 8->14. A single
+    # fundamentals item now packs MULTIPLE periods under suffixed keys
+    # (``revenue``, ``revenue_2`` … one per quarter — see market.py
+    # ``_grounding_fields_from_rows`` + ``_GROUNDING_MAX_PERIODS=8``). With the
+    # field cap at 8, a long-horizon "since 2023" answer (12 quarters) had its
+    # OLDEST ~4 quarters trimmed out of the single packed row → those figures
+    # stayed unsubstantiated and the answer floored despite being correct
+    # (RC-3 residual A in docs/audits/2026-06-28-grounding-floor-rootcause.md).
+    # 14 = ticker + up to 13 period values, covering a full ~3-year quarterly
+    # trend. The byte cap (4096) already holds: 14 short numeric fields
+    # (<=32 chars each) plus keys serialize to well under 1 KB, so the post-build
+    # byte-trim does not re-truncate. The per-period emit cap (_GROUNDING_MAX_PERIODS)
+    # still bounds how many periods the handler packs, so this only RAISES the
+    # ceiling the packed periods compete for — it never invents fields.
     GROUNDING_MAX_ROWS = 10
-    GROUNDING_MAX_FIELDS_PER_ROW = 8
+    GROUNDING_MAX_FIELDS_PER_ROW = 14
     GROUNDING_VALUE_MAX_CHARS = 32
     GROUNDING_SAMPLE_MAX_BYTES = 4096
 

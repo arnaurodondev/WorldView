@@ -109,3 +109,43 @@ These are answer-construction defects in the grounding/refusal policy, not tool-
 
 ## Class tally (one line)
 **a = 15 (every question; 1 also class d), b = 0 pure (mag5 partial only), c = 0, d = 1 (co-occurring), e = 0.**
+
+---
+
+## RC-3 implementation + deferred items (2026-06-28, post-fix)
+
+**RC-3 (per-period grounding) — DONE.** RC-1 fixed the data layer (market-data returns
+the real multi-period series), but the rag-chat `query_fundamentals` handler still lifted
+only `rows[-1]` into `grounding_fields`, so a multi-quarter answer left every non-latest
+quarter unsubstantiated → `GROUNDING_FLOOR` despite correct figures. Fixed by switching
+`_handle_query_fundamentals` to the multi-period `_grounding_fields_from_rows` helper (the
+pattern its sibling history/batch handlers already used), threading `allowed_canonicals`
+so coverage is honoured on every period; raised `_GROUNDING_MAX_PERIODS` 4 → 8 → 13 and the
+emission per-row field cap `GROUNDING_MAX_FIELDS_PER_ROW` 8 → 14 so a full ~3-year quarterly
+trend's figures all survive into the single packed grounding item. Verified: `ru_meta_eps_trend`
+FAIL→PASS(100), `ru_tsla_margin_trend` FAIL→PASS(97); Tesla "since 2023" grounding_sample went
+1 → 13 periods. Commits 5eb3217b1 (RC-3) + the field-cap follow-up.
+
+**Stub-leak guard — DONE.** A fourth leaked-stub shape surfaced during the re-smoke: the
+planner's bare ARGUMENTS object (`{"ticker": …, "periods": , "period_type": …}`) shipped as
+the final answer (~1-in-4, stochastic). No `name`/`arguments` wrapper and no `{"<tool>": …}`
+wrapper, so the existing detectors missed it; also invalid JSON, so matched (not parsed).
+Added `_is_raw_tool_args_object` + a strip pass; `_is_tool_call_stub` now discounts the
+trailing "Note: some figures…" disclaimer that was masking the stub above the size gate.
+Plugs into the existing re-prompt fallback — the raw stub never ships. Commit d2396c172.
+
+### Deferred / future (genuine synthesis-correctness defects — flooring them is correct)
+
+- **`ru_nvda_amd_revenue_4q` — wrong-period / fiscal-calendar mismatch in synthesis.** The
+  multi-ticker batch grounding sample is rich, but the answer quotes AMD/NVDA per-quarter
+  figures ($7.7B/$9.2B/$10.3B …) under fiscal-quarter labels that do not align with the
+  returned series (sample revenue $81.6B NVDA / $10.25B AMD) — 2 matched / 6 unmatched. The
+  model is citing the wrong fiscal quarters (NVDA fiscal-year offset) and the batch handler's
+  per-ticker suffixed packing collides distinct tickers' values under shared `_<idx>` keys.
+  Deferred: needs a synthesis fiscal-label fix + a per-ticker grounding namespace.
+- **`da_apple_revenue_fy2024q4_precision` — answers the wrong fiscal year, cites unsampled row.**
+  Question asks Apple FY2024 Q4; the answer reports "FY Q4 2025 = $102.5B" citing a row not in
+  the grounding sample → 0 matched / 11 unmatched. The headline figure is for the wrong period
+  (and not in the returned series). Deferred: period-selection / precision-question synthesis
+  defect — flooring is a TRUE catch (the answer is genuinely wrong), so leaving it failed is
+  honest. Part of the deferred period/row-selection class.

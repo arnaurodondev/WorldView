@@ -138,41 +138,38 @@ async def test_history_missing_metric_absent_from_bag() -> None:
 async def test_history_multi_period_capped_and_suffixed() -> None:
     """FIX 2 + RC-3: emit up to _GROUNDING_MAX_PERIODS periods, newest-first, suffixed.
 
-    RC-3 (2026-06-28) raised the cap 4 -> 8 so a multi-quarter trend answer
-    substantiates every quoted quarter (not just the latest 4). Given 10 ASC
-    periods, the bag carries the newest 8 — newest bare, then ``_2`` ... ``_8`` —
-    and the 9th/10th-newest are dropped by the cap.
+    RC-3 (2026-06-28) raised the cap 4 -> 8 -> 13 (in lockstep with the emission
+    per-row field cap GROUNDING_MAX_FIELDS_PER_ROW 8->14) so a full ~3-year
+    quarterly trend answer substantiates every quoted quarter. Given 15 ASC
+    periods, the bag carries the newest 13 — newest bare, then ``_2`` ... ``_13`` —
+    and the 14th/15th-newest are dropped by the cap.
     """
     from rag_chat.application.pipeline.handlers.market import _GROUNDING_MAX_PERIODS
 
     s3 = AsyncMock()
-    # ASC by date: revenue 10,20,...,100 (billions) — newest is 100.
+    # ASC by date: revenue 10,20,...,150 (billions) — newest is 150.
+    rev_b = list(range(10, 160, 10))  # [10,20,...,150] — 15 periods
     s3.get_fundamentals_history_with_snapshot.return_value = {
         "periods": [
             {"period": f"Q{i}", "period_type": "QUARTERLY", "revenue": v * 1_000_000_000, "eps": float(v)}
-            for i, v in enumerate([10, 20, 30, 40, 50, 60, 70, 80, 90, 100], start=1)
+            for i, v in enumerate(rev_b, start=1)
         ],
         "current_snapshot": None,
     }
     handler = _make_handler(s3)
-    result = await handler._handle_get_fundamentals_history(ticker="AAPL", periods=10)
+    result = await handler._handle_get_fundamentals_history(ticker="AAPL", periods=15)
 
     assert result is not None
     gf = _gf_dict(result)
-    # Newest period bare, then _2 ... _8 — exactly _GROUNDING_MAX_PERIODS rows.
-    assert gf["revenue"] == "100000000000"  # newest (Q10)
-    assert gf["revenue_2"] == "90000000000"
-    assert gf["revenue_3"] == "80000000000"
-    assert gf["revenue_4"] == "70000000000"
-    assert gf["revenue_5"] == "60000000000"
-    assert gf["revenue_6"] == "50000000000"
-    assert gf["revenue_7"] == "40000000000"
-    assert gf["revenue_8"] == "30000000000"  # 8th-newest (Q3)
-    # 9th/10th-newest (20, 10) are dropped by the cap.
-    assert "revenue_9" not in gf
-    assert "revenue_10" not in gf
+    # Newest period bare, then _2 ... _13 — exactly _GROUNDING_MAX_PERIODS rows.
+    assert gf["revenue"] == "150000000000"  # newest (Q15)
+    assert gf["revenue_2"] == "140000000000"
+    assert gf["revenue_13"] == "30000000000"  # 13th-newest (Q3)
+    # 14th/15th-newest (20, 10) are dropped by the cap.
+    assert "revenue_14" not in gf
+    assert "revenue_15" not in gf
     # Sanity on the cap constant the test relies on.
-    assert _GROUNDING_MAX_PERIODS == 8
+    assert _GROUNDING_MAX_PERIODS == 13
 
 
 # ── _handle_get_fundamentals_history_batch ────────────────────────────────────
