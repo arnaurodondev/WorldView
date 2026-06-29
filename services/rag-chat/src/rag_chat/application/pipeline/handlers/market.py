@@ -2050,14 +2050,58 @@ class MarketHandler(ToolHandler):
         interval: str,
         bars: list[dict[str, Any]],
     ) -> str:
-        """Format OHLCV bars as a markdown table with a header line."""
-        header = f"{ticker} price history ({interval}, {from_date} → {to_date})\n"
-        header += "| Date       | Close  | Volume |\n|------------|--------|--------|\n"
+        """Format OHLCV bars as a markdown table with a header line.
+
+        Cat-B B2 (2026-06-28): the per-bar table now renders ``High`` and ``Low``
+        columns (they were computed into ``grounding_fields`` but NEVER into the
+        text the LLM sees, so the model truthfully but wrongly reported "high/low
+        not available" for a YTD-range question — a split-brain between the eval
+        wire and the LLM context, docs/audits/2026-06-28-cat-b-screener-missingness.md).
+        We also prepend an explicit aggregated WINDOW SUMMARY line (period high /
+        low / range / first / last close / N bars) so a "high and low so far this
+        year" question has the aggregate to copy rather than asking the model to
+        fold ~120 bars itself — an aggregation it is unreliable at.
+        """
+        # ── Window summary (the aggregate the model should copy, not compute) ──
+        # Collect numeric extrema defensively: a None/garbled bar field must never
+        # poison the max/min (mirrors _grounding_fields_from_bars' guard).
+        highs = [float(h) for b in bars if (h := _coerce_grounding_number(b.get("high"))) is not None]
+        lows = [float(low) for b in bars if (low := _coerce_grounding_number(b.get("low"))) is not None]
+        summary = ""
+        if highs or lows:
+            parts: list[str] = []
+            if highs:
+                parts.append(f"high ${max(highs):.2f}")
+            if lows:
+                parts.append(f"low ${min(lows):.2f}")
+            if highs and lows:
+                parts.append(f"range ${max(highs) - min(lows):.2f}")
+            # First / last close anchor the trajectory endpoints for a series
+            # question (Cat-C C1: a "plot last 90 days" answer summarises rather
+            # than enumerates every bar).
+            first_close = _coerce_grounding_number(bars[0].get("close")) if bars else None
+            last_close = _coerce_grounding_number(bars[-1].get("close")) if bars else None
+            if first_close is not None:
+                parts.append(f"first close ${float(first_close):.2f}")
+            if last_close is not None:
+                parts.append(f"last close ${float(last_close):.2f}")
+            parts.append(f"{len(bars)} bars")
+            summary = f"Window summary: {' — '.join(parts)}\n"
+
+        header = summary + f"{ticker} price history ({interval}, {from_date} → {to_date})\n"
+        header += "| Date       | High   | Low    | Close  | Volume |\n"
+        header += "|------------|--------|--------|--------|--------|\n"
         rows = []
         for b in bars:
             close = b.get("close", 0) or 0
             volume = b.get("volume", 0) or 0
-            rows.append(f"| {b.get('date', '?')} | ${float(close):.2f} | {int(volume):,} |")
+            # High/Low may be absent on a degenerate bar — render "—" rather than
+            # a fabricated 0 so the LLM never quotes a phantom extremum.
+            hi_raw = _coerce_grounding_number(b.get("high"))
+            lo_raw = _coerce_grounding_number(b.get("low"))
+            hi = f"${float(hi_raw):.2f}" if hi_raw is not None else "—"
+            lo = f"${float(lo_raw):.2f}" if lo_raw is not None else "—"
+            rows.append(f"| {b.get('date', '?')} | {hi} | {lo} | ${float(close):.2f} | {int(volume):,} |")
         return header + "\n".join(rows)
 
     def _format_fundamentals_table(
