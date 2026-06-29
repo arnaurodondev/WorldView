@@ -1489,6 +1489,248 @@ _UNIVERSE_AGGREGATE_TOOLS: frozenset[str] = frozenset(
 _TOOL_TEXT_TICKER_RE = re.compile(r"\b([A-Z]{1,6}(?:\.[A-Z])?)\b")
 
 
+# ── Cat-B FIX 3 — off-payload ticker guard ───────────────────────────────────
+#
+# WHY: the 2026-06-28 Category-B audit (docs/audits/2026-06-28-cat-b-screener-
+# missingness.md) found the answer LLM, when handed a screener/listing payload it
+# distrusts (wrong universe or a coverage gap), PADDING the answer with tickers
+# from its OWN world knowledge that NO tool returned — the canonical AI-chip
+# allowlist (NVDA/AMD/AVGO/…) for ``ru_ai_semi_screener``, and KEYS/HPE for
+# ``iter3_top5_tech_marketcap``. The synthesis prompt's Rule #2 ("never add
+# entities absent from a tool result") is necessary but a soft NL rule does not
+# STOP a model that has decided the payload is unusable. The audit's recommended
+# backstop: a deterministic guard that intersects the answer's ticker tokens
+# against the tickers actually present in the tool-result text and strips/flags
+# any the answer introduced. This is the only mechanism that *guarantees* Rule #2
+# rather than requesting it.
+#
+# SCOPE (deliberately conservative — false positives erode trust more than the
+# occasional missed pad):
+#   * Fires ONLY for screener/listing/ranking questions (keyword-gated) AND only
+#     when a universe/aggregate tool actually ran this turn. A single-entity
+#     intelligence/news answer that legitimately *mentions* peers is never
+#     touched.
+#   * A token is "off-payload" only when it is ticker-SHAPED, NOT in the payload
+#     ticker set, NOT a known finance/units acronym (US, ETF, YoY, FY, Q1…), and
+#     appears in a STRUCTURED slot (a markdown table cell or a list-item lead) —
+#     the shapes the model uses to manufacture a "complete" ranking. Tickers in
+#     free prose are left alone (over-stripping a real caveat is worse).
+
+# Screener / listing / ranking QUESTION shape. We only run the guard when the
+# user asked for a SET of names (a screen, a ranking, a "list the top N"), which
+# is the exact shape that invites list-padding. Anchored on list/screen/rank
+# verbs so an ordinary single-entity question never matches.
+_LISTING_QUESTION_RE = re.compile(
+    r"\b(screen|screener|list|top\s+\d+|largest|biggest|ranked?|ranking|"
+    r"which\s+(?:companies|stocks|names|tickers)|"
+    r"(?:companies|stocks|names|tickers)\s+(?:with|that|above|below))\b",
+    re.IGNORECASE,
+)
+
+# Ticker-shaped tokens that are NOT tickers — finance/units/scaffolding acronyms
+# that the _TOOL_TEXT_TICKER_RE (1-6 upper-case) over-matches. Excluding them
+# keeps the guard from flagging legitimate prose ("US-listed", "YoY growth",
+# "Q4 FY2024", "P/E", "ETF") as an off-payload ticker. Kept broad on purpose —
+# every false exclusion here is a ticker the guard simply won't strip (safe),
+# whereas a false INCLUSION would strip a real word from the answer.
+_NON_TICKER_ALLCAPS: frozenset[str] = frozenset(
+    {
+        # geography / listing scope
+        "US",
+        "USA",
+        "EU",
+        "UK",
+        "ADR",
+        "OTC",
+        # finance metrics / units
+        "PE",
+        "PEG",
+        "EPS",
+        "PS",
+        "PB",
+        "EV",
+        "ROE",
+        "ROA",
+        "ROI",
+        "FCF",
+        "EBIT",
+        "TTM",
+        "YOY",
+        "QOQ",
+        "MOM",
+        "CAGR",
+        "MCAP",
+        "AUM",
+        "GAAP",
+        "USD",
+        "EUR",
+        "GBP",
+        "B",
+        "M",
+        "K",
+        "T",
+        # period / quarter labels
+        "FY",
+        "Q1",
+        "Q2",
+        "Q3",
+        "Q4",
+        "H1",
+        "H2",
+        "CY",
+        # vehicles / sectors / themes (not screenable tickers)
+        "ETF",
+        "ETFS",
+        "REIT",
+        "IPO",
+        "AI",
+        "ML",
+        "GPU",
+        "CPU",
+        "RF",
+        "SEC",
+        "GICS",
+        "SP",
+        "DJIA",
+        # answer scaffolding the LLM emits in caps
+        "N",
+        "NA",
+        "TBD",
+        "YTD",
+        "MTD",
+        "QTD",
+        "VS",
+        "AND",
+        "OR",
+        "THE",
+        "TOTAL",
+        "NOTE",
+        "RANK",
+        "TOP",
+    }
+)
+
+
+def _extract_payload_tickers(tool_items: list[Any]) -> set[str]:
+    """Collect every ticker-shaped token present in the tool-result PAYLOAD.
+
+    This is the set the answer is allowed to name. Mirrors the grounded-ref
+    collection in :meth:`_build_entity_grounded_sets`: ticker attrs on the item
+    plus every ``_TOOL_TEXT_TICKER_RE`` match in ``item.text`` (the screener row
+    bodies the LLM actually saw). Returns an upper-cased set; empty when no items.
+    """
+    payload: set[str] = set()
+    for item in tool_items:
+        if item is None:
+            continue
+        for attr in ("ticker", "canonical_name", "entity_name"):
+            v = getattr(item, attr, None)
+            if isinstance(v, str) and v:
+                # canonical_name/entity_name may be a full company name; only the
+                # ticker-shaped tokens inside it count toward the allowlist.
+                for m in _TOOL_TEXT_TICKER_RE.findall(v):
+                    payload.add(m.upper())
+        cm = getattr(item, "citation_meta", None)
+        if cm is not None:
+            cm_t = getattr(cm, "ticker", None)
+            if isinstance(cm_t, str) and cm_t:
+                payload.add(cm_t.strip().upper())
+        text_body = getattr(item, "text", None)
+        if isinstance(text_body, str) and text_body:
+            for m in _TOOL_TEXT_TICKER_RE.findall(text_body):
+                payload.add(m.upper())
+    return payload
+
+
+def _structured_answer_tickers(answer: str) -> set[str]:
+    """Ticker-shaped tokens that appear in a STRUCTURED slot of the answer.
+
+    Conservative by design: we only collect tokens from lines that look like a
+    markdown table row (``| ... |``) or a list-item / numbered lead
+    (``- AAPL``, ``1. AAPL``, ``* AAPL``) — the shapes the model uses to
+    manufacture a ranking. Tokens in free prose are intentionally ignored so the
+    guard never strips a legitimately-mentioned peer from a sentence.
+    """
+    found: set[str] = set()
+    for raw_line in answer.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        is_table_row = line.startswith("|") or line.count("|") >= 2
+        is_list_lead = bool(re.match(r"^(?:[-*+]|\d+[.)])\s+", line))
+        if not (is_table_row or is_list_lead):
+            continue
+        for m in _TOOL_TEXT_TICKER_RE.findall(line):
+            found.add(m.upper())
+    return found
+
+
+def find_off_payload_tickers(
+    *,
+    question: str,
+    answer: str,
+    tool_items: list[Any],
+    called_tool_names: list[str] | None,
+) -> set[str]:
+    """Return tickers the ANSWER introduced in a structured slot that NO tool
+    returned — the Cat-B off-payload-invention set.
+
+    Returns an empty set (guard does not fire) unless ALL of:
+      * the question is a screener/listing/ranking shape (``_LISTING_QUESTION_RE``);
+      * a universe/aggregate tool actually ran (``_UNIVERSE_AGGREGATE_TOOLS``);
+      * the payload yielded at least one ticker to anchor against (so we never
+        false-positive on an empty/failed payload, where the right behaviour is a
+        refusal handled elsewhere, not a strip).
+
+    A candidate ticker is reported only when it is ticker-shaped, absent from the
+    payload ticker set, and not a known finance/units acronym. The caller decides
+    whether to strip the offending rows or flag them.
+    """
+    if not answer or not answer.strip():
+        return set()
+    if not _LISTING_QUESTION_RE.search(question or ""):
+        return set()
+    called = set(called_tool_names or ())
+    if not (called & _UNIVERSE_AGGREGATE_TOOLS):
+        return set()
+    payload = _extract_payload_tickers(tool_items)
+    if not payload:
+        # No payload tickers to anchor against — an empty/failed screen. The
+        # honest response is a refusal (handled by the wholesale-refusal /
+        # all-tools-failed guards), not a silent strip of every answer token.
+        return set()
+    candidates = _structured_answer_tickers(answer)
+    return {t for t in candidates if t not in payload and t not in _NON_TICKER_ALLCAPS and not t.isdigit()}
+
+
+def strip_off_payload_ticker_lines(answer: str, off_payload: set[str]) -> str:
+    """Remove structured rows/list-items whose lead ticker is off-payload.
+
+    Drops the offending table row or list item entirely (the whole fabricated
+    ranking entry, not just the ticker token, so we never leave a dangling
+    ``| | $63.80B |`` cell). Prose lines are never touched. If the strip would
+    remove every line, the answer is left unchanged and the caller appends a flag
+    instead — an empty answer is a worse failure than a flagged one.
+    """
+    if not off_payload:
+        return answer
+    kept: list[str] = []
+    removed = 0
+    for raw_line in answer.splitlines():
+        line = raw_line.strip()
+        is_table_row = line.startswith("|") or line.count("|") >= 2
+        is_list_lead = bool(re.match(r"^(?:[-*+]|\d+[.)])\s+", line))
+        if (is_table_row or is_list_lead) and any(
+            t in {m.upper() for m in _TOOL_TEXT_TICKER_RE.findall(line)} for t in off_payload
+        ):
+            removed += 1
+            continue
+        kept.append(raw_line)
+    if removed == 0 or not "\n".join(kept).strip():
+        return answer
+    return "\n".join(kept)
+
+
 def _normalise_entity_identifier(value: Any) -> set[str]:
     """Flatten any entity-identifier value into a lowercase string set.
 
@@ -3937,6 +4179,42 @@ class ChatOrchestratorUseCase:
                 tool_names=_executed_tool_names,
                 retrieved_items=reranked or non_none_items,
             )
+
+        # ── Cat-B FIX 3: off-payload ticker guard (deterministic) ─────────────
+        # For screener/listing/ranking questions, strip any structured ranking
+        # row whose lead ticker was NOT in any tool result — the model padding a
+        # distrusted/empty screen with its own world knowledge (the AI-chip
+        # allowlist, KEYS/HPE). Conservative: only fires on listing-shaped
+        # questions where a universe tool ran and the payload yielded ≥1 ticker;
+        # only structured rows (table/list) are eligible; prose is never touched.
+        # See docs/audits/2026-06-28-cat-b-screener-missingness.md (B1).
+        if full_text and full_text.strip():
+            _off_payload = find_off_payload_tickers(
+                question=request.message,
+                answer=full_text,
+                tool_items=non_none_items,
+                called_tool_names=list(_executed_tool_names),
+            )
+            if _off_payload:
+                _pre_strip = full_text
+                full_text = strip_off_payload_ticker_lines(full_text, _off_payload)
+                log.warning(  # type: ignore[no-any-return]
+                    "off_payload_tickers_stripped",
+                    tickers=sorted(_off_payload),
+                    stripped=full_text != _pre_strip,
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+                # If the strip could not remove the offending rows (e.g. they
+                # weren't in a clean table shape), append an explicit flag so the
+                # fabricated names are never presented as grounded screener output.
+                if full_text == _pre_strip:
+                    full_text = (
+                        full_text.rstrip()
+                        + "\n\n_Note: "
+                        + ", ".join(sorted(_off_payload))
+                        + " were not returned by the screener and are not grounded "
+                        "in the platform's data._"
+                    )
 
         # ── BP-674 defense-in-depth: post-grounding narration scrub ───────────
         # The grounding rewrites (above) replace ``full_text`` with their own
