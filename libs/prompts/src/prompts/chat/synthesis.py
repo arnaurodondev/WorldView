@@ -110,6 +110,30 @@ specific part that is genuinely unavailable, never the whole answer.
    the specific field that is genuinely absent — never the whole row or answer
    when other fields on it are present.
 
+## PERIOD-MATCHING — BIND EVERY FIGURE TO ITS ROW'S OWN LABEL
+A figure is only correct under the period the tool's own row gives it. The table
+already carries an unambiguous period label per row (e.g. ``Q4 FY2024``, a
+``period`` / ``period_end`` column). You MUST read that label, not guess from row
+order:
+
+- Before quoting any figure, identify the row's period label / ``period_end`` in
+  the tool table and quote the value ONLY under that exact label. NEVER re-order,
+  re-index, or re-assign quarters by position — do not map the 1st/2nd/3rd row to
+  Q1/Q2/Q3 by where it sits; map each value to the label that row actually shows.
+- When the user names a specific fiscal period (e.g. "fiscal Q4 2024, quarter
+  ending Sep 28 2024"), find the row whose label / ``period_end`` matches that
+  exact period and quote THAT row.
+- If NO returned row matches the requested period, say so explicitly and name the
+  closest available period the tool DID return ("Q4 FY2024 is not in the returned
+  history; the oldest quarter available is Q1 FY2025 (Dec 2024)"). Do NOT
+  substitute the nearest quarter under the requested label — a value carried onto
+  the wrong period label is a fabrication even when the number itself is real.
+
+For a long price / time series, report summary statistics — first, last, high,
+low, and the range over the N periods returned — rather than enumerating every
+bar. Quote the extremes and endpoints from the rows that carry them; do not
+transcribe a hundred-row table verbatim.
+
 ## FORBIDDEN — DO NOT EMIT
 The user MUST NOT see any of the following in your answer:
 
@@ -180,7 +204,20 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # report every returned value in full with its citation, refuse only the
     # specific genuinely-absent part. KEEPS every 1.4 win (digit-for-digit copy,
     # report-in-full, keep-the-tag, TRUST YOUR TOOL RESULTS).
-    version="1.5",
+    # 1.6 (Cat-A period-selection root-cause, 2026-06-28): the v1.5 finding-run
+    # still showed the model SELECTING/LABELLING the WRONG fiscal period from a
+    # payload that already carried correct labels — scrambling Q1-Q4 ordering by
+    # row position (TSLA), inventing/mislabelling fiscal years and padding extra
+    # quarters (NVDA/AMD), and substituting the nearest September quarter under a
+    # requested-but-absent label (Apple Q4 FY2024). Added the PERIOD-MATCHING
+    # block: bind every figure to its row's OWN period label / period_end, never
+    # map rows to quarters by position, and — when the requested period is absent
+    # from the returned window — say so and name the closest available period
+    # rather than relabelling the nearest quarter. Also added a long-series steer
+    # (report first/last/high/low/range over N rather than enumerating every bar)
+    # for the C1-companion price-history case. Additive: KEEPS every 1.5 win
+    # (anti-fabrication policy, digit-for-digit copy, report-in-full balance).
+    version="1.6",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -193,7 +230,11 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "refusal language that regressed grounding, requires full cited reporting. "
         "v1.5 adds the ANTI-FABRICATION POLICY (no invented periods/rows, no "
         "off-payload entities, read scalar fields before declaring data missing) "
-        "while preserving the v1.4 report-in-full balance (RC-2)."
+        "while preserving the v1.4 report-in-full balance (RC-2). "
+        "v1.6 adds the PERIOD-MATCHING block (bind every figure to its row's own "
+        "period label; name the closest available period when the requested one is "
+        "absent rather than relabelling the nearest quarter) plus a long-series "
+        "summary-stats steer (Cat-A period-selection)."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

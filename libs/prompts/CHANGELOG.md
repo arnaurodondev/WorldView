@@ -262,6 +262,30 @@ is unchanged.
 
 ## chat_synthesis_system
 
+### 1.6 — 2026-06-28 (Cat-A period-selection)
+
+- The v1.5 finding-run still showed the model **selecting / labelling the wrong
+  fiscal period** from a payload that already carried correct labels
+  (`docs/audits/2026-06-28-cat-a-period-selection.md`): it scrambled Q1–Q4 by row
+  position (`da_tsla_revenue_2024_full_year`), invented/mislabelled fiscal years
+  and padded extra quarters (`ru_nvda_amd_revenue_4q`), and substituted the
+  nearest September quarter under a requested-but-absent label
+  (`da_apple_revenue_fy2024q4_precision` — Q4 FY2024 outside the returned window).
+  The tool labels themselves were correct; the missing guardrail was a
+  period-binding directive (cause (d)).
+- v1.6 adds the **PERIOD-MATCHING** block: bind every figure to its row's OWN
+  period label / `period_end`; never map rows to quarters by position; and — when
+  the requested period is **absent** from the returned window — say so and name
+  the closest available period the tool DID return, rather than relabelling the
+  nearest quarter (a real number under the wrong period label is still a
+  fabrication).
+- Adds a **long-series steer** (report first/last/high/low/range over N rather
+  than enumerating every bar) for the C1-companion price-history case.
+- **Additive:** keeps every v1.5 win (ANTI-FABRICATION POLICY, digit-for-digit
+  copy, report-in-full balance, TRUST YOUR TOOL RESULTS). Backed by the
+  deterministic period-presence guard in the rag-chat orchestrator (FIX 2) and the
+  off-payload-ticker guard (FIX 3) for the financial-correctness backstop.
+
 ### 1.5 — 2026-06-28 (RC-2 anti-fabrication policy)
 
 - The v1.4 finding-run grounding-floor root-cause

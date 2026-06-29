@@ -59,8 +59,8 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.5 (RC-2) added the ANTI-FABRICATION POLICY block.
-    assert ident.startswith("chat_synthesis_system@1.5#")
+    # v1.6 (Cat-A) added the PERIOD-MATCHING block.
+    assert ident.startswith("chat_synthesis_system@1.6#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -101,6 +101,25 @@ def test_synthesis_prompt_anti_fabrication_policy_with_balance() -> None:
     assert "report" in rendered.lower()
     assert "refuse ONLY the" in rendered
     assert "never the whole answer" in rendered
+
+
+def test_synthesis_prompt_period_matching_block() -> None:
+    """v1.6 (Cat-A): the PERIOD-MATCHING block must (a) forbid mapping rows to
+    quarters by position, (b) require binding figures to the row's own label, and
+    (c) require naming the closest available period when the requested one is
+    absent rather than relabelling the nearest quarter.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    assert "PERIOD-MATCHING" in rendered
+    # (a) no positional re-assignment of quarters.
+    assert "re-assign quarters by position" in rendered
+    assert "period_end" in rendered  # bind to the row's own period label/period_end
+    # (c) absent-period handling: name the closest, do not substitute under the label.
+    assert "closest available period" in rendered
+    assert "Do NOT\n  substitute the nearest quarter" in rendered or "do not substitute" in rendered.lower()
+    # The C1-companion long-series steer.
+    assert "long price / time series" in rendered
+    assert "summary statistics" in rendered
 
 
 def test_synthesis_prompt_forbids_refusing_present_data() -> None:
