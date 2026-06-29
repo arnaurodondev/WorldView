@@ -299,6 +299,20 @@ _GROUNDING_MAX_PERIODS = 13
 # build_grounding_sample still hold (each row contributes up to 4 keys).
 _SCREEN_GROUNDING_MAX_ROWS = 3
 
+# Cat-C C1 (2026-06-28): price-series per-bar grounding band cap. A "plot NVDA
+# last 90 days" answer cites N individual daily closes, but the grounding bag
+# emitted only 3 aggregate scalars (high/low/last-close), so the judge could
+# verify almost none of the series and floored it (GROUNDING_FLOOR,
+# docs/audits/2026-06-28-cat-c-priceseries-judgenoise.md). We keep the summary
+# stats AND emit a small DOWN-SAMPLED band of per-bar (close, date) pairs so a
+# representative subset of the series — plus the endpoints — substantiates.
+# Bounded so summary scalars (ticker/high/low/close = 4) + band (K bars x 2
+# fields) stay under the emission per-row field cap (GROUNDING_MAX_FIELDS_PER_ROW
+# =14 in sse_emitter): 5 bars x 2 = 10, + 4 = 14 exactly. The band is partial by
+# design for a long series; the matcher tolerates unmatched bars and the
+# down-sample (first, last, evenly-spaced interior) covers the endpoints.
+_PRICE_BAR_GROUNDING_MAX_ROWS = 5
+
 
 def _grounding_fields_from_rows(
     rows: list[dict[str, Any]],
@@ -359,7 +373,7 @@ def _grounding_fields_from_bars(
     *,
     ticker: str,
 ) -> tuple[tuple[str, str], ...]:
-    """Build the ``grounding_fields`` bag for a price-history (OHLCV) result.
+    r"""Build the ``grounding_fields`` bag for a price-history (OHLCV) result.
 
     PLAN-0116 W5 / Item 3. Two benchmark questions cite price figures the matcher
     could not substantiate (``tc_price_history_msft_ytd_range`` — "MSFT's high and
@@ -369,10 +383,23 @@ def _grounding_fields_from_bars(
     CLOSE so a "high was $X, low was $Y" claim substantiates and a fabricated
     high/low is contradicted (the rubric's ``fabricated_high_low`` forbidden fact).
 
+    Cat-C C1 (2026-06-28): a SERIES answer ("plot NVDA last 90 days") cites N
+    individual daily closes, which the 3 aggregate scalars could not substantiate
+    — the judge floored it (docs/audits/2026-06-28-cat-c-priceseries-judgenoise.md).
+    So in ADDITION to the summary stats we now emit (i) the first close + the window
+    range, and (ii) a small DOWN-SAMPLED band of per-bar ``(close, date)`` pairs
+    (first / last / evenly-spaced interior) so a representative subset of the series
+    AND its endpoints substantiate. The band is partial by design for a long series
+    (capped at ``_PRICE_BAR_GROUNDING_MAX_ROWS`` to stay under the emission field
+    cap); the matcher tolerates the unmatched interior bars.
+
     Emitted RAW + unscaled (``_coerce_grounding_number``), ``ticker`` first. A bar
-    may carry ``high``/``low``/``close`` (live ``/ohlcv/bars`` shape); a missing
-    field is simply skipped so no phantom number enters. Flag-safe: this only fills
-    the in-memory item; CHAT_EVAL_GROUNDING_SAMPLES still gates the wire.
+    may carry ``high``/``low``/``close``/``date`` (live ``/ohlcv/bars`` shape); a
+    missing field is simply skipped so no phantom number enters. Suffixed keys
+    (``close_2``, ``period_2`` …) ride the matcher's ``_\d+$``-strip convention and
+    the ``get_price_history`` allow-list (ticker/period/open/high/low/close/volume).
+    Flag-safe: this only fills the in-memory item; CHAT_EVAL_GROUNDING_SAMPLES still
+    gates the wire.
     """
     if not bars:
         return ()
@@ -394,6 +421,34 @@ def _grounding_fields_from_bars(
     last_close = _coerce_grounding_number(bars[-1].get("close"))
     if last_close is not None:
         fields.append(("close", last_close))
+
+    # ── Cat-C C1: down-sampled per-bar band (close + date) ────────────────────
+    # Pick up to _PRICE_BAR_GROUNDING_MAX_ROWS bars by evenly-spaced index so the
+    # band always includes the FIRST and LAST bar (the trajectory endpoints) plus
+    # interior samples. Emitted suffixed (_2, _3 …) so they ride alongside — and
+    # never overwrite — the bare ``close`` summary scalar above. ``period`` carries
+    # the bar's date (an allow-listed key) so a claim like "$215.20 on 2026-05-12"
+    # can bind to a specific bar.
+    n_band = min(_PRICE_BAR_GROUNDING_MAX_ROWS, len(bars))
+    if n_band > 0:
+        if n_band == 1:
+            band_indices = [0]
+        else:
+            # Evenly spaced over [0, len-1] inclusive; round to int and dedupe so a
+            # short series never emits the same bar twice.
+            step = (len(bars) - 1) / (n_band - 1)
+            band_indices = sorted({round(i * step) for i in range(n_band)})
+        suffix = 2  # _2 onward; bare close/period are reserved for the summary
+        for idx in band_indices:
+            bar = bars[idx]
+            bar_close = _coerce_grounding_number(bar.get("close"))
+            if bar_close is None:
+                continue
+            fields.append((f"close_{suffix}", bar_close))
+            bar_date = bar.get("date") or bar.get("bar_date") or bar.get("ts")
+            if bar_date:
+                fields.append((f"period_{suffix}", str(bar_date)))
+            suffix += 1
     return tuple(fields)
 
 
