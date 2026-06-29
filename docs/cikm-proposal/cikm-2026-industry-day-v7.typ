@@ -134,13 +134,16 @@ that additive LLM scoring [4] did not reliably catch: an answer flagged as mostl
 range. The lesson is simple: LLM judges are useful, but some defects should be vetoed deterministically.
 
 #strong[Level 2: tool-output substantiation.] A generated answer can pass answer-level checks while ignoring or
-misusing the data returned by tools. The substantiation layer cross-checks numeric claims against actual tool
-outputs. In the latest frozen benchmark, #strong[22 of 67] questions carried verifiable value-tool samples;
-across those, every numeric claim the harness could check was grounded: #strong[56] substantiated, #strong[0]
-contradicted, and #strong[0] unsupported. The check is deliberately precision-oriented: if the captured sample
-does not contain the relevant period or metric, the claim is left #emph[unmatched] rather than falsely
-contradicted. It is thus a high-precision corroborating floor; a figure simply #emph[absent] from the tool
-payload is caught by the Level-1 grounding veto, not this numeric check.
+misusing the data returned by tools. The substantiation layer cross-checks each numeric claim in the answer
+against the actual values the tools returned. On the questions whose tools yield verifiable values, the served
+numbers are well-grounded — the check surfaces no contradictions — and where a captured sample lacks the
+relevant period or metric, a claim is left #emph[unmatched] rather than falsely contradicted, a deliberate
+precision-over-recall stance. It is thus a high-precision corroborating floor: a figure simply #emph[absent]
+from the tool payload is caught by the Level-1 grounding veto, not this numeric check. This layer is not
+hypothetical — it is what let us catch a real grounding regression, in which the agent fabricated quarterly
+figures whenever a fundamentals tool returned only a single period, and then confirm the fix once the tool was
+corrected to return the full series. Measuring tool-output use directly is what makes such defects — invisible
+to answer-level scoring — observable and fixable.
 
 #strong[Level 3: trajectory quality.] Agentic RAG must also be evaluated #emph[before] the final answer [10]. The
 trajectory judge reads the captured tool-call trace and scores routing, ordering, recovery, and efficiency,
