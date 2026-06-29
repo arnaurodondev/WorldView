@@ -129,7 +129,8 @@ async def test_singular_handler_filters_phantom_and_keeps_real_row() -> None:
     result = await handler._handle_get_fundamentals_history(ticker="AAPL", periods=2)
 
     assert result is not None
-    # The real row's revenue must be in the rendered table.
-    assert "95.0B" in result.text
+    # The real row's revenue must be in the rendered table. Cat-A FIX 3
+    # (2026-06-28) renders revenue at 3-decimal precision (was $X.1f).
+    assert "95.000B" in result.text
     # The phantom row's period must NOT be rendered (the entire row was dropped).
     assert "Q3 FY2026" not in result.text

@@ -69,9 +69,10 @@ async def test_singular_handler_emits_snapshot_block_after_period_table() -> Non
 
     assert result is not None
     text = result.text
-    # Period table is still rendered.
+    # Period table is still rendered. Cat-A FIX 3 (2026-06-28) renders revenue
+    # at 3-decimal precision (was $X.1f).
     assert "Q2 FY2026" in text
-    assert "95.0B" in text
+    assert "95.000B" in text
     # Snapshot block is appended below.
     assert "Current Snapshot" in text
     assert "as-of 2026-06-01" in text

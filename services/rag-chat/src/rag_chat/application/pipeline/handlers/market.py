@@ -191,6 +191,22 @@ def _coerce_grounding_number(value: Any) -> str | None:
     return repr(num)
 
 
+def _fmt_raw_number(value: Any) -> str:
+    """Render ``value`` as a full-precision, un-rounded numeric string for a cell.
+
+    Cat-A FIX 3 (2026-06-28): the fundamentals table previously rounded revenue
+    to ``$X.1f B``, so a 3-decimal-precision question could not be answered from
+    the cell and the model padded digits. We render the raw value alongside the
+    billions form so the LLM-visible cell carries full precision (revenue is an
+    exact dollar figure like ``94930000000``; an EODHD decimal like ``94.93`` is
+    kept verbatim). Integers shed the trailing ``.0``; non-numeric input is
+    stringified unchanged so the cell never errors. Reuses ``_coerce_grounding_number``'s
+    canonical formatting so the displayed raw matches what the matcher substantiates.
+    """
+    coerced = _coerce_grounding_number(value)
+    return coerced if coerced is not None else str(value)
+
+
 def _grounding_fields_from_row(
     row: dict[str, Any] | None,
     snapshot: dict[str, Any] | None,
@@ -2066,20 +2082,40 @@ class MarketHandler(ToolHandler):
         states "Periodicity: QUARTERLY" so the LLM sees the contract before
         reading the cells.
         """
+        # Cat-A FIX 3 (2026-06-28, period precision): the table now carries TWO
+        # period-identity columns — the fiscal ``Period`` label AND the explicit
+        # ``Period End`` ISO date — so a question that names a quarter by its
+        # period-end date ("fiscal Q4 2024 ending Sep 28 2024") can be bound to
+        # the matching row by date, not just by a fiscal label the model might
+        # mis-anchor (the Apple two-Sep-28-Q4s trap, docs/audits/
+        # 2026-06-28-cat-a-period-selection.md). Revenue/Net Income are rendered
+        # UN-ROUNDED (full precision) alongside the human-readable $X.XXXB form,
+        # because the prior ``$X.1f B`` rounding made 3-decimal-precision
+        # questions impossible to answer from the cell, so the model padded
+        # digits ("$102.500B") that were themselves unsubstantiated.
         header = f"{ticker} quarterly fundamentals (Periodicity: QUARTERLY)\n"
-        header += "| Period | Periodicity | Revenue | Net Income | EPS | P/E |\n"
-        header += "|--------|-------------|---------|------------|-----|-----|\n"
+        header += "| Period | Period End | Periodicity | Revenue | Net Income | EPS | P/E |\n"
+        header += "|--------|------------|-------------|---------|------------|-----|-----|\n"
         rows = []
         for p in periods:
             rev_val = p.get("revenue") or p.get("totalRevenue")
-            rev = f"${float(rev_val) / 1e9:.1f}B" if rev_val else "—"
+            # Render BOTH the rounded billions form (readability) and the raw,
+            # un-rounded value (precision) so the LLM-visible cell can support a
+            # 3-decimal answer without padding. e.g. "$94.930B (raw: 94930000000)".
+            rev = f"${float(rev_val) / 1e9:.3f}B (raw: {_fmt_raw_number(rev_val)})" if rev_val else "—"
             ni_val = p.get("net_income") or p.get("netIncome")
-            ni = f"${float(ni_val) / 1e9:.1f}B" if ni_val else "—"
+            ni = f"${float(ni_val) / 1e9:.3f}B (raw: {_fmt_raw_number(ni_val)})" if ni_val else "—"
             eps_val = p.get("eps") or p.get("epsActual")
             eps = f"${float(eps_val):.2f}" if eps_val else "—"
             pe_val = p.get("pe_ratio") or p.get("pe")
             pe = f"{float(pe_val):.1f}x" if pe_val else "—"
             period_label = p.get("period") or p.get("date") or "?"
+            # Explicit ISO period-end date (the unambiguous anchor). The history
+            # use case tags every row with ``period_end_date``; ``query_fundamentals``
+            # uses ``period_end``. Tolerate both, and fall back to "—" so the
+            # column is always present (the LLM sees the date is unavailable
+            # rather than the column silently vanishing).
+            period_end = p.get("period_end_date") or p.get("period_end") or p.get("date") or "—"
             # Explicit per-row periodicity tag. Fall back to QUARTERLY because
             # this formatter is only ever called from the quarterly-history
             # path; an ANNUAL row leaking here would be a contract violation
@@ -2087,7 +2123,7 @@ class MarketHandler(ToolHandler):
             # provenance for any non-QUARTERLY rows, QUARTERLY is the safer
             # default than leaving the cell blank.
             periodicity = p.get("period_type") or "QUARTERLY"
-            rows.append(f"| {period_label} | {periodicity} | {rev} | {ni} | {eps} | {pe} |")
+            rows.append(f"| {period_label} | {period_end} | {periodicity} | {rev} | {ni} | {eps} | {pe} |")
         table = header + "\n".join(rows)
 
         # PLAN-0103 W25 / BP-640: snapshot block — emitted AFTER the period
