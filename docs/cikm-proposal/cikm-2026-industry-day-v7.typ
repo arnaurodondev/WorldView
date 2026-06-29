@@ -85,19 +85,6 @@ embeddings [3], BM25 lexical search [8], and structured market-data queries over
 prediction-market snapshots. Each tool call, argument, status, latency, and result count is recorded as a
 trace, which later becomes an evaluation object.
 
-The graph is designed to model financial knowledge as a #emph[changing object]. Each canonical entity can be
-represented through multiple refreshed views: a definitional view, an evidence-built narrative view, and, for
-instruments, a market/fundamental view. This allows the same entity to be retrieved through different semantic
-routes depending on the query. Relations carry confidence that increases with corroborating evidence and decays
-over time according to the predicate class: a supplier relation, a board-membership relation, and an
-intraday-sentiment relation should not remain equally fresh for the same duration. Contradictory evidence
-demotes confidence rather than deleting the edge. Unlike summarisation-oriented graph RAG [5], every edge
-points back to the passage that asserted it — which is what makes the evidence-level evaluation below possible.
-
-This design is what motivates the evaluation framework. The system is not evaluated only as an extractor, nor
-only as a chatbot. It is evaluated as a live retrieval-and-reasoning stack whose served state is the object
-users actually query.
-
 #figure(
   block(breakable: false, inset: 7pt, stroke: 0.4pt, radius: 3pt, width: 100%)[
     #set align(center)
@@ -123,6 +110,19 @@ users actually query.
   dense, lexical, and structured-market tools and returns a cited answer. The same tool-call trace is then
   consumed by the multi-level evaluation framework (dashed) — the contribution of this paper.],
 )
+
+The graph is designed to model financial knowledge as a #emph[changing object]. Each canonical entity can be
+represented through multiple refreshed views: a definitional view, an evidence-built narrative view, and, for
+instruments, a market/fundamental view. This allows the same entity to be retrieved through different semantic
+routes depending on the query. Relations carry confidence that increases with corroborating evidence and decays
+over time according to the predicate class: a supplier relation, a board-membership relation, and an
+intraday-sentiment relation should not remain equally fresh for the same duration. Contradictory evidence
+demotes confidence rather than deleting the edge. Unlike summarisation-oriented graph RAG [5], every edge
+points back to the passage that asserted it — which is what makes the evidence-level evaluation below possible.
+
+This design is what motivates the evaluation framework. The system is not evaluated only as an extractor, nor
+only as a chatbot. It is evaluated as a live retrieval-and-reasoning stack whose served state is the object
+users actually query.
 
 = Multi-level evaluation framework
 The framework evaluates four levels, each catching failures that the previous level cannot see.
