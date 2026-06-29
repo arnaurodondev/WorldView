@@ -303,6 +303,156 @@ async def _fetch_page_extras(
     return extras
 
 
+# ── Attribute / snapshot WHERE predicates (shared) ───────────────────────────
+# WHY a module-level tuple: the numeric snapshot-range fields are referenced by
+# BOTH the metric-filtered branch and (post CAT-B B1 fix) the no-metric branch,
+# so they must be defined once. Each entry has matching ``<field>_min`` /
+# ``<field>_max`` attributes on ``ScreenFilter`` and a same-named column on
+# ``instrument_fundamentals_snapshot``.
+_NUMERIC_SNAP_FILTERS: tuple[str, ...] = (
+    "avg_volume_30d",
+    "eps_ttm",
+    "free_cash_flow",
+    "fcf_margin",
+    "interest_coverage",
+    "net_debt_to_ebitda",
+    # ── Wave L-4a snapshot fields (PLAN-0089) ────────────────────────────────
+    "analyst_target_price",
+    "analyst_consensus_rating",
+    "institutional_ownership_pct",
+    "short_percent",
+    # Wave L-4b: trailing-90d insider net dollar flow (sortable + filterable).
+    "insider_net_buy_90d",
+    # ── Wave L-5b: intelligence rollup numeric fields (PLAN-0089) ─────────────
+    "news_count_7d",
+    "llm_relevance_7d_max",
+    "display_relevance_7d_weighted",
+    "recent_contradiction_count",
+)
+
+
+def _filters_need_snapshot(filters: list[ScreenFilter], snap_fields_available: tuple[str, ...]) -> bool:
+    """Return True when ANY filter carries a snapshot-column predicate.
+
+    Used by the no-metric branch (CAT-B B1 fix) to decide whether to JOIN
+    ``instrument_fundamentals_snapshot`` before applying the snapshot WHERE
+    predicates. The metric-filtered branch always LEFT-JOINs the snapshot for
+    projection, so it never needs this guard.
+    """
+    for snap_field in _NUMERIC_SNAP_FILTERS:
+        if snap_field not in snap_fields_available:
+            continue
+        if any(getattr(f, f"{snap_field}_min", None) is not None for f in filters):
+            return True
+        if any(getattr(f, f"{snap_field}_max", None) is not None for f in filters):
+            return True
+    if any(f.credit_ratings for f in filters) and "credit_rating" in snap_fields_available:
+        return True
+    for filter_attr, snap_col in (
+        ("next_earnings_within_days", "next_earnings_date"),
+        ("next_dividend_within_days", "next_dividend_date"),
+    ):
+        if snap_col not in snap_fields_available:
+            continue
+        if any(getattr(f, filter_attr, None) is not None for f in filters):
+            return True
+    for bool_field in ("has_active_alert", "has_ai_brief"):
+        if bool_field not in snap_fields_available:
+            continue
+        if any(getattr(f, bool_field, None) is not None for f in filters):
+            return True
+    return False
+
+
+def _apply_attribute_predicates(
+    stmt: Any,
+    instr: Any,
+    snap: Any,
+    filters: list[ScreenFilter],
+    snap_fields_available: tuple[str, ...],
+) -> Any:
+    """Apply all non-metric (attribute + snapshot) WHERE predicates to ``stmt``.
+
+    Extracted (2026-06-28, CAT-B B1) so BOTH the metric-filtered branch and the
+    no-metric branch share ONE implementation. ``stmt`` must already have
+    ``instr`` available and — when any snapshot predicate is present — ``snap``
+    joined (callers use ``_filters_need_snapshot`` to decide). Predicates are
+    AND-combined across all filter entries; multi-entry fields collapse to the
+    first non-None value (mirrors the historical L-1/L-2 behaviour).
+    """
+    # Sector / industry — GICS taxonomy (industry is more selective than sector).
+    for sv in (f.sector for f in filters if f.sector is not None):
+        stmt = stmt.where(instr.sector == sv)
+    for iv in (f.industry for f in filters if f.industry is not None):
+        stmt = stmt.where(instr.industry == iv)
+    # L-1: instrument-attribute filters (country / exchange / has_* flags).
+    for cv in (f.country for f in filters if f.country is not None):
+        stmt = stmt.where(instr.country == cv)
+    for ev in (f.exchange for f in filters if f.exchange is not None):
+        stmt = stmt.where(instr.exchange == ev)
+    if any(f.has_fundamentals is not None for f in filters):
+        hf = next(f.has_fundamentals for f in filters if f.has_fundamentals is not None)
+        stmt = stmt.where(instr.has_fundamentals == hf)
+    if any(f.has_ohlcv is not None for f in filters):
+        ho = next(f.has_ohlcv for f in filters if f.has_ohlcv is not None)
+        stmt = stmt.where(instr.has_ohlcv == ho)
+
+    # ── Wave L-2/L-4: snapshot numeric range predicates ──────────────────────
+    # ``NULL >= :v`` → UNKNOWN, so instruments without a snapshot row are
+    # correctly dropped whenever any snapshot predicate is active. PLAN-0103 W16
+    # (BP-635): skip predicates against columns the deployed schema lacks.
+    for snap_field in _NUMERIC_SNAP_FILTERS:
+        if snap_field not in snap_fields_available:
+            continue
+        min_val = next(
+            (getattr(f, f"{snap_field}_min") for f in filters if getattr(f, f"{snap_field}_min", None) is not None),
+            None,
+        )
+        max_val = next(
+            (getattr(f, f"{snap_field}_max") for f in filters if getattr(f, f"{snap_field}_max", None) is not None),
+            None,
+        )
+        if min_val is not None:
+            stmt = stmt.where(getattr(snap, snap_field) >= min_val)
+        if max_val is not None:
+            stmt = stmt.where(getattr(snap, snap_field) <= max_val)
+    # credit_ratings: IN predicate across non-empty tuple.
+    ratings = next((f.credit_ratings for f in filters if f.credit_ratings), None)
+    if ratings and "credit_rating" in snap_fields_available:
+        stmt = stmt.where(snap.credit_rating.in_(list(ratings)))
+
+    # ── Wave L-5c: calendar (date) "within next N days" window predicates ─────
+    for filter_attr, snap_col in (
+        ("next_earnings_within_days", "next_earnings_date"),
+        ("next_dividend_within_days", "next_dividend_date"),
+    ):
+        if snap_col not in snap_fields_available:
+            continue
+        days = next(
+            (getattr(f, filter_attr) for f in filters if getattr(f, filter_attr, None) is not None),
+            None,
+        )
+        if days is not None:
+            stmt = stmt.where(getattr(snap, snap_col) >= func.current_date())
+            stmt = stmt.where(
+                getattr(snap, snap_col)
+                <= func.current_date() + text(":n_days * INTERVAL '1 day'").bindparams(n_days=days)
+            )
+
+    # ── Wave L-5b: boolean equality predicates (has_active_alert / has_ai_brief) ──
+    for bool_field in ("has_active_alert", "has_ai_brief"):
+        if bool_field not in snap_fields_available:
+            continue
+        val = next(
+            (getattr(f, bool_field) for f in filters if getattr(f, bool_field, None) is not None),
+            None,
+        )
+        if val is not None:
+            stmt = stmt.where(getattr(snap, bool_field) == val)
+
+    return stmt
+
+
 async def query_timeseries(
     session: AsyncSession,
     instrument_id: str,
@@ -428,13 +578,29 @@ async def query_screen(
     # actually has. See ``_resolve_available_snap_fields`` for rationale.
     snap_fields_available: tuple[str, ...] = await _resolve_available_snap_fields(session)
 
-    if not filters:
-        # No filters — return ALL instruments sorted by symbol, with the most
-        # common display metrics populated via LEFT JOIN so the screener table
-        # shows real values instead of "—" in the default view.
+    # ── CAT-B B1 (2026-06-28): split metric-bearing vs attribute-only filters ─
+    # ``metric`` is now optional, so a filter may carry ONLY an instrument
+    # attribute (sector/industry/country/exchange) or a snapshot range. When NO
+    # filter carries a ``fundamental_metrics`` metric we route through the
+    # no-metric branch below — which applies the attribute/snapshot WHERE
+    # predicates against ``instruments`` and still honours ``sort_by`` (e.g.
+    # ``market_capitalization``). Previously the API rejected attribute-only
+    # filters with a 422; even when they slipped through, the metric-filtered
+    # branch's ``base = filter_subqueries[0]`` would IndexError on an empty list.
+    metric_filters = [f for f in filters if f.metric is not None]
+
+    if not metric_filters:
+        # No metric thresholds — return instruments matching the ATTRIBUTE /
+        # SNAPSHOT predicates (or ALL instruments when ``filters`` is empty),
+        # sorted by ``sort_by`` (default ``market_capitalization`` DESC). The
+        # common display metrics are populated via LEFT JOIN so the screener
+        # table shows real values instead of "—" in the default view.
         # WHY LEFT JOIN (not INNER): we must not exclude instruments that lack
         # some metrics (e.g. crypto instruments have no P/E). LEFT JOIN returns
         # NULL for missing metrics, which the frontend renders as "—".
+        #
+        # Whether the attribute/snapshot predicates need the snapshot JOIN:
+        attr_needs_snap = _filters_need_snapshot(filters, snap_fields_available)
         m = FundamentalMetricModel
 
         # WHY these metrics: the columns displayed in the screener table's
@@ -478,6 +644,10 @@ async def query_screen(
         # so an unknown sort key can never 500 the default screener view.
         page_q = select(instr.id, instr.symbol, instr.name, instr.exchange, instr.sector)
 
+        # CAT-B B1: track whether ``snap`` is already JOINed so we never double-
+        # join it (once for a snapshot sort, once for a snapshot WHERE predicate).
+        page_has_snap_join = False
+
         page_sort_col: Any
         if sort_by == "ticker":
             page_sort_col = instr.symbol
@@ -487,6 +657,7 @@ async def query_screen(
             # Snapshot column — LEFT JOIN so instruments without a snapshot row
             # still appear (NULL sorts last via nullslast below).
             page_q = page_q.outerjoin(snap, instr.id == snap.instrument_id)
+            page_has_snap_join = True
             page_sort_col = getattr(snap, sort_by)
         elif sort_by is not None and sort_by != "current_price":
             # Treat as a fundamental_metrics metric: LEFT JOIN its latest value.
@@ -540,6 +711,18 @@ async def query_screen(
         else:
             page_sort_col = None
 
+        # ── CAT-B B1: apply attribute / snapshot WHERE predicates ────────────
+        # When the no-metric branch is reached via attribute-only filters
+        # (e.g. ``sector="Technology"``), restrict the page to matching rows.
+        # JOIN ``snap`` first if a snapshot predicate is present and it is not
+        # already joined for a snapshot sort. Empty ``filters`` → no predicates
+        # (the historical "return ALL instruments" default is preserved).
+        if attr_needs_snap and not page_has_snap_join:
+            page_q = page_q.outerjoin(snap, instr.id == snap.instrument_id)
+            page_has_snap_join = True
+        if filters:
+            page_q = _apply_attribute_predicates(page_q, instr, snap, filters, snap_fields_available)
+
         if page_sort_col is not None:
             # nullslast(): instruments missing the sort metric sort to the END in
             # BOTH directions (a NULL market cap must never beat a real one).
@@ -558,7 +741,15 @@ async def query_screen(
         # is re-sorted using this same key so the rendered order matches.
         page_ids = [r.id for r in page_rows]
 
-        total_row = await session.execute(select(func.count()).select_from(instr))
+        # CAT-B B1: the total MUST reflect the same attribute/snapshot
+        # predicates as the page query, otherwise pagination over a filtered
+        # universe reports the full-table count. Mirror the JOIN + WHEREs.
+        total_q = select(func.count()).select_from(instr)
+        if attr_needs_snap:
+            total_q = total_q.outerjoin(snap, instr.id == snap.instrument_id)
+        if filters:
+            total_q = _apply_attribute_predicates(total_q, instr, snap, filters, snap_fields_available)
+        total_row = await session.execute(total_q)
         total = int(total_row.scalar_one())
 
         def _latest_metric_sq(metric_name: str, alias: str) -> Any:
@@ -667,12 +858,21 @@ async def query_screen(
 
     m = FundamentalMetricModel
 
-    # Build a subquery for each filter: latest value per instrument for that metric.
+    # Build a subquery for each METRIC-bearing filter: latest value per
+    # instrument for that metric. CAT-B B1: ``filters`` may now also contain
+    # attribute-only entries (``metric=None``) — those carry no metric subquery
+    # and are applied purely as WHERE predicates via ``_apply_attribute_predicates``
+    # below, so we iterate ``metric_filters`` (not ``filters``) here. The branch
+    # is only reached when ``metric_filters`` is non-empty.
     filter_subqueries: list[Any] = []
     metric_columns: list[tuple[str, Any]] = []
 
-    for i, f in enumerate(filters):
+    for i, f in enumerate(metric_filters):
         alias = f"f{i}"
+        # ``metric_filters`` is filtered to non-None metrics; assert narrows the
+        # type for mypy so ``metric_columns`` stays ``list[tuple[str, Any]]``.
+        assert f.metric is not None
+        metric_name = f.metric
 
         # Subquery: latest as_of_date per instrument for this metric
         latest_date_sq = (
@@ -680,7 +880,7 @@ async def query_screen(
                 m.instrument_id,
                 func.max(m.as_of_date).label("max_date"),
             )
-            .where(m.metric == f.metric)
+            .where(m.metric == metric_name)
             .group_by(m.instrument_id)
             .subquery(name=f"{alias}_latest")
         )
@@ -694,7 +894,7 @@ async def query_screen(
             and_(
                 m.instrument_id == latest_date_sq.c.instrument_id,
                 m.as_of_date == latest_date_sq.c.max_date,
-                m.metric == f.metric,
+                m.metric == metric_name,
             ),
         )
 
@@ -711,7 +911,7 @@ async def query_screen(
 
         sq = value_sq.subquery(name=alias)
         filter_subqueries.append(sq)
-        metric_columns.append((f.metric, sq.c.value_numeric))
+        metric_columns.append((metric_name, sq.c.value_numeric))
 
     # INNER JOIN all filter subqueries then always JOIN instruments for
     # ticker/name/exchange/sector and COUNT(*) OVER() for pagination total.
@@ -746,120 +946,13 @@ async def query_screen(
     # WHY outerjoin quotes: current_price must not exclude instruments with no quote row.
     stmt = stmt.outerjoin(q, instr.id == q.instrument_id)
 
-    # Sector filter (AND logic across all filter entries that specify a sector)
-    for sv in (f.sector for f in filters if f.sector is not None):
-        stmt = stmt.where(instr.sector == sv)
-
-    # FIX-LIVE-M (2026-05-24): mirror sector with industry — GICS industry
-    # (e.g. "Semiconductors") is more selective than sector ("Technology").
-    # AND logic across all filter entries that specify an industry.
-    for iv in (f.industry for f in filters if f.industry is not None):
-        stmt = stmt.where(instr.industry == iv)
-
-    # L-1: instrument-attribute filters — applied as AND predicates against instruments table
-    for cv in (f.country for f in filters if f.country is not None):
-        stmt = stmt.where(instr.country == cv)
-    for ev in (f.exchange for f in filters if f.exchange is not None):
-        stmt = stmt.where(instr.exchange == ev)
-    if any(f.has_fundamentals is not None for f in filters):
-        hf = next(f.has_fundamentals for f in filters if f.has_fundamentals is not None)
-        stmt = stmt.where(instr.has_fundamentals == hf)
-    if any(f.has_ohlcv is not None for f in filters):
-        ho = next(f.has_ohlcv for f in filters if f.has_ohlcv is not None)
-        stmt = stmt.where(instr.has_ohlcv == ho)
-
-    # ── Wave L-2: snapshot-column predicates ─────────────────────────────────
-    # Numeric min/max filters are applied as ``snap.<col> >= :v`` and
-    # ``snap.<col> <= :v`` against the LEFT-JOINed snapshot. Because PostgreSQL
-    # evaluates ``NULL >= :v`` to UNKNOWN, instruments without a snapshot row
-    # are correctly dropped whenever any L-2 predicate is active. credit_ratings
-    # uses an IN(...) predicate. All collapsed across filter entries with the
-    # first non-None value (mirrors L-1 has_ohlcv/has_fundamentals collapse).
-    numeric_snap_filters: tuple[str, ...] = (
-        "avg_volume_30d",
-        "eps_ttm",
-        "free_cash_flow",
-        "fcf_margin",
-        "interest_coverage",
-        "net_debt_to_ebitda",
-        # ── Wave L-4a snapshot fields (PLAN-0089) ────────────────────────────
-        "analyst_target_price",
-        "analyst_consensus_rating",
-        "institutional_ownership_pct",
-        "short_percent",
-        # Wave L-4b: trailing-90d insider net dollar flow (sortable + filterable).
-        "insider_net_buy_90d",
-        # ── Wave L-5b: intelligence rollup numeric fields (PLAN-0089) ─────────
-        "news_count_7d",
-        "llm_relevance_7d_max",
-        "display_relevance_7d_weighted",
-        "recent_contradiction_count",
-    )
-    for snap_field in numeric_snap_filters:
-        # PLAN-0103 W16 (BP-635): skip predicates against columns the deployed
-        # schema lacks. Without this, an L-4b insider_net_buy_90d filter on a
-        # pre-030 DB would generate ``UndefinedColumnError``.
-        if snap_field not in snap_fields_available:
-            continue
-        min_attr = f"{snap_field}_min"
-        max_attr = f"{snap_field}_max"
-        min_val = next((getattr(f, min_attr) for f in filters if getattr(f, min_attr, None) is not None), None)
-        max_val = next((getattr(f, max_attr) for f in filters if getattr(f, max_attr, None) is not None), None)
-        if min_val is not None:
-            stmt = stmt.where(getattr(snap, snap_field) >= min_val)
-        if max_val is not None:
-            stmt = stmt.where(getattr(snap, snap_field) <= max_val)
-    # credit_ratings: IN predicate across non-empty tuple
-    ratings = next((f.credit_ratings for f in filters if f.credit_ratings), None)
-    if ratings:
-        stmt = stmt.where(snap.credit_rating.in_(list(ratings)))
-
-    # ── Wave L-5c: calendar (date) window filters ────────────────────────────
-    # "Within next N days" maps to:
-    #     WHERE col BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL 'N days'
-    #
-    # PostgreSQL ``NULL BETWEEN x AND y`` evaluates to UNKNOWN, so rows where
-    # the snapshot column is NULL (the common case until L-5b ships) are
-    # correctly excluded — same semantic as the L-2 numeric range filters.
-    #
-    # WHY ``text()`` for the upper bound: SQLAlchemy doesn't expose a
-    # type-safe ``INTERVAL`` constructor for a bound integer at this level,
-    # and constructing ``func.cast`` would be more obscure than this
-    # parameter-bound text fragment. The value is an int validated by the
-    # Pydantic schema (ge=0, le=365) — no user-controlled string interpolation.
-    calendar_date_filters: tuple[tuple[str, str], ...] = (
-        ("next_earnings_within_days", "next_earnings_date"),
-        ("next_dividend_within_days", "next_dividend_date"),
-    )
-    for filter_attr, snap_col in calendar_date_filters:
-        # PLAN-0103 W16 (BP-635): skip if the snapshot lacks the calendar
-        # column (migration 028 not yet applied on this DB).
-        if snap_col not in snap_fields_available:
-            continue
-        days = next(
-            (getattr(f, filter_attr) for f in filters if getattr(f, filter_attr, None) is not None),
-            None,
-        )
-        if days is not None:
-            # Inclusive lower bound = today; inclusive upper bound = today + N.
-            stmt = stmt.where(getattr(snap, snap_col) >= func.current_date())
-            stmt = stmt.where(
-                getattr(snap, snap_col)
-                <= func.current_date() + text(":n_days * INTERVAL '1 day'").bindparams(n_days=days)
-            )
-
-    # ── Wave L-5b: boolean equality filters (has_active_alert, has_ai_brief) ──
-    # Boolean columns use equality (=) rather than range predicates.
-    # PLAN-0103 W16 guard: skip if the column is missing from the deployed schema.
-    for bool_field in ("has_active_alert", "has_ai_brief"):
-        if bool_field not in snap_fields_available:
-            continue
-        val = next(
-            (getattr(f, bool_field) for f in filters if getattr(f, bool_field, None) is not None),
-            None,
-        )
-        if val is not None:
-            stmt = stmt.where(getattr(snap, bool_field) == val)
+    # ── Attribute + snapshot WHERE predicates (shared helper, CAT-B B1) ──────
+    # Sector/industry/country/exchange/has_* + all snapshot numeric/date/bool
+    # predicates. ``snap`` is already LEFT-JOINed above so every snapshot
+    # predicate is valid. ``numeric_snap_filters`` (used by the sort whitelist
+    # below) now aliases the module-level tuple the helper shares.
+    numeric_snap_filters: tuple[str, ...] = _NUMERIC_SNAP_FILTERS
+    stmt = _apply_attribute_predicates(stmt, instr, snap, filters, snap_fields_available)
 
     # Sorting — column resolved from ORM attributes (no raw SQL interpolation)
     sort_col: Any

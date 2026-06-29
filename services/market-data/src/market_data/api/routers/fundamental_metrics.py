@@ -227,8 +227,17 @@ async def screen_instruments(
     }
     # SQL injection guard: sort_by must be a filter metric name, "ticker", or "name"
     if body.sort_by is not None:
+        # WHY ``if f.metric``: ``metric`` is now optional (CAT-B B1 fix); an
+        # attribute-only filter has ``metric=None`` and must not pollute the
+        # sort whitelist with a ``None`` entry. ``market_capitalization`` is
+        # always a valid sort target — the no-metric branch resolves it via the
+        # latest-value LEFT JOIN — so a "top N by market cap" request whose
+        # filters carry no metric (just ``sector``) still validates.
         valid_sort_fields = (
-            {"ticker", "name"} | {f.metric for f in body.filters} | snap_sort_fields | computed_sort_fields
+            {"ticker", "name", "market_capitalization"}
+            | {f.metric for f in body.filters if f.metric}
+            | snap_sort_fields
+            | computed_sort_fields
         )
         if body.sort_by not in valid_sort_fields:
             raise HTTPException(
