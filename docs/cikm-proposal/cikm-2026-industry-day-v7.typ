@@ -7,9 +7,9 @@
 //   κ 0.59->0.80, served-graph 82.6%->48.8%/36.9%. Format: 2-page ACM SigConf; bio+refs+GenAI uncounted.
 
 #set document(title: "A Multi-Level Evaluation Framework for Grounded Agentic RAG in a Continuously Operated Financial Intelligence System")
-#set page(paper: "us-letter", margin: (x: 1.9cm, y: 2.2cm))
+#set page(paper: "us-letter", margin: (x: 1.6cm, y: 1.75cm))
 #set text(font: "New Computer Modern", size: 9.5pt)
-#set par(justify: true, leading: 0.5em)
+#set par(justify: true, leading: 0.47em)
 #set heading(numbering: "1")
 #show heading: set text(size: 10.5pt, weight: "bold")
 #show heading: set block(above: 0.85em, below: 0.45em)
@@ -49,7 +49,7 @@
 
 #v(0.3em)
 
-#columns(2, gutter: 0.7cm)[
+#columns(2, gutter: 0.6cm)[
 
 = Problem and context
 A financial question rarely has one retrieval shape. Fundamentals and earnings questions require structured
@@ -94,6 +94,10 @@ intraday-sentiment relation should not remain equally fresh for the same duratio
 demotes confidence rather than deleting the edge. Unlike summarisation-oriented graph RAG [5], every edge
 points back to the passage that asserted it — which is what makes the evidence-level evaluation below possible.
 
+This design is what motivates the evaluation framework. The system is not evaluated only as an extractor, nor
+only as a chatbot. It is evaluated as a live retrieval-and-reasoning stack whose served state is the object
+users actually query.
+
 #figure(
   block(breakable: false, inset: 7pt, stroke: 0.4pt, radius: 3pt, width: 100%)[
     #set align(center)
@@ -119,10 +123,6 @@ points back to the passage that asserted it — which is what makes the evidence
   dense, lexical, and structured-market tools and returns a cited answer. The same tool-call trace is then
   consumed by the multi-level evaluation framework (dashed) — the contribution of this paper.],
 )
-
-This design is what motivates the evaluation framework. The system is not evaluated only as an extractor, nor
-only as a chatbot. It is evaluated as a live retrieval-and-reasoning stack whose served state is the object
-users actually query.
 
 = Multi-level evaluation framework
 The framework evaluates four levels, each catching failures that the previous level cannot see.
