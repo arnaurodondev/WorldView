@@ -537,19 +537,37 @@ class DeepInfraCompletionAdapter:
         outer safety nets — this layer just gives them a far better shot at
         recovering a real LLM answer.
 
-        We materialise the primary stream into a buffer because the OpenAI SSE
-        API does not allow rewinding: if we yielded tokens piecemeal we could
-        only detect "zero chunks" once iteration finished, at which point the
-        caller would already have committed to an empty stream.  Latency is
-        unaffected on the happy path — we yield the buffered tokens as soon
-        as the primary stream completes (one extra event-loop tick).
+        F1 (2026-06-30, streaming latency fix): we YIELD each chunk the instant
+        it arrives from the primary stream — we no longer materialise the whole
+        upstream SSE into a buffer first.  The old buffer-then-replay approach
+        made time-to-first-token equal to the FULL generation time and flushed
+        the entire answer in one event-loop tick (the "jumpy burst"); streaming
+        chunk-by-chunk restores a real trickle.  The zero-chunk failover is
+        preserved by COUNTING yielded chunks instead of inspecting a buffer:
+
+          * If the primary yields ZERO chunks before completing or erroring,
+            ``_primary_chunk_count`` stays 0 and we fall through to the
+            same-provider ``_stream_chat_fallback_model`` recovery path below
+            (and, if that is unset, the W40 chain-level + W36 degraded-synthesis
+            nets still own recovery downstream).
+          * Once ≥1 chunk has been yielded we are COMMITTED to the primary
+            stream — a mid-stream switch cannot rewind the wire (it would emit
+            duplicate tokens to the client).  This matches the prior behaviour
+            exactly: the old code likewise declined to fall back the moment the
+            buffer was non-empty, and swallowed any later mid-stream error after
+            replaying the partial buffer.  Here the client has already received
+            those partial tokens live, so ending the turn after a mid-stream
+            error is observably identical (partial tokens + a clean end).
         """
         # RC-1: resolve the effective primary model for THIS call. ``model``
         # (when supplied) overrides ``self._model`` for the primary request,
         # the cost-record model_id, and the fallback-guard comparison so the
         # whole method stays internally consistent.
         _effective_model = model or self._model
-        primary_chunks: list[str] = []
+        # F1: replaces the old ``primary_chunks`` buffer.  A count is all we need
+        # to decide failover: 0 => primary produced nothing => fall back; ≥1 =>
+        # committed to the primary stream (no rewind possible).
+        _primary_chunk_count = 0
         # PLAN-0107 Agent-B: usage sink fed by the final SSE chunk. Empty dict
         # = "stream completed without a usage frame" (still triggers a record()
         # call with zeros so the call_site is observable).
@@ -569,19 +587,21 @@ class DeepInfraCompletionAdapter:
                 tools=tools,
                 seed=seed,
             ):
-                primary_chunks.append(chunk)
+                # F1: emit each chunk the moment it arrives (true streaming).
+                _primary_chunk_count += 1
+                yield chunk
         except Exception as exc:
             _primary_exc = exc
 
-        if primary_chunks:
-            # Got at least one token from the primary — emit and finish.
-            # We DON'T fall back mid-stream because partial tokens cannot be
-            # rewound on the wire (would emit duplicates to the client).
-            for chunk in primary_chunks:
-                yield chunk
-            # PLAN-0107 Agent-B: stream successfully completed — record cost
-            # AFTER all chunks are yielded so a recorder hiccup never blocks
-            # the client from receiving tokens.
+        if _primary_chunk_count > 0:
+            # Got at least one token from the primary — we already yielded them
+            # incrementally above, so just finish.  We DON'T fall back even if an
+            # error was captured AFTER the first chunk because partial tokens
+            # cannot be rewound on the wire (would emit duplicates to the
+            # client) — this swallow-after-partial matches the prior buffered
+            # implementation's semantics exactly.
+            # PLAN-0107 Agent-B: record cost AFTER all chunks are yielded so a
+            # recorder hiccup never blocks the client from receiving tokens.
             await self._record_cost(
                 thread_id=thread_id,
                 model_id=_effective_model,
