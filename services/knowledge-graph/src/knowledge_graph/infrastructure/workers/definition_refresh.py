@@ -35,6 +35,9 @@ if TYPE_CHECKING:
     from ml_clients.usage_log import LlmUsageLogProtocol
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from knowledge_graph.infrastructure.intelligence_db.adapters.entity_enrichment_adapter import (
+        EntityEnrichmentAdapter,
+    )
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -80,8 +83,19 @@ class DefinitionRefreshWorker:
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
         batch_limit: int = 0,
         read_session_factory: Any = None,
+        evidence_provider: EntityEnrichmentAdapter | None = None,
     ) -> None:
         self._sf = session_factory
+        # News-grounding (description audit 2026-06-17): optional provider that
+        # returns the entity's own recent ``relation_evidence_raw`` snippets so
+        # the description LLM paraphrases real facts instead of fabricating. This
+        # is the SECOND grounded path (Worker 13J / StructuredEnrichment is the
+        # first). The provider (``EntityEnrichmentAdapter``) opens its OWN
+        # read-replica session per call (R27) — the worker never holds a session
+        # across the ``fetch_recent_evidence`` I/O. When None (e.g. legacy tests
+        # or a consumer wired without it) the description falls back to the LLM's
+        # no-news guard, exactly as before this wiring.
+        self._evidence_provider = evidence_provider
         # DEF-034 (Wave B-5): route Phase 1 fetch through the read replica when
         # one is configured; fall back to the write factory so existing tests
         # that pass only ``session_factory`` keep working unchanged.
@@ -324,6 +338,28 @@ class DefinitionRefreshWorker:
     # Internals
     # ------------------------------------------------------------------
 
+    async def _fetch_news(self, entity_id: UUID) -> list[str] | None:
+        """Best-effort fetch of the entity's recent news evidence for grounding.
+
+        Mirrors ``StructuredEnrichmentUseCase`` Step 3: a quick open/close read
+        on the enrichment adapter's read replica (NOT held across the LLM I/O).
+        Returns ``None`` when no provider is wired OR on ANY read error, so the
+        description LLM applies its no-news guard rather than blocking the
+        refresh cycle. When evidence exists the LLM paraphrases real facts
+        instead of fabricating (description audit 2026-06-17).
+        """
+        if self._evidence_provider is None:
+            return None
+        try:
+            return await self._evidence_provider.fetch_recent_evidence(entity_id)
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "definition_refresh_news_fetch_failed",
+                entity_id=str(entity_id),
+                error_type=type(exc).__name__,
+            )
+            return None
+
     async def _resolve_non_company_text(
         self,
         entity_id: UUID,
@@ -345,12 +381,17 @@ class DefinitionRefreshWorker:
         if row.get("isin"):
             context_hints["isin"] = str(row["isin"])
 
+        # News-grounding: fetch the entity's own recent evidence so the LLM
+        # paraphrases real facts. Best-effort → None degrades to the no-news guard.
+        news = await self._fetch_news(entity_id)
+
         try:
             description = await self._description_client.generate_description(
                 entity_id=str(entity_id),
                 canonical_name=canonical_name,
                 entity_type=entity_type,
                 context_hints=context_hints,
+                news_context=news,
             )
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
@@ -402,12 +443,17 @@ class DefinitionRefreshWorker:
         if row.get("isin"):
             context_hints["isin"] = str(row["isin"])
 
+        # News-grounding: same best-effort evidence fetch as the non-company path
+        # so NULL-source FI descriptions (crypto/FX/index) are grounded too.
+        news = await self._fetch_news(entity_id)
+
         try:
             description = await self._description_client.generate_description(
                 entity_id=str(entity_id),
                 canonical_name=canonical_name,
                 entity_type=_FINANCIAL_INSTRUMENT,
                 context_hints=context_hints,
+                news_context=news,
             )
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
