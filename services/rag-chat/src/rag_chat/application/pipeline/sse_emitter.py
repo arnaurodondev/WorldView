@@ -69,6 +69,8 @@ _TOOL_LABELS: dict[str, str] = {
     "get_market_movers": "Fetching market movers...",
     "get_economic_calendar": "Loading economic calendar...",
     "get_earnings_calendar": "Loading earnings calendar...",
+    # Chat prediction-market tool: Polymarket odds search
+    "get_prediction_markets": "Searching prediction markets...",
     # PLAN-0082 Wave A: action tools
     "get_alerts": "Loading your alerts...",
     # PLAN-0082 Wave B: write action tools

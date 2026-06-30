@@ -1,4 +1,4 @@
-"""Tool registry builder — registers all 22 platform tools into a ToolRegistry.
+"""Tool registry builder — registers all 27 platform tools into a ToolRegistry.
 
 Extracted from tool_executor.py (PLAN-0089 Wave C-1) to reduce dispatcher size.
 All callers import build_default_registry from tool_executor (re-exported there).
@@ -58,9 +58,11 @@ def validate_registry_parity(registry: ToolRegistry) -> dict[str, int]:
 
 
 def build_default_registry() -> ToolRegistry:
-    """Factory: create a ToolRegistry with all 22 tools registered.
+    """Factory: create a ToolRegistry with all 27 tools registered.
 
-    Breakdown: 10 v1 + 4 PLAN-0080 v2 + 6 PLAN-0081 v3 + 2 PLAN-0082 v4.
+    Breakdown: 10 v1 + 4 PLAN-0080 v2 + 6 PLAN-0081 v3 + 2 PLAN-0082 v4
+    + later additions (get_path_between, get_entity_news,
+    get_fundamentals_history_batch, query_fundamentals, get_prediction_markets).
 
     Called by api/dependencies.py to wire the ToolExecutor at startup.
     The handlers registered here are placeholder stubs — the actual execution
@@ -1091,6 +1093,72 @@ def build_default_registry() -> ToolRegistry:
             example_queries=[
                 "What companies are reporting earnings this week?",
                 "When does Apple next report earnings?",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
+    # Chat prediction-market tool: Polymarket odds search. Calls the S9-proxied
+    # /v1/signals/prediction-markets list endpoint (which already supports a
+    # free-text ``query`` ILIKE filter on the market question) via S3BriefPort.
+    # Each result carries a clickable citation_meta.url built from market_slug
+    # (canonical https://polymarket.com/event/<slug>).
+    registry.register(
+        ToolSpec(
+            name="get_prediction_markets",
+            description=(
+                "Searches Polymarket prediction markets by topic, entity, or keyword and "
+                "returns the top matching markets with the current outcome probabilities "
+                "(implied odds), resolution date, 24h volume, and category. Use when the "
+                "user asks what the market is pricing for a FUTURE EVENT — elections, Fed "
+                "rate decisions, crypto price targets, AI milestones, sports outcomes, or "
+                "any 'will X happen?' / 'what are the odds of Y' question. Each returned "
+                "market links to its live Polymarket event page. "
+                "DO NOT use for: (1) current stock prices or fundamentals — use "
+                "get_price_history / query_fundamentals. (2) macro data releases (CPI, "
+                "FOMC dates) — use get_economic_calendar. This tool answers betting-market "
+                "odds, not spot market data."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="query",
+                    type="string",
+                    description=(
+                        "Free-text topic / entity / keyword to match against the market "
+                        "question (e.g. 'Fed rate cut', 'Bitcoin 100k', 'presidential "
+                        "election'). Optional — omit to list the most recently-updated "
+                        "open markets."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="category",
+                    type="string",
+                    description=(
+                        "Optional category filter. Suggested values: macro, politics, "
+                        "sports, crypto, ai, energy, tech, general."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="status",
+                    type="string",
+                    description="Market resolution status. Default 'open'.",
+                    required=False,
+                    enum=["open", "resolved", "all"],
+                ),
+                ParameterSpec(
+                    name="limit",
+                    type="integer",
+                    description="Max markets to return (1-50). Default 10.",
+                    required=False,
+                ),
+            ],
+            source_type="market_data",
+            example_queries=[
+                "What are the odds the Fed cuts rates in March?",
+                "What is Polymarket pricing for the next presidential election?",
+                "Show me prediction markets about Bitcoin hitting 100k",
             ],
         ),
         handler=lambda **_: None,

@@ -1,13 +1,13 @@
 # RAG / Chat Service
 
 > **Owner**: Chat domain · **Database**: `rag_db` (owned) · **Port**: 8008
-> **Status**: Tool-use chat pipeline + **26-tool catalog** (`capability_manifest.yaml` v5) + SSE streaming + morning/instrument briefings + brief pre-generation scheduler
+> **Status**: Tool-use chat pipeline + **27-tool catalog** (`capability_manifest.yaml` v6) + SSE streaming + morning/instrument briefings + brief pre-generation scheduler
 
 ---
 
 ## Mission & Boundaries
 
-**Owns**: Query rewriting, tool-use chat pipeline, 26-tool catalog, SSE streaming
+**Owns**: Query rewriting, tool-use chat pipeline, 27-tool catalog, SSE streaming
 (vector + KG + SQL tools), result injection, context assembly, prompt building,
 LLM provider fallback, streaming response delivery, citation injection, response caching.
 
@@ -213,10 +213,10 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
       → Re-acquire UoW → persist thread + message
 ```
 
-### Tool Catalog (26 tools — `libs/tools/src/tools/capability_manifest.yaml` v5)
+### Tool Catalog (27 tools — `libs/tools/src/tools/capability_manifest.yaml` v6)
 
 The `get_alerts` / `create_alert` action tools are documented separately below
-(Action Tools and User Authorization). The remaining 24 read-only tools:
+(Action Tools and User Authorization). The remaining 25 read-only tools:
 
 | Tool | Target | Description | Since |
 |------|--------|-------------|-------|
@@ -244,6 +244,7 @@ The `get_alerts` / `create_alert` action tools are documented separately below
 | `get_market_movers` | S9→S3 | Top gainers/losers/most-active via S9 `GET /v1/market/top-movers`. Default: gainers/1d | v3 |
 | `get_economic_calendar` | S9→S3 | Macro events (CPI, FOMC, GDP) via S9 `GET /v1/fundamentals/economic-calendar` | v3 |
 | `get_earnings_calendar` | S9→S3 | Earnings release dates + EPS via S9 `GET /v1/fundamentals/earnings-calendar` | v3 |
+| `get_prediction_markets` | S9→S3 | Polymarket odds search via S9 `GET /v1/signals/prediction-markets` (free-text `query` ILIKE + `category`/`status`/`limit`). One `RetrievedItem` per market; `citation_meta.url` is the canonical `https://polymarket.com/event/<market_slug>` deep link (search fallback for null/malformed slugs). `source_name="polymarket"` | v6 |
 
 **v2 intelligence tools (PLAN-0080 Wave A)**: all 4 call S9-proxied endpoints (R14/R7 compliance — never S7 directly). All respect `EntityContext` scope: when the executor is bound to an entity via `ToolExecutorFactory.for_request(entity_context=...)`, the `entity_id` is auto-injected and LLM-supplied values are silently overridden (M-1 enforcement).
 

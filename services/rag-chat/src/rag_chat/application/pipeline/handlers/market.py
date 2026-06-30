@@ -13,9 +13,11 @@ Covers tools backed by S3Port and S3BriefPort:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import structlog
 
@@ -604,6 +606,77 @@ def _pick_period_row(periods_data: list[Any], common_period: str | None) -> Any:
     return periods_data[-1]
 
 
+# ── Polymarket canonical URL builder (chat prediction-market tool) ────────────
+# Mirrors the FRONTEND helper apps/worldview-web/lib/prediction-markets.ts
+# ``buildPolymarketUrl`` so the chat citation link is byte-identical to the link
+# the dashboard/widget renders. The known frontend "wrong links" bug (memory
+# 2026-06-28) was that the prediction-market UI ignored ``market_slug`` and sent
+# every row to a generic search page; the canonical deep link is
+# ``https://polymarket.com/event/<market_slug>``.
+
+# MALFORMED_SLUG_TAIL — detects the ~4/525 stored slugs with a corrupted
+# "numeric-tail" (e.g. ``...-143-229-513-574-212-254``) that 404 on /event/.
+# Requires a chain of 3+ purely-numeric "-<digits>" segments so a legitimate
+# slug ending in a single year/number (``...-by-2024``, ``...-game-7``) is NOT
+# misclassified. Identical to the TS regex ``/-\d+(-\d+){2,}$/``.
+_POLYMARKET_MALFORMED_SLUG_TAIL = re.compile(r"-\d+(-\d+){2,}$")
+
+
+def _build_polymarket_url(slug: str | None, question: str) -> str:
+    """Return the best Polymarket link for a market row.
+
+    - Clean, non-empty slug → canonical deep link
+      ``https://polymarket.com/event/<slug>``.
+    - Null / empty / whitespace slug OR a malformed numeric-tail slug →
+      the title-search fallback ``https://polymarket.com/markets?_q=<title>``
+      (always resolves to a usable results list — a safe degraded experience).
+
+    WHY ``/event/`` (not ``/market/``): ``/event/<slug>`` is the grouped page a
+    human lands on from Polymarket's own UI and the one that resolves for the
+    slugs we ingest from the Gamma API; ``/market/<slug>`` would 404.
+    """
+    clean_slug = (slug or "").strip()
+    # quote() escapes spaces / '?' / '%' etc. in the title so the fallback query
+    # string is always well-formed. An empty title still lands on the market list.
+    search_url = f"https://polymarket.com/markets?_q={quote(question or '')}"
+    if not clean_slug:
+        return search_url
+    if _POLYMARKET_MALFORMED_SLUG_TAIL.search(clean_slug):
+        return search_url
+    return f"https://polymarket.com/event/{clean_slug}"
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse an ISO-8601 string into a tz-aware UTC datetime, or None.
+
+    Tolerates a trailing ``Z`` (Python <3.11 fromisoformat rejects it) and
+    naive timestamps (assumed UTC). Returns None on any non-string / unparseable
+    input so a malformed upstream field never raises (R9-style safe degradation).
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _format_probability(price: Any) -> str | None:
+    """Render an implied-probability float (0.0-1.0) as a ``NN%`` string, or None."""
+    num = _coerce_grounding_number(price)
+    if num is None:
+        return None
+    try:
+        pct = float(num) * 100.0
+    except (TypeError, ValueError):
+        return None
+    return f"{pct:.0f}%"
+
+
 class MarketHandler(ToolHandler):
     """Handles price, fundamentals, screener, movers, and calendar tools.
 
@@ -624,6 +697,8 @@ class MarketHandler(ToolHandler):
             "get_market_movers",
             "get_economic_calendar",
             "get_earnings_calendar",
+            # Chat prediction-market tool — Polymarket odds search (S3BriefPort).
+            "get_prediction_markets",
         }
     )
 
@@ -656,6 +731,7 @@ class MarketHandler(ToolHandler):
             "get_market_movers": self._handle_get_market_movers,
             "get_economic_calendar": self._handle_get_economic_calendar,
             "get_earnings_calendar": self._handle_get_earnings_calendar,
+            "get_prediction_markets": self._handle_get_prediction_markets,
         }
         target = dispatch.get(tool_name)
         if target is None:
@@ -1952,6 +2028,138 @@ class MarketHandler(ToolHandler):
                 ),
             )
         ]
+
+    async def _handle_get_prediction_markets(
+        self,
+        query: str | None = None,
+        category: str | None = None,
+        status: str = "open",
+        limit: int = 10,
+    ) -> list[RetrievedItem]:
+        """Search Polymarket prediction markets via S9 GET /v1/signals/prediction-markets.
+
+        Returns ONE RetrievedItem per matching market so each carries its own
+        clickable ``citation_meta.url`` (the canonical Polymarket event link
+        derived from ``market_slug``). The text block renders the question,
+        current outcome probabilities (implied odds), resolution date, 24h
+        volume, and category so the LLM can answer "what are the odds of X".
+
+        R9: returns [] on missing port, invalid input, or upstream errors.
+        R27: read-only — no UnitOfWork.
+        """
+        if self._s3_brief is None:
+            log.warning("tool_handler_missing_port", tool="get_prediction_markets", port="s3_brief")
+            return []
+
+        # Normalise status against the values market-data's list endpoint
+        # accepts (it 422s on anything else). Default/unknown → "open".
+        status_norm = (status or "open").strip().lower()
+        if status_norm not in {"open", "resolved", "cancelled", "all"}:
+            log.warning(
+                "tool_invalid_param",
+                tool="get_prediction_markets",
+                param="status",
+                value=status,
+                fallback="open",
+            )
+            status_norm = "open"
+        # Clamp limit to the tool's advertised 1-50 band (server caps at 200).
+        limit_clamped = max(1, min(int(limit), 50))
+        query_norm = query.strip() if isinstance(query, str) and query.strip() else None
+        category_norm = category.strip() if isinstance(category, str) and category.strip() else None
+
+        t0 = time.monotonic()
+        try:
+            markets = await asyncio.wait_for(
+                self._s3_brief.get_prediction_markets(
+                    query=query_norm,
+                    category=category_norm,
+                    status=status_norm,
+                    limit=limit_clamped,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_prediction_markets", error=str(e))
+            return []
+
+        if not markets:
+            log.info("tool_no_data", tool="get_prediction_markets", query=query_norm, category=category_norm)
+            return []
+
+        out: list[RetrievedItem] = []
+        for m in markets[:limit_clamped]:
+            if not isinstance(m, dict):
+                continue
+            market_id = str(m.get("market_id") or "")
+            question = str(m.get("question") or "").strip() or "(untitled market)"
+            slug = m.get("market_slug")
+            # Canonical Polymarket deep link from the slug (search fallback on
+            # null/empty/malformed slug) — mirrors the frontend helper exactly.
+            url = _build_polymarket_url(slug, question)
+
+            # Render the outcome probabilities. Outcomes are [{name, token_id, price}]
+            # where price is the implied probability 0.0-1.0. Most markets are
+            # binary (Yes/No) but we render whatever outcomes are present.
+            outcomes = m.get("outcomes") or []
+            odds_parts: list[str] = []
+            if isinstance(outcomes, list):
+                for o in outcomes:
+                    if not isinstance(o, dict):
+                        continue
+                    name = str(o.get("name") or "").strip()
+                    pct = _format_probability(o.get("price"))
+                    if name and pct is not None:
+                        odds_parts.append(f"{name} {pct}")
+            odds_line = ", ".join(odds_parts) if odds_parts else "no current odds"
+
+            close_time = m.get("close_time")
+            resolution = str(close_time) if close_time else "TBD"
+            volume = m.get("volume_24h")
+            volume_str = _format_market_cap_value(volume) or "n/a"
+            cat = m.get("category") or "uncategorized"
+            res_status = m.get("resolution_status") or status_norm
+
+            lines = [
+                f"## {question}",
+                f"- Implied odds: {odds_line}",
+                f"- Resolution date: {resolution}",
+                f"- 24h volume: {volume_str}",
+                f"- Category: {cat}  |  Status: {res_status}",
+                f"- Source: Polymarket — {url}",
+            ]
+            text = "\n".join(lines)
+
+            published_at = _parse_iso_datetime(m.get("updated_at"))
+            out.append(
+                RetrievedItem.create(
+                    item_id=f"tool:prediction_market:{market_id or question[:32]}",
+                    item_type=ItemType.financial,
+                    text=text[:_TOOL_RESULT_MAX_CHARS],
+                    score=0.84,
+                    # Prediction markets are a market-priced signal, not an
+                    # authoritative filing — mid trust (eodhd_news tier).
+                    trust_weight=0.70,
+                    published_at=published_at,
+                    citation_meta=CitationMeta(
+                        title=question,
+                        url=url,
+                        source_name="polymarket",
+                        published_at=published_at,
+                        entity_name=None,
+                    ),
+                )
+            )
+
+        log.info(
+            "tool_executed",
+            tool="get_prediction_markets",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            query=query_norm,
+            category=category_norm,
+            count=len(out),
+        )
+        return out
 
     async def _handle_get_economic_calendar(
         self,

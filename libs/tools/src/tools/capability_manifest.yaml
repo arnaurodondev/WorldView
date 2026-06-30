@@ -1,4 +1,4 @@
-version: "5"
+version: "6"
 tools:
   - name: get_price_history
     description: >
@@ -751,6 +751,46 @@ tools:
     example_queries:
       - "What companies are reporting earnings this week?"
       - "When does Apple next report earnings?"
+
+  - name: get_prediction_markets
+    description: >
+      Searches Polymarket prediction markets by topic, entity, or keyword and returns
+      the top matching markets with the current outcome probabilities (implied odds),
+      resolution date, 24h volume, and category. Use when the user asks what the market
+      is pricing for a future event — elections, Fed rate decisions, crypto price
+      targets, AI milestones, sports outcomes, or any "will X happen?" / "what are the
+      odds of Y" question. Each returned market links to its live Polymarket event page.
+    parameters:
+      - name: query
+        type: string
+        description: >
+          Free-text topic / entity / keyword to match against the market question
+          (e.g. 'Fed rate cut', 'Bitcoin 100k', 'presidential election'). Optional —
+          omit to list the most recently-updated open markets.
+        required: false
+      - name: category
+        type: string
+        description: >
+          Optional category filter. Suggested values: macro, politics, sports, crypto,
+          ai, energy, tech, general (non-binding — backend does case-insensitive
+          equality only).
+        required: false
+      - name: status
+        type: string
+        enum: [open, resolved, all]
+        description: "Market resolution status to filter on. Default 'open'."
+        required: false
+      - name: limit
+        type: integer
+        description: Max markets to return (1-50). Default 10.
+        required: false
+    source_type: "market_data"
+    since: "v6"
+    deprecated_at: null
+    example_queries:
+      - "What are the odds the Fed cuts rates in March?"
+      - "What is Polymarket pricing for the next presidential election?"
+      - "Show me prediction markets about Bitcoin hitting 100k"
 
   - name: get_alerts
     description: >
