@@ -179,3 +179,65 @@ async def test_cypher_traverse_uses_neighborhood_endpoint(
     body = json.loads(requests[0].content)
     assert body["entity_id"] == str(entity_id)
     assert "cypher" not in body
+
+
+# ── T6: ContentStoreClient resolves doc_id → source-article metadata ──────────
+
+
+@pytest.mark.asyncio
+async def test_content_store_client_resolves_document_metadata(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """feat/chat-kg-source-links: POST /api/v1/documents/batch → {doc_id: meta}.
+
+    The map must carry the article URL + source + (parsed) published_at so the
+    intelligence handler can backfill clickable KG citations.
+    """
+    from rag_chat.infrastructure.clients.content_store_client import ContentStoreClient
+
+    doc_id = uuid4()
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "documents": [
+                {
+                    "doc_id": str(doc_id),
+                    "title": "Apple beats Q1",
+                    "url": "https://news.example/apple",
+                    "published_at": "2026-04-30T00:00:00+00:00",
+                    "source_name": "Reuters",
+                    "source_type": "news",
+                    "word_count": 500,
+                }
+            ]
+        },
+    )
+
+    client = ContentStoreClient(base_url=_BASE)
+    result = await client.get_documents_metadata([doc_id])
+
+    assert doc_id in result
+    meta = result[doc_id]
+    assert meta.url == "https://news.example/apple"
+    assert meta.source_name == "Reuters"
+    assert meta.published_at is not None and meta.published_at.year == 2026
+
+    # Empty input short-circuits without an HTTP call.
+    assert await client.get_documents_metadata([]) == {}
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 1
+    assert str(requests[0].url) == f"{_BASE}/api/v1/documents/batch"
+
+
+@pytest.mark.asyncio
+async def test_content_store_client_4xx_returns_empty_map(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """A 4xx (e.g. malformed request) degrades to an empty map, not an exception."""
+    from rag_chat.infrastructure.clients.content_store_client import ContentStoreClient
+
+    httpx_mock.add_response(status_code=400, json={"detail": "bad"})
+
+    client = ContentStoreClient(base_url=_BASE)
+    result = await client.get_documents_metadata([uuid4()])
+    assert result == {}
