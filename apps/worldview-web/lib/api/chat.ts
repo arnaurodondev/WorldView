@@ -41,6 +41,10 @@ type RawCitation = {
   // Shared
   title?: string;
   url?: string;
+  // ISO-8601 publish date of the backing article/document. rag-chat emits this
+  // on both the SSE `citations` event and ThreadDetailResponse; we thread it
+  // through so the citation chip can show "when" alongside "where".
+  published_at?: string | null;
 };
 
 /**
@@ -64,6 +68,10 @@ export function normalizeCitation(raw: RawCitation): RawCitation {
     relevance_score: raw.relevance_score ?? raw.confidence ?? 0,
     title: raw.title ?? "",
     url: raw.url ?? "",
+    // Carry the publish date through explicitly (not just via `...raw`) so it
+    // is part of the normalized contract the chip reads. Left as-is when the
+    // backend omits it — KG/relation citations have no date.
+    published_at: raw.published_at ?? null,
   };
 }
 

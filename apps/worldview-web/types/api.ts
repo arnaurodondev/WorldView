@@ -1430,6 +1430,11 @@ export interface Citation {
   url: string;
   source: string;
   relevance_score: number;
+  // ISO-8601 publish timestamp of the backing news/document, when the source
+  // has one (rag-chat emits `published_at`; KG/relation items emit null).
+  // Optional + nullable so existing callers and URL-less KG citations keep
+  // type-checking — the chip renders a date only when this is present.
+  published_at?: string | null;
 }
 
 /**

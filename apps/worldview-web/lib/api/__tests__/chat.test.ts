@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createChatApi } from "../chat";
+import { createChatApi, normalizeCitation } from "../chat";
 import { GatewayError } from "../_client";
 
 function mockFetch(status: number, body: unknown = {}) {
@@ -85,5 +85,36 @@ describe("createChatApi().getCompanyOverviewByTicker", () => {
     await expect(api.getCompanyOverviewByTicker("AAPL")).rejects.toBeInstanceOf(
       GatewayError,
     );
+  });
+});
+
+describe("normalizeCitation", () => {
+  it("maps the canonical rag-chat shape onto the legacy contract", () => {
+    // rag-chat emits {id, source_name, confidence, ...}; the chip reads
+    // {article_id, source, relevance_score, ...}. Normalization bridges them.
+    const out = normalizeCitation({
+      id: "cit-1",
+      source_name: "Reuters",
+      confidence: 0.82,
+      title: "NVDA beats",
+      url: "https://news.example.com/nvda",
+    });
+    expect(out.article_id).toBe("cit-1");
+    expect(out.source).toBe("Reuters");
+    expect(out.relevance_score).toBe(0.82);
+  });
+
+  it("threads published_at through so the chip can show the date", () => {
+    const out = normalizeCitation({
+      id: "cit-2",
+      source_name: "Bloomberg",
+      published_at: "2026-06-30T08:00:00Z",
+    });
+    expect(out.published_at).toBe("2026-06-30T08:00:00Z");
+  });
+
+  it("defaults published_at to null when the source omits it (KG items)", () => {
+    const out = normalizeCitation({ id: "kg-1", item_type: "relation" });
+    expect(out.published_at).toBeNull();
   });
 });

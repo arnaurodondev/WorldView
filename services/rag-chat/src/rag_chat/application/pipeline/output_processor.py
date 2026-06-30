@@ -114,6 +114,27 @@ _PII_PATTERNS = [
 ]
 
 
+def _clean_optional_str(value: str | None) -> str | None:
+    """Collapse empty / whitespace-only strings to ``None``.
+
+    WHY: upstream feeds are inconsistent about "no value". The S6 chunk-search
+    adapter maps a missing url/source_name to ``None`` (``meta.get("url")``),
+    but the NLP-pipeline ``/briefing-articles`` endpoint coerces them to the
+    empty string (``url=row["url"] or ""``). The latter flows verbatim through
+    ``get_entity_news`` -> ``CitationMeta(url="")`` -> ``Citation(url="")`` and
+    out over SSE. On the frontend an empty-string url is falsy, so the chip
+    falls back to a non-link badge — but ``source_name=""`` would still render
+    a blank source label, and a stray ``"   "`` url would slip past the JS
+    truthiness guard. Normalising here, at the single citation-building choke
+    point, guarantees every news/doc citation carries either a real value or a
+    clean ``None`` regardless of which upstream produced it.
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 def _contains_pii(text: str) -> bool:
     return any(p.search(text) for p in _PII_PATTERNS)
 
@@ -194,11 +215,16 @@ class OutputProcessor:
                     ref=ref,
                     item_type=item.item_type.value,
                     id=item.item_id,
-                    title=item.citation_meta.title,
-                    url=item.citation_meta.url,
-                    source_name=item.citation_meta.source_name,
+                    title=_clean_optional_str(item.citation_meta.title),
+                    # Normalise url/source_name/entity_name so an empty-string
+                    # value from an upstream that coerces "missing" to "" (e.g.
+                    # the /briefing-articles feed behind get_entity_news) never
+                    # reaches the SSE wire as url="" — which the frontend would
+                    # have to special-case as a broken "Read ↗" link.
+                    url=_clean_optional_str(item.citation_meta.url),
+                    source_name=_clean_optional_str(item.citation_meta.source_name),
                     published_at=item.citation_meta.published_at,
-                    entity_name=item.citation_meta.entity_name,
+                    entity_name=_clean_optional_str(item.citation_meta.entity_name),
                     confidence=item.score,
                     # Persist the full retrieved-chunk text into the Citation
                     # so the citation-judge cron can score grounding against the
