@@ -1,13 +1,13 @@
 # RAG / Chat Service
 
 > **Owner**: Chat domain · **Database**: `rag_db` (owned) · **Port**: 8008
-> **Status**: Tool-use chat pipeline + **26-tool catalog** (`capability_manifest.yaml` v5) + SSE streaming + morning/instrument briefings + brief pre-generation scheduler
+> **Status**: Tool-use chat pipeline + **27-tool catalog** (`capability_manifest.yaml` v5) + SSE streaming + morning/instrument briefings + brief pre-generation scheduler
 
 ---
 
 ## Mission & Boundaries
 
-**Owns**: Query rewriting, tool-use chat pipeline, 26-tool catalog, SSE streaming
+**Owns**: Query rewriting, tool-use chat pipeline, 27-tool catalog, SSE streaming
 (vector + KG + SQL tools), result injection, context assembly, prompt building,
 LLM provider fallback, streaming response delivery, citation injection, response caching.
 
@@ -213,7 +213,7 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
       → Re-acquire UoW → persist thread + message
 ```
 
-### Tool Catalog (26 tools — `libs/tools/src/tools/capability_manifest.yaml` v5)
+### Tool Catalog (27 tools — `libs/tools/src/tools/capability_manifest.yaml` v5)
 
 The `get_alerts` / `create_alert` action tools are documented separately below
 (Action Tools and User Authorization). The remaining 24 read-only tools:
@@ -240,6 +240,7 @@ The `get_alerts` / `create_alert` action tools are documented separately below
 | `get_morning_brief` | DB | User's latest morning brief from `user_briefs` table via `BriefArchivePort`. Read-only (R27). trust_weight=0.92 | v3 |
 | `compare_entities` | S3 | Side-by-side comparison of 2-4 tickers: fundamentals highlights + latest quote in parallel | v3 |
 | `get_entity_news` | S9→S6 | Recent news articles scoped to a single entity (PLAN-0103 W2) | v5 |
+| `get_filings` | S6 | SEC EDGAR filings (10-K/10-Q/8-K/…) for an entity via `S6.search_chunks(source_types=['sec_edgar'])`, deduped to one row per filing; every result carries `citation_meta.url` = the canonical EDGAR filing-index URL. `form_type` is best-effort (label recovered from text). trust_weight=0.95 (feat/chat-sec-filings-tool) | v5 |
 | `screen_universe` | S9→S3 | Quantitative screener via S9 `POST /v1/fundamentals/screen`. Filter by market_cap, P/E, sector, region | v3 |
 | `get_market_movers` | S9→S3 | Top gainers/losers/most-active via S9 `GET /v1/market/top-movers`. Default: gainers/1d | v3 |
 | `get_economic_calendar` | S9→S3 | Macro events (CPI, FOMC, GDP) via S9 `GET /v1/fundamentals/economic-calendar` | v3 |
