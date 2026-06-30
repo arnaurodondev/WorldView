@@ -1,9 +1,9 @@
 ---
 marp: true
-theme: worldview-light
+theme: worldview-academic
 paginate: true
 size: 16:9
-footer: 'Worldview — Final Thesis Defense · Arnau Rodon Comas'
+footer: 'Worldview · Thesis Defense · Arnau Rodon Comas'
 ---
 
 <!-- ================================================================ -->
@@ -19,7 +19,7 @@ footer: 'Worldview — Final Thesis Defense · Arnau Rodon Comas'
 
 <div class="accent-line"></div>
 
-<div class="subtitle">An Open Financial Intelligence Platform</div>
+<div class="subtitle" style="font-size:24px;line-height:1.3">An AI-Driven Financial Intelligence Platform for Market Data Aggregation and Insight Generation</div>
 
 <div class="meta">
 
@@ -33,223 +33,310 @@ Advisor: Víctor Casamayor
 ---
 
 <!-- ================================================================ -->
-<!-- ACT 1 — DIVIDER                                                   -->
+<!-- PART 1 — DIVIDER · MOTIVATION                                     -->
 <!-- ================================================================ -->
 <!-- _class: divider -->
 <!-- _paginate: false -->
 
-<div class="kicker">Act 1</div>
+<div class="kicker">Part 1</div>
 
-# The problem
+# The integration gap
 
-<div class="sub">Financial intelligence fails when signals are not <em>linked</em>.</div>
-
----
-
-<!-- SLIDE 2 — One portfolio, too many signals -->
-
-## One portfolio, too many signals
-
-<div class="cards cols-4">
-  <div class="card blue-top"><div class="tag">Prices</div><p>OHLCV, intraday moves</p></div>
-  <div class="card blue-top"><div class="tag">Fundamentals</div><p>earnings, margins, ownership</p></div>
-  <div class="card blue-top"><div class="tag">News</div><p>thousands of items a week</p></div>
-  <div class="card blue-top"><div class="tag">Filings</div><p>regulatory, analyst reports</p></div>
-</div>
-
-<div class="metrics">
-  <div class="metric"><div class="num">~3,000</div><div class="lbl">news items per week<br>for a 30-position portfolio</div></div>
-  <div class="metric blue"><div class="num">1</div><div class="lbl">analyst<br>can't read that</div></div>
-</div>
-
-<p class="center muted">Four signal streams, per company — multiplied across the whole book.</p>
+<div class="sub">Structured and unstructured financial data never meet.</div>
 
 ---
 
-<!-- SLIDE 3 — The risk you don't see  (PROTECTED — main hook) -->
+<!-- _header: 'Part 1 · Motivation' -->
+<!-- SLIDE — Two data tracks -->
 
-## The risk you don't see
+## Two data tracks that never meet
 
-<p class="lead">The risk is often <strong>not</strong> the company you hold —<br>it's the company <em>it depends on</em>.</p>
-
-<div class="graph">
-  <div class="gnode" style="border-color:var(--red);background:var(--red-soft)">Supplier A<br><span class="small muted" style="font-weight:500">disruption</span></div>
-  <div class="gedge"><span class="pred">supplies</span><div class="line"></div><span class="arrowhead">▶</span></div>
-  <div class="gnode">Manufacturer B</div>
-  <div class="gedge"><span class="pred">you hold</span><div class="line"></div><span class="arrowhead">▶</span></div>
-  <div class="gnode gold">Your portfolio</div>
+<div style="display:flex;align-items:stretch;gap:18px;margin:18px 0">
+  <div class="card blue-top" style="flex:1">
+    <div class="tag">Structured · typed, scheduled</div>
+    <div class="muted small" style="margin:8px 0 2px;font-weight:600">prices · OHLCV</div>
+    <table class="mini">
+      <tr><th>ticker</th><th>date</th><th>open</th><th>high</th><th>close</th></tr>
+      <tr class="hl-row"><td>TSMC</td><td>06-24</td><td>102.4</td><td>105.1</td><td>104.0</td></tr>
+      <tr><td>NVDA</td><td>06-24</td><td>195.2</td><td>197.0</td><td>196.3</td></tr>
+    </table>
+    <div class="muted small" style="margin:12px 0 2px;font-weight:600">fundamentals · TSMC</div>
+    <table class="mini">
+      <tr><th>metric</th><th>value</th><th>period</th></tr>
+      <tr><td>revenue</td><td>$20.0B</td><td>Q2</td></tr>
+      <tr><td>gross margin</td><td>53.2%</td><td>Q2</td></tr>
+      <tr><td>EPS</td><td>1.48</td><td>Q2</td></tr>
+    </table>
+  </div>
+  <div class="gap-q"><span class="qmark">?</span><span class="s">no shared key</span></div>
+  <div class="card gold-top" style="flex:1">
+    <div class="tag">Unstructured · prose, no schema</div>
+    <div class="doc"><span class="doctype">News</span>"<mark>TSMC</mark> warns of capacity constraints amid surging AI-chip demand…" <span class="muted small">Reuters</span></div>
+    <div class="doc"><span class="doctype">Filing</span>"…concentration of advanced-node capacity remains a key risk factor…" <span class="muted small">Form 20-F</span></div>
+    <div class="doc"><span class="doctype">Transcript</span>"…we expect AI demand to stay strong well into next year…" <span class="muted small">Q2 earnings call</span></div>
+  </div>
 </div>
 
-<div class="callout amber center"><strong>Hidden exposure:</strong> A never appears in your holdings — yet its shock reaches you.</div>
+<p class="center muted">The same <mark>TSMC</mark> sits in every record above — yet <strong>nothing links the structured rows to the prose</strong>. That link is the integration problem.</p>
 
 ---
 
-<!-- SLIDE 4 — Why isn't this already solved? -->
+<!-- _class: vcenter -->
+<!-- _header: 'Part 1 · Motivation' -->
+<!-- SLIDE — Why integration matters: a motivating example -->
+
+## Two kinds of risk
+
+<div style="display:flex;align-items:center;gap:0;margin:18px 0">
+  <div class="hold-region" style="flex:1">
+    <div class="region-label">Direct · what you hold</div>
+    <div class="noderow"><span class="gnode-sm held">NVDA</span><span class="gnode-sm held">AAPL</span><span class="gnode-sm held">MSFT</span></div>
+    <p class="muted small" style="margin-top:10px">risk you can already <strong>see</strong> — once prices, news &amp; fundamentals are unified</p>
+  </div>
+  <div class="risk-link">
+    <span class="pred">supplied_by</span>
+    <span class="pred">lends_to</span>
+    <span class="pred">customer_of</span>
+    <span class="lk-arrow">▶</span>
+    <span class="muted small" style="text-align:center">the knowledge<br>layer links them</span>
+  </div>
+  <div class="dep-region" style="flex:1">
+    <div class="region-label">Indirect · what you depend on</div>
+    <div class="noderow"><span class="gnode-sm hidden">Supplier A</span><span class="gnode-sm hidden">Foundry B</span><span class="gnode-sm hidden">Lender C</span></div>
+    <p class="muted small" style="margin-top:10px">risk you <strong>can't</strong> see — companies you don't hold, but are exposed to</p>
+  </div>
+</div>
+
+<div class="callout amber center">A shock in the right-hand layer still reaches your book — only a <em>linked</em> view makes that exposure visible.</div>
+
+---
+
+<!-- _class: vcenter -->
+<!-- _header: 'Part 1 · Motivation' -->
+<!-- SLIDE — Objectives & scope -->
+
+## Objectives
+
+<div class="grid2">
+  <div>
+    <div class="rung l1"><span class="name">O-1 · Event-driven platform</span><span class="tag">multi-source, decoupled</span></div>
+    <div class="rung l1"><span class="name">O-2 · Tiered NLP enrichment</span><span class="tag">NER · routing · extraction</span></div>
+    <div class="rung l1"><span class="name">O-3 · Live knowledge graph</span><span class="tag">confidence + decay</span></div>
+  </div>
+  <div>
+    <div class="rung l1"><span class="name">O-4 · Hybrid multi-modal RAG</span><span class="tag">grounded, cited</span></div>
+    <div class="rung l1"><span class="name">O-5 · Five user journeys</span><span class="tag">frontend</span></div>
+    <div class="rung l1"><span class="name">O-6 · Validate end-to-end</span><span class="tag">coverage + latency</span></div>
+  </div>
+</div>
+
+<p class="center small muted" style="margin-top:18px">Scope: open and inspectable · single-operator · thesis-scale.</p>
+
+---
+
+<!-- _header: 'Part 1 · Motivation' -->
+<!-- SLIDE — Where Worldview sits (capability gap, incl. GraphRAG) -->
 
 ## Why isn't this already solved?
 
-| Platform | Cost / year | Open | Conversational | Linked graph |
-|---|---|:--:|:--:|:--:|
-| Bloomberg / LSEG | <span class="hl">$20–30k / seat</span> | — | ✗ | partial |
-| FinBERT + vector DB | $0 | ✓ | ✗ | ✗ |
-| BloombergGPT | closed | ✗ | ✗ | ✗ |
-| **Worldview** | **$0 infra · <$50/mo** | ✓ | ✓ | ✓ live |
+| System | Price / yr | Ingest | NLP | Linked graph | Hybrid | Cites | Open |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| Bloomberg / LSEG terminal | <span class="cost-bad">$20–30k / seat</span> | <span class="y">✓</span> | <span class="y">✓</span> | <span class="y">✓</span> | <span class="y">✓</span> | <span class="p">partial</span> | <span class="n">✗</span> |
+| Open RAG — LangChain / Haystack | $0 + infra | <span class="n">✗</span> | <span class="n">✗</span> | <span class="n">✗</span> | <span class="y">✓</span> | <span class="p">partial</span> | <span class="y">✓</span> |
+| Finance LLMs — FinBERT / BloombergGPT | varies | <span class="n">✗</span> | <span class="n">✗</span> | <span class="n">✗</span> | <span class="n">✗</span> | <span class="n">✗</span> | <span class="p">partial</span> |
+| GraphRAG | $0 + infra | <span class="n">✗</span> | <span class="p">partial</span> | <span class="p">rebuild-only</span> | <span class="y">✓</span> | <span class="p">partial</span> | <span class="y">✓</span> |
+| **Worldview** | <span class="cost-good">~$50 / mo</span> | <span class="y">✓</span> | <span class="y">✓</span> | <span class="y">✓</span> | <span class="y">✓</span> | <span class="y">✓</span> | <span class="y">✓</span> |
 
-<p class="center muted" style="margin-top:18px">The systems that <em>link</em> everything are locked behind terminal pricing.<br>The open systems <em>don't link</em> anything.</p>
+<p class="center muted" style="margin-top:14px">The capable system already exists — it costs <em>$20–30k a seat</em> and you can't inspect it. The open systems don't integrate. Worldview delivers the <strong>integrated, inspectable</strong> capability set for <em>~$50/month</em>.</p>
 
-<!-- highlight Worldview row -->
 <style scoped>
+table { font-size: 16px; width: 100%; table-layout: fixed; }
+th, td { padding: 9px 6px; text-align: center; }
+th:first-child, td:first-child { width: 25%; text-align: left; }
 table tr:last-child td { background-color: var(--blue-soft) !important; }
 </style>
 
 ---
 
 <!-- ================================================================ -->
-<!-- ACT 2 — DIVIDER                                                   -->
+<!-- PART 2 — DIVIDER · WHAT WORLDVIEW IS                              -->
 <!-- ================================================================ -->
 <!-- _class: divider -->
 <!-- _paginate: false -->
 
-<div class="kicker">Act 2</div>
+<div class="kicker">Part 2</div>
 
-# What Worldview does
+# What Worldview is
 
-<div class="sub">Turn market signals into <em>linked, cited</em> intelligence.</div>
+<div class="sub">An integrated, event-driven intelligence platform — and four contributions.</div>
 
 ---
 
-<!-- SLIDE 5 — Three things, end to end -->
+<!-- _header: 'Part 2 · The platform' -->
+<!-- SLIDE — Four contributions (C-1..C-4) -->
 
-## Three things, end to end
+## Four contributions
 
-<div class="cards cols-4">
+<div class="grid2">
   <div class="card blue-top">
-    <div class="numbadge">1</div>
-    <h3>Ingest</h3>
-    <p>Market data, news, filings, fundamentals — many providers, decoupled.</p>
+    <h3>C-1 · Integrated platform</h3>
+    <p>Ten hexagonal services on a Kafka backbone with schema-governed contracts, a transactional outbox, and a single API gateway — boots end-to-end on one host.</p>
   </div>
   <div class="card blue-top">
-    <div class="numbadge">2</div>
-    <h3>Link</h3>
-    <p>A knowledge graph of entities and relations, each fact with confidence that <em>decays</em>.</p>
+    <h3>C-2 · Cost-controlled enrichment</h3>
+    <p>Every article is scored for financial relevance <em>before</em> any LLM call, then routed into effort tiers. ~$10–18/month at thesis scale.</p>
+  </div>
+  <div class="card blue-top">
+    <h3>C-3 · Live knowledge graph</h3>
+    <p>Per-edge confidence accumulates with corroboration and <em>decays</em> on a per-relation timescale; every edge links back to its source passage.</p>
   </div>
   <div class="card gold-top">
-    <div class="numbadge">3</div>
-    <h3>Answer</h3>
-    <p>A grounded chatbot that <strong>cites every claim</strong> in a real source.</p>
+    <h3>C-4 · Grounded chatbot</h3>
+    <p>LLM-driven tool use over vector, full-text, graph, and structured retrieval — streamed answers with inline citations.</p>
   </div>
 </div>
-
-<div class="callout blue center">Open-source · commodity hardware · <strong>&lt;$50/month</strong> in external APIs</div>
 
 ---
 
-<!-- SLIDE 6 — The system: 10 services on one event backbone -->
+<!-- _class: vcenter -->
+<!-- _header: 'Part 2 · The platform' -->
+<!-- SLIDE — The system: real topology diagram -->
 
-## The system: 10 services on one event backbone
+## Ten services on one event backbone
 
-<div class="flow" style="margin:14px 0 6px">
-  <div class="step">Data<br>providers<span class="s">5 sources</span></div>
-  <div class="arr">▶</div>
-  <div class="step blue">Kafka backbone<span class="s">event spine</span></div>
-  <div class="arr">▶</div>
-  <div class="step">Service groups<span class="s">ingest · NLP · graph · chat</span></div>
-  <div class="arr">▶</div>
-  <div class="step gold">Frontend<span class="s">one app</span></div>
+<div class="topo">
+  <div class="topo-layer"><span class="topo-tag">access</span>
+    <span class="svc"><b>Frontend</b><span class="r">Next.js</span></span><span class="ga">▸</span>
+    <span class="svc gw"><b>S9 Gateway</b><span class="r">one door</span></span>
+    <span class="svc"><b>S1 Portfolio</b></span>
+  </div>
+  <div class="topo-layer"><span class="topo-tag">data</span>
+    <span class="svc"><b>S2 Mkt Ingest</b></span>
+    <span class="svc"><b>S3 Market Data</b></span>
+    <span class="svc"><b>S4 Content Ingest</b></span>
+    <span class="svc"><b>S5 Content Store</b></span>
+  </div>
+  <div class="topo-bus">Kafka event backbone — services publish &amp; consume events, never call each other</div>
+  <div class="topo-layer"><span class="topo-tag">intelligence</span>
+    <span class="svc intel"><b>S6 NLP</b></span>
+    <span class="svc intel"><b>S7 Knowledge Graph</b></span>
+    <span class="svc intel"><b>S8 RAG / Chat</b></span>
+    <span class="svc intel"><b>S10 Alerts</b></span>
+  </div>
+  <div class="arch-store">one PostgreSQL — TimescaleDB · pgvector · Apache AGE</div>
 </div>
 
-<div class="metrics" style="margin-top:10px">
-  <div class="metric blue"><div class="num">10</div><div class="lbl">backend services</div></div>
-  <div class="metric blue"><div class="num">8</div><div class="lbl">databases<br>(one per service)</div></div>
-  <div class="metric blue"><div class="num">6</div><div class="lbl">shared libraries</div></div>
-</div>
-
-<p class="center small muted">Database-per-service · no service calls another directly · full topology in appendix</p>
+<p class="center muted">Ten services · one event spine · one store · one door. I follow <em>two journeys</em>, not a catalog of ten services.</p>
 
 ---
 
-<!-- SLIDE 7 — Two journeys, not ten services -->
+<!-- _class: vcenter -->
+<!-- _header: 'Part 2 · The platform' -->
+<!-- SLIDE — Architecture foundations (event-driven · gateway · hexagonal) -->
 
-## Two journeys, not ten services
+## Architecture foundations
 
-<div class="twocol">
-  <div class="panel good">
-    <h3>① Generation</h3>
-    <div class="flow" style="margin:14px 0">
-      <div class="step">Article</div><div class="arr">▶</div>
-      <div class="step">Extract</div><div class="arr">▶</div>
-      <div class="step gold">Graph</div>
-    </div>
-    <p class="muted center">An article becomes a fact.</p>
+<div class="found3">
+  <div class="fcard blue-top">
+    <h3>Event-driven</h3>
+    <p>Services talk only through Kafka — never directly. One slow or failed stage never blocks another.</p>
+    <div class="glyph"><span class="gb">S6</span><span class="ga">▸</span><span class="gb hot">Kafka</span><span class="ga">▸</span><span class="gb">S7</span></div>
   </div>
-  <div class="panel" style="background:var(--gold-soft);border:1px solid #E6C98A">
-    <h3 style="color:var(--gold)">② Access</h3>
-    <div class="flow" style="margin:14px 0">
-      <div class="step">Question</div><div class="arr">▶</div>
-      <div class="step">Retrieve</div><div class="arr">▶</div>
-      <div class="step gold">Cite</div>
-    </div>
-    <p class="muted center">A question becomes a grounded answer.</p>
+  <div class="fcard blue-top">
+    <h3>One door</h3>
+    <p>A single API gateway authenticates every request and signs the internal token backends trust.</p>
+    <div class="glyph"><span class="gb">Frontend</span><span class="ga">▸</span><span class="gb hot">Gateway</span><span class="ga">▸</span><span class="gb">services</span></div>
+  </div>
+  <div class="fcard blue-top">
+    <h3>Hexagonal layering</h3>
+    <p>Same inward dependency structure in every service. Use cases test in seconds; arch tests fail the build on a violation.</p>
+    <div class="glyph"><span class="gb">API</span><span class="ga">▸</span><span class="gb">App</span><span class="ga">▸</span><span class="gb hot">Domain</span><span class="ga">◀</span><span class="gb">Infra</span></div>
   </div>
 </div>
 
-<p class="center muted" style="margin-top:14px">Every service appears <em>when it matters</em> — not as a catalog.</p>
+---
+
+<!-- _class: vcenter -->
+<!-- _header: 'Part 2 · The platform' -->
+<!-- SLIDE — Two journeys: real intelligence.png -->
+
+## Two journeys through the system
+
+<div class="lane gen">
+  <span class="lane-tag">Generation</span>
+  <div class="flow" style="margin:0;flex-wrap:nowrap">
+    <div class="step">Article</div><div class="arr">▶</div>
+    <div class="step">Ingest</div><div class="arr">▶</div>
+    <div class="step">Enrich</div><div class="arr">▶</div>
+    <div class="step gold">Graph</div>
+  </div>
+</div>
+
+<div class="lane acc">
+  <span class="lane-tag">Access</span>
+  <div class="flow" style="margin:0;flex-wrap:nowrap">
+    <div class="step">Question</div><div class="arr">▶</div>
+    <div class="step">Retrieve</div><div class="arr">▶</div>
+    <div class="step">Ground</div><div class="arr">▶</div>
+    <div class="step gold">Answer</div>
+  </div>
+</div>
+
+<div class="shared-store">one PostgreSQL — read and written by both journeys</div>
+
+<p class="center muted">Generation continuously builds the graph; access queries it on demand. Every service sits on one of these two paths.</p>
 
 ---
 
 <!-- ================================================================ -->
-<!-- ACT 3 — DIVIDER                                                   -->
+<!-- PART 3 — DIVIDER · GENERATION                                     -->
 <!-- ================================================================ -->
 <!-- _class: divider -->
 <!-- _paginate: false -->
 
-<div class="kicker">Act 3 · Trace 1</div>
+<div class="kicker">Part 3</div>
 
-# From an article to a fact
+# Generation: article → fact
 
-<div class="sub">How raw text becomes a queryable graph edge.</div>
-
-<div class="miniflow">
-  <span class="m">Raw HTML</span><span class="a">▶</span>
-  <span class="m">Cleaned text</span><span class="a">▶</span>
-  <span class="m">Extracted relation</span><span class="a">▶</span>
-  <span class="m">Graph edge</span>
-</div>
+<div class="sub">How raw text becomes a queryable, evidence-backed graph edge.</div>
 
 ---
 
-<!-- SLIDE 8 — An article publishes. How does it become a fact? -->
+<!-- _class: vcenter -->
+<!-- _header: 'Part 3 · Generation' -->
+<!-- SLIDE — Medallion lifecycle -->
 
 ## An article publishes. How does it become a fact?
 
-<div class="flow" style="margin:40px 0">
+<div class="flow">
   <div class="step">Raw HTML<span class="s">as fetched</span></div>
   <div class="arr">▶</div>
-  <div class="step blue">Bronze<span class="s">stored</span></div>
+  <div class="step blue">Bronze<span class="s">stored, immutable</span></div>
   <div class="arr">▶</div>
-  <div class="step blue">Silver<span class="s">cleaned</span></div>
+  <div class="step blue">Silver<span class="s">cleaned, deduped</span></div>
   <div class="arr">▶</div>
   <div class="step blue">Enriched<span class="s">entities + relations</span></div>
   <div class="arr">▶</div>
   <div class="step gold">Knowledge graph<span class="s">evidence attached</span></div>
 </div>
 
-<p class="center muted">The <em>medallion lifecycle</em> — each stage adds structure, nothing is thrown away.</p>
+<p class="center muted" style="margin-top:14px">The <em>medallion lifecycle</em> — each stage adds structure; raw bytes are never thrown away.</p>
 
 ---
 
-<!-- SLIDE 9 — Step 1 — Ingest, then decouple -->
+<!-- _header: 'Part 3 · Generation' -->
+<!-- SLIDE — Ingest, then decouple -->
 
 ## Step 1 — Ingest, then decouple
 
-<div class="twocol">
+<div class="twocol" style="align-items:center">
   <div>
     <div class="rung l1"><span class="name">1 · Adapter fetches</span><span class="tag">news · filings · markets</span></div>
     <div class="rung l1"><span class="name">2 · Raw content stored</span><span class="tag">object storage</span></div>
     <div class="rung l1"><span class="name">3 · Event published</span><span class="tag">→ Kafka</span></div>
   </div>
   <div style="display:flex;align-items:center;gap:14px;height:100%">
-    <div class="step blue" style="text-align:center;padding:24px 22px;border-radius:12px;border:1px solid #BFD8F0;background:var(--blue-soft);font-weight:700">Kafka<span class="s">event spine</span></div>
+    <div class="step blue" style="text-align:center;padding:24px 22px;border-radius:3px;border:1px solid #BFD8F0;background:var(--blue-soft);font-weight:700">Kafka<span class="s">event spine</span></div>
     <span class="arr">▶</span>
     <div style="display:flex;flex-direction:column;gap:9px">
       <span class="pill">NLP</span><span class="pill">storage</span><span class="pill">graph</span><span class="pill">indexing</span>
@@ -257,448 +344,320 @@ table tr:last-child td { background-color: var(--blue-soft) !important; }
   </div>
 </div>
 
-<div class="callout blue"><strong>No downstream service blocks ingestion.</strong> No service calls another directly — they react to events.</div>
+<div class="callout amber"><strong>No downstream service blocks ingestion.</strong> Services react to events — if NLP is slow, ingestion never notices; the backlog drains later.</div>
+
 
 ---
 
-<!-- SLIDE 10 — Hard problem #1 — the dual write  (PROTECTED) -->
-
-## Hard problem #1 — the dual write
-
-<div class="twocol">
-  <div class="panel bad">
-    <h3>Naïve dual write</h3>
-    <div class="row"><span class="ok">✓</span> Database write</div>
-    <div class="row"><span class="no">✗</span> Kafka publish fails</div>
-    <div class="result">→ silent inconsistency, forever</div>
-  </div>
-  <div class="panel good">
-    <h3>Transactional outbox</h3>
-    <div class="row"><span class="ok">✓</span> Data + event in <em>one</em> DB transaction</div>
-    <div class="row"><span class="ok">✓</span> Dispatcher publishes later, retries</div>
-    <div class="result">→ no lost events</div>
-  </div>
-</div>
-
-<div class="flow" style="margin:16px 0 0">
-  <div class="step">write data<br>+ outbox row</div><div class="arr">▶</div>
-  <div class="step">commit<span class="s">atomic</span></div><div class="arr">▶</div>
-  <div class="step">dispatcher</div><div class="arr">▶</div>
-  <div class="step blue">Kafka</div>
-</div>
-
----
-
-<!-- SLIDE 11 — Step 2 — Not every article deserves an LLM -->
+<!-- _header: 'Part 3 · Generation' -->
+<!-- SLIDE — Cost-controlled routing (C-2) -->
 
 ## Step 2 — Not every article deserves an LLM
 
-<div class="twocol" style="align-items:center">
-  <div>
-    <div class="flow" style="margin:0 0 22px;justify-content:flex-start">
-      <div class="step">Articles</div><div class="arr">▶</div>
-      <div class="step blue">Relevance gate<span class="s">scores each article</span></div>
-    </div>
+<div class="figrow">
+  <div class="fcol-txt">
     <div class="bars">
-      <div class="bar-row"><div class="bar-head"><span>Medium effort</span><span class="v">56.9%</span></div><div class="bar-track"><div class="bar-fill" style="width:56.9%;background:#5C93C9"></div></div></div>
-      <div class="bar-row"><div class="bar-head"><span>Deep effort</span><span class="v">31.8%</span></div><div class="bar-track"><div class="bar-fill" style="width:31.8%;background:#2F6FB0"></div></div></div>
-      <div class="bar-row"><div class="bar-head"><span>Light effort</span><span class="v">11.2%</span></div><div class="bar-track"><div class="bar-fill" style="width:11.2%;background:#9CC3E8"></div></div></div>
+      <div class="bar-row"><div class="bar-head"><span>Medium effort</span><span class="v">56.9%</span></div><div class="bar-track"><div class="bar-fill" style="width:56.9%"></div></div></div>
+      <div class="bar-row"><div class="bar-head"><span>Deep effort</span><span class="v">31.8%</span></div><div class="bar-track"><div class="bar-fill" style="width:31.8%"></div></div></div>
+      <div class="bar-row"><div class="bar-head"><span>Light effort</span><span class="v">11.2%</span></div><div class="bar-track"><div class="bar-fill" style="width:11.2%"></div></div></div>
+    </div>
+    <p class="muted">The gate routes each article into one of four effort tiers — deep extraction is reserved for the minority that warrant it.</p>
+  </div>
+  <div class="fcol-txt narrow">
+    <div class="card blue-top">
+      <h3>The relevance gate</h3>
+      <p>A small model embeds the article's <strong>title + subtitle</strong> and predicts its extraction yield — then assigns an effort tier.</p>
+      <div class="glyph" style="margin-top:6px">
+        <span class="gb">title + subtitle</span><span class="ga">▸</span><span class="gb hot">embed</span><span class="ga">▸</span><span class="gb">yield</span><span class="ga">▸</span><span class="gb">tier</span>
+      </div>
+    </div>
+    <p class="center muted small" style="margin-top:12px">Runs <em>before</em> any model call.</p>
+  </div>
+</div>
+
+---
+
+<!-- _header: 'Part 3 · Generation' -->
+<!-- SLIDE — The real NLP pipeline (nlp-pipeline.png) -->
+
+## Step 3 — The enrichment pipeline
+
+<div class="figrow">
+  <div class="fcol-txt narrow">
+    <div class="card" style="margin-bottom:10px"><p><strong>Closed predicate vocabulary.</strong> The model picks from a fixed relation set — it cannot invent arbitrary types, which keeps the graph canonicalisable.</p></div>
+    <div class="card"><p><strong>Entity-resolution cascade.</strong> Cheapest match first: alias → ticker → fuzzy → embedding. Unresolved mentions are kept, never dropped.</p></div>
+  </div>
+  <div class="fcol-img">
+    <div class="pipe">
+      <div class="pstep">recognize entities<span class="s">GLiNER · zero-shot NER</span></div>
+      <div class="pdrop">▼</div>
+      <div class="pstep">route by relevance</div>
+      <div class="pdrop">▼</div>
+      <div class="pstep gate">◆ suppression gate<span class="s">drop low-value articles</span></div>
+      <div class="pdrop">▼</div>
+      <div class="pstep">embed</div>
+      <div class="pdrop">▼</div>
+      <div class="pstep gate">◆ novelty gate<span class="s">skip redundant articles</span></div>
+      <div class="pdrop">▼</div>
+      <div class="pstep">resolve → extract<span class="s">Qwen3-235B · closed vocabulary</span></div>
+      <div class="pdrop">▼</div>
+      <div class="pstep" style="border-color:var(--gold);color:#6f4d08">enriched fact event</div>
     </div>
   </div>
-  <div>
-    <div class="metric"><div class="num">~$10–18</div><div class="lbl">hosted inference / month<br>(well under the $50 ceiling)</div></div>
-    <p class="center muted small" style="margin-top:18px">6,955 articles over 30 days.<br><em>Cost control is a routing decision.</em></p>
-  </div>
 </div>
 
 ---
 
-<!-- SLIDE 12 — Step 3 — Extract entities and relations -->
-
-## Step 3 — Extract entities and relations
-
-<div class="flow" style="margin:18px 0">
-  <div class="step">Article sentence</div><div class="arr">▶</div>
-  <div class="step blue">LLM extraction</div><div class="arr">▶</div>
-  <div class="step gold" style="font-size:22px">NVIDIA <span style="color:var(--gold)">—supplied_by→</span> TSMC</div>
-</div>
-
-<div class="cards" style="margin-top:8px">
-  <div class="card blue-top"><h3>Closed predicate vocabulary</h3><p>The model picks from a fixed relation set — it can't invent arbitrary types.</p></div>
-  <div class="card blue-top"><h3>Entity-resolution cascade</h3>
-    <p><span class="pill">alias</span> → <span class="pill">ticker</span> → <span class="pill">fuzzy</span> → <span class="pill">embedding</span> — cheapest check first.</p>
-  </div>
-</div>
-
-<p class="center muted small" style="margin-top:10px">Every triple keeps its <em>evidence sentence</em>.</p>
-
----
-
-<!-- SLIDE 13 — Step 4 — The fact lands in the graph  (PROTECTED) -->
+<!-- _header: 'Part 3 · Generation' -->
+<!-- SLIDE — The fact lands in the graph (C-3) -->
 
 ## Step 4 — The fact lands in the graph
 
-<div class="twocol" style="align-items:center">
-  <div>
-    <div class="graph" style="justify-content:flex-start">
-      <div class="gnode">NVIDIA</div>
-      <div class="gedge"><span class="pred">supplied_by</span><div class="line"></div><span class="arrowhead">▶</span></div>
-      <div class="gnode gold">TSMC</div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:18px">
-      <span class="pill">versioned edge</span><span class="pill">Apache AGE</span><span class="pill">corroborated, not duplicated</span>
-    </div>
-  </div>
-  <div class="center">
-    <div class="evstack"><div class="metric" style="border:none;box-shadow:none;padding:6px"><div class="num">16.2</div><div class="lbl">evidence rows<br>per edge, on average</div></div></div>
-  </div>
+<div class="graph">
+  <div class="gnode">NVIDIA</div>
+  <div class="gedge"><span class="pred">supplied_by</span><div class="line"></div><span class="arrowhead">▸</span></div>
+  <div class="gnode gold">TSMC</div>
 </div>
 
-<div class="callout amber center" style="margin-top:22px">The hidden dependency from Slide 3 is now <strong>queryable</strong>.</div>
+<p class="center"><span class="pill">Apache AGE</span> &nbsp; <span class="pill">versioned edge</span> &nbsp; <strong>corroborated, not duplicated</strong> — 16.2 evidence rows per edge on average · 4,700+ relations on the seeded corpus.</p>
 
----
+<div class="callout blue center" style="margin-top:6px"><strong>…and each entity earns a grounded description:</strong></div>
 
-<!-- SLIDE 14 — Hard problem #2 — messages arrive twice -->
-
-## Hard problem #2 — messages arrive twice
-
-<div class="flow" style="margin:24px 0">
-  <div class="step blue">Event <span class="pill">E123</span></div><div class="arr">▶<small>first time</small></div>
-  <div class="step">Consumer<span class="s">process ✓</span></div>
-</div>
-<div class="flow" style="margin:24px 0">
-  <div class="step bad">Event <span class="pill">E123</span> again</div><div class="arr">▶<small>re-delivered</small></div>
-  <div class="step">Consumer<span class="s">checks processed IDs → no-op</span></div>
-</div>
-
-<div class="callout blue"><strong>At-least-once delivery means duplicates are normal.</strong> Idempotent consumers turn re-delivery into a no-op — never a double fact.</div>
-
----
-
-<!-- SLIDE 15 — Hard problem #3 — schemas change over time -->
-
-## Hard problem #3 — schemas change over time
-
-<div class="twocol" style="align-items:center">
-  <div class="flow" style="margin:0;flex-direction:column;gap:16px">
-    <div class="step blue">Producer <span class="pill">v2</span><span class="s">adds a new field</span></div>
-    <div class="arr" style="transform:rotate(90deg)">▶</div>
-    <div class="step">Consumer <span class="pill">v1</span><span class="s">still works — field has a default</span></div>
-    <div><span class="badge pass">forward compatible</span></div>
-  </div>
-  <div class="card">
-    <h3>The rules</h3>
-    <div class="row" style="display:flex;gap:8px;margin:8px 0"><span class="ok" style="color:var(--green);font-weight:800">✓</span> Add fields with defaults</div>
-    <div class="row" style="display:flex;gap:8px;margin:8px 0"><span class="no" style="color:var(--red);font-weight:800">✗</span> Never remove fields</div>
-    <div class="row" style="display:flex;gap:8px;margin:8px 0"><span class="no" style="color:var(--red);font-weight:800">✗</span> Never rename fields</div>
-    <p class="muted small" style="margin-top:12px">Versioned event envelope + Avro schemas.</p>
-  </div>
+<div class="flow" style="margin-top:12px">
+  <div class="step">NVIDIA's edges<br>+ evidence</div><div class="arr">▶</div>
+  <div class="step blue">LLM<span class="s">grounded</span></div><div class="arr">▶</div>
+  <div class="step" style="max-width:340px;font-weight:500;font-size:14px;text-align:left;line-height:1.35">"NVIDIA designs GPUs; depends on TSMC for advanced-node fabrication…" <span class="pill">[1]</span> <span class="pill">[2]</span></div><div class="arr">▶</div>
+  <div class="step gold">embedded<span class="s">for retrieval</span></div>
 </div>
 
 ---
 
-<!-- SLIDE 16 — Facts age — so does confidence -->
+<!-- _header: 'Part 3 · Generation' -->
+<!-- SLIDE — Facts age, so does confidence (C-3 decay) -->
 
 ## Facts age — so does confidence
 
-<div class="twocol" style="align-items:center">
-  <div class="ladder">
-    <div class="rung l1"><span class="name">Permanent</span><span class="tag">incorporated_in</span></div>
-    <div class="rung l2"><span class="name">Slow · ~2 yr</span><span class="tag">owns / acquired</span></div>
-    <div class="rung l3"><span class="name">Medium · ~60 d</span><span class="tag">analyst_rating</span></div>
-    <div class="rung l4"><span class="name">Ephemeral · ~3 d</span><span class="tag">intraday_momentum</span></div>
+<div class="figrow">
+  <div class="fcol-txt">
+    <div class="graph" style="margin:2px 0 12px;justify-content:flex-start">
+      <div class="gnode">NVIDIA</div>
+      <div class="gedge"><span class="pred">supplied_by</span><div class="line"></div><span class="arrowhead">▸</span></div>
+      <div class="gnode gold">TSMC</div>
+    </div>
+    <div class="card">
+      <div class="muted small" style="font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">the edge record</div>
+      <table class="mini">
+        <tr><td>relation</td><td>supplied_by</td></tr>
+        <tr><td>confidence</td><td>0.82 · decaying</td></tr>
+        <tr><td>class</td><td>slow — ~2 yr half-life</td></tr>
+        <tr><td>evidence</td><td>"TSMC supplies advanced nodes…" (Reuters)</td></tr>
+      </table>
+    </div>
   </div>
-  <div class="center">
-    <svg viewBox="0 0 320 200" width="340" height="200">
-      <line x1="40" y1="20" x2="40" y2="170" stroke="#C7D2E2" stroke-width="1.5"/>
-      <line x1="40" y1="170" x2="300" y2="170" stroke="#C7D2E2" stroke-width="1.5"/>
-      <path d="M40,28 C110,55 170,140 300,162" fill="none" stroke="#2F6FB0" stroke-width="3"/>
-      <circle cx="40" cy="28" r="6" fill="#A9760B"/>
-      <text x="52" y="26" font-size="15" fill="#A9760B" font-weight="700">1.000</text>
-      <circle cx="300" cy="162" r="6" fill="#586781"/>
-      <text x="232" y="158" font-size="15" fill="#586781" font-weight="700">0.165</text>
-      <text x="150" y="192" font-size="13" fill="#586781">time →</text>
-    </svg>
-    <p class="muted small">Beta posterior + class-specific half-life</p>
+  <div class="fcol-txt narrow">
+    <div class="ladder">
+      <div class="rung l1"><span class="name">Permanent</span><span class="tag">incorporated_in</span></div>
+      <div class="rung l2"><span class="name">Slow · ~2 yr</span><span class="tag">owns</span></div>
+      <div class="rung l3"><span class="name">Medium · ~60 d</span><span class="tag">analyst_rating</span></div>
+      <div class="rung l4"><span class="name">Ephemeral · ~3 d</span><span class="tag">momentum</span></div>
+    </div>
+    <p class="center" style="margin-top:12px"><span class="gold" style="font-family:var(--serif);font-size:30px;font-weight:600">1.0 → 0.16</span><br><span class="muted small">ephemeral edge over its half-life · Beta posterior</span></p>
   </div>
 </div>
-
-<div class="callout amber"><strong>Honest limit:</strong> on seeded data confidence saturates near 1.0 — the extractor emits a near-constant score, so absolute <em>calibration is still pending</em>.</div>
 
 ---
 
 <!-- ================================================================ -->
-<!-- ACT 4 — DIVIDER                                                  -->
+<!-- PART 4 — DIVIDER · ACCESS                                         -->
 <!-- ================================================================ -->
 <!-- _class: divider -->
 <!-- _paginate: false -->
 
-<div class="kicker">Act 4 · Trace 2</div>
+<div class="kicker">Part 4</div>
 
-# From a question to a grounded answer
+# Access: question → answer
 
-<div class="sub">How the user gets a <em>cited</em> response.</div>
-
-<div class="miniflow">
-  <span class="m">Question</span><span class="a">▶</span>
-  <span class="m">Tools</span><span class="a">▶</span>
-  <span class="m">Retrieved context</span><span class="a">▶</span>
-  <span class="m">Answer + citations</span>
-</div>
+<div class="sub">How a user's question becomes a grounded, cited response.</div>
 
 ---
 
-<!-- SLIDE 17 — What's my exposure to TSMC? -->
+<!-- _header: 'Part 4 · Access' -->
+<!-- SLIDE — One door, typed tools -->
 
-## "What's my exposure to TSMC?"
+## One door, typed tools
 
-<div class="callout blue" style="font-size:24px;border-radius:14px;margin-bottom:22px">💬 &nbsp;<em>"What's my exposure to TSMC?"</em></div>
+<div class="callout blue" style="font-size:24px;border-radius:3px;margin-bottom:22px">💬 &nbsp;<em>"What's my exposure to TSMC?"</em></div>
 
-<div class="flow" style="margin:10px 0">
-  <div class="step blue">API Gateway<span class="s">the only door</span></div><div class="arr">▶</div>
-  <div class="step">Chat service<span class="s">classifies intent</span></div><div class="arr">▶</div>
+<div class="flow">
+  <div class="step blue">API Gateway<span class="s">the only door</span></div>
+  <div class="arr">▶</div>
+  <div class="step">Chat service<span class="s">classifies intent</span></div>
+  <div class="arr">▶</div>
   <div class="step gold">Typed tools<span class="s">function API</span></div>
 </div>
 
-<div class="cards" style="margin-top:14px">
-  <div class="card"><h3>The model reasons; typed tools fetch.</h3><p>The LLM never touches a database directly.</p></div>
-  <div class="card blue-top"><div class="tag">security</div><p>Single gateway authenticates and signs a trusted internal token.</p></div>
+<div class="twocol" style="margin-top:8px">
+  <div class="card"><h3>The model reasons; typed tools fetch</h3><p>The LLM never touches a database directly — it calls a typed tool manifest over the whole platform.</p></div>
+  <div class="card blue-top"><div class="tag">security</div><p>The single gateway authenticates and signs a short-lived internal token the backends trust.</p></div>
 </div>
 
 ---
 
-<!-- SLIDE 18 — Four ways to retrieve, in parallel -->
+<!-- _header: 'Part 4 · Access' -->
+<!-- SLIDE — The retrieval loop (tool-chain.png) -->
 
-## Four ways to retrieve, in parallel
+## The retrieval loop
 
-<div class="grid2">
-  <div class="card blue-top"><h3>Graph traversal</h3><p>Follow dependency edges &nbsp;<span class="pill">traverse_graph</span></p></div>
-  <div class="card blue-top"><h3>Hybrid document search</h3><p>Vector + keyword, merged &nbsp;<span class="pill">search_documents</span></p></div>
-  <div class="card blue-top"><h3>Structured lookups</h3><p>Prices, fundamentals &nbsp;<span class="pill">get_fundamentals</span></p></div>
-  <div class="card blue-top"><h3>Entity intelligence</h3><p>Profiles, contradictions &nbsp;<span class="pill">get_entity</span></p></div>
+<div class="fan">
+  <div class="fan-q">"What's my exposure to TSMC?" &nbsp;<span class="muted small">→ intent classified</span></div>
+  <div class="muted small" style="margin:2px 0">▼&nbsp; the agent fans out — <strong>22 typed tools across 6 domains</strong>, in parallel</div>
+  <div class="fan-row">
+    <div class="fan-mod"><b>Graph</b><span class="s">dependency edges</span><span class="pill">traverse_graph</span></div>
+    <div class="fan-mod"><b>Documents &amp; news</b><span class="s">vector + BM25</span><span class="pill">search_documents</span></div>
+    <div class="fan-mod"><b>Market &amp; funds</b><span class="s">prices · ratios</span><span class="pill">get_fundamentals</span></div>
+    <div class="fan-mod"><b>Portfolio</b><span class="s">your holdings</span><span class="pill">get_portfolio</span></div>
+    <div class="fan-mod"><b>Entity intel</b><span class="s">profiles · narratives</span><span class="pill">get_entity</span></div>
+  </div>
+  <div class="pdrop">▼</div>
+  <div class="fan-fuse">rank fusion · RRF + trust &nbsp;→&nbsp; grounded answer</div>
 </div>
 
-<div class="callout blue center"><strong>rank fusion</strong> — the agent combines modalities per question, then fuses results by rank</div>
+<p class="center muted">The model picks &amp; combines whichever modalities the question needs — results stream back over SSE.</p>
 
 ---
 
-<!-- SLIDE 19 — Fuse → ground → cite -->
+<!-- _class: vcenter -->
+<!-- _header: 'Part 4 · Access' -->
+<!-- SLIDE — Fuse, ground, cite (C-4) -->
 
-## Fuse → ground → cite
+## Grounded &amp; cited — a worked example
 
-<div class="flow" style="margin:18px 0;flex-wrap:nowrap">
-  <div class="step">Intent</div><div class="arr">▶</div>
-  <div class="step blue">Tools fired<span class="s">graph · docs · funds</span></div><div class="arr">▶</div>
-  <div class="step">Rank fusion<span class="s">RRF</span></div><div class="arr">▶</div>
-  <div class="step">Grounded<br>generation</div><div class="arr">▶</div>
-  <div class="step gold">Answer + <span class="pill">[1]</span><span class="pill">[2]</span></div>
-</div>
-
-<div class="twocol" style="margin-top:14px">
-  <div class="card"><p>The model writes the answer <strong>only from retrieved context</strong> — every claim carries a citation that resolves to a real source chunk.</p></div>
-  <div class="panel bad"><h3>🛡 Phantom-citation gate</h3><p style="color:#7a2f2c">A <span class="pill">[n]</span> pointing to a tool that was never called is <strong>rejected</strong>.</p></div>
-</div>
-
----
-
-<!-- SLIDE 20 — The payoff: surfacing the hidden link  (PROTECTED) -->
-
-## The payoff: surfacing the hidden link
-
-<div class="twocol" style="align-items:center;grid-template-columns:1.15fr 0.85fr">
-  <div>
-    <div class="callout blue" style="margin-bottom:14px"><em>"What's my exposure to TSMC?"</em></div>
-    <div class="graph" style="justify-content:flex-start">
-      <div class="gnode" style="font-size:20px;padding:12px 18px">You</div>
-      <div class="gedge" style="min-width:90px"><span class="pred small">holds</span><div class="line"></div><span class="arrowhead">▶</span></div>
-      <div class="gnode" style="font-size:20px;padding:12px 18px">B</div>
-      <div class="gedge" style="min-width:110px"><span class="pred small">supplied_by</span><div class="line"></div><span class="arrowhead">▶</span></div>
-      <div class="gnode gold" style="font-size:20px;padding:12px 18px">TSMC</div>
+<div class="ex">
+  <div class="ex-q">"What's my exposure to TSMC?"</div>
+  <div class="ex-block">
+    <div class="ex-label">retrieved</div>
+    <div class="ex-rows">
+      <div class="ex-row"><span class="ex-tag">graph</span>NVIDIA —supplied_by→ TSMC</div>
+      <div class="ex-row"><span class="ex-tag">graph</span>TSMC —customer→ Apple · AMD · Qualcomm</div>
+      <div class="ex-row"><span class="ex-tag">portfolio</span>you hold NVDA · 4.2% of book</div>
+      <div class="ex-row"><span class="ex-tag">docs</span>"TSMC warns of capacity constraints…" (Reuters)</div>
+      <div class="ex-row"><span class="ex-tag">docs</span>"Analysts flag NVIDIA supply-chain risk" (Bloomberg)</div>
+      <div class="ex-row"><span class="ex-tag">market</span>TSMC gross margin 53% · NVDA +2.1% today</div>
     </div>
-    <p class="muted" style="margin-top:14px">Paths ranked by <em>surprising</em> <strong>and</strong> <em>reliable</em> — real cross-sector bridges, not tautologies.</p>
   </div>
-  <div class="center">
-    <div class="hero-num">0 / 20</div>
-    <div class="hero-lbl">top-ranked paths flagged<br>as noise (manual review)</div>
+  <div class="ex-block">
+    <div class="ex-label">answer</div>
+    <div class="ex-rows">
+      <div class="ex-answer">You hold <strong>NVIDIA</strong> (4.2%) <span class="pill">[1]</span>, which is supplied by <strong>TSMC</strong> <span class="pill">[2]</span>. TSMC just flagged capacity constraints <span class="pill">[3]</span> and analysts are pricing supply-chain risk into NVIDIA <span class="pill">[4]</span> — an <em>indirect exposure</em> you don't hold directly.
+      <div class="ex-cite">[1] portfolio · NVDA &nbsp; [2] graph edge · NVIDIA→TSMC &nbsp; [3] Reuters · Jun 24 &nbsp; [4] Bloomberg · Jun 25</div></div>
+    </div>
   </div>
 </div>
+
 
 ---
 
 <!-- ================================================================ -->
-<!-- ACT 5 — DIVIDER                                                  -->
+<!-- PART 5 — DIVIDER · EVALUATION                                     -->
 <!-- ================================================================ -->
 <!-- _class: divider -->
 <!-- _paginate: false -->
 
-<div class="kicker">Act 5</div>
+<div class="kicker">Part 5</div>
 
-# Does it actually run?
+# Evaluation
 
-<div class="sub">Infrastructure credibility, latency, and evaluation.</div>
+<div class="sub">Does it run, is it fast, are the answers good?</div>
 
----
-
-<!-- SLIDE 21 — A real distributed system, on one machine -->
-
-## A real distributed system, on one machine
-
-<div class="metrics">
-  <div class="metric blue"><div class="num">~50</div><div class="lbl">containers</div></div>
-  <div class="metric blue"><div class="num">8</div><div class="lbl">databases</div></div>
-  <div class="metric blue"><div class="num">6</div><div class="lbl">shared libraries</div></div>
-</div>
-
-<div class="flow" style="margin:18px 0 10px">
-  <div class="step gold"><span class="pill">make dev</span></div><div class="arr">▶</div>
-  <div class="step">services + Kafka<br>+ databases + observability</div>
-</div>
-
-<div class="cards" style="margin-top:8px">
-  <div class="card blue-top"><h3>Database per service</h3><p>No shared schema · no cross-service DB access.</p></div>
-  <div class="card gold-top"><h3>$0 infrastructure</h3><p>Commodity hardware, open-source throughout.</p></div>
-</div>
 
 ---
 
-<!-- SLIDE 22 — Fast where the user feels it -->
-
-## Fast where the user feels it
-
-<div class="bars" style="margin-top:10px">
-  <div class="bar-row">
-    <div class="bar-head"><span>Price chart &nbsp;<span class="pill">/ohlcv</span></span><span class="v gold">32 ms p95</span></div>
-    <div class="bar-track"><div class="bar-fill gold" style="width:16%"></div></div>
-  </div>
-  <div class="bar-row">
-    <div class="bar-head"><span>Graph traversal (depth-2)</span><span class="v">305 ms p95</span></div>
-    <div class="bar-track"><div class="bar-fill" style="width:33%"></div></div>
-  </div>
-  <div class="bar-row">
-    <div class="bar-head"><span>Chat first token (cached)</span><span class="v">924 ms p95</span></div>
-    <div class="bar-track"><div class="bar-fill" style="width:60%"></div></div>
-  </div>
-</div>
-
-<div class="metrics" style="margin-top:6px">
-  <div class="metric"><div class="num">6.25×</div><div class="lbl">under the chart budget</div></div>
-  <div class="metric blue" style="flex:2"><div class="num" style="font-size:30px;padding-top:10px">mostly the hosted LLM</div><div class="lbl">chat latency is external, not our code</div></div>
-</div>
-
----
-
-<!-- SLIDE 23 — How do I know the answers are good? -->
+<!-- _class: vcenter -->
+<!-- _header: 'Part 5 · Evaluation' -->
+<!-- SLIDE — How do I know the answers are good? (LLM-as-judge pipeline) -->
 
 ## How do I know the answers are good?
 
-<div class="twocol" style="grid-template-columns:1.3fr 0.7fr;align-items:center">
-  <div>
-    <div class="panel bad" style="margin-bottom:14px">
-      <h3>🛡 Tier 1 — deterministic gates <span class="small" style="color:#7a2f2c">(fire first)</span></h3>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-        <span class="pill">phantom citation</span><span class="pill">leaked scaffolding</span><span class="pill">contradicts retrieved data</span>
-      </div>
-    </div>
-    <div class="panel good">
-      <h3>Tier 2 — soft rubric</h3>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-        <span class="pill">grounding</span><span class="pill">routing</span><span class="pill">coherence</span>
-      </div>
-    </div>
-  </div>
-  <div class="center">
-    <div class="hero-num">κ ≈ 0.95</div>
-    <div class="hero-lbl">judge vs. my hand labels<br>(bar was ≥ 0.70)</div>
-  </div>
+<div class="flow" style="margin:8px 0 4px">
+  <div class="step">Question<span class="s">from the eval set</span></div><div class="arr">▶</div>
+  <div class="step">/chat endpoint<span class="s">system under test</span></div><div class="arr">▶</div>
+  <div class="step">Answer<span class="s">+ citations</span></div><div class="arr">▶</div>
+  <div class="step blue">LLM judge</div>
 </div>
+
+<p class="center muted small" style="margin:2px 0">▼&nbsp; the judge scores each answer on —</p>
+
+<div class="jbar gates"><span class="jlbl">Tier 1 · gates</span><span class="muted small">pass / fail</span> &nbsp; <span class="pill">phantom citation</span> <span class="pill">leaked scaffolding</span> <span class="pill">contradicts data</span></div>
+<div class="jbar rubric"><span class="jlbl">Tier 2 · rubric</span><span class="muted small">graded 0–N</span> &nbsp; <span class="pill">grounding</span> <span class="pill">routing</span> <span class="pill">coherence</span></div>
+
+<p class="center muted small" style="margin:4px 0">▼&nbsp; combined</p>
+
+<div class="center"><span class="score-box">final score per answer</span></div>
 
 ---
 
-<!-- ================================================================ -->
-<!-- ACT 6 — DIVIDER / DEMO                                           -->
-<!-- ================================================================ -->
-<!-- _class: divider -->
-<!-- _paginate: false -->
-
-<div class="kicker">Act 6</div>
-
-# Live demo
-
-<div class="sub">~3 minutes · video backup ready</div>
-
-<div class="miniflow">
-  <span class="m">Dashboard</span><span class="a">▶</span>
-  <span class="m">Entity graph</span><span class="a">▶</span>
-  <span class="m">Cited chat answer</span>
-</div>
-
----
-
-<!-- SLIDE 25 — Results against the objectives -->
+<!-- _header: 'Part 5 · Evaluation' -->
+<!-- SLIDE — Results against objectives -->
 
 ## Results against the objectives
 
 | # | Objective | Result | Note |
 |---|---|:--:|---|
 | O-1 | Event-driven multi-source platform | <span class="badge pass">PASS</span> | |
-| O-2 | Cost-controlled NLP (&lt;$50/mo) | <span class="badge pass">PASS</span> | ~$10–18/mo |
-| O-3 | Live graph w/ confidence + decay | <span class="badge partial">PARTIAL</span> | calibration pending |
-| O-4 | Hybrid multi-modal grounded RAG | <span class="badge partial">PARTIAL</span> | quality bounded |
+| O-2 | Cost-controlled NLP (<$50/mo) | <span class="badge pass">PASS</span> | ~$10–18/mo |
+| O-3 | Live graph w/ confidence + decay | <span class="badge pass">PASS</span> <span class="badge partial">PARTIAL</span> | mechanism live · calibration pending |
+| O-4 | Hybrid multi-modal grounded RAG | <span class="badge pass">PASS</span> <span class="badge partial">PARTIAL</span> | modalities live · faithfulness preliminary |
 | O-5 | Five end-to-end user journeys | <span class="badge pass">PASS</span> | |
 | O-6 | Latency & functional coverage | <span class="badge pass">PASS</span> | chart 32 ms p95 |
 
 ---
 
-<!-- SLIDE 26 — What I'd flag honestly -->
+<!-- ================================================================ -->
+<!-- PART 6 — DIVIDER · DEMO & CONCLUSIONS                             -->
+<!-- ================================================================ -->
+<!-- _class: divider -->
+<!-- _paginate: false -->
 
-## What I'd flag honestly
+<div class="kicker">Part 6</div>
 
-<div class="grid2">
-  <div class="card" style="border-left:4px solid var(--amber)">
-    <h3>Confidence calibration</h3>
-    <p>Formula is live and correct — but the extractor emits a near-constant score, so absolute values aren't trustworthy yet.</p>
-  </div>
-  <div class="card" style="border-left:4px solid var(--amber)">
-    <h3>Single-annotator judge</h3>
-    <p>κ ≈ 0.95 is high, but against <em>my</em> labels — no inter-annotator gold set.</p>
-  </div>
-  <div class="card" style="border-left:4px solid var(--amber)">
-    <h3>Benchmark variance</h3>
-    <p><strong>~43%</strong> of questions flip verdict across runs — the agent plans tools at non-zero temperature. Read as patterns, not exact rates.</p>
-  </div>
-  <div class="card" style="border-left:4px solid var(--amber)">
-    <h3>Sparse graph</h3>
-    <p>Only <strong>~13%</strong> of entities carry an edge — coverage grows with corpus size.</p>
-  </div>
-</div>
+# Demo &amp; conclusions
+
+<div class="sub">The platform, live — then where it stands.</div>
 
 ---
 
-<!-- SLIDE 27 — Contributions & what's next -->
+<!-- _class: divider -->
+<!-- _paginate: false -->
+<!-- _footer: '' -->
+<!-- SLIDE — Demo (audience-facing placeholder; flow + backup live in the script only) -->
 
-## Contributions & what's next
+# Demo
+
+---
+
+<!-- _class: vcenter -->
+<!-- _header: 'Part 6 · Demo & conclusions' -->
+<!-- SLIDE — Contributions & what's next (C-1..C-4) -->
+
+## Contributions &amp; what's next
 
 <div class="twocol">
   <div class="panel good">
     <h3>Contributions</h3>
-    <div class="row">✓ Open, end-to-end financial intelligence platform</div>
-    <div class="row">✓ News-to-graph dependency extraction</div>
-    <div class="row">✓ Cost-controlled NLP pipeline</div>
-    <div class="row">✓ Grounded, cited RAG chat</div>
-    <div class="row">✓ Reproducible evaluation harness</div>
+    <p>✓ <strong>C-1</strong> Integrated event-driven platform<br>✓ <strong>C-2</strong> Cost-controlled enrichment pipeline<br>✓ <strong>C-3</strong> Live knowledge graph w/ decaying confidence<br>✓ <strong>C-4</strong> Grounded, cited multi-modal chat</p>
   </div>
   <div class="panel" style="background:var(--gold-soft);border:1px solid #E6C98A">
-    <h3 style="color:var(--gold)">Next</h3>
-    <div class="row">→ Calibrate extractor confidence</div>
-    <div class="row">→ Inter-annotator judge validation</div>
-    <div class="row">→ Densify the graph</div>
-    <div class="row">→ Cost counterfactual vs. fully-local stack</div>
+    <h3 style="color:var(--gold)">What's next</h3>
+    <p class="muted small" style="margin:0 0 6px">several of these close the honest gaps from the talk</p>
+    <p>→ Calibrate extractor confidence — off the saturation ceiling<br>→ Inter-annotator judge validation — beyond a single labeller<br>→ Densify the graph — today only ~13% of entities carry an edge<br>→ Scale beyond one host — Kubernetes, multi-region, multi-tenant<br>→ Fold prediction-market signals into the graph</p>
   </div>
 </div>
 
 ---
 
-<!-- SLIDE 28 — Thank you -->
+<!-- ================================================================ -->
+<!-- SLIDE — Thank you                                                 -->
+<!-- ================================================================ -->
 <!-- _class: title -->
 <!-- _paginate: false -->
 <!-- _footer: '' -->
@@ -713,6 +672,156 @@ table tr:last-child td { background-color: var(--blue-soft) !important; }
 
 **Arnau Rodon Comas**
 github.com/arnaurodondev/WorldView
-Worldview — An Open Financial Intelligence Platform
+Worldview — An AI-Driven Financial Intelligence Platform
 
+</div>
+
+---
+
+<!-- ================================================================ -->
+<!-- BACKUP — clean Q&A slides (not presented)                         -->
+<!-- ================================================================ -->
+<!-- _class: vcenter -->
+<!-- _header: 'Backup · transactional outbox' -->
+<!-- _paginate: false -->
+<!-- _footer: '' -->
+
+## Hard problem — the dual write
+
+<div class="twocol">
+  <div class="panel bad">
+    <h3>Naïve dual write</h3>
+    <div class="row"><span class="ok">✔</span> Database write</div>
+    <div class="row"><span class="no">✘</span> Kafka publish fails</div>
+    <div class="result">→ silent inconsistency, forever</div>
+  </div>
+  <div class="panel good">
+    <h3>Transactional outbox</h3>
+    <div class="row"><span class="ok">✔</span> Data + event in <em>one</em> DB transaction</div>
+    <div class="row"><span class="ok">✔</span> Dispatcher publishes later, retries</div>
+    <div class="result">→ no lost events</div>
+  </div>
+</div>
+
+<div class="flow" style="margin-top:18px">
+  <div class="step">write data<br>+ outbox row</div><div class="arr">▶</div>
+  <div class="step">commit<span class="s">atomic</span></div><div class="arr">▶</div>
+  <div class="step">dispatcher<span class="s">reads outbox</span></div><div class="arr">▶</div>
+  <div class="step blue">Kafka</div>
+</div>
+
+---
+
+<!-- _class: vcenter -->
+<!-- _header: 'Backup · idempotent consumers' -->
+<!-- _paginate: false -->
+<!-- _footer: '' -->
+
+## Hard problem — messages arrive twice
+
+<div class="flow" style="margin:16px 0">
+  <div class="step blue">Event <span class="pill">E123</span></div><div class="arr">▶<small>first time</small></div>
+  <div class="step">Consumer<span class="s">process ✓</span></div>
+</div>
+<div class="flow" style="margin:24px 0">
+  <div class="step bad">Event <span class="pill">E123</span> again</div><div class="arr">▶<small>re-delivered</small></div>
+  <div class="step">Consumer<span class="s">checks processed IDs → no-op</span></div>
+</div>
+
+<div class="callout blue"><strong>At-least-once delivery means duplicates are normal.</strong> Idempotent consumers turn re-delivery into a no-op — never a double fact.</div>
+
+---
+
+<!-- _class: vcenter -->
+<!-- _header: 'Backup · schema evolution' -->
+<!-- _paginate: false -->
+<!-- _footer: '' -->
+
+## Hard problem — schemas change over time
+
+<div class="twocol" style="align-items:center">
+  <div class="flow" style="margin:0;flex-direction:column;gap:16px">
+    <div class="step blue">Producer <span class="pill">v2</span><span class="s">adds a new field</span></div>
+    <div class="arr" style="transform:rotate(90deg)">▶</div>
+    <div class="step">Consumer <span class="pill">v1</span><span class="s">still works — field has a default</span></div>
+    <div><span class="badge pass">forward compatible</span></div>
+  </div>
+  <div class="card">
+    <h3>The rules</h3>
+    <p><span style="color:var(--green);font-weight:800">✔</span> Add fields with defaults<br><span style="color:var(--red);font-weight:800">✘</span> Never remove fields<br><span style="color:var(--red);font-weight:800">✘</span> Never rename fields</p>
+    <p class="muted">Versioned event envelope + Avro schemas, validated in the registry.</p>
+  </div>
+</div>
+
+---
+
+<!-- _class: vcenter -->
+<!-- _header: 'Backup · distributed system + latency' -->
+<!-- _paginate: false -->
+<!-- _footer: '' -->
+
+## A real distributed system, on one machine
+
+<div class="metrics">
+  <div class="metric blue"><div class="num">~50</div><div class="lbl">application processes</div></div>
+  <div class="metric blue"><div class="num">8</div><div class="lbl">logical databases<br>(one PostgreSQL cluster)</div></div>
+  <div class="metric blue"><div class="num">6</div><div class="lbl">shared libraries</div></div>
+</div>
+
+<div class="bars" style="margin-top:12px">
+  <div class="bar-row"><div class="bar-head"><span>Price chart <span class="pill">/ohlcv</span></span><span class="v gold">32 ms p95</span></div><div class="bar-track"><div class="bar-fill gold" style="width:16%"></div></div></div>
+  <div class="bar-row"><div class="bar-head"><span>Graph traversal (depth-2)</span><span class="v">305 ms p95</span></div><div class="bar-track"><div class="bar-fill" style="width:40%"></div></div></div>
+  <div class="bar-row"><div class="bar-head"><span>Chat first token (cached)</span><span class="v">924 ms p95</span></div><div class="bar-track"><div class="bar-fill" style="width:64%"></div></div></div>
+</div>
+
+<p class="center muted" style="margin-top:10px">Database-per-service · $0 infrastructure · boots with one command. Our code answers in tens of ms; chat latency is the <em>external LLM</em>.</p>
+
+---
+
+<!-- _class: vcenter -->
+<!-- _header: 'Backup · confidence & decay' -->
+<!-- _paginate: false -->
+<!-- _footer: '' -->
+
+## Confidence — accumulate, decay, contradict
+
+<div class="grid2">
+  <div class="card blue-top"><h3>Accumulate</h3><p>Each independent observation raises confidence with <em>diminishing returns</em> — a Beta posterior, not a counter.</p></div>
+  <div class="card blue-top"><h3>Decay</h3><p>Evidence is down-weighted on a per-predicate timescale — six decay classes, permanent through ephemeral.</p></div>
+  <div class="card blue-top"><h3>Contradict</h3><p>Conflicting evidence <em>demotes</em> within a bounded range — it never erases a well-supported edge.</p></div>
+  <div class="card"><h3>Half-life by class</h3><p><span class="pill">incorporated_in</span> permanent · <span class="pill">owns</span> ~2 yr · <span class="pill">analyst_rating</span> ~60 d · <span class="pill">momentum</span> ~3 d</p></div>
+</div>
+
+<div class="callout amber center">The decay class comes from the relation <em>type</em> (a registry), not the LLM — the LLM only emits the per-evidence confidence.</div>
+
+---
+
+<!-- _class: vcenter -->
+<!-- _header: 'Backup · entity-resolution cascade' -->
+<!-- _paginate: false -->
+<!-- _footer: '' -->
+
+## Entity resolution — cheapest match first
+
+<div class="flow">
+  <div class="step">mention<span class="s">"NVIDIA"</span></div><div class="arr">▶</div>
+  <div class="step">alias<span class="s">exact</span></div><div class="arr">▶</div>
+  <div class="step">ticker<span class="s">NVDA</span></div><div class="arr">▶</div>
+  <div class="step">fuzzy<span class="s">string sim</span></div><div class="arr">▶</div>
+  <div class="step blue">embedding<span class="s">nearest canonical</span></div>
+</div>
+
+<div class="callout blue center">Each step runs only if the cheaper ones miss. Unresolved mentions are kept as <strong>anchors</strong> for extraction — never silently dropped.</div>
+
+---
+
+<!-- _header: 'Backup · full service topology' -->
+<!-- _paginate: false -->
+<!-- _footer: '' -->
+
+## Full service topology
+
+<div class="fig">
+  <img src="../thesis/diagrams/topology.png" alt="Full Worldview service topology" />
+  <div class="figcap">Reference diagram from the thesis — every service, contract, and external boundary.</div>
 </div>

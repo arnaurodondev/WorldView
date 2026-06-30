@@ -160,3 +160,7 @@ arnau_*.pdf
 results/chat_model_eval/
 results/desc_grounding_eval/
 results/kg_desc_eval/
+
+# Presentation build tooling + generated output (not product code)
+presentation/script_to_html.py
+presentation/script.html
