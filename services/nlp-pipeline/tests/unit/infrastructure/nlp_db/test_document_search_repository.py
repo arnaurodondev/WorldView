@@ -137,20 +137,46 @@ class TestSearch:
         """source_type='news' maps to the DB enum list via _SOURCE_TYPE_MAP.
 
         The API exposes a coarser taxonomy ('news', 'sec_edgar') than the DB,
-        which stores per-adapter values ('eodhd_news', 'finnhub_news', etc.).
+        which stores the canonical `ContentSourceType` literal per adapter.
         _build_search_params must translate API → DB list so the SQL ANY() clause
-        matches actual rows (PLAN-0064 BUG-2 fix).
+        matches actual rows.
+
+        REGRESSION GUARD (feat/fix-sec-fts-source-type): the LIVE news literals
+        — eodhd / eodhd_ticker_news / finnhub / newsapi — MUST be present, or the
+        'news' filter silently drops ~49k real articles (it previously only
+        listed the legacy seed names). Legacy seed names are still included for
+        backward compatibility.
         """
         request = _make_request(source_type="news")
         params = _build_search_params(request)
-        assert params["source_types"] == ["eodhd_news", "finnhub_news", "press_release"]
+        source_types = params["source_types"]
+        # The four live ContentSourceType news literals must all be present:
+        assert source_types is not None
+        for live_literal in ("eodhd", "eodhd_ticker_news", "finnhub", "newsapi"):
+            assert live_literal in source_types
+        # Legacy seed names retained for backward compatibility:
+        assert "eodhd_news" in source_types
+        assert "press_release" in source_types
 
     @pytest.mark.asyncio
     async def test_search_with_sec_edgar_source_type_filter(self) -> None:
-        """source_type='sec_edgar' maps to the three SEC adapter values."""
+        """source_type='sec_edgar' maps to the literal stored by ingestion.
+
+        REGRESSION GUARD (feat/fix-sec-fts-source-type): the canonical
+        'sec_edgar' literal — the value the SEC EDGAR adapter path actually
+        writes for every one of the 4.5k stored filings — MUST be in the mapped
+        list. The original map only listed per-form seed names (sec_10k/8k/10q)
+        and matched ZERO real filings.
+        """
         request = _make_request(source_type="sec_edgar")
         params = _build_search_params(request)
-        assert params["source_types"] == ["sec_10k", "sec_8k", "sec_10q"]
+        source_types = params["source_types"]
+        assert source_types is not None
+        # The bug: 'sec_edgar' (the live literal) was missing → 0 filings matched.
+        assert "sec_edgar" in source_types
+        # Legacy per-form seed names retained for backward compatibility:
+        for legacy in ("sec_10k", "sec_8k", "sec_10q"):
+            assert legacy in source_types
 
     @pytest.mark.asyncio
     async def test_search_source_type_all_becomes_none(self) -> None:

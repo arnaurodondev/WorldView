@@ -256,10 +256,62 @@ class AsyncpgDocumentSearchRepository(DocumentSearchRepositoryPort):
 # Maps API source_type values to the actual source_type strings stored in
 # document_source_metadata.  The API exposes a coarser taxonomy than the DB
 # (which records the exact ingestion adapter name).
+#
+# ROOT-CAUSE FIX (feat/fix-sec-fts-source-type): the original lists were written
+# against OLD seed/fixture names ("sec_10k", "eodhd_news", ...) that the LIVE
+# pipeline never produces.  Real ingestion stamps source_type with the canonical
+# `contracts.enums.ContentSourceType` literal carried end-to-end from S4 → S5
+# (content_store_db.documents.source_type) → the S5 `content.article.stored.v1`
+# event → S6 `document_source_metadata.source_type` (set verbatim in
+# article_consumer.py from `value["source_type"]`).  Those literals are:
+#   eodhd, eodhd_ticker_news, finnhub, newsapi, sec_edgar, polymarket, manual,
+#   tenant_upload.
+# Consequence of the mismatch: `?source_type=sec_edgar` mapped to
+# [sec_10k, sec_8k, sec_10q] and matched ~31 stale seed rows while MISSING the
+# 4,503 real `sec_edgar` filings; `?source_type=news` matched ~403 seed rows
+# while MISSING ~49,000 real eodhd/eodhd_ticker_news/finnhub/newsapi articles.
+#
+# Fix: map to the REAL ContentSourceType literals first, and additionally keep
+# the legacy seed names so older fixture/seed rows remain searchable (harmless
+# extra ANY() members — they simply never match in production data).
 _SOURCE_TYPE_MAP: dict[str, list[str]] = {
-    "news": ["eodhd_news", "finnhub_news", "press_release"],
-    "sec_edgar": ["sec_10k", "sec_8k", "sec_10q"],
+    # All non-filing public/news adapters. `eodhd_ticker_news` is the per-ticker
+    # EODHD feed (auto-created per equity); both it and bare `eodhd` are news.
+    "news": [
+        # Live canonical ContentSourceType literals:
+        "eodhd",
+        "eodhd_ticker_news",
+        "finnhub",
+        "newsapi",
+        # Legacy seed/fixture names (kept for backward-compat; absent in prod):
+        "eodhd_news",
+        "finnhub_news",
+        "newsapi_news",
+        "press_release",
+    ],
+    "sec_edgar": [
+        # Live canonical literal — this is the value the SEC EDGAR adapter path
+        # actually writes for every filing (form type is NOT yet structured;
+        # see follow-up note below):
+        "sec_edgar",
+        # Legacy seed/fixture per-form names (kept for backward-compat):
+        "sec_10k",
+        "sec_8k",
+        "sec_10q",
+    ],
 }
+
+# FOLLOW-UP (documented, NOT done here — would need migration + backfill):
+# The SEC EDGAR adapter (S4 sec_edgar/adapter.py) DOES know the form type — the
+# `forms` config ("10-K,10-Q,8-K,DEF14A") is sent to EFTS and each EFTS hit's
+# `_source` carries the form.  Today the adapter discards it: `FetchResult` has
+# no form_type field, so every filing lands under the single generic
+# `source_type='sec_edgar'` and per-form filtering (10-K vs 8-K vs 10-Q) is
+# impossible from structured data.  Recovering it cheaply would require: (a) add
+# an optional `form_type` to the FetchResult / raw event with a default (R11
+# forward-compatible), (b) thread it through S5 + S6, (c) a backfill parsing the
+# ~4.5k stored index docs.  That is a multi-service change with a backfill and is
+# intentionally left as a follow-up rather than half-implemented here.
 
 # Maps date_preset values to a relative window in days before now.
 # "since_last_visit" requires per-user state and is treated as no filter here.
