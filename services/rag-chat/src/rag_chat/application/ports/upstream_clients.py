@@ -135,6 +135,25 @@ class ContradictionResult:
 
 
 @dataclass
+class DocumentMetadata:
+    """Source-article metadata for a KG-derived citation (from content-store).
+
+    Resolved from a ``doc_id`` carried on a claim / event so a knowledge-graph
+    statement can link back to the news article that produced it. All fields are
+    optional — content-store silently omits missing documents, in which case the
+    caller leaves ``url`` (etc.) as ``None`` and degrades to a non-clickable
+    citation (identical to the pre-backfill behaviour).
+    """
+
+    doc_id: str
+    title: str | None = None
+    url: str | None = None
+    published_at: datetime | None = None
+    source_name: str | None = None
+    source_type: str | None = None
+
+
+@dataclass
 class PortfolioContext:
     """Portfolio summary for a user, returned by S1."""
 
@@ -250,6 +269,32 @@ class S7Port(Protocol):
         limit: int = 5,
     ) -> list[dict]:
         """Fuzzy alias search to resolve an entity name to entity_id candidates."""
+        ...
+
+
+@runtime_checkable
+class ContentStorePort(Protocol):
+    """Content-store client port — resolve ``doc_id`` → source-article metadata.
+
+    Used to backfill knowledge-graph-derived citations (claims, events) with the
+    URL / source / publish-date of the news article they were extracted from, so
+    the chat UI can render a clickable "Read ↗" link. The KG service stores only
+    the ``doc_id`` reference (nlp_db / content-store own the article title + url —
+    R9), so the linkage must be resolved over REST.
+
+    Returns ``{}`` on any HTTP / network error (R9 safe degradation) — the caller
+    falls back to a non-clickable citation.
+    """
+
+    async def get_documents_metadata(
+        self,
+        doc_ids: list[UUID],
+    ) -> dict[UUID, DocumentMetadata]:
+        """POST /api/v1/documents/batch → ``{doc_id: DocumentMetadata}`` map.
+
+        Missing doc_ids are omitted from the returned map. Returns ``{}`` on any
+        error or when ``doc_ids`` is empty.
+        """
         ...
 
 

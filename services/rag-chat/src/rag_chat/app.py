@@ -209,6 +209,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
     from rag_chat.application.use_cases.get_thread import GetThreadUseCase
     from rag_chat.application.use_cases.persist_chat import ChatPersistenceUseCase
+    from rag_chat.infrastructure.clients.content_store_client import ContentStoreClient
     from rag_chat.infrastructure.clients.s1_client import S1Client
     from rag_chat.infrastructure.clients.s3_client import S3Client
     from rag_chat.infrastructure.clients.s6_client import S6Client
@@ -220,6 +221,12 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
     s3 = S3Client(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
+    # feat/chat-kg-source-links: resolves claim/event doc_id → source-article URL
+    # so KG-derived chat citations become clickable.
+    content_store = ContentStoreClient(
+        base_url=settings.content_store_base_url,
+        timeout=settings.upstream_timeout_seconds,
+    )
     s1 = S1Client(
         base_url=settings.s1_base_url,
         valkey=valkey_client,
@@ -613,6 +620,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         s3_brief=s3_brief,
         brief_archive=brief_archive,
         s10=s10_client,
+        content_store=content_store,
         timeout=settings.upstream_timeout_seconds,
     )
     app.state.tool_executor_factory = tool_executor_factory  # expose for tests / health checks

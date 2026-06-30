@@ -192,6 +192,10 @@ class Settings(BaseSettings):
     s3_base_url: str = "http://market-data:8003"
     s1_base_url: str = "http://portfolio:8001"
     s5_base_url: str = "http://alert:8010"  # Alert service (S5) — used by BriefingContextGatherer
+    # Content-store (S5-data) base URL — used by ContentStoreClient to resolve a
+    # claim/event ``doc_id`` to its source-article URL so KG-derived citations
+    # become clickable in chat. POST /api/v1/documents/batch (internal, RS256 JWT).
+    content_store_base_url: str = "http://content-store:8005"  # RAG_CHAT_CONTENT_STORE_BASE_URL
     # Deprecated (PRD-0025): S1 Portfolio now uses X-Internal-JWT (RS256) propagated
     # from the ContextVar set by InternalJWTMiddleware. This field is kept with a
     # default to avoid startup ValidationError on existing deployments, but is unused.

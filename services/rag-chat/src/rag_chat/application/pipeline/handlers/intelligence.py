@@ -30,7 +30,12 @@ from .base import ToolHandler
 
 if TYPE_CHECKING:
     from rag_chat.application.pipeline.tool_executor import EntityContext, ToolUseBlock
-    from rag_chat.application.ports.upstream_clients import S6Port, S7Port
+    from rag_chat.application.ports.upstream_clients import (
+        ContentStorePort,
+        DocumentMetadata,
+        S6Port,
+        S7Port,
+    )
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -168,6 +173,11 @@ class IntelligenceHandler(ToolHandler):
         # (TypeError: unexpected keyword argument 's6') AND silently
         # regressed search_entity_relations ranking back to zero-vector ANN.
         s6: S6Port | None = None,
+        # feat/chat-kg-source-links: optional content-store client used to
+        # backfill claim/event citations with the source-article URL so a
+        # KG-derived statement links to the news that produced it. None falls
+        # back to the legacy behaviour (url=None, non-clickable citation).
+        content_store: ContentStorePort | None = None,
         # F-LIVE-NEW-001: configurable resolver tuning. Tests inject custom
         # values; production reads from settings via the module-level cache.
         stop_words: frozenset[str] | None = None,
@@ -178,6 +188,7 @@ class IntelligenceHandler(ToolHandler):
         self._entity_context = entity_context
         self._timeout = timeout
         self._s6 = s6
+        self._content_store = content_store
         # s7_intel intentionally unused; accepted to keep factory call uniform.
         self._stop_words: frozenset[str] = stop_words if stop_words is not None else _RESOLVER_STOP_WORDS
         self._similarity_delta_min: float = (
@@ -604,6 +615,95 @@ class IntelligenceHandler(ToolHandler):
 
         return None
 
+    async def _resolve_source_docs(
+        self,
+        doc_ids: list[str | None],
+    ) -> dict[UUID, DocumentMetadata]:
+        """Resolve a set of claim/event ``doc_id`` strings → source-article metadata.
+
+        Best-effort enrichment: returns ``{}`` when the content-store client is
+        not wired, no usable doc_ids are present, or the lookup fails for ANY
+        reason (including transport failure). This is intentionally broader than
+        the usual ``except Exception`` R9 guard — the source-link backfill is
+        secondary to the claim/event data itself, so a content-store outage must
+        NOT propagate a ``UpstreamTransportError`` (BaseException) and fail the
+        whole tool result. The citations simply stay non-clickable.
+        """
+        if self._content_store is None:
+            return {}
+        parsed: list[UUID] = []
+        for raw in doc_ids:
+            if not raw:
+                continue
+            try:
+                parsed.append(UUID(str(raw)))
+            except (ValueError, TypeError):
+                continue
+        if not parsed:
+            return {}
+        try:
+            return await asyncio.wait_for(
+                self._content_store.get_documents_metadata(parsed),
+                timeout=self._timeout,
+            )
+        except BaseException as e:
+            log.warning("source_doc_resolution_failed", num_doc_ids=len(parsed), error=str(e))
+            return {}
+
+    @staticmethod
+    def _safe_uuid(value: str | None) -> UUID | None:
+        """Parse a doc_id string to UUID, returning None on any failure."""
+        if not value:
+            return None
+        try:
+            return UUID(str(value))
+        except (ValueError, TypeError):
+            return None
+
+    @classmethod
+    def _lookup_doc(
+        cls,
+        source_docs: dict[UUID, DocumentMetadata],
+        doc_id: str | None,
+    ) -> DocumentMetadata | None:
+        """Return the resolved DocumentMetadata for ``doc_id`` (or None)."""
+        key = cls._safe_uuid(doc_id)
+        if key is None:
+            return None
+        return source_docs.get(key)
+
+    @staticmethod
+    def _citation_from_doc(
+        *,
+        title: str,
+        entity_name: str,
+        doc: DocumentMetadata | None,
+    ) -> CitationMeta:
+        """Build a CitationMeta, backfilling url/source/published_at from ``doc``.
+
+        When ``doc`` is None (no source article resolved) the citation keeps the
+        legacy shape: url=None, source_name="knowledge_graph". When a source
+        article IS resolved, the url + source_name + published_at point at the
+        news article so the chat UI can render a clickable "Read ↗" link.
+        """
+        if doc is None:
+            return CitationMeta(
+                title=title,
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=entity_name,
+            )
+        return CitationMeta(
+            title=title,
+            url=doc.url,
+            # Prefer the article's real source (e.g. "Reuters"); fall back to the
+            # KG marker when content-store had no source_name for the document.
+            source_name=doc.source_name or "knowledge_graph",
+            published_at=doc.published_at,
+            entity_name=entity_name,
+        )
+
     async def _handle_get_entity_graph(
         self,
         tool_call: ToolUseBlock,
@@ -880,6 +980,11 @@ class IntelligenceHandler(ToolHandler):
             log.warning("tool_no_data", tool="search_claims", entity_name=entity_name)
             return []
 
+        # Backfill citation URLs from the source article each claim was extracted
+        # from (one batched content-store lookup for the whole result set).
+        source_docs = await self._resolve_source_docs([c.doc_id for c in claims])
+        linked = 0
+
         items: list[RetrievedItem] = []
         for claim in claims:
             text = (
@@ -887,6 +992,9 @@ class IntelligenceHandler(ToolHandler):
                 f"{claim.claim_text} "
                 f"(confidence={claim.extraction_confidence:.2f})"
             )
+            doc = self._lookup_doc(source_docs, claim.doc_id)
+            if doc is not None and doc.url:
+                linked += 1
             items.append(
                 RetrievedItem.create(
                     item_id=f"tool:claim:{claim.claim_id}",
@@ -894,13 +1002,13 @@ class IntelligenceHandler(ToolHandler):
                     text=text[:_TOOL_RESULT_MAX_CHARS],
                     score=claim.extraction_confidence,
                     trust_weight=0.75,
+                    doc_id=self._safe_uuid(claim.doc_id),
+                    published_at=doc.published_at if doc is not None else None,
                     extraction_confidence=claim.extraction_confidence,
-                    citation_meta=CitationMeta(
+                    citation_meta=self._citation_from_doc(
                         title=f"Claim: {claim.claim_type}",
-                        url=None,
-                        source_name="knowledge_graph",
-                        published_at=None,
                         entity_name=entity_name,
+                        doc=doc,
                     ),
                 )
             )
@@ -910,6 +1018,7 @@ class IntelligenceHandler(ToolHandler):
             tool="search_claims",
             latency_ms=round((time.monotonic() - t0) * 1000),
             items_returned=len(items),
+            items_source_linked=linked,
         )
         return items
 
@@ -954,6 +1063,11 @@ class IntelligenceHandler(ToolHandler):
             log.warning("tool_no_data", tool="search_events", entity_name=entity_name)
             return []
 
+        # Backfill citation URLs from the source article each event was extracted
+        # from (one batched content-store lookup for the whole result set).
+        source_docs = await self._resolve_source_docs([e.doc_id for e in events])
+        linked = 0
+
         items: list[RetrievedItem] = []
         for event in events:
             text = (
@@ -962,6 +1076,9 @@ class IntelligenceHandler(ToolHandler):
                 + (f" on {event.event_date}" if event.event_date else "")
                 + f": {event.event_text}"
             )
+            doc = self._lookup_doc(source_docs, event.doc_id)
+            if doc is not None and doc.url:
+                linked += 1
             items.append(
                 RetrievedItem.create(
                     item_id=f"tool:event:{event.event_id}",
@@ -969,12 +1086,12 @@ class IntelligenceHandler(ToolHandler):
                     text=text[:_TOOL_RESULT_MAX_CHARS],
                     score=event.extraction_confidence,
                     trust_weight=0.78,
-                    citation_meta=CitationMeta(
+                    doc_id=self._safe_uuid(event.doc_id),
+                    published_at=doc.published_at if doc is not None else None,
+                    citation_meta=self._citation_from_doc(
                         title=f"Event: {event.event_type}",
-                        url=None,
-                        source_name="knowledge_graph",
-                        published_at=None,
                         entity_name=entity_name,
+                        doc=doc,
                     ),
                 )
             )
@@ -984,6 +1101,7 @@ class IntelligenceHandler(ToolHandler):
             tool="search_events",
             latency_ms=round((time.monotonic() - t0) * 1000),
             items_returned=len(items),
+            items_source_linked=linked,
         )
         return items
 
