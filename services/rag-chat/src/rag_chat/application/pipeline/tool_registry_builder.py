@@ -988,6 +988,75 @@ def build_default_registry() -> ToolRegistry:
         handler=lambda **_: None,
     )
 
+    # SEC EDGAR filings tool — surfaces a company's filings with a clickable
+    # EDGAR citation URL on every result.  Distinct from search_documents:
+    # search_documents' advertised ``sec_filing`` source taxonomy does not match
+    # the stored ``sec_edgar`` literal, so filing-only retrieval was effectively
+    # unreachable; this tool pins the correct source_type, dedupes to one row per
+    # filing, and stamps citation_meta.url with the sec.gov filing index URL.
+    registry.register(
+        ToolSpec(
+            name="get_filings",
+            description=(
+                "Retrieves a company's SEC EDGAR filings (10-K, 10-Q, 8-K, DEF 14A, S-1) — each "
+                "returned with a clickable link to the primary filing on sec.gov. "
+                "**Use this tool — NOT search_documents — for ANY question about a company's "
+                "regulatory filings, annual/quarterly reports, or where to read the official "
+                "filing.** Triggers: 'show me Apple's latest 10-K', 'list NVDA's recent 8-K "
+                "filings', 'link me to Tesla's annual report', 'what did MSFT file with the SEC'. "
+                "Identify the company by ticker (or entity_id). Returns filings newest-first with "
+                "the form type, filed date, and the EDGAR URL as the citation source. The "
+                "form_type filter is best-effort (the label is recovered from the filing text); "
+                "when no filing matches it the tool still returns the company's recent filings."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="ticker",
+                    type="string",
+                    description="Stock ticker (e.g. 'AAPL'). Provide this OR entity_id.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="entity_id",
+                    type="string",
+                    description="Canonical entity UUID. Provide this OR ticker.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="form_type",
+                    type="string",
+                    description='Optional SEC form filter, e.g. "10-K", "10-Q", "8-K", "DEF 14A". Best-effort.',
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="date_from",
+                    type="date",
+                    description="Earliest filed date (YYYY-MM-DD). Optional.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="date_to",
+                    type="date",
+                    description="Latest filed date (YYYY-MM-DD). Optional.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="max_results",
+                    type="integer",
+                    description="Max filings to return (1-20). Default 10.",
+                    required=False,
+                ),
+            ],
+            source_type="sec_edgar",
+            example_queries=[
+                "Show me Apple's latest 10-K filing",
+                "List NVDA's recent 8-K filings with links",
+                "Link me to Tesla's annual report on EDGAR",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
     registry.register(
         ToolSpec(
             name="get_market_movers",

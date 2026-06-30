@@ -98,7 +98,8 @@ class TestRegistryParameterCoverage:
         names = {s.name for s in registry.all_specs()}
         # PLAN-0112 W4 bumped 25 → 26 by adding ``get_path_between`` (pairwise).
         # Chat prediction-market tool bumped 26 → 27 by adding ``get_prediction_markets``.
-        assert len(names) == 27, f"Expected 27 tools, got {len(names)}: {sorted(names)}"
+        # Chat SEC-filings tool bumped 27 → 28 by adding ``get_filings``.
+        assert len(names) == 28, f"Expected 28 tools, got {len(names)}: {sorted(names)}"
 
     def test_every_audit_placeholder_tool_now_carries_params_or_is_zero_param(self) -> None:
         """D-R1-002: 18 placeholder tools were filled in; 3 intentionally zero-arg."""
@@ -164,7 +165,8 @@ class TestProductionRegistryToolDefinitions:
         defs = registry.to_tool_definitions()
         # PLAN-0112 W4: 26 after adding get_path_between.
         # Chat prediction-market tool: 27 after adding get_prediction_markets.
-        assert len(defs) == 27
+        # Chat SEC-filings tool: 28 after adding get_filings.
+        assert len(defs) == 28
 
     def test_every_definition_has_openai_envelope(self) -> None:
         registry = build_default_registry()
@@ -215,6 +217,8 @@ class TestProductionRegistryToolDefinitions:
             "get_path_between",
             # Chat prediction-market tool
             "get_prediction_markets",
+            # Chat SEC-filings tool
+            "get_filings",
         }
         assert names == expected, f"Missing: {expected - names}; Extra: {names - expected}"
 

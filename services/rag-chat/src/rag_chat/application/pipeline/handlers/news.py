@@ -4,11 +4,13 @@ Covers tools backed by S6Port and BriefArchivePort:
   - search_documents   (S6Port — hybrid BM25+ANN document search)
   - get_morning_brief  (BriefArchivePort — DB-archived morning brief)
   - get_entity_news    (S6Port — entity-anchored news feed, PLAN-0103 W2)
+  - get_filings        (S6Port — SEC EDGAR filings with clickable EDGAR citation URLs)
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -31,6 +33,24 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # Maximum characters for tool result text injected into LLM context.
 _TOOL_RESULT_MAX_CHARS = 4000
 
+# Recognises the common SEC form types embedded in a filing's title or body text.
+# All SEC EDGAR filings are stored under the single generic source_type
+# ``sec_edgar`` (the per-form type — 10-K / 10-Q / 8-K — is NOT persisted as a
+# structured column anywhere downstream of content-ingestion). We therefore
+# recover the human-facing form label best-effort by scanning the chunk text /
+# title. Pattern mirrors nlp_pipeline.application.blocks.rare_token._RE_FILING_TYPE
+# plus a few proxy / registration forms that show up in the corpus.
+_RE_FILING_FORM = re.compile(
+    r"\b(10-K(?:/A)?|10-Q(?:/A)?|8-K(?:/A)?|DEF\s*14A|DEFA?14A|S-1(?:/A)?|" r"20-F|6-K|424B[0-9]?|13[DFG])\b",
+    re.IGNORECASE,
+)
+
+# Stored source_type for every SEC EDGAR filing document (content-ingestion's
+# ``sec_edgar`` Source row → content-store → document_source_metadata.source_type).
+# The NLP chunk-search endpoint filters ``dsm.source_type = ANY(:source_types)``
+# verbatim, so this exact literal is what selects filings (and ONLY filings).
+_SEC_EDGAR_SOURCE_TYPE = "sec_edgar"
+
 
 class NewsHandler(ToolHandler):
     """Handles document search and morning brief tools.
@@ -39,7 +59,7 @@ class NewsHandler(ToolHandler):
     get_morning_brief calls BriefArchivePort (local DB read — R27 compliance).
     """
 
-    _HANDLED_TOOLS = frozenset({"search_documents", "get_morning_brief", "get_entity_news"})
+    _HANDLED_TOOLS = frozenset({"search_documents", "get_morning_brief", "get_entity_news", "get_filings"})
 
     def __init__(
         self,
@@ -79,6 +99,16 @@ class NewsHandler(ToolHandler):
             # PLAN-0103 W2: entity-anchored news feed (Q1 follow-up).
             known, _ = filter_kwargs_to_signature(self._handle_get_entity_news, tool_name, args)
             return await self._handle_get_entity_news(**known)
+        if tool_name == "get_filings":
+            # SEC EDGAR filing retrieval — each result carries a clickable
+            # citation_meta.url pointing at the EDGAR filing index page.
+            # Normalize the common to_date → date_to alias (mirrors search_documents).
+            if "to_date" in args and "date_to" not in args:
+                args = {**args, "date_to": args.pop("to_date")}
+            if "from_date" in args and "date_from" not in args:
+                args = {**args, "date_from": args.pop("from_date")}
+            known, _ = filter_kwargs_to_signature(self._handle_get_filings, tool_name, args)
+            return await self._handle_get_filings(**known)
         raise ValueError(f"NewsHandler cannot handle tool: {tool_name}")
 
     # ── S6 handler (document search) ───────────────────────────────────────────
@@ -436,6 +466,204 @@ class NewsHandler(ToolHandler):
             tool="get_entity_news",
             latency_ms=round((time.monotonic() - t0) * 1000),
             entity_id=str(resolved_id),
+            items_returned=len(items),
+        )
+        return items
+
+    # ── SEC EDGAR filings (clickable EDGAR citation URLs) ──────────────────────
+
+    @staticmethod
+    def _detect_form_type(*texts: str | None) -> str | None:
+        """Best-effort recover the SEC form label (10-K, 8-K, …) from text.
+
+        All filings share the generic ``sec_edgar`` source_type — the per-form
+        type is never persisted structurally — so we scan the title/body. The
+        FIRST matched token wins (titles lead with the form type when present).
+        Returns the normalised upper-case label (whitespace collapsed) or None.
+        """
+        for text in texts:
+            if not text:
+                continue
+            m = _RE_FILING_FORM.search(text)
+            if m:
+                # Collapse internal whitespace ("DEF  14A" → "DEF 14A") + upper-case.
+                return re.sub(r"\s+", " ", m.group(1)).upper()
+        return None
+
+    async def _handle_get_filings(
+        self,
+        entity_id: str | None = None,
+        ticker: str | None = None,
+        form_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        max_results: int = 10,
+    ) -> list[RetrievedItem]:
+        """Retrieve SEC EDGAR filings for an entity, each with a clickable EDGAR URL.
+
+        Why a dedicated tool (not just ``search_documents``): ``search_documents``
+        advertises a ``source_types`` filter to the LLM but the value taxonomy it
+        suggests (``sec_filing``) does NOT match the stored ``sec_edgar`` literal,
+        so filing-only retrieval was effectively unreachable. This tool pins the
+        correct stored source_type, deduplicates to ONE result per filing
+        (chunk-search returns many chunks per document), and stamps
+        ``citation_meta.url`` with the canonical EDGAR index URL so the answer can
+        link straight to the primary source on sec.gov.
+
+        Read path (R9 — rag-chat → S6 direct REST, the existing tool pattern):
+        ``S6Port.search_chunks`` with ``source_types=['sec_edgar']`` filters
+        ``document_source_metadata.source_type`` verbatim. The returned
+        ``EnrichedChunkResult`` already carries ``url`` (EDGAR), ``published_at``
+        (filed date), ``title`` and ``source_name``.
+
+        Resolution order (mirrors get_entity_news):
+          1. ``entity_id`` (UUID string) wins when provided.
+          2. else ``ticker`` resolved via S6 alias lookup.
+          3. else the active EntityContext scope, if any.
+          4. else no entity filter (returns recent filings across the corpus).
+
+        ``form_type`` (e.g. "10-K") is a BEST-EFFORT filter: the type is not a
+        structured field, so we (a) bias the relevance query toward it and
+        (b) prefer results whose detected form label matches. If NO result
+        matches the requested form we fall back to returning all filings (logged)
+        rather than an empty hand — the EDGAR link still lets the user verify.
+        """
+        if self._s6 is None:
+            log.warning("tool_handler_missing_port", tool="get_filings", port="s6")
+            return []
+
+        # Resolve to a single canonical entity UUID (optional — None = any entity).
+        resolved_id: UUID | None = None
+        if entity_id:
+            try:
+                resolved_id = UUID(entity_id)
+            except ValueError:
+                log.warning("tool_invalid_entity_id", tool="get_filings", entity_id=entity_id)
+        if resolved_id is None and ticker:
+            try:
+                resolved_id = await self._s6.resolve_entity_by_ticker(ticker)
+            except Exception as exc:
+                log.warning("tool_failed", tool="get_filings", phase="resolve_ticker", error=str(exc))
+                return []
+            if resolved_id is None:
+                log.warning("entity_ticker_unresolved", tool="get_filings", ticker=ticker)
+        if resolved_id is None and self._entity_context is not None:
+            # Fall back to the scoped entity (e.g. the page the user is viewing).
+            resolved_id = self._entity_context.entity_id
+
+        # Clamp the requested result count to a safe band.
+        capped_results = max(1, min(int(max_results), 20))
+
+        # Parse optional date bounds (the chunk search accepts datetime | None).
+        def _parse_dt(s: str | None) -> datetime | None:
+            if s is None:
+                return None
+            try:
+                return datetime.fromisoformat(str(s).replace("Z", "+00:00")).replace(tzinfo=UTC)
+            except ValueError:
+                log.warning("tool_invalid_date", tool="get_filings", value=s)
+                return None
+
+        # Build the relevance query. The chunk search needs SOME query text; bias
+        # it toward the requested form type, otherwise use a broad high-recall
+        # phrase. The hard source_type + entity filters do the real selection.
+        normalised_form = re.sub(r"\s+", " ", form_type).strip().upper() if form_type else None
+        query_text = normalised_form or "annual quarterly report SEC filing"
+
+        from rag_chat.application.ports.upstream_clients import ChunkSearchRequest
+
+        # Over-fetch: chunk search returns multiple chunks per filing, so request
+        # a larger window and dedupe by doc_id down to ``capped_results`` filings.
+        request = ChunkSearchRequest(
+            query_text=query_text,
+            top_k=min(50, capped_results * 5),
+            search_type="hybrid",
+            date_from=_parse_dt(date_from),
+            date_to=_parse_dt(date_to),
+            source_types=[_SEC_EDGAR_SOURCE_TYPE],
+            entity_ids=[resolved_id] if resolved_id is not None else None,
+        )
+
+        t0 = time.monotonic()
+        try:
+            results = await asyncio.wait_for(self._s6.search_chunks(request), timeout=self._timeout)
+        except Exception as exc:
+            log.warning("tool_failed", tool="get_filings", error=str(exc))
+            return []
+
+        if not results:
+            log.info("tool_no_data", tool="get_filings", entity_id=str(resolved_id) if resolved_id else None)
+            return []
+
+        # Dedupe to ONE entry per filing (best-ranked chunk wins — results are
+        # already score-ordered by S6). Detect the form label per filing.
+        seen_docs: set[str] = set()
+        matched: list[RetrievedItem] = []
+        fallback: list[RetrievedItem] = []
+        _entity_label = ticker.strip().upper() if isinstance(ticker, str) and ticker.strip() else None
+
+        for result in results:
+            doc_id = str(result.doc_id) if result.doc_id else result.chunk_id
+            if doc_id in seen_docs:
+                continue
+            seen_docs.add(doc_id)
+
+            detected_form = self._detect_form_type(result.title, result.text)
+            # Compose a human title: "10-K filing — 2026-01-31" when we know both.
+            date_label = result.published_at.date().isoformat() if result.published_at else "date unknown"
+            if detected_form:
+                title = f"{detected_form} filing — {date_label}"
+            elif result.title:
+                title = result.title
+            else:
+                title = f"SEC filing — {date_label}"
+
+            # Text injected into the LLM context: title + form + date + link.
+            text_lines = [title]
+            text_lines.append(f"  Source: SEC EDGAR | Filed: {date_label}")
+            if result.url:
+                text_lines.append(f"  Filing: {result.url}")
+            item = RetrievedItem.create(
+                item_id=f"tool:filing:{doc_id}",
+                item_type=ItemType.chunk,
+                entity_id=resolved_id,
+                text="\n".join(text_lines)[:_TOOL_RESULT_MAX_CHARS],
+                score=max(0.5, float(result.score)),
+                # SEC filings are the highest-authority primary source (mirrors the
+                # sec_10k/10q → 0.95 trust weights in the TrustScorer invariant).
+                trust_weight=0.95,
+                source_type=_SEC_EDGAR_SOURCE_TYPE,
+                published_at=result.published_at,
+                citation_meta=CitationMeta(
+                    title=title,
+                    url=result.url,  # canonical EDGAR filing index URL
+                    source_name="sec_edgar",
+                    published_at=result.published_at,
+                    entity_name=_entity_label,
+                ),
+            )
+            # When a specific form was requested, partition matches vs the rest so
+            # we can prefer exact-form filings but still degrade gracefully.
+            if normalised_form is not None and (detected_form is None or detected_form != normalised_form):
+                fallback.append(item)
+            else:
+                matched.append(item)
+
+        chosen = matched if matched else fallback
+        if normalised_form is not None and not matched:
+            log.info("filings_form_filter_fallback", tool="get_filings", form_type=normalised_form)
+
+        # Newest filing first — chronological ordering is what users expect for a
+        # filings list (chunk search ordered by relevance, not date).
+        chosen.sort(key=lambda it: it.published_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+        items = chosen[:capped_results]
+
+        log.info(
+            "tool_executed",
+            tool="get_filings",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            entity_id=str(resolved_id) if resolved_id else None,
+            form_type=normalised_form,
             items_returned=len(items),
         )
         return items
