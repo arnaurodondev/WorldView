@@ -71,6 +71,58 @@ def test_output_parses_citation_markers(processor: OutputProcessor) -> None:
 
 
 @pytest.mark.unit
+def test_output_news_citation_carries_url_source_published(processor: OutputProcessor) -> None:
+    """A well-formed news/doc item surfaces url + source_name + published_at.
+
+    Guards the happy path: when the upstream gives us real values they must
+    reach the Citation verbatim (this is what powers the frontend "Read ↗"
+    link and the source/date labels).
+    """
+    raw = "Apple beat estimates [1]."
+    _, citations = processor.process(raw, [_item("chunk-1")])
+
+    assert len(citations) == 1
+    assert citations[0].url == "https://sec.gov/apple"
+    assert citations[0].source_name == "SEC"
+    assert citations[0].published_at == datetime(2024, 1, 15, tzinfo=UTC)
+
+
+@pytest.mark.unit
+def test_output_empty_string_url_source_normalised_to_none(processor: OutputProcessor) -> None:
+    """Empty-string url/source_name/title from upstream collapse to None.
+
+    The /briefing-articles feed behind get_entity_news coerces a missing
+    url/source_name to "" (``row["url"] or ""``). Without normalisation the
+    Citation would carry url="" and the frontend would either render a broken
+    "Read ↗" link or a blank source label. We assert the choke point cleans it.
+    """
+    item = RetrievedItem.create(
+        item_id="news-1",
+        item_type=ItemType.chunk,
+        text="Some news body.",
+        score=0.5,
+        trust_weight=0.85,
+        citation_meta=CitationMeta(
+            title="   ",  # whitespace-only -> None
+            url="",  # empty -> None (no broken link)
+            source_name="",  # empty -> None (no blank label)
+            published_at=datetime(2026, 6, 30, tzinfo=UTC),
+            entity_name="",  # empty -> None
+        ),
+    )
+
+    _, citations = processor.process("Headline [1].", [item])
+
+    assert len(citations) == 1
+    assert citations[0].url is None
+    assert citations[0].source_name is None
+    assert citations[0].title is None
+    assert citations[0].entity_name is None
+    # published_at is a real value and must survive untouched.
+    assert citations[0].published_at == datetime(2026, 6, 30, tzinfo=UTC)
+
+
+@pytest.mark.unit
 def test_output_citation_out_of_range_ignored(processor: OutputProcessor) -> None:
     """[99] when only 5 items -> citation 99 not in list."""
     raw = "Some answer with [99] invalid reference."

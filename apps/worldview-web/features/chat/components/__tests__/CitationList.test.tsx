@@ -90,4 +90,41 @@ describe("CitationList", () => {
     expect(screen.getByText("[1]")).toBeDefined();
     expect(screen.getByText("[2]")).toBeDefined();
   });
+
+  it("renders the publish date (UTC) when published_at is present", () => {
+    render(
+      <CitationList
+        citations={[{ ...LINKED_CITE, published_at: "2026-06-30T08:00:00Z" }]}
+      />,
+    );
+    // Compact "Mon D, YYYY" label, fixed to UTC so the day never drifts by TZ.
+    expect(screen.getByText("Jun 30, 2026")).toBeDefined();
+    // The date is also appended to the hover tooltip.
+    const link = screen.getByRole("link");
+    expect(link.getAttribute("title")).toContain("Jun 30, 2026");
+  });
+
+  it("omits the date for citations without a published_at", () => {
+    render(<CitationList citations={[LINKED_CITE]} />);
+    // No date label leaks in when the source has no publish timestamp.
+    expect(screen.queryByText(/\d{4}$/)).toBeNull();
+  });
+
+  it("renders the source name alongside every citation", () => {
+    render(<CitationList citations={[LINKED_CITE]} />);
+    // source_name (mapped to `source`) is always shown so the analyst sees
+    // WHERE the claim came from even before clicking through.
+    expect(screen.getByText("Reuters")).toBeDefined();
+  });
+
+  it("ignores a malformed published_at instead of printing 'Invalid Date'", () => {
+    render(
+      <CitationList
+        citations={[{ ...LINKED_CITE, published_at: "not-a-date" }]}
+      />,
+    );
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+    // The chip itself still renders fine.
+    expect(screen.getByRole("link")).toBeDefined();
+  });
 });
