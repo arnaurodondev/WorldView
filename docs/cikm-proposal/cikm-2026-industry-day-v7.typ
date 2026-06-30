@@ -40,9 +40,9 @@
   passing an uncalibrated judge. Our contribution is a #emph[multi-level evaluation framework] that measures such
   a system at four levels — answer validity (an LLM judge hardened with deterministic hard-fail gates and a
   grounding veto), numeric tool-output substantiation, trajectory judging over the captured tool-call trace, and
-  calibration against a human-labelled gold set. It is motivated by real failures it was built to catch: a
-  fabricated answer scored 85/100 under an additive judge, and raw error strings scored perfectly. On a frozen
-  run the gated judge reaches Cohen's κ = 0.80 with zero false-passes on fabrication, and we report a sobering
+  calibration against a human-labelled gold set. It is motivated by real failures it was built to catch: under
+  an additive judge, a fabricated answer scored 85/100. On a frozen gold set the gated judge reaches Cohen's
+  κ = 0.80 with zero false-passes on fabrication, and we report a sobering
   negative result — fresh-extractor quality substantially overstates the served-graph quality users actually
   query.
 ]
@@ -163,9 +163,8 @@ cell, held to zero — and #emph[run-stable], because the gates that protect tha
 than LLM-scored.
 
 We also maintain an emerging #emph[reasoning-validity] layer that labels whether evidence-to-claim inferences
-are supported, unsupported, or contradicted. We do not present it as a validated standalone benchmark yet,
-because it remains LLM-judged. It is reported only as a diagnostic signal alongside deterministic
-substantiation.
+are supported, unsupported, or contradicted; as it remains LLM-judged, we report it only as a diagnostic
+signal, not a validated benchmark.
 
 = Finding: served graph quality is the number that matters
 Underlying all four levels is one principle — the object of evaluation is the #emph[served] state the agent
@@ -174,17 +173,16 @@ important empirical lesson: extractor quality can overstate user-facing quality.
 evaluation, fresh extraction reached #strong[82.6%] document support, while relations actually served from the
 stored graph reached only #strong[48.8%] support volume-weighted, or #strong[36.9%] predicate-balanced [6]. The
 gap appears because the live graph is a sediment of extractor versions, historical documents, validation rules,
-and previous promotion decisions. Users do not query the fresh extractor; they query the served graph.
+and previous promotion decisions. It also explains why the served score lags our current logic: improvements
+propagate to users only as the sediment is re-promoted, so measuring the extractor alone overstates user-facing
+quality until backfill completes — which is precisely what served-state measurement makes visible. Users do not
+query the fresh extractor; they query the served graph.
 
 This finding changes what should be measured. A KG-RAG system can report strong extraction precision and still
 serve stale, unsupported, or directionally wrong relations if the graph state is not evaluated directly.
 Deterministic validation gates removed #strong[442] bad relations in the latest graph-quality pass, including
 self-loops, out-of-vocabulary predicates, invalid `listed_on` relations, and common-noun endpoints. On the
 current extractor, the same gates increasingly act as regression guards rather than active filters.
-
-The general lesson is that live grounded RAG should be evaluated layer by layer: answer quality, evidence use,
-tool trajectory, judge reliability, and served retrieval state. A system that #emph[reports] success is not
-necessarily a system that #emph[is] correct.
 
 = Talk takeaways
 The talk is a technical field report on evaluating grounded agentic RAG under continuous operation. Attendees
