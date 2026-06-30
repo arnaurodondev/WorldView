@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   categorize,
   formatCountdown,
+  buildPolymarketUrl,
   MACRO_KEYWORDS,
   POLITICS_KEYWORDS,
   SPORTS_KEYWORDS,
@@ -190,5 +191,80 @@ describe("formatCountdown", () => {
 
   it("returns 'closes in 7d' for a timestamp exactly 7 days away", () => {
     expect(formatCountdown("2026-05-12T12:00:00.000Z")).toBe("closes in 7d");
+  });
+});
+
+// ── buildPolymarketUrl ──────────────────────────────────────────────────────────
+
+/**
+ * buildPolymarketUrl tests — pin the "wrong links" fix (2026-06-28).
+ *
+ * The bug: every prediction-market row opened a generic Polymarket text
+ * search instead of the specific market, because the gateway hardcoded
+ * url:"" and the UI fell back to a search URL. The fix routes through this
+ * helper, which deep-links clean slugs to /event/{slug} and only falls back
+ * to search for null / empty / malformed (numeric-tail) slugs.
+ */
+describe("buildPolymarketUrl", () => {
+  it("deep-links a clean slug to the canonical /event/{slug} path", () => {
+    // The 521/525 majority case — a normal Polymarket Gamma slug.
+    const slug = "will-harvey-weinstein-be-sentenced-to-more-than-30-years-in-prison";
+    expect(buildPolymarketUrl(slug, "Will Harvey Weinstein be sentenced?")).toBe(
+      `https://polymarket.com/event/${slug}`,
+    );
+  });
+
+  it("falls back to a title-search URL when the slug is null", () => {
+    // Markets ingested before the slug column existed have null → search.
+    expect(buildPolymarketUrl(null, "Fed rate decision")).toBe(
+      "https://polymarket.com/markets?_q=Fed%20rate%20decision",
+    );
+  });
+
+  it("falls back to a title-search URL when the slug is an empty string", () => {
+    expect(buildPolymarketUrl("", "Some Market")).toBe(
+      "https://polymarket.com/markets?_q=Some%20Market",
+    );
+  });
+
+  it("falls back to a title-search URL when the slug is whitespace only", () => {
+    // Whitespace would otherwise yield /event/%20 — guard via trim().
+    expect(buildPolymarketUrl("   ", "Whitespace Slug")).toBe(
+      "https://polymarket.com/markets?_q=Whitespace%20Slug",
+    );
+  });
+
+  it("falls back to search for a malformed numeric-tail slug (the ~4/525 case)", () => {
+    // The corruption pattern: a chain of dash-separated number groups appended.
+    const malformed = "will-x-happen-143-229-513-574-212-254";
+    expect(buildPolymarketUrl(malformed, "Will X happen?")).toBe(
+      "https://polymarket.com/markets?_q=Will%20X%20happen%3F",
+    );
+  });
+
+  it("URL-encodes special characters in the search fallback title", () => {
+    // Titles routinely contain ? & % spaces — all must be percent-encoded so
+    // the query string is valid and points at the right search term.
+    expect(buildPolymarketUrl(null, "Up 50% & done? yes/no")).toBe(
+      "https://polymarket.com/markets?_q=Up%2050%25%20%26%20done%3F%20yes%2Fno",
+    );
+  });
+
+  it("keeps a clean slug that legitimately ends in a single number", () => {
+    // Only a CHAIN of 3+ numeric groups is treated as malformed. A real slug
+    // ending in one number (e.g. a year or "game-7") must still deep-link.
+    const slug = "nba-finals-game-7";
+    expect(buildPolymarketUrl(slug, "NBA Finals Game 7")).toBe(
+      `https://polymarket.com/event/${slug}`,
+    );
+  });
+
+  it("keeps a clean slug that ends in two numeric groups", () => {
+    // Boundary: the malformed pattern requires the first -\d+ PLUS 2 more, i.e.
+    // 3+ groups. Two groups (e.g. a "-2024-q1"-style numeric pair) stays clean.
+    const slug = "election-result-2024-1";
+    expect(buildPolymarketUrl(slug, "Election result")).toBe(
+      `https://polymarket.com/event/${slug}`,
+    );
   });
 });

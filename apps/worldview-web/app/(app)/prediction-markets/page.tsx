@@ -26,6 +26,9 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 // HF-10: shared compact-currency formatter for "$1.2M" / "$42.5K" output.
 import { formatCompactCurrency } from "@/lib/format";
+// WHY import: URL construction is centralised so this page, the dashboard
+// widget, and the gateway transform all produce identical Polymarket links.
+import { buildPolymarketUrl } from "@/lib/prediction-markets";
 import { TrendingUp, Search, AlertCircle } from "lucide-react";
 import type { PredictionMarket, PredictionMarketsResponse } from "@/types/api";
 
@@ -182,15 +185,17 @@ function MarketRow({ market }: { market: PredictionMarketExtended }) {
 
   // WHY link to polymarket.com: the prediction markets page is a read-only view;
   // trading happens on Polymarket's platform.
-  // WHY title-search URL (density bundle 2026-05-09): the historic
-  // ``/event/{slug}`` pattern returned 404 for many markets because the slug we
-  // receive from the Gamma ``markets`` payload does NOT reliably match
-  // Polymarket's canonical event/market paths. The ``/markets?_q=`` search URL
-  // always resolves to a working results page regardless of slug shape — so we
-  // use it as the first-class target and only fall back to ``market.url`` when
-  // S3 supplied an explicit URL.
-  const fallbackUrl = `https://polymarket.com/markets?_q=${encodeURIComponent(market.title ?? "")}`;
-  const targetUrl = market.url && market.url.length > 0 ? market.url : fallbackUrl;
+  // WHY market.url is authoritative (2026-06-28 "wrong links" fix): the gateway
+  // transform now populates ``url`` via buildPolymarketUrl(), which returns the
+  // canonical ``/event/{slug}`` deep link for clean slugs and a title-search
+  // fallback for null/malformed slugs. We no longer build a search URL inline —
+  // that duplicated logic sent every row to a generic search. The
+  // buildPolymarketUrl re-derivation is a DEFENSIVE fallback (stale cached
+  // payload with empty url) using the SAME helper, never a divergent one.
+  const targetUrl =
+    market.url && market.url.length > 0
+      ? market.url
+      : buildPolymarketUrl(market.market_slug, market.title ?? "");
   const handleRowClick = () => {
     window.open(targetUrl, "_blank", "noopener,noreferrer");
   };

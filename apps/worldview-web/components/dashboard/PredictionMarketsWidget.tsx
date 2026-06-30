@@ -47,6 +47,7 @@ import { formatCompactCurrency } from "@/lib/format";
 import {
   categorize,
   formatCountdown,
+  buildPolymarketUrl,
   type Category,
 } from "@/lib/prediction-markets";
 import type { PredictionMarketsResponse } from "@/types/api";
@@ -495,17 +496,18 @@ export function PredictionMarketsWidget() {
             const yesProbColor = yesPct > 60 ? "text-positive" : yesPct < 40 ? "text-muted-foreground" : "text-muted-foreground";
             const noProbColor = noPct > 60 ? "text-negative" : "text-muted-foreground";
 
-            // WHY title-search default (density bundle 2026-05-09): the historic
-            // ``/event/{slug}`` URL returned 404 for many markets because
-            // Polymarket's canonical paths split ``/event/`` (grouped) vs
-            // ``/market/`` (single binary) and the slug we receive from the
-            // Gamma ``markets`` payload doesn't reliably match either path.
-            // The ``/markets?_q=`` search URL ALWAYS resolves to a working
-            // results page no matter the slug shape — so we use it as the
-            // first-class link target and only fall back to the explicit
-            // ``url`` if S3 supplied one (legacy / future correct slugs).
-            const marketUrl = market.url
-              || `https://polymarket.com/markets?_q=${encodeURIComponent(market.title)}`;
+            // WHY market.url is now authoritative (2026-06-28 "wrong links" fix):
+            // the gateway transform populates ``url`` via buildPolymarketUrl(),
+            // which already emits the canonical ``/event/{slug}`` deep link for
+            // clean slugs and the title-search fallback for null/malformed slugs.
+            // We no longer hand-build a search URL here — that duplicated logic is
+            // what made every row open a generic search. The buildPolymarketUrl
+            // re-derivation is a DEFENSIVE fallback only: if ``url`` were ever
+            // empty (e.g. a stale cached payload from before this fix), we
+            // reconstruct the SAME link from market_slug + title rather than
+            // diverging into a second implementation.
+            const marketUrl =
+              market.url || buildPolymarketUrl(market.market_slug, market.title);
 
             function handleMarketClick() {
               // Open in new tab — trader reads market context alongside the terminal.

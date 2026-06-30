@@ -7,6 +7,12 @@ import type {
   PredictionMarketsResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
+// WHY import here: URL construction is centralised in lib/prediction-markets so
+// the gateway transform, the dashboard widget, and the /prediction-markets page
+// all produce IDENTICAL links. Previously this transform hardcoded `url: ""`,
+// forcing the two UI files to build their own (title-search) URL — the root
+// cause of the "every row links to a generic search" bug.
+import { buildPolymarketUrl } from "@/lib/prediction-markets";
 
 export function createPredictionMarketsApi(t: string | undefined) {
   return {
@@ -82,18 +88,18 @@ export function createPredictionMarketsApi(t: string | undefined) {
           entity_ids: [], // Not available in summary response — would need entity linking
           tickers: [], // Same — summary doesn't include ticker associations
           source: "polymarket" as const, // Currently only Polymarket is integrated (PRD-0019)
-          // WHY a search URL by default (density bundle 2026-05-09): the previous
-          // ``/event/{slug}`` pattern returned 404 for many markets — Polymarket's
-          // canonical URLs distinguish ``/event/`` (grouped market) from
-          // ``/market/`` (single binary), and the ``slug`` field on the Gamma
-          // ``markets`` payload does NOT reliably match either path. The most
-          // robust user-facing fallback is the search page, which always resolves
-          // to a working result for any title. We empty the ``url`` so the widget's
-          // own ``url -> slug -> search`` ladder still runs and prefers the search.
-          url: "",
-          // WHY pass market_slug through: PredictionMarketsWidget (Wave A-4) builds
-          // the URL client-side using market_slug as a second fallback after url.
-          // Preserving it avoids re-fetching when url is empty.
+          // WHY populate url here (2026-06-28 "wrong links" fix): the transform
+          // used to hardcode ``url: ""`` on the theory that `/event/{slug}` 404s,
+          // pushing a title-search fallback into the two UI files. But 521/525
+          // stored slugs ARE valid Polymarket ``/event/`` slugs — emptying the
+          // url sent EVERY row to a generic text search. buildPolymarketUrl now
+          // returns the canonical ``/event/{slug}`` deep link for clean slugs and
+          // gracefully falls back to the title-search URL for the ~4 malformed
+          // (numeric-tail) slugs and any null/empty slug. Single source of truth.
+          url: buildPolymarketUrl(m.market_slug, m.question),
+          // WHY still pass market_slug through: the UI types/consumers expect it,
+          // and it lets a consumer re-derive the URL defensively via the same
+          // helper if it ever needs to (avoids re-fetching the payload).
           market_slug: m.market_slug,
           // 2026-06-10 fix: forward the server category. The PredictionMarket
           // type declared `category?` since PLAN-0049 but the transform never
