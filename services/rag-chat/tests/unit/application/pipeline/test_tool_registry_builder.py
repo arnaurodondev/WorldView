@@ -64,8 +64,9 @@ def test_default_registry_has_zero_drift() -> None:
     # PLAN-0103 W2 bumped 23 → 24 by adding ``get_entity_news``.
     # PLAN-0104 W32 bumped 24 → 25 by adding ``query_fundamentals``.
     # PLAN-0112 W4 bumped 25 → 26 by adding ``get_path_between`` (pairwise).
-    assert sizes["manifest"] == 26, (
-        f"Expected 26 platform tools, got {sizes['manifest']}. "
+    # Chat prediction-market tool bumped 26 → 27 by adding ``get_prediction_markets``.
+    assert sizes["manifest"] == 27, (
+        f"Expected 27 platform tools, got {sizes['manifest']}. "
         "If a tool was intentionally added/removed, update this assertion."
     )
 

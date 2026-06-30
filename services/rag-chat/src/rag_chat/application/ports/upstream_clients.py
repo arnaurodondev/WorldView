@@ -700,6 +700,30 @@ class S3BriefPort(Protocol):
         """GET /v1/fundamentals/earnings-calendar → earnings release dates."""
         ...
 
+    # PLAN — chat prediction-market tool: keyword/topic/entity search over
+    # Polymarket markets via the existing S9 → S3 list proxy. Backed by the
+    # market-data ``GET /api/v1/prediction-markets`` endpoint which already
+    # supports a free-text ``query`` ILIKE filter on the market question, a
+    # ``category`` equality filter, ``status`` and ``limit`` — so NO new
+    # upstream endpoint is required (R9/R14: S9-proxied, read-only).
+    async def get_prediction_markets(
+        self,
+        query: str | None,
+        category: str | None,
+        status: str,
+        limit: int,
+    ) -> list[dict]:
+        """GET /v1/signals/prediction-markets → list of Polymarket market dicts.
+
+        Each item carries ``market_id``, ``question``, ``outcomes``
+        (``[{name, token_id, price}]`` where price is the implied probability
+        0.0-1.0), ``volume_24h``, ``close_time``, ``resolution_status``,
+        ``market_slug`` (the canonical Polymarket event slug — drives the
+        clickable URL), ``category`` and ``updated_at``. Returns ``[]`` on any
+        HTTP or network error (R9 safe degradation).
+        """
+        ...
+
 
 # ── S10Port (PLAN-0082 Wave A / Wave B) ──────────────────────────────────────
 
