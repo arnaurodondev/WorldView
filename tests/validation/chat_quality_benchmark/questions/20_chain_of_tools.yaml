@@ -39,6 +39,12 @@
   prompt: Which of my portfolio holdings have earnings reports coming up in the next two weeks?
   category: portfolio
   tags: [chain_of_tools, multi_step, portfolio]
+  # W2 trajectory hints (OPTIONAL, advisory). ``intent`` summarises what the
+  # agent must accomplish; ``expected_chain`` is an ORDERED HINT of a sensible
+  # tool sequence (not a checklist — an equally-sensible alternative is fine).
+  # The trajectory judge uses these as intent signal for routing + ordering.
+  intent: Resolve the user's holdings, then look up upcoming earnings dates only for those holdings.
+  expected_chain: [get_portfolio_context, get_earnings_calendar]
   rubric:
     expected_tools: [get_portfolio_context, get_earnings_calendar]
     required_facts: [Names at least one ticker that is BOTH in the user's portfolio AND has an upcoming
@@ -67,6 +73,8 @@
   prompt: Of my current holdings, which one has the weakest profitability based on its most recent fundamentals?
   category: portfolio
   tags: [chain_of_tools, multi_step, portfolio, financial_data]
+  intent: Resolve the held symbols, then fetch a profitability metric for each and rank to find the weakest.
+  expected_chain: [get_portfolio_context, get_fundamentals_history_batch, compare_entities]
   rubric:
     expected_tools: [get_portfolio_context, query_fundamentals, get_fundamentals_history_batch, compare_entities]
     required_facts: [Identifies a specific ticker FROM the user's portfolio as the weakest, 'Cites at
@@ -94,6 +102,8 @@
   prompt: Find a supplier in Apple's value chain that has a gross margin above 40%.
   category: relationship
   tags: [chain_of_tools, multi_step, relationship, screener]
+  intent: Find Apple's suppliers from the relationship graph, then filter them by gross margin > 40%.
+  expected_chain: [traverse_graph, screen_universe, query_fundamentals]
   rubric:
     expected_tools: [traverse_graph, search_entity_relations, screen_universe, query_fundamentals]
     required_facts: [Names a specific supplier entity (company name or ticker) linked to Apple, Cites
@@ -133,6 +143,8 @@
     must_not_call: []
     entity_aliases:
       NVIDIA: [NVDA, NVIDIA Corporation, Nvidia]
+  intent: Identify NVIDIA's competitors via the relationship graph, then compare their revenue growth over 4 quarters.
+  expected_chain: [traverse_graph, get_fundamentals_history_batch, compare_entities]
   budgets:
     max_latency_s: 120
   notes: "CHAIN STRUCTURE:\n  Step 1: get_entity_intelligence(NVDA) OR traverse_graph(competitor edge)\n\
@@ -160,6 +172,8 @@
     must_not_call: []
     entity_aliases:
       Tesla: [TSLA, Tesla, Inc.]
+  intent: Find Tesla's most recent earnings date, then summarise news in the week after that date.
+  expected_chain: [get_earnings_calendar, search_documents]
   budgets:
     max_latency_s: 120
   notes: "CHAIN STRUCTURE:\n  Step 1: get_earnings_calendar(tickers=[TSLA], past=true) → most recent\n\
@@ -204,6 +218,8 @@
   prompt: What's today's top market mover, and does its fundamentals justify the move?
   category: signal
   tags: [chain_of_tools, multi_step, signal, financial_data]
+  intent: Find today's top mover, then pull its fundamentals to judge whether the move is justified.
+  expected_chain: [get_market_movers, query_fundamentals, get_entity_news]
   rubric:
     expected_tools: [get_market_movers, query_fundamentals, get_entity_news]
     required_facts: [Names the top mover (ticker and % move), 'Cites at least one fundamental metric (P/E,

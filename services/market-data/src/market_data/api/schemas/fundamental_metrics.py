@@ -26,9 +26,23 @@ class TimeseriesResponse(BaseModel):
 
 
 class ScreenFilterRequest(BaseModel):
-    """A single metric filter for screening."""
+    """A single metric filter for screening.
 
-    metric: str = Field(..., pattern=r"^[a-z_][a-z0-9_]{0,63}$")
+    ``metric`` is OPTIONAL (2026-06-28, CAT-B B1 fix). A filter may carry ONLY
+    an instrument attribute (``sector`` / ``industry`` / ``country`` /
+    ``exchange`` / ``has_*``) or a snapshot-column range with no
+    ``fundamental_metrics`` threshold — this is the natural shape for queries
+    like "top 5 US technology companies by market cap" (filter sector=Technology,
+    ``sort_by=market_capitalization``, no metric threshold). Previously
+    ``metric`` was REQUIRED, so an attribute-only filter was rejected with a 422
+    at the API boundary even though the query + port layers fully support
+    attribute-only screening. That 422 forced upstream callers (the rag-chat
+    ``screen_universe`` tool) to either drop the filter (returning the entire
+    universe) or invent a dummy metric — both of which produced the wrong
+    universe and provoked off-payload entity invention in the chat answer.
+    """
+
+    metric: str | None = Field(default=None, pattern=r"^[a-z_][a-z0-9_]{0,63}$")
     min_value: float | None = None
     max_value: float | None = None
     period_type: str | None = None

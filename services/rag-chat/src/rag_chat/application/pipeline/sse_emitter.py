@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
@@ -619,10 +620,37 @@ class SSEEmitter:
     #   - VALUE_MAX_CHARS: each value is str-coerced then truncated to this.
     #   - SAMPLE_MAX_BYTES:the whole serialized sample is bounded; over → cut +
     #                      ``truncated=true``.
-    GROUNDING_MAX_ROWS = 3
-    GROUNDING_MAX_FIELDS_PER_ROW = 8
+    #
+    # 2026-06-28 (substantiation-drop fix): raised MAX_ROWS 3->10 and
+    # SAMPLE_MAX_BYTES 1024->4096. The 3-row cap was the Class-B truncation that
+    # silently dropped real multi-row tool data (batch fundamentals, screeners)
+    # before the W3 judge could verify it -- e.g. tc_batch_fundamentals_mag5
+    # returns 5 tickers but rows 4-5 (AAPL/AMZN) were never sampled, capping
+    # substantiation regardless of answer quality. 10 rows covers every
+    # batch/screener result of <=10 rows in the benchmark; the byte cap rises in
+    # step so the added rows survive the post-build byte-trim instead of being
+    # truncated away again (the largest real sample, get_fundamentals_history_batch
+    # at 5 rows is ~1.4 KB, fits comfortably in 4 KB). VALUE_MAX_CHARS is
+    # unchanged -- only the row/byte ceilings moved here.
+    #
+    # RC-3 follow-up (2026-06-28): raised MAX_FIELDS_PER_ROW 8->14. A single
+    # fundamentals item now packs MULTIPLE periods under suffixed keys
+    # (``revenue``, ``revenue_2`` … one per quarter — see market.py
+    # ``_grounding_fields_from_rows`` + ``_GROUNDING_MAX_PERIODS=8``). With the
+    # field cap at 8, a long-horizon "since 2023" answer (12 quarters) had its
+    # OLDEST ~4 quarters trimmed out of the single packed row → those figures
+    # stayed unsubstantiated and the answer floored despite being correct
+    # (RC-3 residual A in docs/audits/2026-06-28-grounding-floor-rootcause.md).
+    # 14 = ticker + up to 13 period values, covering a full ~3-year quarterly
+    # trend. The byte cap (4096) already holds: 14 short numeric fields
+    # (<=32 chars each) plus keys serialize to well under 1 KB, so the post-build
+    # byte-trim does not re-truncate. The per-period emit cap (_GROUNDING_MAX_PERIODS)
+    # still bounds how many periods the handler packs, so this only RAISES the
+    # ceiling the packed periods compete for — it never invents fields.
+    GROUNDING_MAX_ROWS = 10
+    GROUNDING_MAX_FIELDS_PER_ROW = 14
     GROUNDING_VALUE_MAX_CHARS = 32
-    GROUNDING_SAMPLE_MAX_BYTES = 1024
+    GROUNDING_SAMPLE_MAX_BYTES = 4096
 
     # Per-tool field allow-list (FR-8). ONLY numeric / short-identifier fields
     # appear here — NEVER document bodies, narrative text, or any
@@ -637,17 +665,84 @@ class SSEEmitter:
     # survive into the sample; the builder never raises on a missing field.
     _GROUNDING_FIELD_ALLOWLIST: ClassVar[dict[str, tuple[str, ...]]] = {
         # Market / fundamentals tools — numeric financial fields + identifiers.
-        "get_fundamentals_history": ("ticker", "period", "revenue", "eps", "gross_profit", "pe_ratio", "market_cap"),
+        # Value-substantiation (2026-06-26): widened to the full metric set the
+        # fundamentals handlers now emit on ``grounding_fields`` (net_income,
+        # forward_pe, ebitda, free_cash_flow). Keep <= GROUNDING_MAX_FIELDS_PER_ROW
+        # surviving per row (ticker + period + metrics; period rarely resolves so
+        # the numeric metrics fit the cap of 8).
+        # NOTE: ``MAX_FIELDS_PER_ROW`` (8) bounds how many of these survive per
+        # row — for the multi-period rows the suffixed-key admission below packs
+        # additional periods. Margins were added 2026-06-26 (STEP A) so the
+        # percent-typed claim matcher (ru_tsla_margin_trend) has a value to match.
+        "get_fundamentals_history": (
+            "ticker",
+            "period",
+            "revenue",
+            "eps",
+            "gross_profit",
+            "net_income",
+            "pe_ratio",
+            "forward_pe",
+            "market_cap",
+            "ebitda",
+            "free_cash_flow",
+            "gross_margin",
+            "operating_margin",
+            "net_margin",
+        ),
         "get_fundamentals_history_batch": (
             "ticker",
             "period",
             "revenue",
             "eps",
             "gross_profit",
+            "net_income",
             "pe_ratio",
+            "forward_pe",
             "market_cap",
+            "ebitda",
+            "free_cash_flow",
+            "gross_margin",
+            "operating_margin",
+            "net_margin",
         ),
-        "compare_entities": ("ticker", "period", "revenue", "eps", "gross_profit", "pe_ratio", "market_cap"),
+        # query_fundamentals (2026-06-26 STEP A): the confirmed routed-but-silent
+        # gap — its handler populates ``grounding_fields`` (raw numbers + covered
+        # margins) but the tool was absent here, so no sample reached the judge and
+        # coverage stayed ``presumed`` (ru_aapl_pe_simple, ru_tsla_margin_trend,
+        # ru_googl_pe_vs_history). Same field set as the history family.
+        "query_fundamentals": (
+            "ticker",
+            "period",
+            "revenue",
+            "eps",
+            "gross_profit",
+            "net_income",
+            "pe_ratio",
+            "forward_pe",
+            "market_cap",
+            "ebitda",
+            "free_cash_flow",
+            "gross_margin",
+            "operating_margin",
+            "net_margin",
+        ),
+        "compare_entities": (
+            "ticker",
+            "period",
+            "revenue",
+            "eps",
+            "gross_profit",
+            "net_income",
+            "pe_ratio",
+            "forward_pe",
+            "market_cap",
+            "ebitda",
+            "free_cash_flow",
+            "gross_margin",
+            "operating_margin",
+            "net_margin",
+        ),
         "get_price_history": ("ticker", "period", "open", "high", "low", "close", "volume"),
         "screen_universe": ("ticker", "pe_ratio", "market_cap", "revenue"),
         "get_market_movers": ("ticker", "change_pct", "price"),
@@ -701,6 +796,16 @@ class SSEEmitter:
         # 3. dict-style item (some handlers return plain dicts).
         if isinstance(item, dict):
             return item.get(field)
+        # 4. Structured grounding_fields bag (value-substantiation, 2026-06-26):
+        #    fundamentals/compare handlers carry raw numeric values as an ordered
+        #    tuple of (key, str-value) pairs. Probe it last so the direct-attr /
+        #    citation_meta paths (e.g. ticker via entity_name) still win. Dict-ify
+        #    once per call; the bag is small (<=~9 keys) so this is cheap.
+        gf = getattr(item, "grounding_fields", None)
+        if gf:
+            gf_map = dict(gf)
+            if field in gf_map:
+                return gf_map[field]
         return None
 
     @classmethod
@@ -773,6 +878,30 @@ class SSEEmitter:
                 row_contributed = True
             if row_contributed:
                 sampled_rows += 1
+
+            # Value-substantiation (2026-06-26): admit ALREADY-SUFFIXED grounding
+            # keys (``revenue_2``, ``ticker_3``) that a single item carries for
+            # MULTIPLE entities — e.g. compare_entities packs every compared
+            # ticker into one item. The main loop only probes bare allow-listed
+            # names, so the 2nd+ entity's metrics would otherwise be dropped. We
+            # admit a suffixed key ONLY when its ``_\d+$``-stripped base is in the
+            # allow-list AND passes the same portfolio/account redaction — so this
+            # stays fail-closed and never leaks an unknown field shape.
+            gf = getattr(item, "grounding_fields", None)
+            if gf:
+                for raw_key, raw_val in dict(gf).items():
+                    if row_field_count >= cls.GROUNDING_MAX_FIELDS_PER_ROW:
+                        break
+                    base = re.sub(r"_\d+$", "", raw_key)
+                    if base == raw_key or base not in allow:
+                        # Bare keys already handled above; non-allow-listed base → skip.
+                        continue
+                    if any(sub in raw_key.lower() for sub in cls._GROUNDING_REDACT_NAME_SUBSTRINGS):
+                        continue
+                    if raw_val is None or raw_key in fields:
+                        continue
+                    fields[raw_key] = str(raw_val)[: cls.GROUNDING_VALUE_MAX_CHARS]
+                    row_field_count += 1
 
         if not fields:
             # No allow-listed field survived (e.g. the handler renders numbers

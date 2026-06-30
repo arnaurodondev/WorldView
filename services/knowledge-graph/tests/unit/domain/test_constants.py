@@ -9,22 +9,36 @@ pytestmark = pytest.mark.unit
 
 class TestMembershipRelations:
     def test_membership_relations_frozen(self) -> None:
-        """MEMBERSHIP_RELATIONS is a frozenset of the 4 uppercase AGE labels."""
+        """MEMBERSHIP_RELATIONS is a frozenset of the 6 uppercase AGE labels."""
         from knowledge_graph.domain.constants import MEMBERSHIP_RELATIONS
 
         assert isinstance(MEMBERSHIP_RELATIONS, frozenset)
         assert MEMBERSHIP_RELATIONS == {
             "IS_IN_SECTOR",
+            "IS_IN_INDUSTRY",
             "LISTED_ON",
             "OPERATES_IN_COUNTRY",
+            "REVENUE_FROM_COUNTRY",
             "HEADQUARTERED_IN",
         }
         # Uppercase AGE-label strings (NOT lowercase RelationType enum values).
         for label in MEMBERSHIP_RELATIONS:
             assert label == label.upper()
 
+    def test_is_in_industry_and_revenue_from_country_are_membership(self) -> None:
+        """PLAN-0113: IS_IN_INDUSTRY + REVENUE_FROM_COUNTRY are pruned as membership.
+
+        These two high-fan-out labels were added to MEMBERSHIP_RELATIONS so the
+        connection-discovery engines (AGE + relational) prune them, matching the
+        existing IS_IN_SECTOR / OPERATES_IN_COUNTRY treatment.
+        """
+        from knowledge_graph.domain.constants import MEMBERSHIP_RELATIONS
+
+        assert "IS_IN_INDUSTRY" in MEMBERSHIP_RELATIONS
+        assert "REVENUE_FROM_COUNTRY" in MEMBERSHIP_RELATIONS
+
     def test_membership_subset_of_age_labels(self) -> None:
-        """All 4 membership labels exist in the AGE edge-label whitelist."""
+        """All 6 membership labels exist in the AGE edge-label whitelist."""
         from knowledge_graph.domain.constants import MEMBERSHIP_RELATIONS
         from knowledge_graph.infrastructure.workers.age_sync_worker import _VALID_EDGE_LABELS
 

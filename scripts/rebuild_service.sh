@@ -108,6 +108,17 @@ else
   echo "==> Building with layer cache (--cache)."
 fi
 
+# CACHE_BUST defeats BuildKit's stale local-source snapshot (see
+# docs/audits/2026-06-27-compose-build-stale-prompts.md and the matching
+# `ARG CACHE_BUST` in services/rag-chat/Dockerfile). A value that changes with
+# the working-tree state forces BuildKit to re-snapshot the local build context,
+# so an edited shared lib (libs/prompts, libs/contracts, …) can never be served
+# from a deduped old snapshot. Plain `docker build` without this arg keeps its
+# default behaviour (the ARG default is `unset`). Dockerfiles that do not declare
+# the ARG simply ignore it.
+CACHE_BUST_VALUE="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo nogit)-$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null | md5 2>/dev/null || git -C "$REPO_ROOT" status --porcelain 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || date +%s)"
+BUILD_FLAGS+=(--build-arg "CACHE_BUST=${CACHE_BUST_VALUE}")
+
 echo "==> Building images SEQUENTIALLY (one service at a time)..."
 # CRITICAL: build each variant in its OWN `docker compose build` invocation, NOT
 # all at once. Building a whole family (up to 15 services) in a single parallel
@@ -124,6 +135,48 @@ for svc in "${SERVICES[@]}"; do
   echo "    --> building $svc"
   "${COMPOSE[@]}" build ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} "$svc"
 done
+
+# ── Post-build staleness guard ────────────────────────────────────────────────
+# Belt-and-suspenders for the BuildKit stale-local-source bug
+# (docs/audits/2026-06-27-compose-build-stale-prompts.md): even with the
+# CACHE_BUST arg above, assert the FRESHLY BUILT image actually contains the
+# current on-disk libs/prompts version. We grep the version string in the image
+# and compare it to the source tree; a mismatch means a stale shared lib was
+# shipped — fail loudly instead of silently deploying old code.
+#
+# Only applies to images that bundle libs/prompts (every service does today, but
+# we resolve the image name from compose so a future no-prompts service is a
+# no-op skip rather than a false failure).
+ondisk_prompts_ver="$(grep -m1 -oE 'version="[^"]+"' \
+  "$REPO_ROOT/libs/prompts/src/prompts/chat/synthesis.py" 2>/dev/null \
+  | sed -E 's/version="([^"]+)"/\1/' || true)"
+if [[ -n "$ondisk_prompts_ver" ]]; then
+  echo "==> Verifying built image(s) carry libs/prompts synthesis version '$ondisk_prompts_ver'..."
+  for svc in "${SERVICES[@]}"; do
+    # Compose names each built image worldview-<service>:latest (project
+    # "worldview"). `compose config --images <svc>` is unreliable across Compose
+    # versions (some ignore the service filter and list every image), so we use
+    # the conventional tag directly — it matches what the build loop just wrote.
+    img="worldview-${svc}:latest"
+    # The lib is installed into the venv site-packages; resolve via importlib so
+    # we don't hardcode the python minor version in the path.
+    img_ver="$(docker run --rm --entrypoint sh "$img" -c \
+      'python -c "import prompts.chat.synthesis as s; print(s.SYNTHESIS_SYSTEM_PROMPT.version)"' \
+      2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ -z "$img_ver" ]]; then
+      echo "    (skip) $svc ($img): libs/prompts not importable — assuming not bundled."
+      continue
+    fi
+    if [[ "$img_ver" != "$ondisk_prompts_ver" ]]; then
+      echo "ERROR: STALE BUILD — $svc image '$img' ships libs/prompts synthesis" >&2
+      echo "       version '$img_ver' but on-disk source is '$ondisk_prompts_ver'." >&2
+      echo "       BuildKit served a stale local-source snapshot. Fix: clear it with" >&2
+      echo "       'docker builder prune -f' and re-run this script." >&2
+      exit 3
+    fi
+    echo "    OK   $svc ($img): libs/prompts == $img_ver"
+  done
+fi
 
 if [[ "$RECREATE" -eq 1 ]]; then
   echo "==> Recreating containers (--force-recreate)..."

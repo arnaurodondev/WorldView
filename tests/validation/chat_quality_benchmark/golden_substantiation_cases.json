@@ -1,0 +1,266 @@
+{
+  "_README": [
+    "GOLDEN numeric-substantiation corpus — PLAN-0116 W4.1.",
+    "Built from REAL answers + captured grounding_sample.fields in the strategic",
+    "subset run runs/run_20260626T185654Z/ (NOT synthetic).  Each case fixes the",
+    "ANSWER text and the SAMPLED fields exactly as the live agent produced them,",
+    "and hand-derives the EXPECTED output of evaluate_substantiation under the",
+    "typed multi-period matcher (PLAN-0116 W1).  The companion test",
+    "scripts/tests/test_golden_substantiation_corpus.py asserts the matcher's",
+    "output equals `expected` on each case — this is the regression net against",
+    "reality.  The contract is identical for cross_check_grounding's contradicted",
+    "count (one shared pipeline, W1.1): expected.contradicted is asserted for BOTH.",
+    "",
+    "DERIVATION RULES (documented per case in `derivation`):",
+    "  * field kinds: revenue/eps/gross_profit/net_income/market_cap/price = ABSOLUTE;",
+    "    pe_ratio/forward_pe = RATIO; *_margin/dividend_yield = PERCENTAGE.",
+    "  * a claim associates ONLY to a field of compatible kind (a `34 %` percentage",
+    "    claim can NEVER attach to the `revenue` absolute field).",
+    "  * multi-period SET: a field with >=2 sampled values is a SET; a claim matching",
+    "    ANY value is substantiated; a claim matching NONE is `unmatched` (the sample",
+    "    is an incomplete subset of periods — it does NOT DISPROVE an unsampled period",
+    "    → never `contradicted`).  Contradiction fires only for a SINGLE-valued",
+    "    (authoritative) field.",
+    "  * structural integers (Q4, '12-month', '3-4 times', row idx) are dropped.",
+    "  * coverage=presumed when NO grounding_sample is present on any tool_result",
+    "    (then all counts are 0 by invariant).",
+    "",
+    "PLAN-0116 W5 additions: ru_nvda_amd_revenue_4q_tablecells (table-aware column-header association, Item 1) + da_msft_fy2024q4_period_mismatch (TIME-SERIES tool fields are never hard-contradicted on a non-match — the captured periods cannot disprove an unsampled quarter; the dedup of Item 1b still prevents phantom multi-value sets for single-point tools) are REAL cases from run_20260626T202833Z."
+  ],
+  "run": "run_20260626T185654Z",
+  "cases": [
+    {
+      "id": "da_msft_fy2024q4_earnings_citations",
+      "answer_text": "Revenue data is not available for MSFT in the retrieved tool results.  \nNet Income data is not available for MSFT in the retrieved tool results.  \nEPS data is not available for MSFT in the retrieved tool results.",
+      "tool_results": [
+        {
+          "tool": "get_fundamentals_history",
+          "status": "ok",
+          "grounding_sample": {
+            "fields": {
+              "eps": "4.27",
+              "gross_profit": "56058000000",
+              "market_cap": "2728761229312",
+              "net_income": "31778000000",
+              "pe_ratio": "21.8785",
+              "revenue": "82886000000",
+              "revenue_2": "81273000000",
+              "ticker": "MSFT"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "coverage": "verified",
+        "substantiated": 0,
+        "unsupported": 0,
+        "contradicted": 0,
+        "unmatched": 0
+      },
+      "derivation": "The answer states NO numeric figures at all — it is a 'data not available' refusal. There are ZERO numeric claims in the prose, so nothing can be substantiated, unsupported, or contradicted. coverage=verified (a sample WAS captured) but every count is 0. NOTE for team-lead: the brief expected the cited revenue/eps to substantiate, but this answer cites no figures — the matcher cannot substantiate numbers the answer never states. The real defect here is the ANSWER (the agent had revenue=82.9B sampled yet said 'not available') — an answer-quality problem, not a matcher problem."
+    },
+    {
+      "id": "ru_nvda_amd_revenue_4q",
+      "answer_text": "**Revenue trend over the last four quarters**\n\n| Quarter | AMD revenue | NVDA revenue |\n|---------|-------------|--------------|\n| Q2 FY2025 | $7.7 B [1] | – |\n| Q3 FY2025 | $9.2 B [1] | – |\n| Q4 FY2025 | $10.3 B [1] | – |\n| Q1 FY2026 | $10.3 B [1] | – |\n| Q2 FY2026 | – | $46.7 B [2] |\n| Q3 FY2026 | – | $57.0 B [2] |\n| Q4 FY2026 | – | $68.1 B [2] |\n| Q1 FY2027 | – | $81.6 B [2] |\n\n**Comparison**\n\n* **Growth magnitude**  \n  * AMD’s revenue rose from $7.7 B to $10.3 B, a **≈ 34 %** increase over four quarters.  \n  * NVDA’s revenue climbed from $46.7 B to $81.6 B, a **≈ 75 %** increase over the same period.\n\n* **Speed of expansion**  \n  * NVDA’s quarterly revenue growth rate (≈ $10–$12 B per quarter) is roughly **3–4 times** the absolute increase seen by AMD (≈ $2–$3 B per quarter).\n\n* **Relative scale**  \n  * Even at the start of the period, NVDA’s revenue was about **6×** AMD’s, and by the end it was **≈ 8×** larger.\n\nThese figures show that while both companies experienced upward revenue trajectories, NVIDIA’s growth was substantially larger in both absolute and relative terms.\n\n⚠ Some figures could not be verified against retrieved data.",
+      "tool_results": [
+        {
+          "tool": "get_fundamentals_history_batch",
+          "status": "ok",
+          "grounding_sample": {
+            "fields": {
+              "eps": "1.87",
+              "eps_2": "1.37",
+              "gross_profit": "61157000000",
+              "gross_profit_2": "5416000000",
+              "market_cap": "5053711646720",
+              "market_cap_2": "847667658752",
+              "net_income": "58321000000",
+              "net_income_2": "1383000000",
+              "pe_ratio": "31.9525",
+              "pe_ratio_2": "172.1358",
+              "revenue": "81615000000",
+              "revenue_2": "10253000000",
+              "revenue_3": "9246000000",
+              "ticker": "NVDA",
+              "ticker_2": "AMD"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "coverage": "verified",
+        "substantiated": 6,
+        "unsupported": 0,
+        "contradicted": 0,
+        "unmatched": "ANY"
+      },
+      "derivation": "revenue is a multi-period SET {81.615B, 10.253B, 9.246B}. ACCEPTANCE (the load-bearing assertions): contradicted MUST be 0 (was 9 in the baseline) and substantiated > 0. The '34 %' and '75 %' growth claims are PERCENTAGE-typed and can NEVER associate to the absolute `revenue` field → unmatched (this is the exact baseline false contradiction). '$10–$12B' multiplier, '3-4 times', '6×', '8×' are count/multiplier tokens → no compatible sampled field → unmatched. Revenue $-claims with no matching sampled period ($46.7B, $57.0B, $68.1B) → UNMATCHED (a >=2-value SET cannot DISPROVE an unsampled period → never contradicted). substantiated == 6 (PLAN-0116 W5 table-aware association): the TABLE column headers 'AMD revenue' / 'NVDA revenue' both name the canonical `revenue` field, so each $-cell in those columns now associates to revenue and the ones matching a sampled period count — $7.7B→? (no sample), $9.2B→9.246B, $10.3B (×2)→10.253B, $81.6B→81.615B; PLUS the two figures repeated in the COMPARISON PROSE next to the word 'revenue' ($10.3B→10.253B, $81.6B→81.615B). Total 6 substantiations of GENUINELY-CORRECT figures (the [1]/[2] citation digits are dropped as citation markers; the count/percentage/multiplier tokens stay unmatched by the kind guard). contradicted stays 0 (the SET rule + answer-multivalued guard). This is the table-cell recall the prior 60-char-window limitation could not reach."
+    },
+    {
+      "id": "ru_googl_pe_vs_history",
+      "answer_text": "Google Alphabet (GOOGL) is trading at a price‑to‑earnings multiple of **26.67×** on a trailing‑12‑month basis .\n\nThe quarterly fundamentals data returned for the past eight quarters does not include historical P/E values (the “P/E” column is empty for each period) . Because the system does not have a series of past P/E ratios, I cannot assess whether the current multiple is high or low relative to GOOGL’s own historical valuation. \n\nIf you would like to compare GOOGL’s valuation to peers or to other valuation metrics that are available, let me know and I can retrieve that information.\n\n⚠ Some figures could not be verified against retrieved data.",
+      "tool_results": [
+        {
+          "tool": "query_fundamentals",
+          "status": "ok"
+        },
+        {
+          "tool": "get_fundamentals_history",
+          "status": "ok",
+          "grounding_sample": {
+            "fields": {
+              "eps": "5.11",
+              "gross_profit": "68625000000",
+              "market_cap": "4266995482624",
+              "net_income": "62578000000",
+              "pe_ratio": "26.6728",
+              "revenue": "109896000000",
+              "revenue_2": "113896000000",
+              "ticker": "GOOGL"
+            }
+          }
+        },
+        {
+          "tool": "query_fundamentals",
+          "status": "ok"
+        }
+      ],
+      "expected": {
+        "coverage": "verified",
+        "substantiated": 1,
+        "unsupported": 0,
+        "contradicted": 0,
+        "unmatched": "ANY"
+      },
+      "derivation": "'26.67×' is a RATIO claim (× suffix + 'price-to-earnings multiple') → associates ONLY to the ratio-kind sampled field pe_ratio (26.6728); 26.67 matches within tol → 1 substantiated. In the BASELINE this number was wrongly associated to net_income (the alias 'earnings' inside 'price-to-earnings' won) and false-contradicted — typing + the ×-as-ratio rule fix it. 'trailing-12-month' → the bare 12 is structural (count, '12-month') → dropped. 'eight quarters' is spelled out (not regex-matched). ACCEPTANCE: contradicted 0 (was 2), substantiated 1."
+    },
+    {
+      "id": "ru_tsla_margin_trend",
+      "answer_text": "Tesla’s gross‑margin has been **rising steadily over the past year**:\n\n| Quarter | Gross margin |\n|---------|--------------|\n| Q1 2025 | 16.31 % [query_fundamentals row 0] |\n| Q2 2025 | 17.24 %  |\n| Q3 2025 | 17.99 %  |\n| Q4 2025 | 20.12 %  |\n| Q1 2026 | 21.08 %  |\n\n**Trend:** The margin moved from the low‑teens in early 2025 (≈16 %) to just above 21 % by the most recent quarter, indicating a consistent improvement quarter‑over‑quarter.\n\n⚠ Some figures could not be verified against retrieved data.",
+      "tool_results": [
+        {
+          "tool": "query_fundamentals",
+          "status": "ok"
+        }
+      ],
+      "expected": {
+        "coverage": "presumed",
+        "substantiated": 0,
+        "unsupported": 0,
+        "contradicted": 0,
+        "unmatched": 0
+      },
+      "derivation": "query_fundamentals emitted NO grounding_sample (it is not yet on the W2 allow-list) → coverage=presumed, all counts 0 by invariant. The five margin percentages (16.31%..21.08%) CANNOT be checked until Wave 2 makes query_fundamentals emit a gross_margin sample. This case is the regression anchor for W2: once the sample is present, the typed matcher must compare the PERCENTAGE margin claims to the gross_margin field (ratio↔% via *100). FLAG: blocked on W2 — W1 alone cannot substantiate this answer."
+    },
+    {
+      "id": "ru_aapl_pe_simple",
+      "answer_text": "AAPL’s price‑to‑earnings (P/E) ratio is **35.96×**【1】\n\n⚠ Some figures could not be verified against retrieved data.",
+      "tool_results": [
+        {
+          "tool": "query_fundamentals",
+          "status": "ok"
+        }
+      ],
+      "expected": {
+        "coverage": "presumed",
+        "substantiated": 0,
+        "unsupported": 0,
+        "contradicted": 0,
+        "unmatched": 0
+      },
+      "derivation": "Single clean case, but query_fundamentals emitted NO grounding_sample → coverage=presumed, all 0. The '35.96×' P/E claim is correctly typed as RATIO and would associate to pe_ratio ONCE W2 emits a sample. W1 alone cannot substantiate it. FLAG: blocked on W2."
+    },
+    {
+      "id": "ru_nvda_amd_revenue_4q_tablecells",
+      "answer_text": "**Revenue over the last 4 quarters**\n\n| Quarter (most recent first) | NVIDIA Revenue | AMD Revenue |\n|-----------------------------|----------------|-------------|\n| Q1 FY2027 (most recent) | $81.6 B [2] | $10.3 B [1] |\n| Q4 FY2026 | $68.1 B [2] | $10.3 B [1] |\n| Q3 FY2026 | $57.0 B [2] | $9.2 B [1] |\n| Q2 FY2026 | $46.7 B [2] | $7.7 B [1] |\n\n**Trajectory comparison**\n\n* **NVIDIA** – Revenue has risen steadily each quarter, moving from $46.7 B to $81.6 B, a cumulative increase of roughly **74 %** over the four‑quarter span.  \n* **AMD** – Revenue grew from $7.7 B to $10.3 B, a cumulative increase of about **34 %**. The growth slowed in the most recent quarter, with revenue flat at $10.3 B compared with the prior quarter.\n\nBoth companies show upward revenue trends, but NVIDIA’s quarterly revenue growth rate has been markedly higher than AMD’s over the same period.\n\n⚠ Some figures could not be verified against retrieved data.",
+      "tool_results": [
+        {
+          "tool": "get_fundamentals_history_batch",
+          "status": "ok",
+          "grounding_sample": {
+            "fields": {
+              "eps": "1.87",
+              "eps_2": "1.37",
+              "gross_profit": "61157000000",
+              "gross_profit_2": "5416000000",
+              "market_cap": "5053711646720",
+              "market_cap_2": "847667658752",
+              "net_income": "58321000000",
+              "net_income_2": "1383000000",
+              "pe_ratio": "31.9525",
+              "pe_ratio_2": "172.1358",
+              "revenue": "81615000000",
+              "revenue_2": "10253000000",
+              "revenue_3": "9246000000",
+              "ticker": "NVDA",
+              "ticker_2": "AMD"
+            },
+            "sampled_rows": 2,
+            "total_rows": 2,
+            "truncated": false
+          }
+        }
+      ],
+      "expected": {
+        "coverage": "verified",
+        "substantiated": 6,
+        "unsupported": 0,
+        "contradicted": 0,
+        "unmatched": "ANY"
+      },
+      "derivation": "REAL table case from run_20260626T202833Z (Item 1 table-aware recall). The answer presents an NVIDIA/AMD revenue trend as a MARKDOWN TABLE ('NVIDIA Revenue' | 'AMD Revenue' columns). revenue is a multi-period SET {81.615B, 10.253B, 9.246B}. Each $-cell associates to `revenue` via its COLUMN HEADER (the 60-char prose window could not reach it). substantiated==6: the 6 cells matching a sampled period ($81.6B->81.615B, $10.3B x3 -> 10.253B, $9.2B->9.246B). The non-matching cells ($68.1B/$57.0B/$46.7B/$7.7B) -> UNMATCHED (a >=2-value SET cannot disprove an unsampled period -> NEVER contradicted). The '74 %'/'34 %' growth claims are PERCENTAGE-typed -> never attach to the absolute revenue field -> unmatched. [1]/[2] citation digits are dropped as citation markers. contradicted MUST be 0."
+    },
+    {
+      "id": "da_msft_fy2024q4_period_mismatch",
+      "answer_text": "Microsoft reported revenue of **$64.7 billion**, net income of **$22.0 billion**, and earnings per share of **$2.95** for fiscal Q4 2024 (quarter ended June 30 2024)【N1】【N2】【N3】\n\n⚠ Some figures could not be verified against retrieved data.",
+      "tool_results": [
+        {
+          "tool": "get_fundamentals_history",
+          "status": "ok",
+          "grounding_sample": {
+            "fields": {
+              "eps": "4.27",
+              "gross_profit": "56058000000",
+              "market_cap": "2728761229312",
+              "net_income": "31778000000",
+              "pe_ratio": "21.8785",
+              "revenue": "82886000000",
+              "revenue_2": "81273000000",
+              "ticker": "MSFT"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          }
+        },
+        {
+          "tool": "get_fundamentals_history",
+          "status": "ok",
+          "grounding_sample": {
+            "fields": {
+              "eps": "4.27",
+              "gross_profit": "56058000000",
+              "market_cap": "2728761229312",
+              "net_income": "31778000000",
+              "pe_ratio": "21.8785",
+              "revenue": "82886000000",
+              "revenue_2": "81273000000",
+              "ticker": "MSFT"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          }
+        }
+      ],
+      "expected": {
+        "coverage": "verified",
+        "substantiated": 0,
+        "unsupported": 0,
+        "contradicted": 0,
+        "unmatched": "ANY"
+      },
+      "derivation": "REAL case from run_20260626T202833Z (PLAN-0116 W5 da_msft fix). The answer cites MSFT's ACTUAL fiscal Q4-2024 figures (revenue $64.7B, net income $22.0B, EPS $2.95) while the get_fundamentals_history sample holds a DIFFERENT, more-recent quarter (revenue {82.886B, 81.273B}, net_income 31.778B, eps 4.27). This is a PERIOD MISMATCH, not a fabrication: the captured periods cannot disprove a claim about an unsampled quarter. revenue is a 2-value SET -> $64.7B UNMATCHED. net_income/eps are single captured values, BUT get_fundamentals_history is a TIME-SERIES tool, so the W5 series rule makes a non-matching claim UNMATCHED (not contradicted) even for a single captured period. contradicted MUST be 0; every numeric claim is UNMATCHED. (Earlier W5 iterations contradicted these 2 via the dedup making the fields single-valued; the series rule corrects that — a fundamentals-history series cannot disprove an unsampled period. Hard contradiction is reserved for single-point tools like query_fundamentals.)"
+    }
+  ]
+}

@@ -249,14 +249,19 @@ class TestIsToolCallStub:
 
 
 class TestOrchestratorGroundingHook:
-    def _build(self, **kwargs: Any) -> tuple[Any, list, MagicMock]:
+    def _build(self, tool_item_text: str | None = None, **kwargs: Any) -> tuple[Any, list, MagicMock]:
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
         pipeline, captured = _make_pipeline(**kwargs)
         # Tool round-trip: iteration 0 calls tool, iteration 1 returns no calls so
         # we exit the loop and the streaming final turn runs.
         block = _make_tool_use_block()
-        item = _make_retrieved_item()
+        # ``tool_item_text`` lets a test supply tool-result text that actually
+        # backs the figures in its grounded draft — required when the draft is a
+        # multi-period table, so the C1 #2 fabricated-series gate (which fires on
+        # a period table the tools cannot back) correctly does NOT intercept and
+        # the rewrite/stub path under test still runs.
+        item = _make_retrieved_item(tool_item_text) if tool_item_text else _make_retrieved_item()
         executor = _make_executor([item])
         factory = _make_factory(executor)
 
@@ -317,9 +322,12 @@ class TestOrchestratorGroundingHook:
         # 2 calls — initial + one rewrite (the orchestrator does NOT loop
         # rewrites; one attempt then banner).
         assert len(captured) == 2
-        # The persisted answer ends with the banner.
+        # The persisted answer ends with the disclaimer. C2: the literal
+        # "⚠ Some … could not be verified" banner is now normalised by the egress
+        # sanitizer into the neutral canonical disclaimer (so the quality judge no
+        # longer reads it as a phantom citation). The warning is still present.
         assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
-        assert "could not be verified" in assistant_response.content
+        assert "could not be matched to a retrieved source" in assistant_response.content
 
     def test_completion_cache_skipped_when_grounding_fails(self) -> None:
         """F-LIVE-008 regression — cache write MUST be skipped when grounding fails.
@@ -408,10 +416,11 @@ class TestOrchestratorGroundingHook:
         asyncio.run(_collect(orch, _make_request(), MagicMock()))
         assert len(captured) == 2
         assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
-        # The banner MUST fire here — the rewrite still invents a number.
-        assert "could not be verified" in assistant_response.content, (
-            "W44 — banner suppression must not hide real fabrication; " f"got: {assistant_response.content!r}"
-        )
+        # The disclaimer MUST fire here — the rewrite still invents a number.
+        # C2: the warning banner is normalised to the canonical disclaimer text.
+        assert (
+            "could not be matched to a retrieved source" in assistant_response.content
+        ), f"W44 — banner suppression must not hide real fabrication; got: {assistant_response.content!r}"
 
     def test_divergent_resynthesis_rewrite_keeps_grounded_original(self) -> None:
         """BP-671 — a rewrite that FREE-GENERATES a new answer (re-synthesis)
@@ -463,7 +472,8 @@ class TestOrchestratorGroundingHook:
         assert "271,474 BTC" not in content, f"fabricated re-synthesis shipped: {content!r}"
         assert "$509.0 million" not in content
         # The user is still warned about the one figure that tripped the pass.
-        assert "could not be verified" in content
+        # C2: warning banner normalised to the canonical disclaimer text.
+        assert "could not be matched to a retrieved source" in content
 
     def test_numeric_rewrite_tool_call_stub_keeps_grounded_original(self) -> None:
         """BP-674 — a numeric rewrite that leaks a tool-call / planning STUB must
@@ -529,6 +539,10 @@ class TestOrchestratorGroundingHook:
             '- get_fundamentals_history_batch(tickers=["NVDA", "AMD"], periods=4)'
         )
         orch, captured, pipeline = self._build(
+            # Tool text backs the table figures so the table is genuinely
+            # grounded (C1 #2 must NOT intercept); only the prose $28.4B is the
+            # ungrounded figure that triggers the rewrite the test asserts on.
+            tool_item_text="NVDA quarterly revenue: Q2 FY2026 $46.7B, Q3 FY2026 $57.0B, Q4 FY2026 $39.3B.",
             stream_chunks=[grounded_table],
             rewrite_chunks=[markdown_stub],
         )

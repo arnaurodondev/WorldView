@@ -23,8 +23,53 @@ import structlog
 
 if TYPE_CHECKING:
     from market_data.application.ports.uow import ReadOnlyUnitOfWork
+    from market_data.domain.enums import PeriodType
 
 log = structlog.get_logger(__name__)
+
+
+def is_future_placeholder_row(rec: object, period_type: PeriodType) -> bool:
+    """Return True when ``rec`` is an EODHD future-dated pre-report placeholder.
+
+    PLAN-0103 W22 / BP-639 (shared 2026-06-28): EODHD pre-emits a row for the
+    NEXT scheduled report date with a NULL driver metric so the column structure
+    stays stable for downstream consumers. After a DESC-sort + slice these
+    placeholders win a period slot, the downstream LLM sees a row whose metrics
+    are all "—", and it FABRICATES values — OR (the ``query_fundamentals`` RC-1
+    symptom) the null row drags every metric's coverage flag to ``partial``,
+    which the rag-chat handler reads as "do not ground", stripping all numeric
+    grounding fields so only ``ticker`` survives the sample.
+
+    A row is a future placeholder only when BOTH:
+      (a) ``period_end`` is strictly in the future relative to today (UTC), AND
+      (b) the driver metric for the period_type is null/empty.
+    For QUARTERLY the driver is ``epsActual`` (earnings_history); for ANNUAL it
+    is ``totalRevenue``/``revenue`` (income_statement). A legitimately-late
+    filing that merely lacks an unrelated optional field is NOT dropped.
+
+    WHY module-level (extracted from ``GetFundamentalsHistoryUseCase``): the
+    sibling ``QueryFundamentalsUseCase`` slices the SAME driver sections and must
+    apply the identical filter, so the predicate is shared to keep the two
+    fundamentals paths byte-for-byte consistent (a divergence here is exactly
+    the RC-1 fabrication driver this de-duplication closes).
+    """
+    from datetime import UTC, datetime
+
+    from market_data.domain.enums import PeriodType as _PeriodType
+
+    pe = getattr(rec, "period_end", None)
+    if pe is None:
+        return False
+    # rec.period_end is a tz-aware datetime; comparing dates is sufficient (we
+    # don't care about intraday for "is this in the future").
+    if pe.date() <= datetime.now(tz=UTC).date():
+        return False
+    data = rec.data if isinstance(getattr(rec, "data", None), dict) else {}  # type: ignore[attr-defined]
+    if period_type == _PeriodType.QUARTERLY:
+        driver_value = data.get("epsActual")
+    else:
+        driver_value = data.get("totalRevenue") or data.get("revenue")
+    return driver_value is None or driver_value == "" or driver_value == "None"
 
 
 class GetFundamentalsHistoryUseCase:
@@ -188,28 +233,9 @@ class GetFundamentalsHistoryUseCase:
         # ``totalRevenue``/``revenue``. We do NOT drop a legitimately-late
         # filing that lacks an unrelated optional field, only the
         # all-null-driver placeholder pattern.
-        from datetime import UTC as _UTC
-        from datetime import datetime as _datetime
-
-        today_utc = _datetime.now(tz=_UTC).date()
-
-        def _is_future_placeholder(rec: object) -> bool:
-            # rec.period_end is a tz-aware datetime; comparing dates is
-            # sufficient (we don't care about intraday for "is this in the
-            # future").
-            pe_date = rec.period_end.date()  # type: ignore[attr-defined]
-            if pe_date <= today_utc:
-                return False
-            data = rec.data if isinstance(rec.data, dict) else {}  # type: ignore[attr-defined]
-            if selected_period_type == PeriodType.QUARTERLY:
-                driver_value = data.get("epsActual")
-            else:
-                driver_value = data.get("totalRevenue") or data.get("revenue")
-            return driver_value is None or driver_value == "" or driver_value == "None"
-
         filtered_driver_records = []
         for rec in driver_records:
-            if _is_future_placeholder(rec):
+            if is_future_placeholder_row(rec, selected_period_type):
                 log.info(
                     "fundamentals_future_placeholder_dropped",
                     symbol=ticker,

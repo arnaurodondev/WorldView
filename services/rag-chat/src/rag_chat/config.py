@@ -233,12 +233,19 @@ class Settings(BaseSettings):
     # F-NEW-015 Option B — defence-in-depth timeout for the entity-grounding
     # rewrite path. Iter-13 produced a 90s end-to-end timeout because the
     # rewrite stream_chat ran unbounded (15-60s per invocation, combined with
-    # the prior synthesis budget). Default 15s aligns with the ceiling
-    # identified by the iter-13 investigation. When this fires the original
+    # the prior synthesis budget). When this fires the original
     # synthesised response is returned with an [unverified] banner so the
     # user still gets the substantive answer.  Override via
     # RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS.
-    entity_grounding_rewrite_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
+    #
+    # 2026-06-26 failure-analysis #2: 15s was firing BEFORE the repair
+    # completion finished on slower model/load conditions, stamping good
+    # answers with a "(validator timeout)" banner that reads as a failure
+    # (`chain_portfolio_upcoming_earnings`). Raised to 30s so the validator
+    # cannot pre-empt a still-in-flight synthesis/repair. The default is
+    # still well under the upstream HTTP ceiling; lower it via env for
+    # latency-sensitive deployments.
+    entity_grounding_rewrite_timeout_seconds: float = Field(default=30.0, gt=0.0, le=120.0)
 
     # RC-1 (2026-06-18 internal-tool latency investigation) — configurable model
     # for the SINGLE combined grounding-repair rewrite. The combined

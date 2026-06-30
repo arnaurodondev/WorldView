@@ -121,6 +121,337 @@ def _format_market_cap_value(value: Any) -> str | None:
     return f"{sign}${abs_n:,.0f}"
 
 
+# ── Value-based substantiation (2026-06-26) ───────────────────────────────────
+# Helpers that lift the RAW numeric values the fundamentals handlers already
+# compute into a structured ``grounding_fields`` bag on RetrievedItem, so the
+# chat-quality eval can substantiate numeric claims against returned values
+# rather than re-parsing the markdown ``text`` blob (brittle: "$81.6B" loses
+# precision). See docs/audits/2026-06-26-substantiation-eval-design.md.
+#
+# Values are emitted as RAW, UNSCALED numeric strings ("81600000000", "1.87",
+# "0.586") so the judge's scale logic (B/M/K/T, %, $) stays authoritative and we
+# never double-scale. A metric is emitted ONLY when its value is a finite number
+# — a missing/None value is skipped so it never enters as a phantom number.
+
+# Per-period flow/snapshot metrics we lift, mapped to the synonym keys a row may
+# carry (first non-None wins). Order is stable so grounding_fields are
+# deterministic. Margins are ratios on the row; we emit them verbatim (the judge
+# compares a "%" claim against ratio*100 via its percent-valued set).
+_GROUNDING_PERIOD_METRIC_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("revenue", ("revenue", "totalRevenue", "revenue_ttm")),
+    ("net_income", ("net_income", "netIncome")),
+    ("eps", ("eps", "epsActual")),
+    ("gross_profit", ("gross_profit",)),
+    ("pe_ratio", ("pe_ratio", "pe")),
+    ("market_cap", ("market_cap", "market_capitalization", "market_cap_usd")),
+    ("ebitda", ("ebitda",)),
+    ("free_cash_flow", ("free_cash_flow", "fcf")),
+    ("forward_pe", ("forward_pe",)),
+    # Margins (2026-06-26 STEP A): emitted as RAW RATIOS ("0.586"), NOT pre-
+    # scaled to a percent. The W1 percent-typed matcher (_PERCENT_VALUED_FIELDS)
+    # cross-checks a "58.6 %" claim against BOTH the raw sample AND sample*100,
+    # so the ratio form is the canonical one — pre-scaling here would double the
+    # value. These are the per-period margin fractions ``query_fundamentals`` and
+    # the history rows carry; a missing margin is skipped (never a phantom 0).
+    ("gross_margin", ("gross_margin",)),
+    ("operating_margin", ("operating_margin",)),
+    ("net_margin", ("net_margin",)),
+)
+
+# Snapshot scalars we lift in addition to the latest period row. The snapshot
+# uses slightly different keys (e.g. market_cap_usd) than per-period rows.
+_GROUNDING_SNAPSHOT_METRIC_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pe_ratio", ("pe_ratio",)),
+    ("forward_pe", ("forward_pe",)),
+    ("market_cap", ("market_cap_usd", "market_cap")),
+    ("ebitda", ("ebitda",)),
+    ("free_cash_flow", ("free_cash_flow", "fcf")),
+)
+
+
+def _coerce_grounding_number(value: Any) -> str | None:
+    """Return ``value`` as a raw, unscaled numeric string, or None if not numeric.
+
+    Rejects bools (``True`` is an int subclass) and non-finite floats so a phantom
+    NaN never enters the bag. ``str(float(...))`` keeps full precision and avoids
+    the markdown formatter's lossy "$81.6B" rendering.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num != num or num in (float("inf"), float("-inf")):  # NaN / inf guard
+        return None
+    # Emit integers without a trailing ".0" so "81600000000" matches the judge's
+    # bare-integer parse; keep float precision otherwise ("1.87", "0.586").
+    if num.is_integer():
+        return str(int(num))
+    return repr(num)
+
+
+def _fmt_raw_number(value: Any) -> str:
+    """Render ``value`` as a full-precision, un-rounded numeric string for a cell.
+
+    Cat-A FIX 3 (2026-06-28): the fundamentals table previously rounded revenue
+    to ``$X.1f B``, so a 3-decimal-precision question could not be answered from
+    the cell and the model padded digits. We render the raw value alongside the
+    billions form so the LLM-visible cell carries full precision (revenue is an
+    exact dollar figure like ``94930000000``; an EODHD decimal like ``94.93`` is
+    kept verbatim). Integers shed the trailing ``.0``; non-numeric input is
+    stringified unchanged so the cell never errors. Reuses ``_coerce_grounding_number``'s
+    canonical formatting so the displayed raw matches what the matcher substantiates.
+    """
+    coerced = _coerce_grounding_number(value)
+    return coerced if coerced is not None else str(value)
+
+
+def _grounding_fields_from_row(
+    row: dict[str, Any] | None,
+    snapshot: dict[str, Any] | None,
+    *,
+    ticker: str,
+    metric_keys: tuple[tuple[str, tuple[str, ...]], ...] = _GROUNDING_PERIOD_METRIC_KEYS,
+    allowed_canonicals: set[str] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """Build the ``grounding_fields`` bag for one entity from its latest period.
+
+    ``row`` is the latest-period metric dict (revenue/eps/...); ``snapshot`` is the
+    current-snapshot scalar dict (pe_ratio/market_cap/...). The first non-None
+    candidate per canonical metric wins, with the period row taking priority over
+    the snapshot. ``ticker`` is always emitted first so the entity is anchored even
+    when every numeric metric is missing.
+
+    ``allowed_canonicals`` (when given) restricts BOTH the period and snapshot-only
+    metric sets to those canonical names — used by query_fundamentals to honour the
+    per-metric coverage flag so an uncovered metric never enters as a phantom number.
+    """
+    fields: list[tuple[str, str]] = [("ticker", ticker)]
+    seen: set[str] = set()
+    row = row or {}
+    snapshot = snapshot or {}
+    for canonical, synonyms in metric_keys:
+        if canonical in seen:
+            continue
+        # RC-3 (2026-06-28): honour the coverage filter on the PERIOD metrics too,
+        # not just the snapshot-only scalars below. The query_fundamentals caller
+        # now passes the full default ``metric_keys`` and relies on
+        # ``allowed_canonicals`` to drop uncovered metrics (previously it pre-filtered
+        # ``metric_keys`` itself). Without this guard an uncovered period metric would
+        # leak as a phantom number on every period.
+        if allowed_canonicals is not None and canonical not in allowed_canonicals:
+            continue
+        raw: Any = None
+        for syn in synonyms:
+            if row.get(syn) is not None:
+                raw = row.get(syn)
+                break
+        if raw is None:
+            for syn in synonyms:
+                if snapshot.get(syn) is not None:
+                    raw = snapshot.get(syn)
+                    break
+        num = _coerce_grounding_number(raw)
+        if num is not None:
+            fields.append((canonical, num))
+            seen.add(canonical)
+    # Snapshot-only scalars (pe_ratio/forward_pe/market_cap/...) that the period
+    # row did not provide — pull straight from the snapshot under its own keys.
+    for canonical, synonyms in _GROUNDING_SNAPSHOT_METRIC_KEYS:
+        if canonical in seen:
+            continue
+        if allowed_canonicals is not None and canonical not in allowed_canonicals:
+            continue
+        for syn in synonyms:
+            num = _coerce_grounding_number(snapshot.get(syn))
+            if num is not None:
+                fields.append((canonical, num))
+                seen.add(canonical)
+                break
+    return tuple(fields)
+
+
+# Multi-period cap (FIX 2, 2026-06-26). A trend/batch answer quotes values across
+# SEVERAL periods (e.g. "EPS grew 4.10 -> 5.20 -> 6.30 -> 7.31 over 4 quarters").
+# Emitting only the LATEST period made every NON-latest figure false-``contradicted``
+# against the single sampled row (the dominant remaining issue: da_msft 18,
+# chain_top_mover 14). We therefore emit up to this many periods, newest first, with
+# the matcher's ``_<idx>`` suffix convention so each period's distinct value survives
+# without colliding (the judge + sse_emitter both strip ``_\d+$`` to the base metric).
+#
+# RC-3 (2026-06-28): raised 4 -> 8, then 8 -> 13 (RC-3 follow-up) in lockstep with
+# the emission-side caps in sse_emitter.py (GROUNDING_MAX_ROWS 3->10,
+# SAMPLE_MAX_BYTES 1024->4096, and GROUNDING_MAX_FIELDS_PER_ROW 8->14).
+# A fundamentals-history answer ("Tesla revenue since 2023", "last N quarters")
+# quotes one figure per quarter; emitting too few periods left the older quarters
+# unsubstantiated → GROUNDING_FLOOR even though the figures were correct (RC-3 in
+# docs/audits/2026-06-28-grounding-floor-rootcause.md). 13 = the headroom under the
+# emission per-row field cap (GROUNDING_MAX_FIELDS_PER_ROW=14: ticker + up to 13
+# period values survive into a single packed item) — covering a full ~3-year
+# quarterly trend. Packing more than the field cap allows would be silently trimmed
+# downstream, so 13 is the effective ceiling for a single-metric trend.
+_GROUNDING_MAX_PERIODS = 13
+
+# Screener multi-instrument cap (STEP B, 2026-06-26). A screen answer cites a few
+# top tickers' P/E / cap; we lift the top N rows' values under suffixed keys so
+# those citations substantiate. Kept small so the per-row field/byte caps in
+# build_grounding_sample still hold (each row contributes up to 4 keys).
+_SCREEN_GROUNDING_MAX_ROWS = 3
+
+# Cat-C C1 (2026-06-28): price-series per-bar grounding band cap. A "plot NVDA
+# last 90 days" answer cites N individual daily closes, but the grounding bag
+# emitted only 3 aggregate scalars (high/low/last-close), so the judge could
+# verify almost none of the series and floored it (GROUNDING_FLOOR,
+# docs/audits/2026-06-28-cat-c-priceseries-judgenoise.md). We keep the summary
+# stats AND emit a small DOWN-SAMPLED band of per-bar (close, date) pairs so a
+# representative subset of the series — plus the endpoints — substantiates.
+# Bounded so summary scalars (ticker/high/low/close = 4) + band (K bars x 2
+# fields) stay under the emission per-row field cap (GROUNDING_MAX_FIELDS_PER_ROW
+# =14 in sse_emitter): 5 bars x 2 = 10, + 4 = 14 exactly. The band is partial by
+# design for a long series; the matcher tolerates unmatched bars and the
+# down-sample (first, last, evenly-spaced interior) covers the endpoints.
+_PRICE_BAR_GROUNDING_MAX_ROWS = 5
+
+
+def _grounding_fields_from_rows(
+    rows: list[dict[str, Any]],
+    snapshot: dict[str, Any] | None,
+    *,
+    ticker: str,
+    max_periods: int = _GROUNDING_MAX_PERIODS,
+    allowed_canonicals: set[str] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """Build a MULTI-PERIOD ``grounding_fields`` bag (FIX 2, 2026-06-26).
+
+    ``rows`` is the period list in ASCENDING date order (oldest -> newest); we emit
+    the newest ``max_periods`` rows so the most-quoted recent figures are covered.
+    The newest period keeps the BARE metric keys (``revenue``, ``eps``, ...); each
+    older period's metrics are suffixed (``revenue_2``, ``revenue_3``, ...) so the
+    matcher associates a claim to the SET of period values for that metric and a
+    non-latest figure is ``substantiated`` rather than false-``contradicted``. The
+    snapshot scalars (pe_ratio/market_cap/...) are folded once onto the newest period
+    only — they are TTM/current, not per-period, so they have one true value.
+
+    The ``ticker`` is emitted exactly once (identifiers are non-numeric and must not
+    be duplicated). Flag-safe: like the single-period helper this only fills the
+    in-memory item; the CHAT_EVAL_GROUNDING_SAMPLES flag still gates the wire.
+
+    ``allowed_canonicals`` (RC-3, 2026-06-28): when given, restrict the per-period
+    metrics to those canonical names — threaded straight to ``_grounding_fields_from_row``
+    so query_fundamentals can honour the per-metric coverage flag across EVERY period
+    (an uncovered metric must never enter as a phantom number, on any period — not just
+    the latest). When ``None`` (the history/batch callers) every metric is emitted as
+    before.
+    """
+    if not rows:
+        return ()
+    # Newest period first, capped. ``rows`` is ASC so reversed() is newest -> oldest.
+    newest_first = list(reversed(rows))[:max_periods]
+    fields: list[tuple[str, str]] = [("ticker", ticker)]
+    for idx, row in enumerate(newest_first):
+        # Newest period folds in the snapshot scalars; older periods get the row only
+        # (snapshot is current/TTM, so it has a single value, attached to the latest).
+        row_snapshot = snapshot if idx == 0 else None
+        per_row = _grounding_fields_from_row(
+            row,
+            row_snapshot,
+            ticker=ticker,
+            allowed_canonicals=allowed_canonicals,
+        )
+        for key, val in per_row:
+            if key == "ticker":
+                continue  # already emitted once; never duplicate the identifier
+            # idx 0 -> bare key; idx 1 -> ``_2``; idx 2 -> ``_3`` ... (matcher strips _\d+$)
+            suffixed = key if idx == 0 else f"{key}_{idx + 1}"
+            fields.append((suffixed, val))
+    return tuple(fields)
+
+
+def _grounding_fields_from_bars(
+    bars: list[dict[str, Any]],
+    *,
+    ticker: str,
+) -> tuple[tuple[str, str], ...]:
+    r"""Build the ``grounding_fields`` bag for a price-history (OHLCV) result.
+
+    PLAN-0116 W5 / Item 3. Two benchmark questions cite price figures the matcher
+    could not substantiate (``tc_price_history_msft_ytd_range`` — "MSFT's high and
+    low so far this year"; ``tc_price_history_nvda_90d``): the handler returned a
+    close-only markdown table with no structured numbers. We lift the WINDOW
+    high/low (max bar high / min bar low across the returned bars) and the latest
+    CLOSE so a "high was $X, low was $Y" claim substantiates and a fabricated
+    high/low is contradicted (the rubric's ``fabricated_high_low`` forbidden fact).
+
+    Cat-C C1 (2026-06-28): a SERIES answer ("plot NVDA last 90 days") cites N
+    individual daily closes, which the 3 aggregate scalars could not substantiate
+    — the judge floored it (docs/audits/2026-06-28-cat-c-priceseries-judgenoise.md).
+    So in ADDITION to the summary stats we now emit (i) the first close + the window
+    range, and (ii) a small DOWN-SAMPLED band of per-bar ``(close, date)`` pairs
+    (first / last / evenly-spaced interior) so a representative subset of the series
+    AND its endpoints substantiate. The band is partial by design for a long series
+    (capped at ``_PRICE_BAR_GROUNDING_MAX_ROWS`` to stay under the emission field
+    cap); the matcher tolerates the unmatched interior bars.
+
+    Emitted RAW + unscaled (``_coerce_grounding_number``), ``ticker`` first. A bar
+    may carry ``high``/``low``/``close``/``date`` (live ``/ohlcv/bars`` shape); a
+    missing field is simply skipped so no phantom number enters. Suffixed keys
+    (``close_2``, ``period_2`` …) ride the matcher's ``_\d+$``-strip convention and
+    the ``get_price_history`` allow-list (ticker/period/open/high/low/close/volume).
+    Flag-safe: this only fills the in-memory item; CHAT_EVAL_GROUNDING_SAMPLES still
+    gates the wire.
+    """
+    if not bars:
+        return ()
+    fields: list[tuple[str, str]] = [("ticker", ticker)]
+    # Window high = max of bar highs; window low = min of bar lows. Collect only
+    # the numeric values so a None/garbled bar field never poisons the extremum.
+    highs = [float(h) for b in bars if (h := _coerce_grounding_number(b.get("high"))) is not None]
+    lows = [float(low) for b in bars if (low := _coerce_grounding_number(b.get("low"))) is not None]
+    if highs:
+        hi = _coerce_grounding_number(max(highs))
+        if hi is not None:
+            fields.append(("high", hi))
+    if lows:
+        lo = _coerce_grounding_number(min(lows))
+        if lo is not None:
+            fields.append(("low", lo))
+    # Latest close (bars are sliced to the trailing window in ASC order, so the
+    # last entry is the most-recent bar).
+    last_close = _coerce_grounding_number(bars[-1].get("close"))
+    if last_close is not None:
+        fields.append(("close", last_close))
+
+    # ── Cat-C C1: down-sampled per-bar band (close + date) ────────────────────
+    # Pick up to _PRICE_BAR_GROUNDING_MAX_ROWS bars by evenly-spaced index so the
+    # band always includes the FIRST and LAST bar (the trajectory endpoints) plus
+    # interior samples. Emitted suffixed (_2, _3 …) so they ride alongside — and
+    # never overwrite — the bare ``close`` summary scalar above. ``period`` carries
+    # the bar's date (an allow-listed key) so a claim like "$215.20 on 2026-05-12"
+    # can bind to a specific bar.
+    n_band = min(_PRICE_BAR_GROUNDING_MAX_ROWS, len(bars))
+    if n_band > 0:
+        if n_band == 1:
+            band_indices = [0]
+        else:
+            # Evenly spaced over [0, len-1] inclusive; round to int and dedupe so a
+            # short series never emits the same bar twice.
+            step = (len(bars) - 1) / (n_band - 1)
+            band_indices = sorted({round(i * step) for i in range(n_band)})
+        suffix = 2  # _2 onward; bare close/period are reserved for the summary
+        for idx in band_indices:
+            bar = bars[idx]
+            bar_close = _coerce_grounding_number(bar.get("close"))
+            if bar_close is None:
+                continue
+            fields.append((f"close_{suffix}", bar_close))
+            bar_date = bar.get("date") or bar.get("bar_date") or bar.get("ts")
+            if bar_date:
+                fields.append((f"period_{suffix}", str(bar_date)))
+            suffix += 1
+    return tuple(fields)
+
+
 # ── Chat-eval #4 (2026-06-12): screener metric rendering ─────────────────────
 # Maps a screener FILTER metric name (the DB column the filter list uses, e.g.
 # ``quarterly_revenue_growth_yoy``) to a display label + the response-row keys
@@ -460,6 +791,10 @@ class MarketHandler(ToolHandler):
         item_id = (
             f"tool:price_history:{ticker}:latest_1m" if n == 1 and interval == "1m" else f"tool:price_history:{ticker}"
         )
+        # Value-substantiation (PLAN-0116 W5 / Item 3): lift the window high/low +
+        # latest close so the eval can verify "high $X / low $Y" claims rather than
+        # re-parse the close-only markdown table. Flag-gated at the SSE layer.
+        grounding_fields = _grounding_fields_from_bars(bars, ticker=ticker.upper())
         return RetrievedItem.create(
             item_id=item_id,
             item_type=ItemType.financial,
@@ -477,6 +812,7 @@ class MarketHandler(ToolHandler):
                 published_at=None,
                 entity_name=ticker.upper(),
             ),
+            grounding_fields=grounding_fields,
         )
 
     async def _handle_get_fundamentals_history(
@@ -601,12 +937,23 @@ class MarketHandler(ToolHandler):
             non_phantom,
             current_snapshot=current_snapshot,
         )
+        # Value-substantiation (2026-06-26): lift the raw numbers so the eval can
+        # verify quoted figures. ``non_phantom`` is ASC by date. FIX 2 (multi-period):
+        # a trend answer quotes several periods, so emit up to _GROUNDING_MAX_PERIODS
+        # rows (newest first, suffixed) instead of only the latest — otherwise every
+        # non-latest figure false-contradicts the single sampled row. Rows may be
+        # pydantic models (model_dump) or plain dicts depending on the adapter path.
+        row_dicts = [
+            (r.model_dump() if hasattr(r, "model_dump") else (r if isinstance(r, dict) else {})) for r in non_phantom
+        ]
+        grounding_fields = _grounding_fields_from_rows(row_dicts, current_snapshot, ticker=ticker)
         return RetrievedItem.create(
             item_id=f"tool:fundamentals:{ticker}",
             item_type=ItemType.financial,
             text=table[:_TOOL_RESULT_MAX_CHARS],
             score=0.88,
             trust_weight=0.90,
+            grounding_fields=grounding_fields,
             # PLAN-0103 W26 / BP-644: bind the entity_name so the BP-605
             # entity-grounding guard (chat_orchestrator._check_entity_grounding)
             # can match this item to the question's ticker. Pre-W26 the
@@ -675,6 +1022,7 @@ class MarketHandler(ToolHandler):
         for ticker in ticker_list:
             entry = results.get(ticker) or {}
             status = entry.get("status")
+            grounding_fields: tuple[tuple[str, str], ...] = ()
             if status == "ok":
                 periods_data = entry.get("periods") or []
                 # PLAN-0103 W25 / BP-640: forward the per-ticker snapshot
@@ -687,6 +1035,15 @@ class MarketHandler(ToolHandler):
                     text = f"{ticker}: no quarterly fundamentals available"
                 else:
                     text = self._format_fundamentals_table(ticker, periods_data, current_snapshot=snap_dict)
+                    # Value-substantiation: lift the raw period numbers (periods are
+                    # ASC). FIX 2 (multi-period): emit up to _GROUNDING_MAX_PERIODS
+                    # rows (newest first, suffixed) so a batch trend answer's
+                    # non-latest figures substantiate instead of false-contradicting.
+                    period_dicts = [
+                        (p.model_dump() if hasattr(p, "model_dump") else (p if isinstance(p, dict) else {}))
+                        for p in periods_data
+                    ]
+                    grounding_fields = _grounding_fields_from_rows(period_dicts, snap_dict, ticker=ticker)
             else:
                 reason = entry.get("reason") or "unknown"
                 text = f"{ticker}: data unavailable — {reason}"
@@ -698,6 +1055,7 @@ class MarketHandler(ToolHandler):
                     text=text[:_TOOL_RESULT_MAX_CHARS],
                     score=0.88,
                     trust_weight=0.90,
+                    grounding_fields=grounding_fields,
                     citation_meta=CitationMeta(
                         title=f"Fundamentals: {ticker}",
                         url=None,
@@ -805,12 +1163,35 @@ class MarketHandler(ToolHandler):
         #    text-scan path picks those up via ``classify_number``.
         upper_ticker = ticker.upper()
         text = self._format_query_fundamentals(upper_ticker, metrics, rows, snapshot, coverage)
+        # Value-substantiation (2026-06-26): lift the raw numbers so the eval can
+        # verify quoted figures. CRITICAL: only emit a metric whose coverage is
+        # "ok" — a "missing"/"partial" metric must NOT enter as a phantom number
+        # (so the eval correctly leaves an asserted-but-uncovered metric as
+        # unsupported). ``rows`` is ASC by date.
+        #
+        # RC-3 (2026-06-28): emit MULTI-PERIOD grounding (one entry per returned
+        # period, newest first, suffixed) like the sibling history/batch handlers
+        # — NOT only ``rows[-1]``. A "Tesla revenue since 2023 / last N quarters"
+        # answer quotes one figure per quarter; the prior single-latest-row sample
+        # left every non-latest quarter unsubstantiated → GROUNDING_FLOOR despite
+        # correct figures (RC-3 in docs/audits/2026-06-28-grounding-floor-rootcause.md).
+        # ``allowed_canonicals`` is threaded so the per-metric coverage flag is
+        # honoured on EVERY period, not just the latest.
+        ok_metrics = {m for m in metrics if coverage.get(m, "missing") == "ok"}
+        row_dicts = [r for r in rows if isinstance(r, dict)]
+        grounding_fields = _grounding_fields_from_rows(
+            row_dicts,
+            snapshot,
+            ticker=upper_ticker,
+            allowed_canonicals=ok_metrics,
+        )
         return RetrievedItem.create(
             item_id=f"tool:fundamentals:{upper_ticker}",
             item_type=ItemType.financial,
             text=text[:_TOOL_RESULT_MAX_CHARS],
             score=0.88,
             trust_weight=0.90,
+            grounding_fields=grounding_fields,
             citation_meta=CitationMeta(
                 title=f"Fundamentals query: {upper_ticker}",
                 url=None,
@@ -1088,6 +1469,13 @@ class MarketHandler(ToolHandler):
             return []
 
         lines = [f"## Entity Comparison: {', '.join(tickers)}\n"]
+        # Value-substantiation (2026-06-26): accumulate grounding_fields across all
+        # compared entities into the single returned item. The first entity uses
+        # bare metric names; the 2nd+ are suffixed ``_2``/``_3`` (matching the
+        # judge's ``_\d+$`` field-name normalisation) so per-entity claims map to
+        # the right number. ``entity_idx`` advances only for entities that render.
+        compare_grounding: list[tuple[str, str]] = []
+        entity_idx = 0
         for item in results:
             # M-3: BaseException is the correct check — asyncio.gather(return_exceptions=True)
             # can return KeyboardInterrupt, SystemExit, etc. which are BaseException but not Exception.
@@ -1160,10 +1548,21 @@ class MarketHandler(ToolHandler):
                     [latest_period.get("eps"), highlights.get("DilutedEpsTTM"), highlights.get("EarningsShare")],
                 ),
             ]
+            # Per-entity grounding bag: ticker first, then each resolved metric as
+            # a RAW number. Suffix non-first entities (``_2``/``_3``...) so the
+            # judge can disambiguate which ticker a claim refers to.
+            suffix = "" if entity_idx == 0 else f"_{entity_idx + 1}"
+            entity_grounding: list[tuple[str, str]] = [(f"ticker{suffix}", ticker)]
+            quote_price = _coerce_grounding_number(quote.get("price") or quote.get("close") or quote.get("last_price"))
+            if quote_price is not None:
+                entity_grounding.append((f"price{suffix}", quote_price))
             for key, candidates in metric_specs:
                 val = next((c for c in candidates if c is not None), None)
                 if val is None:
                     continue
+                num = _coerce_grounding_number(val)
+                if num is not None:
+                    entity_grounding.append((f"{key}{suffix}", num))
                 # FIX-LIVE-DD: pre-format cap-style metrics so the LLM does not
                 # have to read 13-digit integers and hallucinate trillion/
                 # billion labels (the original screener fix, now reused here).
@@ -1173,6 +1572,8 @@ class MarketHandler(ToolHandler):
                         lines.append(f"  {key.replace('_', ' ').title()}: {formatted} (raw: {val})")
                         continue
                 lines.append(f"  {key.replace('_', ' ').title()}: {val}")
+            compare_grounding.extend(entity_grounding)
+            entity_idx += 1
             lines.append("")
 
         text = "\n".join(lines)
@@ -1189,6 +1590,7 @@ class MarketHandler(ToolHandler):
                 text=text[:_TOOL_RESULT_MAX_CHARS],
                 score=0.88,
                 trust_weight=0.85,
+                grounding_fields=tuple(compare_grounding),
                 citation_meta=CitationMeta(
                     title=f"Comparison: {', '.join(tickers)}",
                     url=None,
@@ -1345,6 +1747,10 @@ class MarketHandler(ToolHandler):
             return []
 
         instruments = raw.get("instruments") or raw.get("results") or raw.get("data") or []
+        # Value-substantiation (2026-06-26 STEP B): per-instrument grounding bag,
+        # populated for the top few rows inside the render loop below.
+        screen_grounding: list[tuple[str, str]] = []
+        screen_grounding_rows = 0
         if not instruments:
             text = "No instruments matched the screening criteria."
         else:
@@ -1369,6 +1775,37 @@ class MarketHandler(ToolHandler):
                 ticker = inst.get("ticker") or inst.get("symbol") or "?"
                 name = inst.get("name") or ""
                 row = f"  {ticker}"
+                # Value-substantiation (2026-06-26 STEP B): lift the TOP few rows'
+                # ticker/pe_ratio/market_cap/revenue onto the single screener item
+                # under suffixed keys, so an answer citing a screened ticker's P/E
+                # or cap substantiates. Bounded to _SCREEN_GROUNDING_MAX_ROWS — the
+                # per-row field/byte caps in build_grounding_sample bound it further.
+                if screen_grounding_rows < _SCREEN_GROUNDING_MAX_ROWS and ticker != "?":
+                    suffix = "" if screen_grounding_rows == 0 else f"_{screen_grounding_rows + 1}"
+                    screen_grounding.append((f"ticker{suffix}", str(ticker)))
+                    pe_num = _coerce_grounding_number(
+                        next((inst.get(k) for k in ("pe_ratio", "pe", "trailing_pe") if inst.get(k) is not None), None)
+                    )
+                    if pe_num is not None:
+                        screen_grounding.append((f"pe_ratio{suffix}", pe_num))
+                    cap_num = _coerce_grounding_number(
+                        next(
+                            (
+                                inst.get(k)
+                                for k in ("market_cap", "market_capitalization", "market_cap_usd")
+                                if inst.get(k) is not None
+                            ),
+                            None,
+                        )
+                    )
+                    if cap_num is not None:
+                        screen_grounding.append((f"market_cap{suffix}", cap_num))
+                    rev_num = _coerce_grounding_number(
+                        next((inst.get(k) for k in ("revenue", "revenue_ttm") if inst.get(k) is not None), None)
+                    )
+                    if rev_num is not None:
+                        screen_grounding.append((f"revenue{suffix}", rev_num))
+                    screen_grounding_rows += 1
                 if name:
                     row += f" — {name}"
                 for col_label, row_keys in metric_cols:
@@ -1401,6 +1838,7 @@ class MarketHandler(ToolHandler):
                 text=text[:_TOOL_RESULT_MAX_CHARS],
                 score=0.82,
                 trust_weight=0.80,
+                grounding_fields=tuple(screen_grounding),
                 citation_meta=CitationMeta(
                     title="Screener results",
                     url=None,
@@ -1453,11 +1891,22 @@ class MarketHandler(ToolHandler):
             return []
 
         movers = raw.get("movers") or raw.get("data") or raw.get("results") or []
+        # Value-substantiation (2026-06-26 STEP B): accumulate a per-mover
+        # grounding bag so an answer citing "TICKER +X.XX%" / "@ price" can be
+        # substantiated against the values the tool actually returned. ALL movers
+        # share ONE RetrievedItem (the markdown table is a single block), so we
+        # pack each mover under suffixed keys (``ticker``/``change_pct``/``price``,
+        # then ``ticker_2``/...). The sse_emitter admits ``_\d+$`` keys whose base
+        # is allow-listed; the W1 matcher strips the suffix back to the base metric.
+        # change_pct is emitted as a RAW PERCENT NUMBER ("4.27", not "4.27%") — the
+        # matcher's percentage typing handles the unit, and "change_pct" is in
+        # _PERCENT_VALUED_FIELDS-equivalent percent kind via its name.
+        mover_grounding: list[tuple[str, str]] = []
         if not movers:
             text = f"No {safe_mover_type} data available for period {period}."
         else:
             lines = [f"## Market Movers — {safe_mover_type.replace('_', ' ').title()} ({period})\n"]
-            for m in movers[:limit_clamped]:
+            for idx, m in enumerate(movers[:limit_clamped]):
                 ticker = m.get("ticker") or m.get("symbol") or "?"
                 change_pct = m.get("change_percent") or m.get("change_pct") or m.get("changePercent")
                 price = m.get("price") or m.get("close")
@@ -1467,6 +1916,16 @@ class MarketHandler(ToolHandler):
                 if price:
                     row += f" @ {price}"
                 lines.append(row)
+                # idx 0 → bare keys; idx N → ``_<N+1>`` suffix (matcher strips _\d+$).
+                suffix = "" if idx == 0 else f"_{idx + 1}"
+                if ticker and ticker != "?":
+                    mover_grounding.append((f"ticker{suffix}", str(ticker)))
+                cp_num = _coerce_grounding_number(change_pct)
+                if cp_num is not None:
+                    mover_grounding.append((f"change_pct{suffix}", cp_num))
+                price_num = _coerce_grounding_number(price)
+                if price_num is not None:
+                    mover_grounding.append((f"price{suffix}", price_num))
             text = "\n".join(lines)
 
         log.info(
@@ -1483,6 +1942,7 @@ class MarketHandler(ToolHandler):
                 text=text[:_TOOL_RESULT_MAX_CHARS],
                 score=0.85,
                 trust_weight=0.82,
+                grounding_fields=tuple(mover_grounding),
                 citation_meta=CitationMeta(
                     title=f"Market movers: {safe_mover_type} ({period})",
                     url=None,
@@ -1645,14 +2105,58 @@ class MarketHandler(ToolHandler):
         interval: str,
         bars: list[dict[str, Any]],
     ) -> str:
-        """Format OHLCV bars as a markdown table with a header line."""
-        header = f"{ticker} price history ({interval}, {from_date} → {to_date})\n"
-        header += "| Date       | Close  | Volume |\n|------------|--------|--------|\n"
+        """Format OHLCV bars as a markdown table with a header line.
+
+        Cat-B B2 (2026-06-28): the per-bar table now renders ``High`` and ``Low``
+        columns (they were computed into ``grounding_fields`` but NEVER into the
+        text the LLM sees, so the model truthfully but wrongly reported "high/low
+        not available" for a YTD-range question — a split-brain between the eval
+        wire and the LLM context, docs/audits/2026-06-28-cat-b-screener-missingness.md).
+        We also prepend an explicit aggregated WINDOW SUMMARY line (period high /
+        low / range / first / last close / N bars) so a "high and low so far this
+        year" question has the aggregate to copy rather than asking the model to
+        fold ~120 bars itself — an aggregation it is unreliable at.
+        """
+        # ── Window summary (the aggregate the model should copy, not compute) ──
+        # Collect numeric extrema defensively: a None/garbled bar field must never
+        # poison the max/min (mirrors _grounding_fields_from_bars' guard).
+        highs = [float(h) for b in bars if (h := _coerce_grounding_number(b.get("high"))) is not None]
+        lows = [float(low) for b in bars if (low := _coerce_grounding_number(b.get("low"))) is not None]
+        summary = ""
+        if highs or lows:
+            parts: list[str] = []
+            if highs:
+                parts.append(f"high ${max(highs):.2f}")
+            if lows:
+                parts.append(f"low ${min(lows):.2f}")
+            if highs and lows:
+                parts.append(f"range ${max(highs) - min(lows):.2f}")
+            # First / last close anchor the trajectory endpoints for a series
+            # question (Cat-C C1: a "plot last 90 days" answer summarises rather
+            # than enumerates every bar).
+            first_close = _coerce_grounding_number(bars[0].get("close")) if bars else None
+            last_close = _coerce_grounding_number(bars[-1].get("close")) if bars else None
+            if first_close is not None:
+                parts.append(f"first close ${float(first_close):.2f}")
+            if last_close is not None:
+                parts.append(f"last close ${float(last_close):.2f}")
+            parts.append(f"{len(bars)} bars")
+            summary = f"Window summary: {' — '.join(parts)}\n"
+
+        header = summary + f"{ticker} price history ({interval}, {from_date} → {to_date})\n"
+        header += "| Date       | High   | Low    | Close  | Volume |\n"
+        header += "|------------|--------|--------|--------|--------|\n"
         rows = []
         for b in bars:
             close = b.get("close", 0) or 0
             volume = b.get("volume", 0) or 0
-            rows.append(f"| {b.get('date', '?')} | ${float(close):.2f} | {int(volume):,} |")
+            # High/Low may be absent on a degenerate bar — render "—" rather than
+            # a fabricated 0 so the LLM never quotes a phantom extremum.
+            hi_raw = _coerce_grounding_number(b.get("high"))
+            lo_raw = _coerce_grounding_number(b.get("low"))
+            hi = f"${float(hi_raw):.2f}" if hi_raw is not None else "—"
+            lo = f"${float(lo_raw):.2f}" if lo_raw is not None else "—"
+            rows.append(f"| {b.get('date', '?')} | {hi} | {lo} | ${float(close):.2f} | {int(volume):,} |")
         return header + "\n".join(rows)
 
     def _format_fundamentals_table(
@@ -1677,20 +2181,40 @@ class MarketHandler(ToolHandler):
         states "Periodicity: QUARTERLY" so the LLM sees the contract before
         reading the cells.
         """
+        # Cat-A FIX 3 (2026-06-28, period precision): the table now carries TWO
+        # period-identity columns — the fiscal ``Period`` label AND the explicit
+        # ``Period End`` ISO date — so a question that names a quarter by its
+        # period-end date ("fiscal Q4 2024 ending Sep 28 2024") can be bound to
+        # the matching row by date, not just by a fiscal label the model might
+        # mis-anchor (the Apple two-Sep-28-Q4s trap, docs/audits/
+        # 2026-06-28-cat-a-period-selection.md). Revenue/Net Income are rendered
+        # UN-ROUNDED (full precision) alongside the human-readable $X.XXXB form,
+        # because the prior ``$X.1f B`` rounding made 3-decimal-precision
+        # questions impossible to answer from the cell, so the model padded
+        # digits ("$102.500B") that were themselves unsubstantiated.
         header = f"{ticker} quarterly fundamentals (Periodicity: QUARTERLY)\n"
-        header += "| Period | Periodicity | Revenue | Net Income | EPS | P/E |\n"
-        header += "|--------|-------------|---------|------------|-----|-----|\n"
+        header += "| Period | Period End | Periodicity | Revenue | Net Income | EPS | P/E |\n"
+        header += "|--------|------------|-------------|---------|------------|-----|-----|\n"
         rows = []
         for p in periods:
             rev_val = p.get("revenue") or p.get("totalRevenue")
-            rev = f"${float(rev_val) / 1e9:.1f}B" if rev_val else "—"
+            # Render BOTH the rounded billions form (readability) and the raw,
+            # un-rounded value (precision) so the LLM-visible cell can support a
+            # 3-decimal answer without padding. e.g. "$94.930B (raw: 94930000000)".
+            rev = f"${float(rev_val) / 1e9:.3f}B (raw: {_fmt_raw_number(rev_val)})" if rev_val else "—"
             ni_val = p.get("net_income") or p.get("netIncome")
-            ni = f"${float(ni_val) / 1e9:.1f}B" if ni_val else "—"
+            ni = f"${float(ni_val) / 1e9:.3f}B (raw: {_fmt_raw_number(ni_val)})" if ni_val else "—"
             eps_val = p.get("eps") or p.get("epsActual")
             eps = f"${float(eps_val):.2f}" if eps_val else "—"
             pe_val = p.get("pe_ratio") or p.get("pe")
             pe = f"{float(pe_val):.1f}x" if pe_val else "—"
             period_label = p.get("period") or p.get("date") or "?"
+            # Explicit ISO period-end date (the unambiguous anchor). The history
+            # use case tags every row with ``period_end_date``; ``query_fundamentals``
+            # uses ``period_end``. Tolerate both, and fall back to "—" so the
+            # column is always present (the LLM sees the date is unavailable
+            # rather than the column silently vanishing).
+            period_end = p.get("period_end_date") or p.get("period_end") or p.get("date") or "—"
             # Explicit per-row periodicity tag. Fall back to QUARTERLY because
             # this formatter is only ever called from the quarterly-history
             # path; an ANNUAL row leaking here would be a contract violation
@@ -1698,7 +2222,7 @@ class MarketHandler(ToolHandler):
             # provenance for any non-QUARTERLY rows, QUARTERLY is the safer
             # default than leaving the cell blank.
             periodicity = p.get("period_type") or "QUARTERLY"
-            rows.append(f"| {period_label} | {periodicity} | {rev} | {ni} | {eps} | {pe} |")
+            rows.append(f"| {period_label} | {period_end} | {periodicity} | {rev} | {ni} | {eps} | {pe} |")
         table = header + "\n".join(rows)
 
         # PLAN-0103 W25 / BP-640: snapshot block — emitted AFTER the period

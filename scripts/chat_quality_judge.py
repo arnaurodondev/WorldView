@@ -48,6 +48,7 @@ Design notes
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -220,6 +221,15 @@ class InvariantCode(str, Enum):
     EMPTY_AFTER_TOOLS = "EMPTY_AFTER_TOOLS"  # tool ok+items>=1 but no substantive synthesis
     INFRA_NON_ANSWER = "INFRA_NON_ANSWER"  # all relevant tools transport_error/5xx + apology
     GROUNDING_CONTRADICTED = "GROUNDING_CONTRADICTED"  # numeric claim contradicted by a sample (W3)
+    # SUBSTANTIATION_UNSUPPORTED (PLAN-0110 W1 / MUST-1): the answer asserts a
+    # number for a field the tool NAMED in its grounding sample but never actually
+    # quantified (no parseable value) — an unsupported assertion (weaker proof than
+    # a contradicted value, but still fabrication-adjacent). Deterministic +
+    # LLM-free. Ranked BELOW GROUNDING_CONTRADICTED (a disproved value is strictly
+    # worse) and ABOVE PHANTOM_CITATION. Fires ONLY when coverage=="verified" with
+    # unsupported>0 — so a presumed / flag-off run can NEVER trip it (the W1
+    # byte-identical-baseline guarantee).
+    SUBSTANTIATION_UNSUPPORTED = "SUBSTANTIATION_UNSUPPORTED"  # claim for a named-but-value-less sampled field
     # PHANTOM_CITATION (gold-calibration fix 2026-06-12): the answer attaches a
     # ``[tool_name row N]`` / ``[tool_name]`` provenance tag for a tool that was
     # NEVER called this turn. The cited tool name is disjoint from the called-tool
@@ -239,6 +249,7 @@ class InvariantCode(str, Enum):
 # token AND sits below the grounding floor is reported as CONTROL_TOKEN_LEAK.
 _INVARIANT_PRIORITY: tuple[InvariantCode, ...] = (
     InvariantCode.GROUNDING_CONTRADICTED,
+    InvariantCode.SUBSTANTIATION_UNSUPPORTED,
     InvariantCode.PHANTOM_CITATION,
     InvariantCode.CONTROL_TOKEN_LEAK,
     InvariantCode.TRUNCATED,
@@ -287,6 +298,53 @@ class GroundingCheck:
             "contradicted": self.contradicted,
             "examples": list(self.examples),
             "evidence_mode": self.evidence_mode,
+        }
+
+
+@dataclass(frozen=True)
+class SubstantiationCheck:
+    """Outcome of the deterministic substantiation cross-check (W1 / MUST-1).
+
+    A STRICTER sibling of :class:`GroundingCheck`. Where ``GroundingCheck`` only
+    flags a number a sample DISPROVES (``contradicted``), this check additionally
+    flags a number the agent asserts FOR A SAMPLED FIELD that the tool never
+    actually returned a matching value for (``unsupported``) — the agent claimed a
+    number the tool's own (value-less) field could not have produced.
+
+    Each numeric claim is classified against the captured grounding samples:
+      * ``substantiated`` — claim is associated (by name/alias) to a sampled field
+        and is within tolerance of a sampled value (== ``GroundingCheck.matched``).
+      * ``contradicted``  — claim is associated to a sampled field and is OUTSIDE
+        tolerance of every sampled value (== ``GroundingCheck.contradicted``).
+      * ``unsupported``   — claim is associated to a sampled field that is PRESENT
+        in the sample set but has NO parseable value to match against AND nothing
+        to contradict. The agent asserted a number for a field the tool returned
+        only as a (value-less) name → unsupported assertion.
+      * ``unmatched``     — claim has no associated sampled field (neutral; never a
+        failure — there is no evidence either way).
+
+    Coverage:
+      * ``"verified"`` — at least one grounding sample was present (the check had
+        real field names to bite on).
+      * ``"presumed"`` — NO grounding sample at all (legacy fallback). In this mode
+        the check NEVER fires: by INVARIANT every count is 0 (asserted by tests).
+    """
+
+    substantiated: int = 0  # claim matched a sampled value within tolerance
+    unsupported: int = 0  # claim names a sampled field that returned no value → unsupported
+    contradicted: int = 0  # claim outside tolerance of every sampled value (disproved)
+    unmatched: int = 0  # claim with no associated sampled field (neutral)
+    coverage: str = "presumed"  # "verified" (samples present) | "presumed" (legacy / no samples)
+    examples: list[dict[str, Any]] = field(default_factory=list)  # {claim, field, kind, ...}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "substantiated": self.substantiated,
+            "unsupported": self.unsupported,
+            "contradicted": self.contradicted,
+            "unmatched": self.unmatched,
+            "coverage": self.coverage,
+            "examples": list(self.examples),
         }
 
 
@@ -409,8 +467,87 @@ class JudgeLLM(Protocol):
     def __call__(self, *, system: str, user: str) -> str: ...
 
 
+# ── Judge LLM retry (PLAN-0116 W5 / Item 2) ──────────────────────────────
+# The DeepInfra judge occasionally ``ReadTimeout``s / returns a transient 5xx /
+# 429 under load — which turned into a ``verdict=ERROR`` row that polluted the
+# headline (an eval-INFRA failure mis-read as a quality signal). A bounded retry
+# with short backoff absorbs the transient blip; only a STILL-failing call after
+# all attempts surfaces as ERROR (then excluded from the quality aggregates and
+# reported separately as eval-infra). Deterministic content (temperature=0) makes
+# a retry safe — the same prompt yields the same grade.
+_JUDGE_RETRY_ATTEMPTS = 3  # total attempts (1 initial + 2 retries)
+_JUDGE_RETRY_BASE_DELAY = 0.5  # seconds; exponential: 0.5, 1.0, ...
+
+
+def _is_transient_llm_error(exc: BaseException) -> bool:
+    """True for a RETRYABLE judge-call error (timeout / connection / 5xx / 429).
+
+    We retry ONLY transient transport/server errors — a timeout, a dropped
+    connection, or a server-side 5xx/429. A deterministic client error (a 400 bad
+    request, an auth 401/403, a JSON/parse bug) is NOT retried: re-sending the
+    identical request would fail identically and only waste time. httpx is
+    imported lazily so the module stays importable without it; if it is absent we
+    treat nothing as transient (no retry).
+    """
+    try:
+        import httpx
+    except ImportError:
+        return False
+    # Transport-level: timeouts, connection resets, DNS, etc.
+    if isinstance(exc, httpx.TimeoutException | httpx.TransportError):
+        return True
+    # Server-side HTTP status: 5xx (server fault) or 429 (rate limit) are
+    # transient; 4xx (except 429) is a deterministic client error — do not retry.
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code >= 500 or code == 429
+    return False
+
+
+def _with_retry(
+    call: JudgeLLM,
+    *,
+    attempts: int = _JUDGE_RETRY_ATTEMPTS,
+    base_delay: float = _JUDGE_RETRY_BASE_DELAY,
+    sleep: Any = None,
+) -> JudgeLLM:
+    """Wrap a judge LLM with a bounded retry on TRANSIENT errors (Item 2).
+
+    Retries up to ``attempts`` times total, sleeping ``base_delay * 2**i`` between
+    tries. A non-transient error (see :func:`_is_transient_llm_error`) or the
+    final transient failure is re-raised so ``judge_answer`` / ``judge_trajectory``
+    still tag the row ERROR. ``sleep`` is injectable for tests (defaults to
+    ``time.sleep``); pass a no-op to avoid real delays in unit tests.
+    """
+    import time
+
+    _sleep = sleep if sleep is not None else time.sleep
+
+    def _retrying(*, system: str, user: str) -> str:
+        last: BaseException | None = None
+        for i in range(max(1, attempts)):
+            try:
+                return call(system=system, user=user)
+            except Exception as exc:
+                last = exc
+                # Last attempt, or a non-transient (deterministic) error → give up.
+                if i == attempts - 1 or not _is_transient_llm_error(exc):
+                    raise
+                _sleep(base_delay * (2**i))
+        # Unreachable (the loop either returns or raises), but satisfies typing.
+        assert last is not None
+        raise last
+
+    return _retrying
+
+
 def _build_default_llm(*, api_key: str | None, model: str, base_url: str) -> JudgeLLM | None:
-    """Build the default DeepInfra-backed judge LLM, or None if no API key."""
+    """Build the default DeepInfra-backed judge LLM, or None if no API key.
+
+    The returned callable is wrapped in a bounded transient-error retry
+    (:func:`_with_retry`, Item 2) so a single ReadTimeout / 5xx / 429 no longer
+    forces a ``verdict=ERROR`` row.
+    """
     if not api_key:
         return None
 
@@ -446,7 +583,7 @@ def _build_default_llm(*, api_key: str | None, model: str, base_url: str) -> Jud
             body = resp.json()
             return str(body["choices"][0]["message"]["content"] or "")
 
-    return _call
+    return _with_retry(_call)
 
 
 # --------------------------------------------------------------------------
@@ -1009,6 +1146,15 @@ _TOOL_CITATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A numbered CITATION-INDEX marker (``[N1]``, ``[N12]``) — the canonical inline
+# citation form this codebase emits (see grading.py ``_CITATION_MARKER_FOR_REFUSAL_RE``
+# and the harness ``[N\d+]`` convention). Its ``N<digits>`` body matches the
+# permissive tool-name pattern above (``N`` then digits), so without this guard a
+# legitimate ``[N1]`` is mis-read as a phantom tool citation named ``n1`` and a
+# correctly-cited, honest answer hard-FAILs PHANTOM_CITATION. We exclude it here so
+# only real ``[snake_case_tool …]`` provenance tags reach the called-set check.
+_CITATION_INDEX_MARKER_RE = re.compile(r"^n\d+$", re.IGNORECASE)
+
 
 def _called_tool_names(tool_calls: list[dict[str, Any]] | None) -> set[str]:
     """The lowercased set of tool names actually invoked this turn.
@@ -1046,6 +1192,10 @@ def detect_phantom_citation(
         blocks never trip the check.
       * A tag whose "tool name" is NOT a snake_case identifier (bare numeric
         markers like ``[3]``) is not matched by ``_TOOL_CITATION_RE`` at all.
+      * A numbered citation-INDEX marker (``[N1]`` / ``[N12]``) is skipped — its
+        ``N<digits>`` body matches the permissive tool-name pattern but it is a
+        source-citation marker, not a tool provenance tag (see
+        ``_CITATION_INDEX_MARKER_RE``).
       * When the agent called NO tools we still flag a tool-attributed citation —
         a ``[query_fundamentals row 0]`` tag with an empty called-set is the
         clearest phantom (the agent invented the whole provenance).
@@ -1057,6 +1207,9 @@ def detect_phantom_citation(
     cleaned = _strip_code_spans(text)
     for m in _TOOL_CITATION_RE.finditer(cleaned):
         tool_name = m.group(1).lower()
+        # ``[N1]`` etc. are citation-index markers, not tool names — never phantom.
+        if _CITATION_INDEX_MARKER_RE.match(tool_name):
+            continue
         if tool_name not in called:
             return f"phantom_citation:{tool_name}"
     return None
@@ -1087,6 +1240,7 @@ _ALL_INVARIANTS: tuple[InvariantCode, ...] = (
     InvariantCode.EMPTY_AFTER_TOOLS,
     InvariantCode.INFRA_NON_ANSWER,
     InvariantCode.GROUNDING_CONTRADICTED,
+    InvariantCode.SUBSTANTIATION_UNSUPPORTED,
     InvariantCode.PHANTOM_CITATION,
     InvariantCode.GROUNDING_FLOOR,
 )
@@ -1102,6 +1256,7 @@ def evaluate_invariants(
     tool_calls: list[dict[str, Any]] | None = None,
     relax_non_answer_gates: bool = False,
     enabled: set[InvariantCode] | None = None,
+    substantiation_check: SubstantiationCheck | None = None,
 ) -> dict[InvariantCode, bool]:
     """Run every deterministic invariant gate; return per-code pass/fail.
 
@@ -1144,7 +1299,7 @@ def evaluate_invariants(
 
     # Seed every gate to PASS (True). Disabled gates stay True and are skipped
     # below, so they are reported as "passed" rather than absent.
-    results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
 
     # 1) Degenerate-answer family → CONTROL_TOKEN_LEAK / TRUNCATED /
     #    EMPTY_AFTER_TOOLS. We call the EXISTING detector and re-label its
@@ -1174,6 +1329,18 @@ def evaluate_invariants(
     if InvariantCode.GROUNDING_CONTRADICTED in active:
         if grounding_check.contradicted > 0:
             results[InvariantCode.GROUNDING_CONTRADICTED] = False
+
+    # 3a) Substantiation → SUBSTANTIATION_UNSUPPORTED (W1 / MUST-1). Fires when the
+    #     answer asserts a number for a field the tool NAMED but never quantified
+    #     (``unsupported > 0``) AND the check actually had samples to bite on
+    #     (``coverage == "verified"``). The coverage guard is what makes a presumed
+    #     / flag-off / no-sample run byte-identical to the pre-W1 baseline: with no
+    #     samples ``unsupported`` is 0 anyway, but we double-guard on coverage so a
+    #     future change cannot make this gate fire in presumed mode. ``None`` →
+    #     caller did not run the substantiation check → gate cannot fire.
+    if InvariantCode.SUBSTANTIATION_UNSUPPORTED in active and substantiation_check is not None:
+        if substantiation_check.coverage == "verified" and substantiation_check.unsupported > 0:
+            results[InvariantCode.SUBSTANTIATION_UNSUPPORTED] = False
 
     # 3b) Phantom citation → PHANTOM_CITATION. A ``[tool_name row N]`` provenance
     #     tag whose tool name was never in the called-tool set is invented →
@@ -1262,7 +1429,178 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "free_cash_flow": ("free cash flow", "free_cash_flow", "fcf"),
     "dividend_yield": ("dividend yield", "dividend_yield"),
     "price": ("price", "share price", "trading at", "quote"),
+    "gross_margin": ("gross margin", "gross_margin"),
+    "net_margin": ("net margin", "net_margin", "profit margin", "net profit margin"),
+    "operating_margin": ("operating margin", "operating_margin", "op margin"),
 }
+
+# Percent-valued fields a handler may emit as a RATIO (``0.586``) while the answer
+# states them as a PERCENT (``"58.6%"``). For these, a claim is compared against
+# BOTH the raw sample and ``sample * 100`` so the ratio/percent representation
+# mismatch does not produce a false contradiction. Cheap, one set — see
+# docs/audits/2026-06-26-substantiation-eval-design.md (margin-as-ratio note).
+_PERCENT_VALUED_FIELDS: frozenset[str] = frozenset({"gross_margin", "net_margin", "operating_margin"})
+
+# 2026-06-26 failure-analysis #4: IDENTIFIER fields are non-numeric labels
+# (ticker, symbol, entity/company name). A grounding_sample for a comparison
+# carries them alongside the metrics (e.g. ``{"ticker": "NVDA", "gross_margin":
+# "0.40"}``). They have no parseable numeric value, so the substantiation matcher
+# must NEVER associate a numeric claim (e.g. "40%") to one of them — doing so
+# classed a legitimate margin claim as ``unsupported`` on field ``ticker`` and
+# produced a false SUBSTANTIATION_UNSUPPORTED FAIL (``tc_entity_health_palantir``).
+# We exclude these names from the association universe so the claim attaches to
+# the real numeric field (or stays ``unmatched``) instead. Matched against the
+# ``_<digits>``-stripped base name, so ``ticker_2`` is covered too.
+_IDENTIFIER_FIELDS: frozenset[str] = frozenset(
+    {"ticker", "symbol", "entity_name", "entity", "name", "company", "company_name"}
+)
+
+# --------------------------------------------------------------------------
+# CLAIM TYPING (PLAN-0116 W1.2)
+# --------------------------------------------------------------------------
+#
+# A numeric claim and a sampled field each have a KIND. A claim may associate to a
+# field ONLY when the two kinds are COMPATIBLE. This kills the exact false
+# contradiction observed in run_20260626T185654Z: a "34 % growth" PERCENTAGE claim
+# was associated to the ``revenue`` ABSOLUTE-VALUE field and flagged contradicted.
+#
+# Kinds:
+#   * ``absolute_value`` — a dollar/level figure: ``$5``, ``46.7B``, ``46,742``,
+#     a decimal level (EPS ``4.27``). Fields: revenue/eps/net_income/market_cap/...
+#   * ``percentage``     — a percent: ``34 %``, or a level stated as a margin/
+#     growth (``58.6 %``). Fields: *_margin, dividend_yield.
+#   * ``ratio``          — a multiple: ``26.67x``, a P/E. Fields: pe_ratio, forward_pe.
+#   * ``count``          — a bare small integer multiplier/enumeration (``6x``,
+#     "3-4 times"). Has no metric field; never associates to a $-level.
+#
+# COMPATIBILITY RULE (deliberately ASYMMETRIC + permissive on the unknown side):
+#   - same kind                                  → compatible.
+#   - either side is UNKNOWN (a field/claim we
+#     cannot type, e.g. a bespoke ``confidence``
+#     field, or a bare decimal with no $/pct/x)    → compatible (don't over-block;
+#     the proximity + tolerance checks still gate it).
+#   - two DIFFERENT KNOWN kinds                   → INCOMPATIBLE (block association).
+# So a ``%`` claim never attaches to a KNOWN absolute field (revenue), but still
+# attaches to an untyped field (``confidence=92`` → ``92 %`` stays substantiated).
+
+# Canonical field → kind. Anything not listed is UNKNOWN (compatible with all),
+# which keeps brand-new sampled fields working with no code change (R11 spirit).
+_FIELD_KINDS: dict[str, str] = {
+    "revenue": "absolute_value",
+    "eps": "absolute_value",
+    "gross_profit": "absolute_value",
+    "net_income": "absolute_value",
+    "market_cap": "absolute_value",
+    "ebitda": "absolute_value",
+    "operating_income": "absolute_value",
+    "free_cash_flow": "absolute_value",
+    "price": "absolute_value",
+    "pe_ratio": "ratio",
+    "forward_pe": "ratio",
+    "gross_margin": "percentage",
+    "net_margin": "percentage",
+    "operating_margin": "percentage",
+    "dividend_yield": "percentage",
+}
+
+# Context words that, when they HUG a number, mark it as a relative quantity even
+# without a ``%``/``x`` token: a growth/margin/change figure (→ percentage) or a
+# multiplier (→ count). Matched against the short window immediately BEFORE/AFTER
+# the number, lowercased + unicode-normalised.
+_PERCENT_CONTEXT_RE = re.compile(
+    r"\b(growth|grew|grow|rose|rise|risen|increase|increased|gain|gained|"
+    r"decline|declined|drop|dropped|fell|fall|fallen|decrease|decreased|"
+    r"margin|yoy|year[- ]over[- ]year|qoq|cagr|yield)\b",
+    re.IGNORECASE,
+)
+# A multiplier context: "3-4 times", "roughly 3 times", "6x larger". The bare
+# integer is a count/ratio multiplier, NOT a $-level.
+_MULTIPLIER_AFTER_RE = re.compile(r"^\s*(?:-\s*\d+\s*)?(?:x\b|times\b|fold\b)", re.IGNORECASE)
+
+
+def _normalise_claim_text(text: str) -> str:
+    """Fold unicode punctuation the LLM emits to the ASCII forms the matcher reads.
+
+    The agent renders "price-to-earnings" with a U+2011 NON-BREAKING HYPHEN, a
+    ``26.67x`` MULTIPLICATION SIGN (U+00D7), narrow no-break spaces (U+202F), and
+    en/em dashes. Without folding, the ``price-to-earnings`` alias (regular hyphen)
+    never matches and a P/E claim mis-associates to ``net_income`` (the 'earnings'
+    substring) — the exact ru_googl_pe false contradiction. We REPLACE each with an
+    EQUAL-LENGTH ASCII char so character offsets (and therefore the association
+    window) are preserved.
+    """
+    # Each mapping is 1-char→1-char so offsets are stable.
+    table = {
+        0x2011: "-",  # non-breaking hyphen
+        0x2010: "-",  # hyphen
+        0x2012: "-",  # figure dash
+        0x2013: "-",  # en dash
+        0x2014: "-",  # em dash —
+        0x00D7: "x",  # multiplication sign
+        0x202F: " ",  # narrow no-break space
+        0x00A0: " ",  # no-break space
+        0x2009: " ",  # thin space
+    }
+    return text.translate(table)
+
+
+def _field_kind(field: str) -> str:
+    """Return the KIND of a (suffix-stripped) canonical field name, or 'unknown'."""
+    return _FIELD_KINDS.get(field.lower(), "unknown")
+
+
+def _classify_claim(raw: str, suffix: str, before: str, after: str, *, has_dollar: bool = False) -> str:
+    """Classify a numeric claim into a kind from its FORMAT + surrounding CONTEXT.
+
+    ``before``/``after`` are the already-normalised, lowercased windows hugging the
+    number (a few dozen chars). Decision order -- most specific token first:
+      1. explicit ``%`` suffix                          -> percentage.
+      2. ratio context ("p/e", "multiple", "ratio")     -> ratio (incl. a trailing
+         ``x``, e.g. "37.73x" / "26.67x": the x means "times earnings").
+      3. a bare ``x``/``times`` multiplier right after  -> count (multiplier).
+      4. ``$`` prefix or a B/M/K/T scale suffix         -> absolute_value.
+      5. percentage CONTEXT word (growth/margin/yoy...)  -> percentage.
+      6. otherwise (a bare decimal/integer)             -> unknown (compatible-with-all).
+    """
+    sfx = (suffix or "").lower()
+    if sfx == "%":
+        return "percentage"
+    # STRONGEST format signal FIRST: a ``$`` prefix or a B/M/K/T scale suffix is a
+    # money/LEVEL figure regardless of any nearby word. This must beat ratio
+    # context — ``$0.27`` on an "EPS … P/E (TTM): 29.68x" line is an EPS absolute,
+    # NOT a P/E ratio (the "P/E" sits in the same window but belongs to a DIFFERENT
+    # number). Without this precedence, ``$0.27`` mis-typed ratio → pe_ratio →
+    # false contradiction (observed on chain_top_mover_fundamentals).
+    before_tail = before[-2:]
+    if has_dollar or "$" in before_tail or sfx in _SCALE_SUFFIX:
+        return "absolute_value"
+    # A P/E "multiple" reading: a bare/x-suffixed number with "P/E"/"multiple"
+    # nearby is a RATIO (``37.73x`` / ``26.67x`` — the x means "times earnings").
+    # ``ratio`` ALONE is NOT enough (``PEG ratio: 2.02`` is a different metric we do
+    # not sample) — require a P/E-specific cue, or a multiple/x token.
+    pe_ctx = bool(re.search(r"\b(p\s*/\s*e|price-to-earnings|p/e ratio)\b", before + " " + after))
+    multiple_ctx = bool(re.search(r"\bmultiple\b", before + " " + after))
+    if pe_ctx or (multiple_ctx and _MULTIPLIER_AFTER_RE.match(after)):
+        return "ratio"
+    # "6x", "3-4 times", "8x larger" with NO ratio context — a multiplier/count.
+    if _MULTIPLIER_AFTER_RE.match(after):
+        return "count"
+    # Growth/margin/change/yield context → a relative percentage figure.
+    if _PERCENT_CONTEXT_RE.search(before) or _PERCENT_CONTEXT_RE.search(after):
+        return "percentage"
+    return "unknown"
+
+
+def _kinds_compatible(claim_kind: str, field_kind: str) -> bool:
+    """Compatibility gate (asymmetric, permissive on UNKNOWN — see _FIELD_KINDS)."""
+    if claim_kind == "unknown" or field_kind == "unknown":
+        return True
+    # A multiplier/count claim ("6x") never substantiates a metric LEVEL field; it
+    # only stays compatible with an untyped field (handled by the unknown branch).
+    if claim_kind == "count":
+        return False
+    return claim_kind == field_kind
+
 
 # How far (chars) on EITHER side of a number we look for a field-name / alias to
 # associate the claim with a sampled field. A short window keeps "revenue is X …
@@ -1338,6 +1676,78 @@ def _is_yearlike(raw: str, suffix: str) -> bool:
     return 1900 <= v <= 2099 and len(raw) == 4
 
 
+# A "financial-format" marker means the number is presented AS a magnitude the
+# tools could have returned: a $ prefix, a decimal point, a thousands comma, a
+# percent, or a magnitude word/suffix (B/M/T/K, billion/...). A claim that has
+# ANY of these is a real numeric claim and is never structural.
+_FIN_FORMAT_RE = re.compile(r"[.,%$]|(?:bn|mn|tn|[kmbt]b?n?\b)|billion|million|trillion|thousand", re.IGNORECASE)
+
+# Structural-context tokens that immediately PRECEDE a bare integer when it is a
+# period label / enumeration / row index rather than a financial magnitude:
+#   Q4, FY2025, H1, "row 0", "period 3", "top 5", "last 4 quarters", "#2", list
+#   bullets ("3.") etc. Matched against the short window just before the number.
+_STRUCTURAL_PREFIX_RE = re.compile(
+    r"(?:"
+    r"\bq[1-4]?$|\bfy$|\bh[12]?$|\bquarter[s]?$|\bperiod[s]?$|\bfiscal$|"  # period labels
+    r"\brow$|\bindex$|\brank$|\btop$|\blast$|\bnext$|\bfirst$|\bpast$|"  # enumeration
+    r"\bover$|\bnumber$|#|\bn=$"  # counts
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+# Structural-context tokens that immediately FOLLOW a bare integer ("4 quarters",
+# "3 periods", "5 results", "row 0", "2 years ago").
+_STRUCTURAL_SUFFIX_RE = re.compile(
+    # Optional leading hyphen so "trailing-12-month" (the bare 12 hugged by a
+    # hyphen on BOTH sides) is recognised as a period count, not a magnitude claim.
+    r"^[-\s]*(?:quarter[s]?|period[s]?|year[s]?|result[s]?|row[s]?|item[s]?|"
+    r"month[s]?|day[s]?|week[s]?|entit(?:y|ies)|compan(?:y|ies)|tool[s]?)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_structural_number(cleaned: str, span: tuple[int, int], raw: str, suffix: str) -> bool:
+    """True when a number is a STRUCTURAL token (period/index/count), not a claim.
+
+    Substantiation-matcher precision guard (2026-06-26). A bare small integer with
+    NO financial-format marker ($, decimal, comma, %, magnitude word) is structural
+    when it sits in a period-label / enumeration / count context — e.g. the ``4`` in
+    "Q4 FY2025", "periods = 4", "last 4 quarters", "row 0", "top 5". Such tokens
+    were being mis-parsed as EPS/PE claims and false-``contradicted`` against the
+    single sampled value (n=67/81 of the post-fix run's contradictions).
+
+    CRUCIAL: gate on FORMAT + CONTEXT, never magnitude alone. A claim with any
+    financial-format marker (EPS ``1.87`` → decimal; margin ``58.6%`` → percent;
+    ``0.586`` → decimal; ``$5``; ``46,093``) is NEVER structural and is kept. Only a
+    BARE integer (no marker) in a structural context is dropped.
+    """
+    # Any financial-format marker → a real magnitude claim, keep it.
+    if suffix or _FIN_FORMAT_RE.search(raw):
+        return False
+    try:
+        int(raw)
+    except ValueError:
+        return False
+    start, end = span
+    # CITATION-MARKER guard (PLAN-0116 W5): a bare integer wrapped in square
+    # brackets — ``[1]``, ``[2]`` — is an inline citation reference, NOT a numeric
+    # claim. The table-aware association would otherwise attach these bracket
+    # digits (common in markdown table cells like "$81.6 B [2]") to the column's
+    # metric field. Drop them when immediately bracketed: ``[`` right before and
+    # ``]`` right after the integer.
+    if start > 0 and cleaned[start - 1] == "[" and end < len(cleaned) and cleaned[end] == "]":
+        return True
+    # Look at the immediate neighbourhood (short windows — structural cues hug the
+    # number; a 24-char window is enough for "last N quarters" / "FY" / "row").
+    before = cleaned[max(0, start - 24) : start].lower()
+    after = cleaned[end : end + 16].lower()
+    if _STRUCTURAL_PREFIX_RE.search(before):
+        return True
+    if _STRUCTURAL_SUFFIX_RE.search(after):
+        return True
+    return False
+
+
 def _coerce_number(raw: str, suffix: str) -> float | None:
     """Parse a claim token (mantissa + optional scale suffix) to a float.
 
@@ -1387,28 +1797,143 @@ def _values_within_tolerance(claim: float, sample: float) -> bool:
     return denom > 0 and (diff / denom) <= _GROUNDING_REL_TOL
 
 
+def _field_value_matches(field_name: str, claim: float, sample: float) -> bool:
+    """Tolerance match that knows percent-valued fields.
+
+    For a margin emitted as a ratio (``0.586``) while the answer states a percent
+    (``"58.6%"`` → claim ``58.6``), also compare the claim against ``sample * 100``
+    so the representation mismatch is not a false contradiction. The extra check is
+    one-directional (only widens matches) and gated on the canonical field name, so
+    non-percent fields are unaffected.
+    """
+    if _values_within_tolerance(claim, sample):
+        return True
+    if field_name in _PERCENT_VALUED_FIELDS:
+        return _values_within_tolerance(claim, sample * 100.0)
+    return False
+
+
+def _iter_unique_grounding_field_maps(
+    tool_results: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Yield the DE-DUPLICATED ``grounding_sample.fields`` maps (PLAN-0116 W5).
+
+    DUPLICATE-SAMPLE GUARD. The agent occasionally invokes the SAME value tool
+    twice in one turn (a retry / a re-fetch), and the harness records BOTH
+    tool_results — each carrying a BYTE-IDENTICAL ``grounding_sample``. A naive
+    per-result scan then appends every field's value TWICE, turning a genuine
+    single-period field (``net_income = 31.778B``) into a phantom 2-value "set".
+    The W1.3 multi-period SET rule reads any field with >=2 values as an
+    incomplete period subset and SUPPRESSES contradictions on it — so a
+    FABRICATED figure the single real sample DISPROVES (da_msft: claimed
+    net_income $22.0B vs sampled $31.778B) escapes as ``unmatched`` instead of
+    ``contradicted``. De-duplicating identical field maps removes the phantom
+    multiplicity so a real single-period field stays single-valued and a
+    fabrication is correctly contradicted. GENUINE multi-period data is
+    unaffected: those come as ONE sample with suffixed keys (``revenue``,
+    ``revenue_2``) — a single map, never a duplicate.
+
+    Returns the list of unique ``fields`` dicts in first-seen order. Two maps are
+    "the same" iff their (key,value) content is equal (order-insensitive).
+    """
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for tr in tool_results or []:
+        sample = tr.get("grounding_sample")
+        if not isinstance(sample, dict):
+            continue
+        raw_fields = sample.get("fields")
+        if not isinstance(raw_fields, dict) or not raw_fields:
+            continue
+        # Canonical key for de-dup: sorted (k, str(v)) pairs so two byte-identical
+        # samples collapse regardless of dict ordering.
+        try:
+            key = json.dumps({str(k): str(v) for k, v in raw_fields.items()}, sort_keys=True)
+        except (TypeError, ValueError):
+            key = repr(sorted((str(k), str(v)) for k, v in raw_fields.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(raw_fields)
+    return out
+
+
 def _collect_grounding_fields(tool_results: list[dict[str, Any]] | None) -> dict[str, list[float]]:
     """Gather ``{field: [sampled_float, ...]}`` from every captured grounding_sample.
 
     Reads the W2 ``grounding_sample.fields`` map off each tool_result entry. A
     field may appear in several tool results / sampled rows, so we keep a LIST of
     candidate values per field. Non-numeric / unparseable sample values are
-    dropped (they cannot contradict a number).
+    dropped (they cannot contradict a number). Byte-identical duplicate samples
+    (same tool re-invoked in one turn) are collapsed FIRST via
+    :func:`_iter_unique_grounding_field_maps` so a single-period field is not
+    inflated into a phantom multi-value set (PLAN-0116 W5 duplicate-sample guard).
     """
     fields: dict[str, list[float]] = {}
+    for raw_fields in _iter_unique_grounding_field_maps(tool_results):
+        for fname, fval in raw_fields.items():
+            num = _sample_value_to_float(fval)
+            if num is None:
+                continue
+            # FIX 2 (2026-06-26): a multi-row/-period sample suffixes repeated
+            # fields per row (``eps``, ``eps_2``, ``eps_3`` for a trend; ``revenue_2``
+            # for a 2nd compared entity). Normalise the trailing ``_<digits>`` back to
+            # the BASE field name so EVERY period/row value lands in the SAME
+            # candidate list — otherwise a prior-period figure associates to the base
+            # field (``eps``) but only the latest value is in its list, and a correct
+            # earlier-quarter number is false-``contradicted``. Mirrors the suffix
+            # stripping already done in ``_collect_grounding_field_names``.
+            base = re.sub(r"_\d+$", "", str(fname))
+            fields.setdefault(base, []).append(num)
+    return fields
+
+
+# Tools that return a TIME SERIES / multi-period set of values (PLAN-0116 W5
+# da_msft fix). A field whose sample came from one of these is, by its nature, an
+# INCOMPLETE capture of a series — the few captured periods cannot DISPROVE a
+# claim about a DIFFERENT (unsampled) period. So a non-matching claim against such
+# a field is ``unmatched`` (neutral), NEVER ``contradicted`` — the same principle
+# the multi-period SET rule (W1.3) applies to multi-VALUED fields, extended to the
+# single-captured-period case. This is the honest "the series can't disprove an
+# unsampled quarter" rule: da_msft cited MSFT's real Q4-FY2024 net_income/eps
+# while the sample held a DIFFERENT, more-recent quarter — a period mismatch, not
+# a fabrication. Hard contradiction remains reserved for genuinely single-point
+# tools (a current quote / latest snapshot), where the one returned value IS
+# authoritative for the claim's implied "current" period.
+_SERIES_SOURCED_TOOLS: frozenset[str] = frozenset(
+    {
+        "get_fundamentals_history",
+        "get_fundamentals_history_batch",
+        "get_price_history",
+    }
+)
+
+
+def _collect_series_sourced_fields(tool_results: list[dict[str, Any]] | None) -> set[str]:
+    """Return base field names whose grounding sample came from a TIME-SERIES tool.
+
+    A claim associated to one of these fields is never ``contradicted`` on a
+    non-match (only ``unmatched``) — the captured periods are an incomplete subset
+    of a series and cannot disprove an unsampled period (PLAN-0116 W5 da_msft fix).
+    Identifier fields are irrelevant here (they are excluded from association), but
+    we keep the mapping field-name-based and tool-scoped so a metric sampled by
+    BOTH a series tool and a point tool is treated conservatively (series wins —
+    if ANY source is a series, the field could be period-ambiguous).
+    """
+    series_fields: set[str] = set()
     for tr in tool_results or []:
+        tool = str(tr.get("tool") or tr.get("name") or "")
+        if tool not in _SERIES_SOURCED_TOOLS:
+            continue
         sample = tr.get("grounding_sample")
         if not isinstance(sample, dict):
             continue
         raw_fields = sample.get("fields")
         if not isinstance(raw_fields, dict):
             continue
-        for fname, fval in raw_fields.items():
-            num = _sample_value_to_float(fval)
-            if num is None:
-                continue
-            fields.setdefault(str(fname), []).append(num)
-    return fields
+        for fname in raw_fields:
+            series_fields.add(re.sub(r"_\d+$", "", str(fname)))
+    return series_fields
 
 
 def _field_candidates(field: str) -> set[str]:
@@ -1418,18 +1943,32 @@ def _field_candidates(field: str) -> set[str]:
     return {c for c in candidates if c}
 
 
-def _nearest_field(answer_lower: str, span: tuple[int, int], sampled_fields: list[str]) -> str | None:
+def _nearest_field(
+    answer_lower: str,
+    span: tuple[int, int],
+    sampled_fields: list[str],
+    claim_kind: str = "unknown",
+) -> str | None:
     """Return the SINGLE SAMPLED field nearest the claim, or None.
 
-    SAME-FIELD guard (F-2). We compute the closest field-name mention to the
-    number across the FULL universe of known field names (``_FIELD_ALIASES`` +
-    the sampled field names themselves), then:
+    SAME-FIELD guard (F-2) + KIND guard (PLAN-0116 W1.2). We compute the closest
+    field-name mention to the number across the universe of known field names
+    (``_FIELD_ALIASES`` + the sampled field names themselves), then:
       * if the nearest mention belongs to a SAMPLED field → return it;
       * if the nearest mention belongs to a known-but-NOT-sampled field (e.g.
         "EPS" when only ``revenue`` was sampled) → return None. The number is
         about a different metric we have no sample for; comparing it to a
         farther-away sampled field would be a false contradiction.
       * if no field name sits within the window → None (unmatched, neutral).
+
+    KIND guard: a field whose KIND is INCOMPATIBLE with ``claim_kind`` is removed
+    from the universe entirely (see ``_kinds_compatible``). So a ``34 %``
+    percentage claim never associates to the ``revenue`` absolute field, and a
+    ``26.67x`` ratio claim never associates to ``net_income`` — even when those
+    incompatible field NAMES (or their aliases, e.g. "earnings" inside
+    "price-to-earnings") sit closer to the number. The nearest COMPATIBLE field
+    wins instead (``pe_ratio`` for the P/E). ``claim_kind == "unknown"`` keeps the
+    full universe (back-compat: legacy callers pass no kind).
 
     This stops "Revenue was $46.7B; EPS came in at $5.40" from contradicting the
     revenue sample with the EPS number: "eps" is nearer the $5.40 than "revenue".
@@ -1439,9 +1978,12 @@ def _nearest_field(answer_lower: str, span: tuple[int, int], sampled_fields: lis
     hi = min(len(answer_lower), end + _CLAIM_FIELD_WINDOW)
 
     # The universe of field names we recognise: every alias key + every sampled
-    # field name. Map each name-form back to its canonical field key.
+    # field name. Map each name-form back to its canonical field key. A field whose
+    # KIND is incompatible with the claim is dropped so it can never be associated.
     universe: dict[str, str] = {}
     for canonical in set(sampled_fields) | set(_FIELD_ALIASES):
+        if not _kinds_compatible(claim_kind, _field_kind(canonical)):
+            continue
         for name in _field_candidates(canonical):
             # Prefer a sampled field's claim on a shared name-form so a sampled
             # field is never shadowed by an unsampled alias of the same word.
@@ -1481,6 +2023,335 @@ def _nearest_field(answer_lower: str, span: tuple[int, int], sampled_fields: lis
     return None
 
 
+# --------------------------------------------------------------------------
+# TABLE / STRUCTURE-AWARE association (PLAN-0116 W5 / Item 1)
+# --------------------------------------------------------------------------
+#
+# THE RECALL GAP. ``_nearest_field`` reads a ~60-char window around the number.
+# That works for prose ("revenue was $46.7B") but MISSES a figure inside a
+# MARKDOWN TABLE: a cell's metric label is the COLUMN HEADER (top of the column)
+# or the ROW LABEL (start of the row), both far outside the window. On the
+# subset this left the ru_nvda revenue table + the iter3 market-cap table cells
+# entirely ``unmatched`` (~57 claims across the run).
+#
+# THE FIX (precise, fallback-only). Detect markdown tables, map each numeric
+# CELL to (a) the metric its COLUMN HEADER names and (b) the ticker/period its
+# ROW LABEL names, then associate the cell to a SAMPLED field of COMPATIBLE KIND.
+# This runs ONLY as a fallback when prose association (``_nearest_field``)
+# returns None, so the proven prose path is never overridden. It fires ONLY
+# inside a real detected table, ONLY when the header maps to a known sampled
+# field, and ONLY when kinds are compatible — so it cannot manufacture a false
+# match (a wrong association would be worse than ``unmatched``).
+
+# A markdown separator row: ``|---|:--:|---|`` (pipes + dashes/colons only).
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
+
+
+def _split_table_row(line: str) -> list[tuple[int, int, str]] | None:
+    """Split a ``| a | b | c |`` row into per-cell ``(start, end, text)`` spans.
+
+    Offsets are RELATIVE TO ``line``. Returns ``None`` when the line is not a
+    pipe-delimited row (no interior ``|``). Leading/trailing empty cells produced
+    by the bounding pipes are dropped, but each retained cell keeps its true char
+    span within the line so we can map a claim offset to a column.
+    """
+    if "|" not in line:
+        return None
+    cells: list[tuple[int, int, str]] = []
+    # Walk the pipe positions; a cell is the text BETWEEN two pipes (or between a
+    # line edge and a pipe). We keep edge cells only if non-empty so the common
+    # ``| a | b |`` form yields exactly [a, b].
+    pipe_positions = [i for i, ch in enumerate(line) if ch == "|"]
+    if not pipe_positions:
+        return None
+    bounds = [-1, *pipe_positions, len(line)]
+    for a, b in itertools.pairwise(bounds):
+        start, end = a + 1, b
+        if start >= end:
+            continue
+        text = line[start:end]
+        if not text.strip():
+            # An empty edge cell (outside the bounding pipes) -- skip; an empty
+            # INTERIOR cell (e.g. a "-" placeholder already stripped) we also skip
+            # because it carries no number/label.
+            continue
+        cells.append((start, end, text))
+    return cells or None
+
+
+@dataclass(frozen=True)
+class _TableCol:
+    """One column of a detected markdown table: its header + per-row data spans."""
+
+    header: str  # the (lowercased) header-cell text, e.g. "nvidia revenue"
+    field: str | None  # canonical sampled field the header names, or None
+
+
+def _header_to_field(header: str, sampled_fields: list[str]) -> str | None:
+    """Map a column-header cell to the canonical SAMPLED field it names, if any.
+
+    A header ("NVIDIA Revenue", "Market Capitalization", "P/E") names a metric
+    when one of that metric's name-forms (snake / spaced / alias) appears as a
+    SUBSTRING of the header text. We only ever return a field that is actually
+    SAMPLED (so an unsampled column never invents an association), and we pick the
+    LONGEST matching alias to avoid a short alias (``price`` inside
+    "price-to-earnings") shadowing the specific one (``pe_ratio``).
+    """
+    h = header.lower()
+    best: tuple[int, str] | None = None  # (alias_len, canonical)
+    for canonical in sampled_fields:
+        for form in _field_candidates(canonical):
+            # Require an alias of >=2 chars to avoid pathological 1-char hits.
+            if len(form) >= 2 and form in h and (best is None or len(form) > best[0]):
+                best = (len(form), canonical)
+    return best[1] if best is not None else None
+
+
+@dataclass(frozen=True)
+class _DetectedTable:
+    """One detected markdown table: data-row char region + per-INDEX columns.
+
+    ``columns[k]`` is the header→field mapping for the k-th column. A data cell is
+    associated to its column by its CELL INDEX within its own row (NOT by absolute
+    char offset) so ragged data rows — whose cell widths differ from the header
+    row — still map correctly (the iter3 market-cap table has this exact shape).
+    """
+
+    body_start: int
+    body_end: int
+    columns: list[_TableCol]
+
+
+def _row_pipe_positions(line: str) -> list[int]:
+    """The char offsets (within ``line``) of the ``|`` column separators."""
+    return [i for i, ch in enumerate(line) if ch == "|"]
+
+
+def _cell_index_for_offset(line: str, rel: int) -> int:
+    """Which COLUMN INDEX a char offset ``rel`` falls in, for a ``| a | b |`` row.
+
+    Markdown columns are the regions BETWEEN pipes. We count how many pipes sit
+    to the LEFT of ``rel``. A leading bounding pipe makes the first real column
+    index 0 (one pipe to its left), which matches the header indexing produced by
+    :func:`_split_table_row` (it likewise drops the empty pre-pipe edge cell).
+    Rows WITHOUT a leading bounding pipe (rare) are handled by the same count —
+    the first column then has zero pipes to its left → index 0.
+    """
+    pipes = _row_pipe_positions(line)
+    left = sum(1 for p in pipes if p < rel)
+    # With a leading bounding pipe, the first content column has exactly ONE pipe
+    # to its left → subtract it so the first column is index 0. Without one, the
+    # first column has zero pipes to its left → index 0 already.
+    has_leading_pipe = bool(pipes) and line[: pipes[0]].strip() == ""
+    return max(0, left - 1) if has_leading_pipe else left
+
+
+def _build_table_columns(
+    cleaned_text: str,
+    sampled_fields: list[str],
+) -> list[_DetectedTable]:
+    """Detect markdown tables; return their data region + per-column header→field.
+
+    A table is recognised as a HEADER line (``| … |``) immediately followed by a
+    SEPARATOR line (``|---|---|``); the data rows are every subsequent pipe row
+    until a blank line / non-row. Columns are indexed positionally from the header
+    row; a data cell is later matched to a column by its CELL INDEX (see
+    :func:`_table_field_for_span`), which is robust to ragged data-row widths.
+    """
+    tables: list[_DetectedTable] = []
+    # Pre-compute line offsets so a claim's absolute span maps to a line + column.
+    offset = 0
+    lines: list[tuple[int, str]] = []  # (line_start_offset, line_text)
+    for ln in cleaned_text.splitlines(keepends=True):
+        lines.append((offset, ln))
+        offset += len(ln)
+
+    i = 0
+    while i < len(lines) - 1:
+        _, h_line = lines[i]
+        _, sep_line = lines[i + 1]
+        header_cells = _split_table_row(h_line)
+        if header_cells is None or not _TABLE_SEPARATOR_RE.match(sep_line):
+            i += 1
+            continue
+        # Columns indexed positionally from the header cells.
+        columns = [
+            _TableCol(header=t.strip().lower(), field=_header_to_field(t, sampled_fields))
+            for (_s, _e, t) in header_cells
+        ]
+        # Data region begins after the separator line.
+        body_start = lines[i + 2][0] if i + 2 < len(lines) else len(cleaned_text)
+        j = i + 2
+        body_end = body_start
+        while j < len(lines):
+            l_off, l_line = lines[j]
+            if _split_table_row(l_line) is None or not l_line.strip():
+                break
+            body_end = l_off + len(l_line)
+            j += 1
+        tables.append(_DetectedTable(body_start=body_start, body_end=body_end, columns=columns))
+        i = j
+
+    return tables
+
+
+def _table_field_for_span(
+    table_cols: list[_DetectedTable],
+    cleaned_text: str,
+    span: tuple[int, int],
+    sampled_fields: list[str],
+    claim_kind: str,
+) -> str | None:
+    """Associate a claim span to the SAMPLED field named by its table COLUMN HEADER.
+
+    Returns the canonical field iff the claim falls inside a detected table's data
+    region AND its column header maps to a sampled field AND that field's KIND is
+    compatible with ``claim_kind``. Otherwise None (the caller keeps the claim
+    ``unmatched``). The column is the cell INDEX the claim falls in WITHIN its own
+    data row (robust to ragged widths), mapped to the same-index header column.
+    """
+    start, _end = span
+    for tbl in table_cols:
+        if not (tbl.body_start <= start < tbl.body_end):
+            continue
+        # Find the claim's offset within its own line, then which cell index that
+        # offset lands in for THIS row (not the header row — widths differ).
+        line_start = cleaned_text.rfind("\n", 0, start) + 1
+        line_end = cleaned_text.find("\n", start)
+        if line_end == -1:
+            line_end = len(cleaned_text)
+        line = cleaned_text[line_start:line_end]
+        rel = start - line_start
+        idx = _cell_index_for_offset(line, rel)
+        if idx >= len(tbl.columns):
+            return None
+        field = tbl.columns[idx].field
+        if field is None or field not in sampled_fields:
+            return None
+        # KIND guard (same rule as _nearest_field): never associate an
+        # incompatible kind (a count/percentage claim to an absolute column).
+        if not _kinds_compatible(claim_kind, _field_kind(field)):
+            return None
+        return field
+    return None
+
+
+def _associate_claim(
+    cleaned_lower: str,
+    span: tuple[int, int],
+    sampled_fields: list[str],
+    claim_kind: str,
+    table_cols: list[_DetectedTable],
+) -> str | None:
+    """Associate one claim to a sampled field: prose FIRST, table header as FALLBACK.
+
+    The single association entry point shared by ``_answer_multivalued_fields``,
+    ``cross_check_grounding`` and ``evaluate_substantiation`` (W1.1 — one source of
+    truth, so the veto and the rate can never diverge). Prose proximity
+    (``_nearest_field``) wins when it finds a field; only when it returns None do
+    we fall back to the table COLUMN-HEADER association — so the proven prose path
+    is never overridden and the table layer adds recall without changing any
+    existing association.
+    """
+    field = _nearest_field(cleaned_lower, span, sampled_fields, claim_kind)
+    if field is not None:
+        return field
+    if table_cols:
+        return _table_field_for_span(table_cols, cleaned_lower, span, sampled_fields, claim_kind)
+    return None
+
+
+# --------------------------------------------------------------------------
+# ONE shared claim pipeline (PLAN-0116 W1.1)
+# --------------------------------------------------------------------------
+#
+# Both ``cross_check_grounding`` (the veto) and ``evaluate_substantiation`` (the
+# in-run rate) must see the EXACT SAME claims, types, and field associations —
+# otherwise they diverge (the 2026-06-26 run: veto found 9 contradictions,
+# substantiation found 0 on the SAME answer). This dataclass + iterator are the
+# single source of truth: extract → strip-code → type → (caller associates).
+
+
+@dataclass(frozen=True)
+class _TypedClaim:
+    """One numeric claim extracted from the answer prose, with its kind."""
+
+    value: float
+    span: tuple[int, int]
+    text: str  # the raw matched token (e.g. "$46.7B"), for example records
+    kind: str  # absolute_value | percentage | ratio | count | unknown
+
+
+def _iter_typed_claims(answer_text: str) -> tuple[str, list[_TypedClaim]]:
+    """Extract every typed numeric claim from the answer ONCE (shared pipeline).
+
+    Returns ``(cleaned_lower_text, claims)``. The cleaned text has unicode
+    punctuation folded (``_normalise_claim_text``) and code spans blanked
+    (``_strip_code_spans``); its LOWERCASE form is returned for the callers'
+    ``_nearest_field`` association (one normalisation, one offset space).
+
+    Skips, in order: year-like bare integers, structural integers (period labels /
+    enumeration / counts), and tokens whose mantissa won't parse. Everything that
+    survives is yielded with a kind from :func:`_classify_claim`.
+    """
+    # Fold unicode FIRST (offset-preserving), then blank code spans (also
+    # offset-preserving). Order is irrelevant to offsets — both are 1:1 — but
+    # folding first lets the structural/percent context regexes see ASCII dashes.
+    cleaned = _strip_code_spans(_normalise_claim_text(answer_text or ""))
+    cleaned_lower = cleaned.lower()
+    claims: list[_TypedClaim] = []
+    for m in _CLAIM_NUMBER_RE.finditer(cleaned):
+        raw_num = m.group("num")
+        suffix = m.group("suffix") or ""
+        if _is_yearlike(raw_num, suffix):
+            continue
+        span = m.span()
+        if _is_structural_number(cleaned, span, raw_num, suffix):
+            continue
+        claim_val = _coerce_number(raw_num, suffix)
+        if claim_val is None:
+            continue
+        start, end = span
+        before = cleaned_lower[max(0, start - 32) : start]
+        after = cleaned_lower[end : end + 16]
+        # ``$`` is consumed INTO the match (the regex is ``\$?\s?(num)…``), so it is
+        # not in ``before``. Surface it explicitly so a $-prefixed token is typed
+        # absolute_value even when "P/E"/"ratio" sits in the same window.
+        has_dollar = "$" in m.group(0)
+        kind = _classify_claim(raw_num, suffix, before, after, has_dollar=has_dollar)
+        claims.append(_TypedClaim(value=claim_val, span=span, text=m.group(0).strip(), kind=kind))
+    return cleaned_lower, claims
+
+
+def _answer_multivalued_fields(
+    cleaned_lower: str,
+    claims: list[_TypedClaim],
+    field_names: list[str],
+    table_cols: list[_DetectedTable] | None = None,
+) -> set[str]:
+    """Fields to which the ANSWER associates >=2 DISTINCT claim values.
+
+    A field the answer enumerates with multiple values (a trend / per-period
+    breakdown — "Revenue: Q2 $4.2B, Q3 $3.9B, Q4 $3.4B", or a multi-row table
+    column) is being treated as a multi-period series. The captured
+    grounding_sample is an INCOMPLETE row subset (``sampled_rows`` is capped), so
+    it cannot DISPROVE a period it did not capture. We therefore NEVER fire a
+    contradiction on such a field — a non-matching claim there is ``unmatched``
+    (neutral), exactly like a field that had >=2 SAMPLED values. This mirrors the
+    W1.3 set rule from the ANSWER side and removes the false multi-period
+    GROUNDING_CONTRADICTED on chain_top_mover_fundamentals (single net_income
+    sample vs 4 enumerated quarters). The same association (prose + table header)
+    is used here so a multi-row table column counts as multi-valued too.
+    """
+    seen: dict[str, set[float]] = {}
+    for claim in claims:
+        field_name = _associate_claim(cleaned_lower, claim.span, field_names, claim.kind, table_cols or [])
+        if field_name is None:
+            continue
+        seen.setdefault(field_name, set()).add(round(claim.value, 6))
+    return {f for f, vals in seen.items() if len(vals) >= 2}
+
+
 def cross_check_grounding(
     answer_text: str,
     tool_results: list[dict[str, Any]] | None,
@@ -1509,45 +2380,60 @@ def cross_check_grounding(
     if not grounding_fields:
         return GroundingCheck(evidence_mode="presumed")
 
-    cleaned = _strip_code_spans(answer_text or "")
-    cleaned_lower = cleaned.lower()
+    cleaned_lower, claims = _iter_typed_claims(answer_text)
     field_names = list(grounding_fields)
+    # Detect markdown tables ONCE; their column headers give the association a
+    # fallback for figures inside table cells (PLAN-0116 W5 / Item 1).
+    table_cols = _build_table_columns(cleaned_lower, field_names)
+    # Fields the ANSWER enumerates with >=2 distinct values (a trend) — never
+    # contradicted (the sample is an incomplete row capture). See W1.3.
+    answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names, table_cols)
+    # Fields whose sample came from a TIME-SERIES tool — never contradicted on a
+    # non-match (the captured periods cannot disprove an unsampled period). W5.
+    series_fields = _collect_series_sourced_fields(tool_results)
     matched = 0
     unmatched = 0
     contradicted = 0
     examples: list[dict[str, Any]] = []
 
-    for m in _CLAIM_NUMBER_RE.finditer(cleaned):
-        raw_num = m.group("num")
-        suffix = m.group("suffix") or ""
-        if _is_yearlike(raw_num, suffix):
-            continue
-        claim_val = _coerce_number(raw_num, suffix)
-        if claim_val is None:
-            continue
-        span = m.span()
-
+    for claim in claims:
         # Which SINGLE sampled field does the prose associate with this number?
-        field_name = _nearest_field(cleaned_lower, span, field_names)
+        # The association is KIND-aware: a percentage/ratio claim can never attach
+        # to an incompatible absolute field (PLAN-0116 W1.2). Table cells fall back
+        # to their column header (Item 1).
+        field_name = _associate_claim(cleaned_lower, claim.span, field_names, claim.kind, table_cols)
         if field_name is None:
             unmatched += 1
             continue
 
         samples = grounding_fields[field_name]
-        if any(_values_within_tolerance(claim_val, s) for s in samples):
+        if any(_field_value_matches(field_name, claim.value, s) for s in samples):
             matched += 1
             continue
 
-        # Outside tolerance of EVERY sample for this field → contradiction.
-        nearest_sample = min(samples, key=lambda s: abs(claim_val - s))
+        # Outside tolerance of EVERY sample for this field. MULTI-PERIOD SET rule
+        # (W1.3): a non-matching claim is ``unmatched`` (neutral), NOT a
+        # contradiction, when ANY of:
+        #   * the field has >=2 SAMPLED values, OR
+        #   * the ANSWER enumerates >=2 distinct values for it, OR
+        #   * the field's sample came from a TIME-SERIES tool (W5 da_msft fix) —
+        #     even a single captured period is one of a series and cannot disprove
+        #     a claim about a DIFFERENT (unsampled) period.
+        # All three mean the sample is an incomplete period/entity subset. Only a
+        # single-valued sample from a genuinely single-point tool yields a
+        # contradiction.
+        if len(samples) >= 2 or field_name in answer_multivalued or field_name in series_fields:
+            unmatched += 1
+            continue
+        nearest_sample = min(samples, key=lambda s: abs(claim.value - s))
         contradicted += 1
         examples.append(
             {
                 "field": field_name,
-                "claim": claim_val,
-                "claim_text": m.group(0).strip(),
+                "claim": claim.value,
+                "claim_text": claim.text,
                 "nearest_sample": nearest_sample,
-                "delta": abs(claim_val - nearest_sample),
+                "delta": abs(claim.value - nearest_sample),
             }
         )
 
@@ -1557,6 +2443,177 @@ def cross_check_grounding(
         contradicted=contradicted,
         examples=examples,
         evidence_mode="verified",
+    )
+
+
+# --------------------------------------------------------------------------
+# Substantiation cross-check (PLAN-0110 W1 / MUST-1)
+# --------------------------------------------------------------------------
+#
+# THE PROBLEM cross_check_grounding does NOT catch. ``cross_check_grounding``
+# only HARD-FAILs a number a sample DISPROVES. But the tool may return a field
+# NAME with no usable value (e.g. the handler emitted ``revenue`` as a non-numeric
+# string the sample parser dropped). If the agent then states a revenue number,
+# the grounding check sees no parseable sample for that field → ``unmatched`` →
+# neutral. That is too lenient: the agent asserted a figure for a field the tool
+# never actually quantified. The substantiation check classifies that case as
+# ``unsupported``.
+#
+# DETERMINISTIC + LLM-FREE. We REUSE the exact same claim regex
+# (``_CLAIM_NUMBER_RE``), code-span strip, field-association (``_nearest_field``),
+# and tolerance (``_values_within_tolerance``) as the grounding check — one claim
+# parser, one source of truth (feedback_prompt_input_mismatch). We do NOT add a
+# second claim regex. The ONLY new input is the SET of field NAMES present in the
+# samples (incl. value-less ones), so a claim can be associated to a field that
+# returned no parseable value.
+#
+# INVARIANT (asserted by tests): coverage=="presumed" ⟹ all four counts are 0.
+# With NO sample to bite on we never invent a finding — absence is not failure.
+# This keeps a flag-off / no-sample run byte-identical to the pre-W1 baseline.
+
+
+def _collect_grounding_field_names(tool_results: list[dict[str, Any]] | None) -> set[str]:
+    """Return the SET of field names present in any captured grounding_sample.
+
+    Unlike :func:`_collect_grounding_fields` (which keeps only fields with a
+    PARSEABLE numeric value), this includes EVERY field name the sample carried —
+    even ones whose value could not be parsed to a float. The difference between
+    the two sets is exactly the "named-but-value-less" fields that drive the
+    ``unsupported`` class. Suffixed multi-row keys (``revenue_2``) are normalised
+    back to their base field name so a claim associates to the canonical field.
+    """
+    names: set[str] = set()
+    for raw_fields in _iter_unique_grounding_field_maps(tool_results):
+        for fname in raw_fields:
+            # ``build_grounding_sample`` suffixes repeated fields per row
+            # (``revenue``, ``revenue_2``). Strip a trailing ``_<digits>`` so the
+            # claim associates to the same canonical field name the value map uses.
+            base = re.sub(r"_\d+$", "", str(fname))
+            # 2026-06-26 #4: skip identifier/label fields (ticker, symbol, name).
+            # They are non-numeric and must never own a numeric claim — otherwise
+            # a metric figure attaches to ``ticker`` and is mis-flagged
+            # ``unsupported``. Excluding them here keeps the association universe
+            # numeric-only without touching the generic ``_nearest_field`` logic.
+            if base.lower() in _IDENTIFIER_FIELDS:
+                continue
+            names.add(base)
+    return names
+
+
+def evaluate_substantiation(
+    answer_text: str,
+    tool_results: list[dict[str, Any]] | None,
+) -> SubstantiationCheck:
+    """Deterministically classify each numeric claim's substantiation (W1 / MUST-1).
+
+    Returns a populated :class:`SubstantiationCheck`. ``unsupported > 0`` (when
+    coverage=="verified") is what trips the ``SUBSTANTIATION_UNSUPPORTED``
+    invariant in :func:`evaluate_invariants`.
+
+    Algorithm (LLM-free, deterministic — REUSES the grounding-check helpers):
+      1. Collect the parseable ``{field: [sample_floats]}`` map AND the full set of
+         sampled field NAMES (incl. value-less ones). No samples at all → return a
+         zeroed ``presumed`` check (NEVER fails; all counts 0 — the W1 invariant).
+      2. Strip fenced/inline code so identifier numbers aren't treated as claims.
+      3. For every numeric claim in the prose, associate it to the nearest SAMPLED
+         field (over the FULL name set, so a value-less field still associates):
+           * no associated field            → ``unmatched`` (neutral);
+           * associated field HAS values:
+               - within tolerance of any    → ``substantiated``;
+               - outside tolerance of all   → ``contradicted`` (record example);
+           * associated field has NO value  → ``unsupported`` (record example):
+             the tool named the field but never quantified it.
+    """
+    value_fields = _collect_grounding_fields(tool_results)
+    all_field_names = _collect_grounding_field_names(tool_results)
+    # No evidence at all → legacy "presumed" mode. By INVARIANT we return all-zero
+    # counts and never scan the answer: with no field names to associate against,
+    # every number would be neutral noise and nothing could ever be a failure.
+    if not all_field_names:
+        return SubstantiationCheck(coverage="presumed")
+
+    # ONE shared claim pipeline (W1.1): extract+type the claims EXACTLY as
+    # cross_check_grounding does, so the two checks can never diverge.
+    cleaned_lower, claims = _iter_typed_claims(answer_text)
+    # ``_nearest_field`` associates a claim to one of THESE names. We pass the FULL
+    # set (value-less fields included) so a claim can attach to a named-but-empty
+    # field and be classed ``unsupported`` rather than silently ``unmatched``.
+    field_names = list(all_field_names)
+    # Detect markdown tables ONCE; column headers give table-cell figures a field
+    # association (PLAN-0116 W5 / Item 1). Shared with the veto (W1.1).
+    table_cols = _build_table_columns(cleaned_lower, field_names)
+    # Fields the ANSWER enumerates with >=2 distinct values (a trend) — never
+    # contradicted (the sample is an incomplete row capture). Shared with the veto.
+    answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names, table_cols)
+    # Fields whose sample came from a TIME-SERIES tool — never contradicted on a
+    # non-match (the captured periods cannot disprove an unsampled period). Shared
+    # with the veto (W1.1). W5 da_msft fix.
+    series_fields = _collect_series_sourced_fields(tool_results)
+    substantiated = 0
+    unsupported = 0
+    contradicted = 0
+    unmatched = 0
+    examples: list[dict[str, Any]] = []
+
+    for claim in claims:
+        # KIND-aware association (W1.2): a percentage/ratio claim never attaches to
+        # an incompatible absolute field. Table cells fall back to their column
+        # header (Item 1).
+        field_name = _associate_claim(cleaned_lower, claim.span, field_names, claim.kind, table_cols)
+        if field_name is None:
+            unmatched += 1
+            continue
+
+        samples = value_fields.get(field_name, [])
+        if not samples:
+            # Field NAMED in the sample but no parseable value → the agent stated a
+            # number for a field the tool never actually quantified. Unsupported.
+            unsupported += 1
+            examples.append(
+                {
+                    "field": field_name,
+                    "claim": claim.value,
+                    "claim_text": claim.text,
+                    "kind": "unsupported",
+                }
+            )
+            continue
+
+        if any(_field_value_matches(field_name, claim.value, s) for s in samples):
+            substantiated += 1
+            continue
+
+        # Outside tolerance of EVERY sampled value. MULTI-PERIOD SET rule (W1.3): a
+        # non-matching claim is ``unmatched`` (neutral), not a contradiction, when
+        # ANY of: the field has >=2 SAMPLED values, the ANSWER enumerates >=2
+        # distinct values for it, OR the field's sample came from a TIME-SERIES tool
+        # (W5 da_msft fix — even a single captured period is one of a series and
+        # cannot disprove a claim about a DIFFERENT, unsampled period). All mean the
+        # sample is an incomplete period subset. Only a single-valued sample from a
+        # genuinely single-point tool contradicts.
+        if len(samples) >= 2 or field_name in answer_multivalued or field_name in series_fields:
+            unmatched += 1
+            continue
+        nearest_sample = min(samples, key=lambda s: abs(claim.value - s))
+        contradicted += 1
+        examples.append(
+            {
+                "field": field_name,
+                "claim": claim.value,
+                "claim_text": claim.text,
+                "nearest_sample": nearest_sample,
+                "delta": abs(claim.value - nearest_sample),
+                "kind": "contradicted",
+            }
+        )
+
+    return SubstantiationCheck(
+        substantiated=substantiated,
+        unsupported=unsupported,
+        contradicted=contradicted,
+        unmatched=unmatched,
+        coverage="verified",
+        examples=examples,
     )
 
 
@@ -1622,7 +2679,7 @@ def _degenerate_fail_result(reason: str, *, judge_prompt_id: str) -> dict[str, A
         fired_code: InvariantCode | None = InvariantCode.INFRA_NON_ANSWER
     else:
         fired_code = _DEGENERATE_REASON_TO_CODE.get(reason)
-    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    gate_results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
     if fired_code is not None:
         gate_results[fired_code] = False
     decision = VerdictDecision(
@@ -1631,7 +2688,7 @@ def _degenerate_fail_result(reason: str, *, judge_prompt_id: str) -> dict[str, A
         fail_reason=fired_code,
         gate_results=gate_results,
         grounding_check=GroundingCheck(),
-        dimensions={k: 0 for k in DIMENSION_KEYS},
+        dimensions=dict.fromkeys(DIMENSION_KEYS, 0),
     )
 
     return {
@@ -1670,7 +2727,7 @@ def _grounding_contradicted_fail_result(
         f"vs sample {ex.get('nearest_sample')}). The agent stated a number the "
         f"tool's own payload contradicts — fabrication."
     )
-    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    gate_results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
     gate_results[InvariantCode.GROUNDING_CONTRADICTED] = False
     decision = VerdictDecision(
         verdict=Verdict.FAIL,
@@ -1678,7 +2735,7 @@ def _grounding_contradicted_fail_result(
         fail_reason=InvariantCode.GROUNDING_CONTRADICTED,
         gate_results=gate_results,
         grounding_check=grounding_check,
-        dimensions={k: 0 for k in DIMENSION_KEYS},
+        dimensions=dict.fromkeys(DIMENSION_KEYS, 0),
     )
     return {
         "verdict": "FAIL",
@@ -1696,6 +2753,58 @@ def _grounding_contradicted_fail_result(
             "detail": text,
         },
         "verdict_decision": decision.to_dict(),
+    }
+
+
+def _substantiation_unsupported_fail_result(
+    substantiation_check: SubstantiationCheck,
+    *,
+    judge_prompt_id: str,
+) -> dict[str, Any]:
+    """Build a hard-FAIL verdict for a deterministic UNSUPPORTED assertion (W1).
+
+    Mirror of ``_grounding_contradicted_fail_result`` for the
+    ``SUBSTANTIATION_UNSUPPORTED`` gate. The LLM judge is NOT consulted: the agent
+    asserted a number for a field the tool NAMED but never quantified — an
+    unsupported assertion — so we hard-FAIL deterministically (works offline,
+    F-4). The populated ``SubstantiationCheck`` (with examples) is carried on the
+    legacy ``veto`` so the report can render the claim-vs-empty-field mismatch.
+    """
+    ex = next((e for e in substantiation_check.examples if e.get("kind") == "unsupported"), {})
+    text = (
+        f"SUBSTANTIATION UNSUPPORTED: {substantiation_check.unsupported} numeric "
+        f"claim(s) assert a value for a sampled field the tool never quantified "
+        f"(e.g. claim {ex.get('claim_text', ex.get('claim'))!r} for field "
+        f"{ex.get('field')!r}, which the tool returned with no value). The agent "
+        f"stated a number the tool's payload does not support — unsupported assertion."
+    )
+    gate_results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
+    gate_results[InvariantCode.SUBSTANTIATION_UNSUPPORTED] = False
+    decision = VerdictDecision(
+        verdict=Verdict.FAIL,
+        quality_score=0,
+        fail_reason=InvariantCode.SUBSTANTIATION_UNSUPPORTED,
+        gate_results=gate_results,
+        grounding_check=GroundingCheck(),
+        dimensions=dict.fromkeys(DIMENSION_KEYS, 0),
+    )
+    return {
+        "verdict": "FAIL",
+        "score": 0,
+        "dimensions": {k: {"score": 0, "feedback": text, "reason": text} for k in DIMENSION_KEYS},
+        "reviewer_summary": text,
+        "notes": text,  # back-compat mirror
+        "raw_response": None,
+        "judge_prompt_id": judge_prompt_id,
+        "veto": {
+            "type": "substantiation_unsupported",
+            "reason": "numeric_claim_unsupported",
+            "unsupported": substantiation_check.unsupported,
+            "examples": list(substantiation_check.examples),
+            "detail": text,
+        },
+        "verdict_decision": decision.to_dict(),
+        "substantiation_check": substantiation_check.to_dict(),
     }
 
 
@@ -1719,7 +2828,7 @@ def _phantom_citation_fail_result(
         f"([{phantom_tool} row N]) but that tool was NEVER called this turn — "
         f"the provenance tag is invented. Fabrication → hard FAIL."
     )
-    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    gate_results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
     gate_results[InvariantCode.PHANTOM_CITATION] = False
     decision = VerdictDecision(
         verdict=Verdict.FAIL,
@@ -1727,7 +2836,7 @@ def _phantom_citation_fail_result(
         fail_reason=InvariantCode.PHANTOM_CITATION,
         gate_results=gate_results,
         grounding_check=GroundingCheck(),
-        dimensions={k: 0 for k in DIMENSION_KEYS},
+        dimensions=dict.fromkeys(DIMENSION_KEYS, 0),
     )
     return {
         "verdict": "FAIL",
@@ -1820,6 +2929,19 @@ def judge_answer(
     if grounding_check.contradicted > 0:
         return _grounding_contradicted_fail_result(grounding_check, judge_prompt_id=judge_prompt_id)
 
+    # ── Deterministic substantiation cross-check (PLAN-0110 W1 / MUST-1) ──
+    # An UNSUPPORTED assertion (a number stated for a field the tool NAMED but
+    # never quantified) is an LLM-free hard failure — run it BEFORE the SKIPPED
+    # short-circuit so it fires offline (F-4). It is strictly LOWER priority than a
+    # grounding CONTRADICTION (checked just above), matching _INVARIANT_PRIORITY.
+    # With no samples the check is ``presumed`` (unsupported=0) and this is a no-op
+    # — the answer flows on to the SKIPPED / LLM path unchanged (byte-identical to
+    # pre-W1). The check is threaded onward so every returned judge block carries
+    # ``substantiation_check`` (feedback_audit_returned_value_persistence).
+    substantiation_check = evaluate_substantiation(inp.answer_text, inp.tool_results)
+    if substantiation_check.coverage == "verified" and substantiation_check.unsupported > 0:
+        return _substantiation_unsupported_fail_result(substantiation_check, judge_prompt_id=judge_prompt_id)
+
     if llm is None:
         # No API key + no injected LLM → return a sentinel so the report
         # can clearly show "judge was not run" rather than a fake 0.
@@ -1827,7 +2949,7 @@ def judge_answer(
         return {
             "verdict": "SKIPPED",
             "score": None,
-            "dimensions": {k: None for k in DIMENSION_KEYS},
+            "dimensions": dict.fromkeys(DIMENSION_KEYS),
             "reviewer_summary": _skipped_note,
             "notes": _skipped_note,  # v1.x back-compat mirror
             "raw_response": None,
@@ -1839,6 +2961,9 @@ def judge_answer(
             # gate fired and no judge, there is genuinely no verdict to compose,
             # so we emit None rather than a misleading 0-score FAIL.
             "verdict_decision": None,
+            # The substantiation check DID run (it cleared the gate above) — emit
+            # it so even a SKIPPED artefact records the coverage/counts.
+            "substantiation_check": substantiation_check.to_dict(),
         }
 
     user_prompt = _build_user_prompt(inp)
@@ -1849,7 +2974,7 @@ def judge_answer(
         return {
             "verdict": "ERROR",
             "score": None,
-            "dimensions": {k: None for k in DIMENSION_KEYS},
+            "dimensions": dict.fromkeys(DIMENSION_KEYS),
             "reviewer_summary": _err_note,
             "notes": _err_note,  # v1.x back-compat mirror
             "raw_response": None,
@@ -1857,13 +2982,22 @@ def judge_answer(
             # The judge errored → no sub-scores → no verdict to compose (see the
             # SKIPPED path above for the rationale).
             "verdict_decision": None,
+            "substantiation_check": substantiation_check.to_dict(),
         }
 
     parsed = _parse_judge_response(raw)
     # Pass ``inp`` so the deterministic invariant gate (answer-text + tool-result
     # checks) runs inside the tiered composition — the soft judge alone cannot
     # see leaked tokens / truncation / infra non-answers (PLAN-0110 W1).
-    return _finalise_verdict(parsed, raw_response=raw, judge_prompt_id=judge_prompt_id, inp=inp)
+    # ``substantiation_check`` is threaded through so the final judge block carries
+    # it and the gate map is complete (feedback_audit_returned_value_persistence).
+    return _finalise_verdict(
+        parsed,
+        raw_response=raw,
+        judge_prompt_id=judge_prompt_id,
+        inp=inp,
+        substantiation_check=substantiation_check,
+    )
 
 
 def _parse_judge_response(raw: str) -> dict[str, Any]:
@@ -1937,6 +3071,7 @@ def _finalise_verdict(
     raw_response: str,
     judge_prompt_id: str,
     inp: JudgeInput | None = None,
+    substantiation_check: SubstantiationCheck | None = None,
 ) -> dict[str, Any]:
     """Compute the tiered verdict + legacy fields from parsed dimensions.
 
@@ -2003,6 +3138,11 @@ def _finalise_verdict(
     # check (legacy behaviour — never fails for absence).
     if inp is not None:
         grounding_check = cross_check_grounding(inp.answer_text, inp.tool_results)
+        # PLAN-0110 W1: compute the substantiation check here if the caller did not
+        # already (``judge_answer`` passes it in; a direct ``_finalise_verdict``
+        # caller may not). With no samples it is ``presumed`` and cannot fire.
+        if substantiation_check is None:
+            substantiation_check = evaluate_substantiation(inp.answer_text, inp.tool_results)
         gate_results = evaluate_invariants(
             inp.answer_text,
             inp.tool_results,
@@ -2011,6 +3151,7 @@ def _finalise_verdict(
             grounding_score=grounding_score,
             tool_calls=inp.tool_calls,
             relax_non_answer_gates=_is_appropriate_refusal(inp),
+            substantiation_check=substantiation_check,
         )
     else:
         # No inputs → no answer/samples to cross-check, so the GroundingCheck is
@@ -2018,7 +3159,7 @@ def _finalise_verdict(
         # floor (we still have the judge sub-score); other gates default to
         # "passed".
         grounding_check = GroundingCheck()
-        gate_results = {code: True for code in _ALL_INVARIANTS}
+        gate_results = dict.fromkeys(_ALL_INVARIANTS, True)
         if grounding_score < GROUNDING_VETO_FLOOR:
             gate_results[InvariantCode.GROUNDING_FLOOR] = False
 
@@ -2098,6 +3239,13 @@ def _finalise_verdict(
         # consumers (trend store W4, report W5) read it. It is emitted ALONGSIDE
         # the legacy keys, never instead of them, for the back-compat window.
         "verdict_decision": decision.to_dict(),
+        # ── W1 substantiation check (MUST-1) ──────────────────────────────
+        # feedback_audit_returned_value_persistence: the substantiation counts +
+        # coverage MUST reach the artefact, not just a counter. Always present
+        # (presumed/all-0 when no samples) so the runner rollup is uniform.
+        "substantiation_check": (
+            substantiation_check.to_dict() if substantiation_check is not None else SubstantiationCheck().to_dict()
+        ),
     }
 
 
