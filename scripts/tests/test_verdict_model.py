@@ -103,13 +103,14 @@ def test_verdict_enum_members() -> None:
 
 
 def test_invariant_code_members() -> None:
-    """All invariant codes are present (incl. the PHANTOM_CITATION gate)."""
+    """All invariant codes are present (incl. PHANTOM_CITATION + W1 substantiation)."""
     assert {c.value for c in InvariantCode} == {
         "CONTROL_TOKEN_LEAK",
         "TRUNCATED",
         "EMPTY_AFTER_TOOLS",
         "INFRA_NON_ANSWER",
         "GROUNDING_CONTRADICTED",
+        "SUBSTANTIATION_UNSUPPORTED",
         "PHANTOM_CITATION",
         "GROUNDING_FLOOR",
     }

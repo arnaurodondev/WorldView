@@ -22,6 +22,11 @@ def _make_handler(s3: Any) -> Any:
     return MarketHandler(s3=s3, s3_brief=None, timeout=5.0)
 
 
+def _gf_dict(result: Any) -> dict[str, str]:
+    """Flatten a RetrievedItem's ``grounding_fields`` tuple-of-pairs into a dict."""
+    return dict(result.grounding_fields or ())
+
+
 @pytest.mark.asyncio
 async def test_query_fundamentals_renders_coverage_and_snapshot() -> None:
     """Happy path: coverage line, period table, snapshot block all present."""
@@ -244,6 +249,102 @@ async def test_query_fundamentals_flags_missing_metric_in_coverage_line() -> Non
     assert result is not None
     assert "consensus_eps_next_year=missing" in result.text
     assert "forward_pe=ok" in result.text
+
+
+@pytest.mark.asyncio
+async def test_query_fundamentals_emits_multi_period_grounding_fields() -> None:
+    """RC-3 (2026-06-28): grounding_fields cover EVERY returned period, not rows[-1].
+
+    The pre-RC-3 handler lifted only ``rows[-1]`` into ``grounding_fields``, so a
+    multi-quarter answer ("Tesla revenue since 2023") had every non-latest quarter
+    unsubstantiated → GROUNDING_FLOOR despite correct figures. The handler must now
+    emit one suffixed entry per period (newest bare, then ``_2``/``_3``/...) like the
+    sibling history/batch handlers, capped at ``_GROUNDING_MAX_PERIODS``.
+    """
+    from rag_chat.application.pipeline.handlers.market import _GROUNDING_MAX_PERIODS
+
+    s3 = AsyncMock()
+    # ASC by date (oldest -> newest): revenue 21,22,23,24,25 (billions).
+    s3.query_fundamentals = AsyncMock(
+        return_value={
+            "metrics_by_period": [
+                {
+                    "period_end": f"202{i}-03-31",
+                    "period_label": f"Q1 202{i}",
+                    "period_type": "QUARTERLY",
+                    "revenue": v * 1_000_000_000,
+                }
+                for i, v in enumerate([21, 22, 23, 24, 25], start=1)
+            ],
+            "snapshot": None,
+            "coverage": {"revenue": "ok"},
+        }
+    )
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="TSLA",
+        metrics=["revenue"],
+        periods=5,
+    )
+    assert result is not None
+    gf = _gf_dict(result)
+    # Ticker anchored exactly once.
+    assert gf["ticker"] == "TSLA"
+    # Newest period bare, older periods suffixed — all five present (< cap).
+    assert gf["revenue"] == "25000000000"  # newest
+    assert gf["revenue_2"] == "24000000000"
+    assert gf["revenue_3"] == "23000000000"
+    assert gf["revenue_4"] == "22000000000"
+    assert gf["revenue_5"] == "21000000000"  # oldest
+    # The cap protects against unbounded packing on a long history.
+    assert _GROUNDING_MAX_PERIODS >= 5
+
+
+@pytest.mark.asyncio
+async def test_query_fundamentals_multi_period_grounding_honours_coverage() -> None:
+    """RC-3: the per-metric coverage flag is honoured on EVERY period.
+
+    An uncovered metric must never enter ``grounding_fields`` as a phantom number,
+    on any period — not just the latest. Here ``eps`` is covered but ``net_margin``
+    is ``missing``; only ``eps`` (and the identifier) may appear, across all periods.
+    """
+    s3 = AsyncMock()
+    s3.query_fundamentals = AsyncMock(
+        return_value={
+            "metrics_by_period": [
+                {
+                    "period_end": "2025-12-31",
+                    "period_label": "Q4 2025",
+                    "period_type": "QUARTERLY",
+                    "eps": 1.10,
+                    "net_margin": 0.05,  # present on the row but NOT covered → must be dropped
+                },
+                {
+                    "period_end": "2026-03-31",
+                    "period_label": "Q1 2026",
+                    "period_type": "QUARTERLY",
+                    "eps": 1.20,
+                    "net_margin": 0.06,
+                },
+            ],
+            "snapshot": None,
+            "coverage": {"eps": "ok", "net_margin": "missing"},
+        }
+    )
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="TSLA",
+        metrics=["eps", "net_margin"],
+        periods=2,
+    )
+    assert result is not None
+    gf = _gf_dict(result)
+    # Covered metric present on both periods (newest bare, older suffixed).
+    assert gf["eps"] == "1.2"
+    assert gf["eps_2"] == "1.1"
+    # Uncovered metric must NOT leak as a grounding number on ANY period.
+    assert "net_margin" not in gf
+    assert "net_margin_2" not in gf
 
 
 @pytest.mark.asyncio

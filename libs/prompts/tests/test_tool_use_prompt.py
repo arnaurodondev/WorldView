@@ -249,7 +249,27 @@ class TestToolUsePromptContract:
         detectable in telemetry. Pinning the floor also catches
         accidental downgrades during merges.
         """
-        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version >= "1.9"
+        # Compare as a semver tuple, NOT lexically: "1.10" < "1.9" as strings
+        # but 1.10 > 1.9 as versions. FINAL-67 C4 bumped to 1.10.
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 9)
+
+    def test_prompt_contains_tool_routing_table(self) -> None:
+        """FINAL-67 C4 — TOOL ROUTING table maps question shape to the right tool.
+
+        search_documents was over-selected as a catch-all while the purpose-built
+        tools were under-selected, looping empty searches into refusals. The
+        routing table must name each under-selected tool and demote
+        search_documents to a fallback.
+        """
+        prompt = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-06-01")
+        assert "TOOL ROUTING" in prompt
+        # Each under-selected tool must be routed.
+        assert "get_entity_news" in prompt
+        assert "compare_entities" in prompt
+        assert "search_events" in prompt
+        # search_documents must be explicitly demoted to a fallback.
+        assert "FALLBACK" in prompt
 
     def test_financial_data_addendum_contains_partial_data_rule(self) -> None:
         """PLAN-0104 W47 regression — PARTIAL DATA RULE.
@@ -401,9 +421,9 @@ class TestToolUsePromptContract:
             )
             # The named section header anchors the rule so the LLM can
             # locate it during refusal reasoning.
-            assert "SPECULATIVE FORECASTS" in prompt, (
-                f"intent={intent}: missing SPECULATIVE FORECASTS section — " f"safety-P0 guardrail removed"
-            )
+            assert (
+                "SPECULATIVE FORECASTS" in prompt
+            ), f"intent={intent}: missing SPECULATIVE FORECASTS section — safety-P0 guardrail removed"
             # The refusal template phrase must be present verbatim so the
             # LLM has a canonical refusal to emit.
             assert (

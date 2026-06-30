@@ -86,6 +86,23 @@ _SUFFIX_MULT: dict[str, float] = {
     "T": 1e12,
 }
 
+# C1 #1 pin extension — SPELLED-OUT magnitude words. Financial answers usually
+# say "$111.18 billion", not "$111.18B"; ``_NUM_RE`` captures only the digits
+# (suffix=None) and drops the following word, so the decoded value is 1e9x too
+# small and never matches the tool's base-unit value. The pin looks ahead for one
+# of these words immediately after a number and scales accordingly. Map word →
+# (multiplier, canonical single-letter suffix) so the renderer can reuse
+# ``_render_in_token_format``'s suffix path.
+_WORD_MULT: dict[str, tuple[float, str]] = {
+    "thousand": (1e3, "K"),
+    "million": (1e6, "M"),
+    "billion": (1e9, "B"),
+    "trillion": (1e12, "T"),
+}
+# Matches a magnitude word (optionally preceded by whitespace) anchored at the
+# START of the lookahead slice that follows a number token.
+_WORD_MAGNITUDE_RE = re.compile(r"^\s+(thousand|million|billion|trillion)\b", re.IGNORECASE)
+
 # Citation markers we must ignore so [N7] does not count as the number 7.
 _CITATION_RE = re.compile(r"\[N\d+\]")
 
@@ -714,6 +731,44 @@ def find_phantom_tool_citations(
     called = {str(t).strip().lower() for t in called_tool_names if t}
     cited = {m.group("tool").lower() for m in _TOOL_ROW_CITATION_RE.finditer(response)}
     return cited - called
+
+
+# Like _TOOL_ROW_CITATION_RE but captures the row INDEX too, so the
+# out-of-range check below can compare it against the tool's returned row count.
+_TOOL_ROW_CITATION_WITH_INDEX_RE = re.compile(
+    r"\[\s*(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+(?P<row>\d+)\s*\]",
+    re.IGNORECASE,
+)
+
+
+def find_out_of_range_tool_citations(
+    response: str,
+    tool_row_counts: Mapping[str, int],
+) -> set[str]:
+    """Return ``[name row N]`` tags whose row index is past what the tool returned.
+
+    2026-06-26 failure-analysis #3 (fabrication beyond results): the LLM cites a
+    real tool but a row index that does not exist (e.g. ``screen_universe`` returned
+    1 row but the answer cites ``[screen_universe row 4]`` for fabricated entries).
+    A ``[name row N]`` is out-of-range when ``N >= tool_row_counts[name]`` — rows are
+    0-indexed (the prompt example is ``row 0``), so a tool that returned ``k`` rows
+    has valid indices ``0..k-1``.
+
+    Only tools PRESENT in ``tool_row_counts`` are checked: a tool absent from the
+    map is left to :func:`find_phantom_tool_citations` (never-called) so the two
+    guards do not double-handle the same tag. The returned set holds the exact
+    matched citation substrings so the caller can strip/flag them verbatim.
+    """
+    counts = {str(t).strip().lower(): int(n) for t, n in tool_row_counts.items()}
+    out: set[str] = set()
+    for m in _TOOL_ROW_CITATION_WITH_INDEX_RE.finditer(response):
+        tool = m.group("tool").lower()
+        if tool not in counts:
+            continue
+        row = int(m.group("row"))
+        if row >= counts[tool]:
+            out.add(m.group(0))
+    return out
 
 
 def flatten_tool_values_count(tool_results: Iterable[Any]) -> int:
@@ -1382,14 +1437,286 @@ def _matches_any(
     return False, closest
 
 
+# ── C1 #1: deterministic exact-value substitution (numeric pin) ───────────────
+#
+# FINAL-67 C1: the answer LLM's dominant grounding-floor failure is altering a
+# number it has in hand — rounding $111.184B -> $111.200B. The TRANSCRIBE prompt
+# rule (synthesis v1.3) reduces but does not eliminate it. This deterministic,
+# zero-LLM pass runs BEFORE the grounding validator: when a response number is
+# CLOSE (within ``_PIN_DRIFT_TOL``) to a tool value but NOT exact, it is a
+# transcription drift, and we replace the response token in-place with the exact
+# tool value re-rendered in the SAME format (currency, magnitude suffix, decimal
+# places). After the pin, the validator's exact-match check passes legitimately
+# because the figure is now the tool's figure.
+#
+# Conservative by construction:
+#   * Only fires when there IS a close tool value — never invents or removes a
+#     number, only corrects drift toward a value the tool actually returned.
+#   * The drift band is tight (1%): a 30%-off "number" is a different claim, not
+#     a transcription slip, and is left for the validator to flag.
+#   * Same entity-scoping + same-kind pool ordering as the validator, so AMD's
+#     value never pins an NVDA-attributed number.
+#   * Exact matches are skipped (no-op), so a correct answer is never touched.
+_PIN_DRIFT_TOL = 0.01  # 1% — drift band for "same figure, transcribed loosely"
+
+
+@dataclass(frozen=True)
+class NumericPinResult:
+    """Outcome of :func:`pin_numbers_to_tool_values`."""
+
+    text: str
+    pin_count: int
+
+
+def _render_in_token_format(raw_token: str, suffix: str | None, exact_value: float) -> str | None:
+    """Re-render *exact_value* in the same shape as *raw_token*.
+
+    *raw_token* is the matched token verbatim (e.g. ``$111.200 B`` captured as
+    ``$111.200B`` or ``111.200B``); *suffix* is its magnitude letter (B/M/K/T)
+    or None; *exact_value* is the tool's base-unit value. We scale the exact
+    value down by the token's magnitude and format it with the SAME number of
+    decimal places the token used, preserving a leading ``$`` and the suffix.
+
+    Returns None when the token has no decimal/format we can safely mirror (the
+    caller then skips the pin rather than guess).
+    """
+    # Preserve currency + sign prefix exactly as written.
+    prefix = "$" if "$" in raw_token else ""
+    # Scale the exact value into the token's magnitude.
+    mult = _SUFFIX_MULT.get(suffix, 1.0) if suffix else 1.0
+    scaled = exact_value / mult
+    # Mirror the token's decimal precision so we don't add/drop digits
+    # gratuitously (e.g. "111.200" -> 3 dp; "489.7" -> 1 dp; "35" -> 0 dp).
+    digits_part = raw_token.lstrip("+-$").rstrip("BMKTbmkt%").strip()
+    decimals = len(digits_part.split(".", 1)[1]) if "." in digits_part else 0
+    rendered_num = f"{scaled:.{decimals}f}"
+    suffix_str = suffix if suffix else ""
+    return f"{prefix}{rendered_num}{suffix_str}"
+
+
+def pin_numbers_to_tool_values(
+    response: str,
+    tool_results: Iterable[Any],
+    *,
+    skip_kinds: Iterable[FieldKind] | None = None,
+) -> NumericPinResult:
+    """Replace transcription-drifted numbers with the EXACT tool value.
+
+    Deterministic, no LLM. For each number in *response* that is within
+    ``_PIN_DRIFT_TOL`` of an entity-scoped same-kind tool value but not exactly
+    equal, rewrite it in-place to the tool's exact value (same format). Returns
+    the corrected text plus the count of substitutions. A no-op (pin_count == 0)
+    when every number is exact or no close tool value exists.
+    """
+    skip = set(skip_kinds or ())
+    tool_values = _flatten_tool_values(list(tool_results))
+    if not tool_values:
+        return NumericPinResult(text=response, pin_count=0)
+
+    # Work on the original text; skip tokens inside [N\d] citation markers so a
+    # marker digit is never treated as a claim. We rebuild the string from
+    # non-overlapping replacement spans computed against the ORIGINAL text.
+    pin_count = 0
+    out_parts: list[str] = []
+    last_end = 0
+    for m in _NUM_RE.finditer(response):
+        digits = m.group("digits") or ""
+        if not any(ch.isdigit() for ch in digits):
+            continue
+        # Ignore a token that is actually a [N\d] citation marker body.
+        lead = response[max(0, m.start() - 1) : m.start()]
+        if lead == "N" and m.start() >= 1 and response[max(0, m.start() - 2) : m.start() - 1] == "[":
+            continue
+        if _is_non_claim_number(response, m):
+            continue
+        raw_tok = m.group("full").strip()
+        suffix = m.group("suffix")
+        try:
+            value = _decode_token(raw_tok, digits, suffix)
+        except ValueError:
+            continue
+
+        # C1 #1 pin extension — fold a trailing spelled-out magnitude word into
+        # this token. When the inline suffix is absent and the text right after
+        # the number is " billion"/" million"/etc., scale the value and EXTEND
+        # the replacement span to cover the word so the rewrite stays in the same
+        # "$X billion" shape. ``word_mult`` stays 1.0 (and ``replace_end`` =
+        # m.end()) for the plain-suffix / no-word case, preserving prior behaviour.
+        word_mult = 1.0
+        word_suffix: str | None = None
+        replace_end = m.end()
+        if suffix is None:
+            _wm = _WORD_MAGNITUDE_RE.match(response[m.end() :])
+            if _wm is not None:
+                word_mult, word_suffix = _WORD_MULT[_wm.group(1).lower()]
+                value *= word_mult
+                replace_end = m.end() + _wm.end()
+
+        ctx = _context_around(response, m.start(), m.end())
+        kind = classify_number(value, raw_tok, ctx)
+        if kind in skip:
+            continue
+
+        # Same pool ordering as the validator: entity-scoped same-kind first.
+        entity_tag = _nearest_entity_tag(response, raw_tok)
+        if entity_tag:
+            scoped = [tv for tv in tool_values if tv.entity_tag and entity_tag in tv.entity_tag]
+            pool = [tv.value for tv in scoped if tv.field_kind is kind] or [tv.value for tv in scoped]
+        else:
+            pool = [tv.value for tv in tool_values if tv.field_kind is kind]
+        if not pool:
+            continue
+
+        closest = min(pool, key=lambda c: abs(c - value))
+        # Sign must match — a sign flip is a real error, not a transcription slip.
+        if (closest >= 0) != (value >= 0):
+            continue
+        denom = abs(closest) if closest != 0 else 1.0
+        rel_diff = abs(value - closest) / denom
+        # Already exact (within float noise) → nothing to pin.
+        if rel_diff <= 1e-9:
+            continue
+        # Outside the drift band → a different claim; leave for the validator.
+        if rel_diff > _PIN_DRIFT_TOL:
+            continue
+
+        original_span = response[m.start() : replace_end]
+        if word_suffix is not None:
+            # Spelled-out form: render the digit core in the word's magnitude,
+            # then re-attach the ORIGINAL word verbatim (keeps the writer's
+            # casing/spacing, e.g. " billion"). We render against a synthetic
+            # single-letter-suffix token so the digit core scales correctly, then
+            # strip that letter and substitute the word span.
+            digit_core = _render_in_token_format(f"{raw_tok}{word_suffix}", word_suffix, closest)
+            if digit_core is None:
+                continue
+            digit_core = digit_core.rstrip(word_suffix)
+            word_text = response[m.end() : replace_end]  # e.g. " billion"
+            replacement: str | None = f"{digit_core}{word_text}"
+        else:
+            replacement = _render_in_token_format(raw_tok, suffix, closest)
+        if replacement is None or replacement == original_span:
+            continue
+        out_parts.append(response[last_end : m.start()])
+        out_parts.append(replacement)
+        last_end = replace_end
+        pin_count += 1
+
+    if pin_count == 0:
+        return NumericPinResult(text=response, pin_count=0)
+    out_parts.append(response[last_end:])
+    return NumericPinResult(text="".join(out_parts), pin_count=pin_count)
+
+
+# ── C1 #2: fabricated-series detector (fail-safe, no mutation) ─────────────────
+#
+# FINAL-67 C1 (da_apple_revenue_fy2024q4_precision): the tool returned ONE
+# period but the answer fabricated a full multi-quarter table (Q1 FY25=124.3,
+# Q2=95.4, Q3=94.0 …) absent from the payload. The validator flags the bad
+# numbers but the rewrite often re-fabricates, and the fabricated table then
+# ships with only a disclaimer banner.
+#
+# This detector is a DETECTOR ONLY — it never edits the answer. It returns True
+# ONLY under a high-confidence fabrication signature so the orchestrator can
+# route to the honest "only N period(s) available" fallback instead of shipping
+# the table. Per the C1 #2 fail-safe mandate: prefer failing to the honest
+# disclaimer over silently mangling a coherent answer, and never fire on an
+# answer we are not confident is fabricated.
+#
+# Fires ONLY when ALL hold:
+#   * the answer contains a Markdown table with >= _FAB_MIN_TABLE_ROWS data rows
+#     that each carry a number (a genuine multi-row series, not prose),
+#   * the tool corpus flattened to FEWER numeric values than the table has
+#     number-bearing rows (the answer claims more rows than the tool returned),
+#   * AND a strict majority of the table's row-numbers match NO tool value
+#     (within REVENUE-grade tolerance) — i.e. the surplus is invented, not a
+#     reformatting of real rows.
+_FAB_MIN_TABLE_ROWS = 3  # need a real series before we call it fabricated
+_FAB_UNMATCHED_MAJORITY = 0.6  # >60% of row-numbers unmatched → invented series
+_MARKDOWN_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+# A leading table cell that names a PERIOD: Q1 / Q1 2025 / FY2024 / a bare
+# 4-digit year / a month name. Anchors the fabricated-series gate to time-series
+# tables only, so metric/entity comparison rows never trip it.
+_PERIOD_LABEL_RE = re.compile(
+    r"(?:\bQ[1-4]\b|\bFY\s?\d{2,4}\b|\b(?:19|20)\d{2}\b"
+    r"|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b)",
+    re.IGNORECASE,
+)
+
+
+def detect_fabricated_series(response: str, tool_results: Iterable[Any]) -> bool:
+    """Return True when *response* presents a multi-row table the tools can't back.
+
+    Detector only — does NOT mutate *response*. See the section comment for the
+    exact (conservative) firing conditions. Returns False on any prose answer, a
+    single-row answer, or a table whose numbers mostly match tool values.
+    """
+    tool_values = _flatten_tool_values(list(tool_results))
+    if not tool_values:
+        # No tool numbers at all is the EMPTY-POOL case, handled elsewhere; do
+        # not also fire here (would double-handle and risk false positives).
+        return False
+    tool_floats = [tv.value for tv in tool_values]
+
+    # Collect number-bearing Markdown table rows whose FIRST cell is a PERIOD
+    # label (Q<n>, FY<year>, a bare 4-digit year, or a month name). We require a
+    # period series specifically — that is the da_apple fabrication signature
+    # (inventing quarters the tool never returned). A metric-comparison table
+    # (rows = Revenue / EPS / Gross Profit) is NOT a period series and must never
+    # trip this gate, even when a sparse tool fixture under-populates its values.
+    row_numbers: list[float] = []
+    number_bearing_rows = 0
+    for line in response.splitlines():
+        if not _MARKDOWN_TABLE_ROW_RE.match(line):
+            continue
+        if set(line.strip()) <= {"|", "-", ":", " "}:
+            continue  # separator row
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cells:
+            continue
+        first_cell = cells[0]
+        # The row's leading cell must name a period — else it is not a time
+        # series (it is a metric/entity/category row) and we skip it.
+        if not _PERIOD_LABEL_RE.search(first_cell):
+            continue
+        nums_in_row = [
+            _decode_token(m.group("full").strip(), m.group("digits") or "", m.group("suffix"))
+            for m in _NUM_RE.finditer(line)
+            if (m.group("digits") or "") and any(ch.isdigit() for ch in (m.group("digits") or ""))
+        ]
+        if not nums_in_row:
+            continue
+        number_bearing_rows += 1
+        row_numbers.extend(nums_in_row)
+
+    if number_bearing_rows < _FAB_MIN_TABLE_ROWS:
+        return False
+    # The answer must claim MORE rows than the tool returned distinct values.
+    if number_bearing_rows <= len(tool_floats):
+        return False
+    if not row_numbers:
+        return False
+
+    # How many of the table's numbers match SOME tool value (revenue-grade tol)?
+    unmatched = 0
+    for n in row_numbers:
+        matched, _ = _matches_any(n, tool_floats, DEFAULT_TOLERANCES[FieldKind.REVENUE])
+        if not matched:
+            unmatched += 1
+    return (unmatched / len(row_numbers)) > _FAB_UNMATCHED_MAJORITY
+
+
 __all__ = [
     "GroundingResult",
     "NumericGroundingValidator",
+    "NumericPinResult",
     "ToolValue",
     "UnsupportedNumber",
     "classify_number",
+    "detect_fabricated_series",
     "find_phantom_tool_citations",
     "flatten_tool_values_count",
+    "pin_numbers_to_tool_values",
     "response_has_numeric_claims",
 ]
 

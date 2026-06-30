@@ -164,6 +164,45 @@ def test_cross_check_ignores_calendar_years() -> None:
 
 
 # ---------------------------------------------------------------------------
+# FIX 3 (2026-06-26) — structural-number guard in cross_check_grounding.
+# A bare period label / row index / enumeration integer must NOT be associated
+# to the nearest sampled metric and false-flagged as a CONTRADICTION (the in-run
+# grounding veto over-fired on these, confounding the answer-judge). The same
+# guard already protects evaluate_substantiation; FIX 3 mirrors it here.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_check_structural_period_label_not_contradicted() -> None:
+    # "last 4 quarters" — the bare ``4`` is a count, not an EPS claim. Without the
+    # guard it associates to the nearest sampled metric (eps=7.31) and is flagged
+    # ``contradicted``; with the guard it is skipped entirely.
+    tool_results = [_tool_result_with_sample("get_fundamentals_history", {"eps": "7.31"})]
+    answer = "Over the last 4 quarters EPS was $7.31."
+    check = cross_check_grounding(answer, tool_results)
+    assert check.contradicted == 0
+    # The genuine EPS claim ($7.31) still matches the sample.
+    assert check.matched >= 1
+
+
+def test_cross_check_structural_row_index_not_contradicted() -> None:
+    # A row index ("row 0") is structural and must not contradict a sampled metric.
+    tool_results = [_tool_result_with_sample("query_fundamentals", {"pe_ratio": "37.73"})]
+    answer = "See row 0; the P/E ratio is 37.73x."
+    check = cross_check_grounding(answer, tool_results)
+    assert check.contradicted == 0
+
+
+def test_cross_check_genuine_value_mismatch_still_contradicted() -> None:
+    # The guard must NOT swallow real value mismatches: a formatted financial claim
+    # ($99.9B vs sampled 46.7B) is kept and still trips a contradiction.
+    tool_results = [_tool_result_with_sample("query_fundamentals", {"revenue": "46700000000"})]
+    answer = "Across the last 4 quarters revenue was $99.9B."
+    check = cross_check_grounding(answer, tool_results)
+    assert check.contradicted >= 1
+    assert check.examples and check.examples[0]["field"] == "revenue"
+
+
+# ---------------------------------------------------------------------------
 # T-W3-02 — wiring into the tiered verdict + gate.
 # ---------------------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 # Chat-Quality Judge — Calibration Report
 
-_computed_at_: `2026-06-12T20:31:09.980602+00:00`  
+_computed_at_: `2026-06-25T22:51:47.605621+00:00`
 _labels_: **39/39 labelled**
 
 ## ⛔ REJECT (bar: κ ≥ 0.7 AND zero false-PASS-on-fabrication)
@@ -22,6 +22,6 @@ _labels_: **39/39 labelled**
 | dimension | MAE |
 |---|---|
 | tool_use | 7.872 |
-| grounding | 5.923 |
-| framing | 6.0 |
-| coherence | 8.692 |
+| grounding | 6.128 |
+| framing | 5.641 |
+| coherence | 8.231 |

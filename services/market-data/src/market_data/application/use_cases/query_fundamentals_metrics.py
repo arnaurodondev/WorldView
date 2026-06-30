@@ -204,6 +204,7 @@ class QueryFundamentalsUseCase:
         not yet been taught, and a silent ``"missing"`` is friendlier than a
         500.
         """
+        from market_data.application.use_cases.get_fundamentals_history import is_future_placeholder_row
         from market_data.domain.enums import FundamentalsSection, PeriodType
 
         if not metrics:
@@ -291,8 +292,22 @@ class QueryFundamentalsUseCase:
         else:
             driver_records = records_by_section.get(FundamentalsSection.INCOME_STATEMENT, [])
 
+        # RC-1 fix (2026-06-28): drop EODHD future-dated pre-report placeholder
+        # rows BEFORE slicing — the exact filter ``GetFundamentalsHistoryUseCase``
+        # already applies. Without it, the next-quarter placeholder (null
+        # epsActual/revenue, e.g. TSLA 2026-06-30) wins a period slot, evicts the
+        # oldest real quarter, AND drags every metric's coverage flag to
+        # ``partial``. The rag-chat ``_handle_query_fundamentals`` handler only
+        # emits grounding fields for ``ok``-coverage metrics, so a single
+        # placeholder row was stripping ALL numeric grounding — the chat answer's
+        # ``grounding_sample`` then carried only ``ticker`` and the judge floored
+        # otherwise-correct quarters as fabricated (docs/audits/
+        # 2026-06-28-grounding-floor-rootcause.md RC-1).
+        filtered_driver_records = [
+            rec for rec in driver_records if not is_future_placeholder_row(rec, selected_period_type)
+        ]
         # Slice newest-first then reverse to ASC for caller-friendly ordering.
-        sorted_records = sorted(driver_records, key=lambda r: r.period_end, reverse=True)[:periods]
+        sorted_records = sorted(filtered_driver_records, key=lambda r: r.period_end, reverse=True)[:periods]
         selected = list(reversed(sorted_records))
 
         # Build lookup maps by ISO period_end so per-metric extraction is O(1).

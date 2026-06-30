@@ -317,6 +317,61 @@ def test_screen_sector_filter_forwarded() -> None:
     assert captured_filters[1].sector is None
 
 
+def test_screen_attribute_only_filter_accepted_not_422() -> None:
+    """CAT-B B1: a filter with NO ``metric`` (attribute-only) is accepted (not 422).
+
+    "Top 5 US tech by market cap" expresses its universe as ``sector="Technology"``
+    with the ranking in ``sort_by`` — no metric threshold. Previously ``metric`` was
+    required, so this body 422'd at the boundary and forced upstream callers to drop
+    the filter or invent a dummy metric. The attribute-only filter must now forward
+    as ``ScreenFilter(metric=None, sector="Technology")``.
+    """
+    captured_filters: list = []
+
+    async def _capture(filters, *, limit=50, offset=0, sort_by=None, sort_order="asc"):  # type: ignore[misc]
+        captured_filters.extend(filters)
+        return ([], 0)
+
+    mock_uc = MagicMock()
+    mock_uc.execute = AsyncMock(side_effect=_capture)
+    _, client = _make_app(mock_screen_uc=mock_uc)
+
+    resp = client.post(
+        "/api/v1/fundamentals/screen",
+        json={
+            "filters": [{"sector": "Technology"}],  # no "metric" key
+            "limit": 5,
+            "sort_by": "market_capitalization",
+            "sort_order": "desc",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(captured_filters) == 1
+    assert captured_filters[0].metric is None
+    assert captured_filters[0].sector == "Technology"
+
+
+def test_screen_market_cap_sort_allowed_with_attribute_only_filter() -> None:
+    """CAT-B B1: ``sort_by=market_capitalization`` is valid even with no metric filter.
+
+    The sort whitelist always includes ``market_capitalization`` (the no-metric
+    branch resolves it via the latest-value LEFT JOIN), so a top-N-by-market-cap
+    request whose only filter is an attribute does not 422 on the sort validation.
+    """
+    mock_uc = MagicMock()
+    mock_uc.execute = AsyncMock(return_value=([], 0))
+    _, client = _make_app(mock_screen_uc=mock_uc)
+
+    resp = client.post(
+        "/api/v1/fundamentals/screen",
+        json={
+            "filters": [{"sector": "Technology"}],
+            "sort_by": "market_capitalization",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+
 def test_screen_industry_filter_forwarded() -> None:
     """FIX-LIVE-M: industry field in a filter is forwarded as ScreenFilter.industry.
 

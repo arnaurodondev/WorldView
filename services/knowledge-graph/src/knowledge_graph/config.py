@@ -346,6 +346,19 @@ class Settings(BaseSettings):
     # APScheduler cron for PathInsightSeeder (default: 02:30 UTC daily).
     path_insight_seeder_cron: str = "30 2 * * *"
 
+    # PLAN-0113 — relational recursive-CTE traversal engine (graph_edges matview).
+    # When True, the connection-discovery hot path (pairwise FindPathsBetween use
+    # case + PathInsightWorker anchor discovery) uses RelationalGraphPathAdapter
+    # over the graph_edges matview instead of the AGE Cypher VLE engine.  Default
+    # False (AGE remains the engine) until the relational adapter is validated on
+    # the live stack.  Env: KNOWLEDGE_GRAPH_RELATIONAL_TRAVERSAL_ENABLED.
+    relational_traversal_enabled: bool = False
+    # Per-node fan-out cap for the relational path-array enumeration CTE: a hub
+    # with thousands of neighbours must not explode the frontier.  Only used by
+    # the relational adapter (the AGE engine has its own _MAX_LIMIT).  Env:
+    # KNOWLEDGE_GRAPH_RELATIONAL_TRAVERSAL_DEGREE_CAP.
+    relational_traversal_degree_cap: int = 200
+
     # PLAN-0112 W1 (T-1-04, §AD-5) — hard ceiling on path-discovery hop length.
     # AGE traversal cost grows steeply with hop count; the investigation measured
     # maxhops <= 3 safe (60-800 ms) but maxhops=4 hub-to-hub blew up to 13.8 s on

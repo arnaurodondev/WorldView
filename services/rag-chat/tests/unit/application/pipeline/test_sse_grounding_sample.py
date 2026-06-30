@@ -5,7 +5,7 @@ Contract under test:
     allow-list-only ``{fields, sampled_rows, total_rows, truncated}`` dict, or
     ``None`` for non-allow-listed tools / when no allow-listed field survives.
   - All four hard caps (rows / fields-per-row / value chars / byte cap) hold;
-    over-cap → ``truncated=true`` and the serialized sample ≤ 1024 bytes.
+    over-cap → ``truncated=true`` and the serialized sample ≤ GROUNDING_SAMPLE_MAX_BYTES.
   - Portfolio / account identifiers are NEVER emitted (FR-8 redaction).
   - ``emit_tool_result`` attaches ``grounding_sample`` ONLY when the env flag is
     on AND status == "ok" AND the sample is non-empty; otherwise the legacy
@@ -107,13 +107,56 @@ class TestBuildGroundingSampleCaps:
         assert sample is not None
         assert len(sample["fields"]["revenue"]) == SSEEmitter.GROUNDING_VALUE_MAX_CHARS
 
-    def test_row_cap_samples_at_most_three(self) -> None:
-        items = [_Row(ticker=f"T{i}", revenue=str(i)) for i in range(10)]
+    def test_row_cap_bounds_sampled_rows(self) -> None:
+        # More rows than the cap → total_rows reflects all returned, but the
+        # number sampled never exceeds GROUNDING_MAX_ROWS.
+        n = SSEEmitter.GROUNDING_MAX_ROWS + 5
+        items = [_Row(ticker=f"T{i}", revenue=str(i)) for i in range(n)]
         sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", items)
         assert sample is not None
-        # 10 returned, but only GROUNDING_MAX_ROWS sampled.
-        assert sample["total_rows"] == 10
+        assert sample["total_rows"] == n
         assert sample["sampled_rows"] <= SSEEmitter.GROUNDING_MAX_ROWS
+
+    def test_ten_row_result_fully_captured(self) -> None:
+        """2026-06-28 cap bump (3→10): a ≤10-row batch/screener result is now
+        sampled in full instead of being truncated at the old 3-row cap.
+
+        Each ticker carries a single short distinct value, so all 10 rows fit
+        well under the 4 KB byte budget and survive without truncation. Distinct
+        per-row tickers land under suffixed keys (ticker, ticker_2, …).
+        """
+        items = [_Row(ticker=f"TCK{i:02d}", revenue=str(1000 + i)) for i in range(10)]
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history_batch", items)
+        assert sample is not None
+        assert sample["total_rows"] == 10
+        # All 10 rows are now sampled (old cap of 3 would have stopped at 3).
+        assert sample["sampled_rows"] == 10
+        assert sample["truncated"] is False
+        # Every distinct ticker value survives (bare + suffixed keys).
+        ticker_vals = {v for k, v in sample["fields"].items() if k.startswith("ticker")}
+        assert ticker_vals == {f"TCK{i:02d}" for i in range(10)}
+
+    def test_oversized_sample_still_trims_gracefully(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A sample whose serialized size exceeds the byte cap is still trimmed:
+        fields are dropped, truncated flips True, and the final serialized
+        payload fits the budget. Proves the byte-trim loop is intact after the
+        3→10 / 1024→4096 cap bump.
+
+        A full 10-row x 8-field x 32-char sample is ~4 KB — just under the new
+        4096 ceiling by design (so ≤10-row batches survive). To force the trim
+        path deterministically we pin a smaller cap; the loop must still drop
+        fields until the payload fits whatever cap is in force."""
+        monkeypatch.setattr(SSEEmitter, "GROUNDING_SAMPLE_MAX_BYTES", 512)
+        big = "8" * SSEEmitter.GROUNDING_VALUE_MAX_CHARS
+        items = [
+            _Row(ticker=big, period=big, revenue=big, eps=big, gross_profit=big, pe_ratio=big, market_cap=big)
+            for _ in range(SSEEmitter.GROUNDING_MAX_ROWS)
+        ]
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history_batch", items)
+        assert sample is not None
+        serialized = json.dumps(sample).encode("utf-8")
+        assert len(serialized) <= SSEEmitter.GROUNDING_SAMPLE_MAX_BYTES
+        assert sample["truncated"] is True
 
     def test_field_per_row_cap(self) -> None:
         # Build a row with MORE allow-listed fields than the per-row cap allows.
@@ -133,8 +176,14 @@ class TestBuildGroundingSampleCaps:
         # All 7 allow-listed fields are ≤ the per-row cap (8) → all survive.
         assert len(sample["fields"]) <= SSEEmitter.GROUNDING_MAX_FIELDS_PER_ROW
 
-    def test_byte_cap_sets_truncated_and_bounds_size(self) -> None:
-        # Many rows each with a near-max value → force the byte cap to fire.
+    def test_byte_cap_sets_truncated_and_bounds_size(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 2026-06-28: with the byte cap raised to 4096 and per-row/value caps
+        # unchanged, the sample's structural ceiling (10 rows x 8 fields x 32
+        # chars ~4 KB) sits just UNDER 4096, so row/field stuffing alone can no
+        # longer overflow it. To exercise the byte-trim loop deterministically we
+        # pin a small cap and confirm: fields are dropped, truncated flips True,
+        # and the serialized payload obeys whatever cap is in force.
+        monkeypatch.setattr(SSEEmitter, "GROUNDING_SAMPLE_MAX_BYTES", 256)
         big = "8" * SSEEmitter.GROUNDING_VALUE_MAX_CHARS
         items = [
             _Row(ticker=big, period=big, revenue=big, eps=big, gross_profit=big, pe_ratio=big, market_cap=big)
@@ -261,3 +310,222 @@ class TestEmitToolResultGroundingGating:
                 assert "grounding_sample" in payload
             else:
                 assert "grounding_sample" not in payload
+
+
+# ---------------------------------------------------------------------------
+# build_grounding_sample reads RetrievedItem.grounding_fields (2026-06-26).
+# ---------------------------------------------------------------------------
+
+
+def _fundamentals_item_with_grounding(ticker: str, fields: tuple[tuple[str, str], ...]) -> RetrievedItem:
+    """A fundamentals RetrievedItem carrying structured grounding_fields.
+
+    Text intentionally has NO parseable numbers — proving the builder reads the
+    structured bag, not the markdown blob.
+    """
+    return RetrievedItem.create(
+        item_id=f"tool:fundamentals:{ticker}",
+        item_type=ItemType.financial,
+        text=f"Fundamentals table for {ticker} (see structured fields).",
+        score=0.88,
+        trust_weight=0.90,
+        citation_meta=CitationMeta(
+            title=f"Fundamentals: {ticker}",
+            url=None,
+            source_name="fundamentals",
+            published_at=None,
+            entity_name=ticker,
+        ),
+        grounding_fields=fields,
+    )
+
+
+class TestBuildGroundingSampleReadsGroundingFields:
+    def test_revenue_and_eps_surface_from_grounding_fields(self) -> None:
+        """A handler that only fills grounding_fields still yields numeric fields."""
+        item = _fundamentals_item_with_grounding(
+            "AAPL",
+            (("ticker", "AAPL"), ("revenue", "81600000000"), ("eps", "1.87")),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", [item])
+        assert sample is not None
+        # revenue/eps come from grounding_fields, NOT just the ticker.
+        assert sample["fields"]["ticker"] == "AAPL"
+        assert sample["fields"]["revenue"] == "81600000000"
+        assert sample["fields"]["eps"] == "1.87"
+
+    def test_thirteen_period_revenue_survives_field_cap(self) -> None:
+        """RC-3 follow-up: a 13-period single-metric trend survives the 14-field cap.
+
+        The market.py fundamentals handlers pack one revenue value per quarter under
+        suffixed keys (revenue, revenue_2, … revenue_13). Pre-fix the per-row field
+        cap was 8 (ticker + 7 quarters), so a "since 2023" answer's oldest quarters
+        were trimmed out of the sample → unsubstantiated → GROUNDING_FLOOR. With the
+        cap at 14 (ticker + up to 13 quarters), a full ~3-year quarterly trend's
+        figures all survive into the single packed item.
+        """
+        assert SSEEmitter.GROUNDING_MAX_FIELDS_PER_ROW == 14
+        # ticker + revenue + revenue_2 … revenue_13 == 14 fields exactly.
+        fields = (
+            ("ticker", "TSLA"),
+            *(((f"revenue_{i}" if i > 1 else "revenue"), str(20_000_000_000 + i)) for i in range(1, 14)),
+        )
+        item = _fundamentals_item_with_grounding("TSLA", fields)
+        sample = SSEEmitter.build_grounding_sample("query_fundamentals", [item])
+        assert sample is not None
+        f = sample["fields"]
+        # All 13 periods + the ticker survive — nothing trimmed by the field cap.
+        assert f["ticker"] == "TSLA"
+        assert f["revenue"] == str(20_000_000_000 + 1)  # newest
+        assert f["revenue_13"] == str(20_000_000_000 + 13)  # oldest packed quarter
+        assert len([k for k in f if k.startswith("revenue")]) == 13
+        assert len(f) <= SSEEmitter.GROUNDING_MAX_FIELDS_PER_ROW
+        assert sample["truncated"] is False
+
+    def test_widened_metrics_surface(self) -> None:
+        """net_income / forward_pe / ebitda / free_cash_flow are now allow-listed."""
+        item = _fundamentals_item_with_grounding(
+            "AAPL",
+            (
+                ("ticker", "AAPL"),
+                ("net_income", "23000000000"),
+                ("forward_pe", "27.8"),
+                ("ebitda", "30000000000"),
+                ("free_cash_flow", "19000000000"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", [item])
+        assert sample is not None
+        f = sample["fields"]
+        assert f["net_income"] == "23000000000"
+        assert f["forward_pe"] == "27.8"
+        assert f["ebitda"] == "30000000000"
+        assert f["free_cash_flow"] == "19000000000"
+
+    def test_compare_entities_suffixed_keys_survive(self) -> None:
+        """compare_entities packs both tickers in one item; ``_2`` keys survive.
+
+        The real compare handler sets ``citation_meta.entity_name=None`` (no single
+        owner entity), so the bare ``ticker`` resolves from grounding_fields rather
+        than the citation fallback.
+        """
+        item = RetrievedItem.create(
+            item_id="tool:compare:NVDA-AMD",
+            item_type=ItemType.financial,
+            text="Comparison table (see structured fields).",
+            score=0.88,
+            trust_weight=0.85,
+            citation_meta=CitationMeta(
+                title="Comparison: NVDA, AMD",
+                url=None,
+                source_name="fundamentals",
+                published_at=None,
+                entity_name=None,
+            ),
+            grounding_fields=(
+                ("ticker", "NVDA"),
+                ("revenue", "44100000000"),
+                ("ticker_2", "AMD"),
+                ("revenue_2", "7440000000"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("compare_entities", [item])
+        assert sample is not None
+        f = sample["fields"]
+        assert f["ticker"] == "NVDA"
+        assert f["revenue"] == "44100000000"
+        # Suffixed keys whose base (revenue/ticker) is allow-listed are admitted.
+        assert f["revenue_2"] == "7440000000"
+
+    def test_query_fundamentals_now_allowlisted_emits_values(self) -> None:
+        """STEP A (2026-06-26): query_fundamentals is allow-listed; sample carries
+        values (incl. margins), not just the ticker.
+
+        Before this fix query_fundamentals computed numbers + grounding_fields but
+        was absent from the allow-list → ``build_grounding_sample`` returned None
+        and coverage stayed ``presumed`` (ru_aapl_pe_simple, ru_tsla_margin_trend).
+        """
+        item = _fundamentals_item_with_grounding(
+            "TSLA",
+            (
+                ("ticker", "TSLA"),
+                ("revenue", "25500000000"),
+                ("gross_margin", "0.176"),
+                ("operating_margin", "0.104"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("query_fundamentals", [item])
+        assert sample is not None, "query_fundamentals must be allow-listed (STEP A)"
+        f = sample["fields"]
+        # Real values survive, not merely the ticker (the silent-tool symptom).
+        assert f["ticker"] == "TSLA"
+        assert f["revenue"] == "25500000000"
+        # Margins as RAW RATIOS so the percent-typed W1 matcher can match.
+        assert f["gross_margin"] == "0.176"
+        assert f["operating_margin"] == "0.104"
+        assert set(f.keys()) != {"ticker"}
+
+    def test_market_movers_suffixed_grounding_survives(self) -> None:
+        """STEP B: get_market_movers packs movers in one item; ``_2`` keys survive.
+
+        The mover item carries no per-field attrs (numbers live in grounding_fields
+        + text), so the bare ``ticker``/``change_pct``/``price`` resolve from the
+        bag and the suffixed 2nd-mover keys are admitted (base allow-listed).
+        """
+        item = RetrievedItem.create(
+            item_id="tool:movers:gainers:1D",
+            item_type=ItemType.financial,
+            text="Market movers table (see structured fields).",
+            score=0.85,
+            trust_weight=0.82,
+            citation_meta=CitationMeta(
+                title="Market movers: gainers (1D)",
+                url=None,
+                source_name="market_data",
+                published_at=None,
+                entity_name=None,
+            ),
+            grounding_fields=(
+                ("ticker", "NVDA"),
+                ("change_pct", "4.27"),
+                ("price", "425.1"),
+                ("ticker_2", "AMD"),
+                ("change_pct_2", "3.11"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_market_movers", [item])
+        assert sample is not None
+        f = sample["fields"]
+        assert f["ticker"] == "NVDA"
+        assert f["change_pct"] == "4.27"
+        assert f["price"] == "425.1"
+        # Suffixed keys whose base is allow-listed are admitted.
+        assert f["change_pct_2"] == "3.11"
+        # Values, not merely the ticker (the silent-tool symptom).
+        assert set(f.keys()) != {"ticker"}
+
+    def test_direct_attr_still_wins_over_grounding_fields(self) -> None:
+        """The grounding_fields probe is LAST — a direct attr/citation still wins."""
+        # citation_meta.entity_name supplies ticker; grounding_fields supplies the
+        # numbers. The ticker must resolve via the (earlier) citation_meta path.
+        item = _fundamentals_item_with_grounding("AAPL", (("ticker", "ZZZZ"), ("revenue", "81600000000")))
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", [item])
+        assert sample is not None
+        # entity_name "AAPL" wins over the grounding_fields ticker "ZZZZ".
+        assert sample["fields"]["ticker"] == "AAPL"
+        assert sample["fields"]["revenue"] == "81600000000"
+
+    def test_flag_off_payload_byte_identical_with_grounding_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """NFR-2: even with grounding_fields populated, flag-OFF frame is legacy 4-key."""
+        monkeypatch.delenv("CHAT_EVAL_GROUNDING_SAMPLES", raising=False)
+        item = _fundamentals_item_with_grounding("AAPL", (("ticker", "AAPL"), ("revenue", "81600000000")))
+        emitter = SSEEmitter()
+        frame = emitter.emit_tool_result(
+            "get_fundamentals_history",
+            status="ok",
+            item_count=1,
+            grounding_sample=emitter.build_grounding_sample("get_fundamentals_history", [item]),
+        )
+        payload = json.loads(frame["data"])
+        assert "grounding_sample" not in payload
+        assert set(payload.keys()) == {"type", "tool", "status", "item_count"}

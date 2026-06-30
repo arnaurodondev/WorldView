@@ -12,6 +12,26 @@
 name: worldview
 
 services:
+  # ── PLAN-0113 / grounded-rag-eval flag overlays (dev finding-run) ────────────
+  # These environment: blocks are MERGED on top of each service's env_file, so
+  # they turn on the new code paths without mutating the gitops-sourced
+  # docker.env files. Removing this overlay reverts to the committed defaults.
+  #
+  # KG: route entity↔entity path discovery through the relational adapter
+  # (public.graph_edges matview) added by PLAN-0113 / migration 0063.
+  knowledge-graph:
+    environment:
+      KNOWLEDGE_GRAPH_RELATIONAL_TRAVERSAL_ENABLED: "true"
+  knowledge-graph-path-insight-worker:
+    environment:
+      KNOWLEDGE_GRAPH_RELATIONAL_TRAVERSAL_ENABLED: "true"
+  # rag-chat: attach per-claim grounding samples to the SSE payload so the W1
+  # substantiation judge can verify each answer. Flag is read un-prefixed
+  # straight from os.environ per call, so it must be in the process env.
+  rag-chat:
+    environment:
+      CHAT_EVAL_GROUNDING_SAMPLES: "true"
+
   # ── MailHog — SMTP capture for email testing ────────────────────────────────
   # Captures all outbound emails from S10 Alert service.
   # SMTP: port 1025 (set ALERT_SMTP_HOST=mailhog, ALERT_SMTP_PORT=1025)

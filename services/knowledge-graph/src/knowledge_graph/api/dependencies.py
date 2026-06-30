@@ -459,6 +459,7 @@ def get_find_paths_between_uc(
     """
     from datetime import timedelta
 
+    from knowledge_graph.application.ports.graph_path_engine import GraphPathEngine
     from knowledge_graph.application.ports.node_degree_repository import GraphStats
     from knowledge_graph.application.services.weirdness_scorer import WeirdnessScorer
     from knowledge_graph.application.use_cases.find_paths_between import FindPathsBetweenUseCase
@@ -475,7 +476,23 @@ def get_find_paths_between_uc(
     settings: Settings = request.app.state.settings
     write_factory = request.app.state.write_factory
 
-    engine = AgeGraphPathEngine(write_factory)
+    # PLAN-0113: when the relational-traversal flag is on, the pairwise hot path
+    # uses the recursive-CTE adapter over the graph_edges matview (read replica,
+    # R27-clean — no AGE / no write session), which is ~tens-of-ms vs the AGE
+    # engine's contended-seconds.  Otherwise fall back to the AGE VLE engine.
+    engine: GraphPathEngine
+    if settings.relational_traversal_enabled:
+        from knowledge_graph.infrastructure.relational.graph_path_adapter import (
+            RelationalGraphPathAdapter,
+        )
+
+        read_factory = request.app.state.read_factory
+        engine = RelationalGraphPathAdapter(
+            read_factory,
+            degree_cap=settings.relational_traversal_degree_cap,
+        )
+    else:
+        engine = AgeGraphPathEngine(write_factory)
 
     canonical_repo = CanonicalEntityRepository(session)
 

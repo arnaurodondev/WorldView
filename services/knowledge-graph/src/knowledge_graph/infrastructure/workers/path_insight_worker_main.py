@@ -74,12 +74,29 @@ async def main() -> None:
 
     # Build GraphPathEngine (typed-VLE adapter, PLAN-0112 T-2-04 — replaces the
     # deprecated PathDiscovery), PathScorer, PathTemplateMatcher.
+    from knowledge_graph.application.ports.graph_path_engine import (
+        GraphPathEngine,  # noqa: TCH001 — runtime annotation below
+    )
     from knowledge_graph.application.services.path_scorer import PathScorer
     from knowledge_graph.application.services.path_template_matcher import PathTemplateMatcher
     from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine
     from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
 
-    path_engine = AgeGraphPathEngine(write_factory)
+    # PLAN-0113: anchor discovery uses the relational recursive-CTE adapter over
+    # the graph_edges matview when the flag is on (read replica, no AGE), else the
+    # AGE VLE engine.  Same engine selection as the pairwise API dependency.
+    path_engine: GraphPathEngine
+    if settings.relational_traversal_enabled:
+        from knowledge_graph.infrastructure.relational.graph_path_adapter import (
+            RelationalGraphPathAdapter,
+        )
+
+        path_engine = RelationalGraphPathAdapter(
+            _read_factory,
+            degree_cap=settings.relational_traversal_degree_cap,
+        )
+    else:
+        path_engine = AgeGraphPathEngine(write_factory)
     scorer = PathScorer()
     template_matcher = PathTemplateMatcher(write_factory)
 

@@ -49,9 +49,18 @@ class MetricDataPoint:
 
 @dataclass(frozen=True, slots=True)
 class ScreenFilter:
-    """A single metric filter for instrument screening."""
+    """A single metric filter for instrument screening.
 
-    metric: str
+    ``metric`` is OPTIONAL (2026-06-28, CAT-B B1 fix): a filter may carry only
+    an instrument attribute (sector/industry/country/exchange/has_*) or a
+    snapshot-column range with no ``fundamental_metrics`` threshold. The query
+    layer routes such attribute-only filters through the no-metric branch (which
+    applies the attribute WHERE predicates against ``instruments`` and supports
+    ``sort_by``) instead of building a per-metric subquery. See
+    ``ScreenFilterRequest`` for why this matters (top-N-by-market-cap queries).
+    """
+
+    metric: str | None = None
     min_value: float | None = None
     max_value: float | None = None
     period_type: str | None = None

@@ -10,7 +10,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -335,3 +335,76 @@ async def test_snapshot_includes_as_of_when_highlights_present() -> None:
     assert snap["as_of"] == "2026-03-31"
     assert snap["source"] == "highlights"
     assert snap["pe_ratio"] == pytest.approx(30.4)
+
+
+@pytest.mark.asyncio
+async def test_future_placeholder_quarter_is_dropped_and_coverage_stays_ok() -> None:
+    """RC-1 regression (docs/audits/2026-06-28-grounding-floor-rootcause.md).
+
+    EODHD pre-emits a NEXT-quarter EARNINGS_HISTORY row with ``epsActual=None``
+    (a future-dated placeholder). ``GetFundamentalsHistoryUseCase`` already drops
+    it; before this fix ``QueryFundamentalsUseCase`` did NOT, so the placeholder:
+      * won a period slot (evicting the oldest real quarter at the same N), and
+      * dragged every metric's coverage flag to ``partial`` because the newest
+        row's revenue/eps were null.
+
+    The rag-chat ``_handle_query_fundamentals`` handler only emits grounding
+    fields for ``ok``-coverage metrics, so that single placeholder stripped ALL
+    numeric grounding — the chat answer's ``grounding_sample`` then carried only
+    ``ticker`` and the judge floored otherwise-correct quarters as fabricated.
+
+    With the fix: the placeholder is dropped, all 3 real quarters survive at
+    periods=3, and coverage is ``ok`` for both revenue and eps.
+    """
+    inst = _instrument()
+
+    # Three real, past quarters (EPS in earnings_history, revenue in income).
+    q1 = datetime(2025, 9, 30, tzinfo=UTC)
+    q2 = datetime(2025, 12, 31, tzinfo=UTC)
+    q3 = datetime(2026, 3, 31, tzinfo=UTC)
+    # One future-dated placeholder: epsActual null, period_end in the future so
+    # the test is stable regardless of the calendar date when CI runs it.
+    future = datetime.now(tz=UTC) + timedelta(days=45)
+
+    earnings = [
+        _record(FundamentalsSection.EARNINGS_HISTORY, q1, {"epsActual": "1.50"}),
+        _record(FundamentalsSection.EARNINGS_HISTORY, q2, {"epsActual": "2.00"}),
+        _record(FundamentalsSection.EARNINGS_HISTORY, q3, {"epsActual": "1.80"}),
+        _record(
+            FundamentalsSection.EARNINGS_HISTORY,
+            future,
+            {"reportDate": future.strftime("%Y-%m-%d"), "epsActual": None},
+        ),
+    ]
+    income = [
+        _record(FundamentalsSection.INCOME_STATEMENT, q1, {"totalRevenue": "90000000000"}),
+        _record(FundamentalsSection.INCOME_STATEMENT, q2, {"totalRevenue": "95000000000"}),
+        _record(FundamentalsSection.INCOME_STATEMENT, q3, {"totalRevenue": "92000000000"}),
+        # No income row for the future placeholder period — mirrors EODHD.
+    ]
+    uow = _uow(
+        {
+            FundamentalsSection.EARNINGS_HISTORY: earnings,
+            FundamentalsSection.INCOME_STATEMENT: income,
+        },
+        inst,
+    )
+    uc = QueryFundamentalsUseCase(uow)
+    out = await uc.execute(
+        instrument_id=uuid4(),
+        metrics=["revenue", "eps"],
+        periods=3,
+        include_snapshot=False,
+    )
+
+    rows = out["metrics_by_period"]
+    assert len(rows) == 3, f"placeholder leaked / evicted a real quarter: {[r['period_end'] for r in rows]}"
+    # The future placeholder must be absent; all three returned rows are real.
+    assert all(r["period_end"] != future.strftime("%Y-%m-%d") for r in rows)
+    assert {r["period_end"] for r in rows} == {"2025-09-30", "2025-12-31", "2026-03-31"}
+    # Coverage stays ``ok`` (not ``partial``) so the rag-chat handler keeps the
+    # numeric grounding fields — this is the line that closes RC-1.
+    assert out["coverage"]["revenue"] == "ok"
+    assert out["coverage"]["eps"] == "ok"
+    # Every returned quarter carries real numbers.
+    assert all(r["revenue"] is not None and r["eps"] is not None for r in rows)

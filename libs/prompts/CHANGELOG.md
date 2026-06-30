@@ -191,6 +191,31 @@ is unchanged.
   entities; pairs with the `provisional_enrichment_core.py` fallback hardening
   (tickerless company-class -> `unknown`, not `financial_instrument`).
 
+## chat_trajectory_judge
+
+### 1.0 — 2026-06-25 (NEW — Multi-Level Eval Framework W2, trajectory layer)
+
+- **NEW judge prompt — grades the agent's TOOL-CHAIN PROCESS, not the answer.**
+  Complements `CHAT_QUALITY_JUDGE` (which grades the final answer) with a
+  trajectory grader that reads the SAME ordered tool trace
+  (`call N: tool(args) -> status items=K`) plus the question intent and scores
+  four 0-25 sub-dimensions: `routing` (tools fit intent), `ordering` (a chain
+  resolves a dependency before consuming it), `recovery` (after a failed/empty
+  call the agent retries/substitutes vs gives up/loops), and `efficiency`
+  (minimal, non-redundant calls). `trajectory_score = sum(4)` (0-100) is
+  computed in `scripts/chat_trajectory_judge.py`, not in the prompt.
+- **Strict-JSON output** `{routing, ordering, recovery, efficiency,
+  reviewer_summary}` (per-dim `{score, feedback}`), mirroring the answer judge's
+  shape. content_hash `eb78317b2115` (computed from the body).
+- **Independent of `CHAT_QUALITY_JUDGE`.** The answer grader is NOT modified;
+  a unit test asserts `CHAT_QUALITY_JUDGE.content_hash` is unchanged.
+- **Impact:** additive only — wired into `run_chat_quality_benchmark.py` behind
+  `--trajectory` (default ON when `--judge` is on); it attaches a `trajectory`
+  block to each `q_<id>.json` and a `trajectory` roll-up to `_judge_summary.json`
+  / the `_report.md` "Trajectory (MUST-2)" section. It does NOT change the
+  answer FAIL/PASS verdict. As with any judge prompt, a future body edit flips
+  the hash and breaks longitudinal trajectory comparison — record the bump here.
+
 ## chat_quality_judge
 
 ### 3.0 — 2026-06-12 (BREAKING, PLAN-0110 W3 / PRD-0091 FR-7)
@@ -217,3 +242,139 @@ is unchanged.
 - Per-dimension JSON output key `reason` → `feedback`.
 - Top-level `notes` → `reviewer_summary` (≤800-char PR-review paragraph).
 - FRAMING dimension rewritten LENGTH-AGNOSTIC (short factual answers score 25).
+
+## tool_use_system
+
+### 1.10 — 2026-06-27 (FINAL-67 C4 — tool routing)
+
+- Added the **TOOL ROUTING** table to the planning-turn prompt. The FINAL-67 run
+  found `search_documents` over-selected as a generic catch-all while the
+  purpose-built tools were under-selected, looping empty searches into refusals:
+  `da_mstr_news_dec2024` never tried `get_entity_news`,
+  `iter3_apple_competitors_spanish` routed competitors to `get_entity_graph`, and
+  `tc_search_events_semi_earnings_beats` never called `search_events`.
+- v1.10 maps question shape to the FIRST tool — 'latest news about X' ->
+  `get_entity_news`, 'competitors of X in <sector>' -> `compare_entities`,
+  '<sector> events/earnings beats' -> `search_events`, relations -> `traverse_graph`
+  / `search_entity_relations`, numbers -> `query_fundamentals` — and demotes
+  `search_documents` to an explicit fallback for open-ended free-text only.
+- All prior strict-no-hallucination rules are **unchanged**.
+
+## chat_synthesis_system
+
+### 1.6 — 2026-06-28 (Cat-A period-selection)
+
+- The v1.5 finding-run still showed the model **selecting / labelling the wrong
+  fiscal period** from a payload that already carried correct labels
+  (`docs/audits/2026-06-28-cat-a-period-selection.md`): it scrambled Q1–Q4 by row
+  position (`da_tsla_revenue_2024_full_year`), invented/mislabelled fiscal years
+  and padded extra quarters (`ru_nvda_amd_revenue_4q`), and substituted the
+  nearest September quarter under a requested-but-absent label
+  (`da_apple_revenue_fy2024q4_precision` — Q4 FY2024 outside the returned window).
+  The tool labels themselves were correct; the missing guardrail was a
+  period-binding directive (cause (d)).
+- v1.6 adds the **PERIOD-MATCHING** block: bind every figure to its row's OWN
+  period label / `period_end`; never map rows to quarters by position; and — when
+  the requested period is **absent** from the returned window — say so and name
+  the closest available period the tool DID return, rather than relabelling the
+  nearest quarter (a real number under the wrong period label is still a
+  fabrication).
+- Adds a **long-series steer** (report first/last/high/low/range over N rather
+  than enumerating every bar) for the C1-companion price-history case.
+- **Additive:** keeps every v1.5 win (ANTI-FABRICATION POLICY, digit-for-digit
+  copy, report-in-full balance, TRUST YOUR TOOL RESULTS). Backed by the
+  deterministic period-presence guard in the rag-chat orchestrator (FIX 2) and the
+  off-payload-ticker guard (FIX 3) for the financial-correctness backstop.
+
+### 1.5 — 2026-06-28 (RC-2 anti-fabrication policy)
+
+- The v1.4 finding-run grounding-floor root-cause
+  (`docs/audits/2026-06-28-grounding-floor-rootcause.md`, RC-2) found the answer
+  LLM still **fabricating** along three axes: (1) inventing missing
+  quarters/rows from a single-period fundamentals payload (8 questions, e.g.
+  `ru_nvda_amd_revenue_4q`, `da_tsla_revenue_2024_full_year`); (2) padding a
+  screener result with off-payload mega-cap tickers it never returned (MRVL,
+  UBER, SHOP, CRM — `ru_ai_semi_screener`, `iter3_top5_tech_marketcap`); and
+  (3) claiming returned scalar fields were "missing" (`high`/`low` present in
+  `tc_price_history_msft_ytd_range`; `status=ok` over-refusals).
+- v1.5 adds the **ANTI-FABRICATION POLICY** block with three explicit rules:
+  (1) never invent periods/quarters/rows — report the single returned period in
+  full + state the series is unavailable; (2) never add entities absent from a
+  tool result; (3) read the returned scalar fields before declaring data missing,
+  declining only the genuinely-absent field.
+- **Balance preserved (does NOT fight v1.4):** each rule carries the v1.4
+  counter-instruction — "report every value the tools DID return, in full, with
+  its citation; refuse ONLY the specific part that is genuinely unavailable,
+  never the whole answer." This is anti-fabrication, not anti-answering; all v1.4
+  wins (digit-for-digit copy, report-in-full, keep-the-tag, TRUST YOUR TOOL
+  RESULTS) are unchanged.
+
+### 1.4 — 2026-06-28 (FINAL-67 grounding regression — soften C1)
+
+- v1.3's "TRANSCRIBE, DO NOT COMPUTE" block OVER-corrected. Two read-only audits
+  (`docs/audits/2026-06-28-grounding-regression-{map,mechanism}.md`) converged:
+  the blanket "do NOT infer/extrapolate/build a time series" plus the "prefer
+  saying 'not in the retrieved data' over supplying a number" escape hatch made
+  the answer LLM WITHHOLD, shrink, and wrongly REFUSE data the tools handed it.
+  `GROUNDING_FLOOR` 7→16, `substantiated_n` 56→47, while `unsupported_n` stayed
+  0 — i.e. shrinkage/refusal, NOT fabrication. Answers also dropped inline
+  citation tags, so correct numbers read as ungrounded. Flagship
+  `iter3_msft_earnings_citations` went 100→5 (wrongful refusal of a
+  `query_fundamentals` result that returned `items=1`).
+- v1.4 **keeps** the digit-for-digit copy rule (the part that helped —
+  `unsupported_n` stayed 0), **narrows** "don't build a series" to ONLY the
+  periods the tool did not return (never a reason to omit returned periods),
+  **removes** the "prefer 'not in the retrieved data'" refusal escape hatch, and
+  **adds** a counter-instruction: report every groundable value IN FULL WITH its
+  inline `[tool_name row N]` citation tag — never refuse, hedge, shorten, or drop
+  attribution on data you can ground.
+- The C1 #1 numeric pin and #2 fabricated-series gate (product code) are
+  **unchanged** — both were exonerated by the audits (pin fired 9× and helped,
+  gate fired 0×).
+
+### 1.3 — 2026-06-27 (FINAL-67 C1 — transcribe, don't compute)
+
+- Added the **TRANSCRIBE, DO NOT COMPUTE** block. The dominant FINAL-67
+  grounding-floor failure (8 of 14 FAILs) was the answer LLM altering numbers it
+  already had: rounding $111.184B -> $111.200B
+  (`da_apple_revenue_fy2024q4_precision`), fabricating a 6-quarter trajectory from
+  a single-period snapshot (`ru_nvda_amd_revenue_4q`), and carrying one entity's
+  revenue onto another (`da_nvda_amd_compare_fy2024q3`).
+- v1.3 requires copying every figure digit-for-digit from the tool result,
+  forbids rounding/extrapolating/annualising, forbids inventing a period or
+  series the tool did not return, requires every derived figure's inputs to be
+  present, and requires an explicit "not in the retrieved data" statement instead
+  of a substitute number.
+- The product-side numeric-grounding validator (chat_orchestrator) still backs
+  this prompt rule as defence-in-depth.
+
+### 1.2 — 2026-06-27 (FINAL-67 C3 — trust-your-tool-results)
+
+- Added the **TRUST YOUR TOOL RESULTS** block to the synthesis-turn prompt. The
+  FINAL-67 run found the INVERSE of fabrication: the answer LLM refused or denied
+  capability despite a successful / non-empty tool result.
+  `tc_price_history_msft_ytd_range` refused ("data does not contain the daily
+  high or low") when the tool row carried `high=489.7, low=356.28`;
+  `tc_create_alert_nvda_below` denied it could set price alerts ("not permitted")
+  after `create_alert` returned `status: ok`.
+- v1.2 forbids claiming a value is "unavailable/not included" when it is present
+  in a tool result, requires confirming an action when its tool returned success,
+  and instructs that a price/high-low/past-value lookup is factual — NOT
+  speculation to be refused.
+- The `{safety}` parameter, FORBIDDEN narration block, and GROUND EVERY ROW
+  anti-fabrication block are **unchanged**.
+
+### 1.1 — 2026-06-26 (platform quality failure-analysis #3 — anti-fabrication)
+
+- Added the **GROUND EVERY ROW** block to the synthesis-turn prompt. The 2026-06-26
+  chat-quality run found fabrication beyond tool results: a tool returns 1 row, the
+  answer asserts N (`iter3_top5_tech_marketcap`, `agg_q5_tsla_macro`,
+  `iter3_msft_earnings_citations`), inventing plausible rows with `[tool row N]`
+  citations that do not exist in the trace.
+- v1.1 hard-constrains the answer to EXACTLY the rows/values the tools returned,
+  forbids emitting a `[tool_name row N]` citation for a row index a tool did not
+  return, and requires an explicit shortfall statement when fewer items came back
+  than the question asked for.
+- Companion product guard: `chat_orchestrator` strips/flags citation row-indices
+  not present in the returned trace before the answer is sent.
+- The `{safety}` parameter and FORBIDDEN narration block are **unchanged**.
