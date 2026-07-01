@@ -976,3 +976,62 @@ class TestPgPredictionMarketRepositoryQuery:
             assert pairs == []
         finally:
             await self._cleanup(uow)
+
+    async def test_multi_word_query_matches_out_of_order_tokens(self, uow) -> None:
+        """R2 fix: a natural multi-word phrase matches on AND-ed tokens.
+
+        The market question does not contain the query as a verbatim substring
+        (word order differs, extra words in between), so the old whole-phrase
+        ILIKE returned 0. Tokenised AND matching now finds it.
+        """
+        try:
+            await uow.prediction_markets.upsert(
+                self._market(
+                    "mkt-dem-2028",
+                    "Who will win the 2028 Democratic presidential nomination?",
+                ),
+            )
+            await uow.prediction_markets.upsert(
+                self._market("mkt-gop-2028", "2028 Republican primary winner"),
+            )
+            await uow.commit()
+
+            # "presidential nomination" is not a contiguous substring match test
+            # here — both tokens appear (in order) but the key point is the query
+            # phrase differs from the stored question; multi-token AND matches.
+            pairs, total = await uow.prediction_markets.list_markets(
+                status=None,
+                query="Democratic 2028 nomination",
+                limit=10,
+                offset=0,
+            )
+
+            assert total == 1
+            assert len(pairs) == 1
+            assert pairs[0][0].market_id == "mkt-dem-2028"
+        finally:
+            await self._cleanup(uow)
+
+    async def test_nonsense_multi_word_phrase_matches_nothing(self, uow) -> None:
+        """A phrase whose tokens do not all co-occur in any question → 0 rows."""
+        try:
+            await uow.prediction_markets.upsert(
+                self._market(
+                    "mkt-dem-2028",
+                    "Who will win the 2028 Democratic presidential nomination?",
+                ),
+            )
+            await uow.commit()
+
+            # "presidential" is present but "bitcoin" is not → AND fails.
+            pairs, total = await uow.prediction_markets.list_markets(
+                status=None,
+                query="bitcoin presidential nomination",
+                limit=10,
+                offset=0,
+            )
+
+            assert total == 0
+            assert pairs == []
+        finally:
+            await self._cleanup(uow)

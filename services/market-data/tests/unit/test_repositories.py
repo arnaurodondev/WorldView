@@ -699,3 +699,101 @@ class TestPredictionMarketListQueryEscape:
         assert "ESCAPE '\\'" in sql, f"expected single-char ESCAPE, got: {sql}"
         # The broken two-backslash form (Python "'\\\\'") must be absent.
         assert "ESCAPE '\\\\'" not in sql, f"two-backslash ESCAPE must not appear: {sql}"
+
+
+class TestPredictionMarketQueryTokenizer:
+    """R2 fix — tokenised multi-word free-text search.
+
+    The old free-text branch matched the ENTIRE query phrase as one ILIKE
+    substring, so natural multi-word chat queries ("2028 Democratic
+    presidential nomination") returned 0 rows because no single market question
+    contains that exact substring. The branch now splits the query into
+    meaningful tokens and AND-matches each one.
+    """
+
+    def test_tokenize_splits_meaningful_words(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            _tokenize_query,
+        )
+
+        # "2028" survives (numeric, len 4); trivial words are irrelevant here.
+        assert _tokenize_query("2028 Democratic presidential nomination") == [
+            "2028",
+            "democratic",
+            "presidential",
+            "nomination",
+        ]
+
+    def test_tokenize_drops_stopwords_short_tokens_and_dedupes(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            _tokenize_query,
+        )
+
+        # "who"/"will"/"the" = stopwords; "in" = short; "election" appears twice
+        # but is de-duplicated; casing/punctuation normalised.
+        assert _tokenize_query("Who will win the election, the 2024 election?") == [
+            "win",
+            "election",
+            "2024",
+        ]
+
+    def test_tokenize_all_stopwords_returns_empty(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            _tokenize_query,
+        )
+
+        assert _tokenize_query("who will the") == []
+
+    def test_tokenize_keeps_wildcard_chars_in_token(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            _tokenize_query,
+        )
+
+        # "50%" stays a single token so escaping later matches a literal "50%"
+        # rather than the bare number "50".
+        assert _tokenize_query("win 50%") == ["win", "50%"]
+
+    async def _run_list_markets(self, query):
+        """Execute ``list_markets`` against a mock session; return (sql, params)."""
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketRepository,
+        )
+
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = []
+        session.execute.return_value = result
+
+        repo = PgPredictionMarketRepository(session)
+        await repo.list_markets(status=None, query=query, limit=5, offset=0)
+
+        text_clause = session.execute.call_args[0][0]
+        # Compiled bind params are exposed via the TextClause's bind params.
+        params = {k: v.value for k, v in text_clause._bindparams.items()}
+        return text_clause.text, params
+
+    async def test_multi_word_query_builds_anded_per_token_predicates(self):
+        """Each token becomes its own AND-ed, separately-bound ILIKE predicate."""
+        sql, params = await self._run_list_markets("presidential nomination")
+
+        # Two distinct token params, each a literal-substring pattern.
+        assert params["query_tok_0"] == "%presidential%"
+        assert params["query_tok_1"] == "%nomination%"
+        # AND-ed together (not OR — OR would broaden to the whole table).
+        assert "query_tok_0" in sql and "query_tok_1" in sql
+        assert " AND " in sql
+        assert " OR " not in sql
+        # Single-char ESCAPE preserved on every token predicate (BP-712).
+        assert "ESCAPE '\\'" in sql
+        assert "ESCAPE '\\\\'" not in sql
+        # The whole-phrase substring must NOT be used for a multi-word query.
+        assert "%presidential nomination%" not in params.values()
+        assert "query_like" not in params
+
+    async def test_all_stopword_query_falls_back_to_whole_phrase(self):
+        """When no meaningful token survives, match the whole phrase (no crash)."""
+        sql, params = await self._run_list_markets("who will the")
+
+        assert params["query_like"] == "%who will the%"
+        assert "query_tok_0" not in params
+        assert "ESCAPE '\\'" in sql
