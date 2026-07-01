@@ -20,17 +20,16 @@ import asyncio
 import contextlib
 import hashlib
 import os
-import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 import httpx
-import jwt as pyjwt
 from sqlalchemy import text
 
 from observability import get_logger, start_metrics_server  # type: ignore[import-untyped]
+from observability.internal_jwt import mint_internal_jwt  # type: ignore[import-untyped]
 from portfolio.application.ports.brokerage_client import SnapTradeUser
 from portfolio.application.use_cases.record_transaction import RecordTransactionCommand, RecordTransactionUseCase
 from portfolio.application.use_cases.upsert_holdings_from_snapshot import (
@@ -165,19 +164,13 @@ def _system_jwt_headers(settings: Settings) -> dict[str, str]:
     decodable JWT. The HS256 token here is only for dev — production would
     require a proper service account token from S9.
     """
-    now = int(time.time())
-    token = pyjwt.encode(
-        {
-            "iss": "worldview-gateway",
-            "sub": "system:brokerage-sync",
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "tenant_id": "00000000-0000-0000-0000-000000000000",
-            "role": "system",
-            "iat": now,
-            "exp": now + 86400,
-        },
-        settings.brokerage_sync_jwt_secret.get_secret_value(),
-        algorithm="HS256",
+    # DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
+    # always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
+    # ``InternalJWTMiddleware`` once real verification is enabled).
+    token = mint_internal_jwt(
+        sub="system:brokerage-sync",
+        ttl_seconds=86400,
+        dev_hs256_secret=settings.brokerage_sync_jwt_secret.get_secret_value(),
     )
     return {"X-Internal-JWT": token}
 

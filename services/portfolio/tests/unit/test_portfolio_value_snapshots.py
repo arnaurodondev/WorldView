@@ -680,3 +680,18 @@ class TestReplayUntil:
         positions = _replay_until(txns, date(2026, 4, 15))
         assert positions[iid].quantity == Decimal(0)
         assert positions[iid].avg_cost == Decimal(0)
+
+
+# ── DEF-002: internal-JWT claims (aud + jti) ──────────────────────────────────
+
+
+def test_system_jwt_headers_include_aud_and_jti() -> None:
+    """DEF-002: X-Internal-JWT MUST carry aud + a unique jti (required by middleware)."""
+    import jwt as pyjwt
+    from portfolio.workers.portfolio_snapshot_worker import _system_jwt_headers
+
+    decoded = pyjwt.decode(_system_jwt_headers()["X-Internal-JWT"], options={"verify_signature": False})
+    assert decoded["aud"] == "worldview-internal"
+    assert decoded["iss"] == "worldview-gateway"
+    assert decoded["sub"] == "system:portfolio-snapshot"
+    assert decoded["jti"]

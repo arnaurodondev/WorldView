@@ -780,3 +780,21 @@ class TestInstrumentLookupMissLongDefer:
         # 30-day defer upsert.
         assert len(valkey.set_calls) == 1, "transient HTTP error must still escalate the backoff"
         emb_repo.upsert.assert_not_awaited()
+
+
+# ── DEF-002: internal-JWT claims (aud + jti) ──────────────────────────────────
+
+
+def test_system_jwt_headers_include_aud_and_jti() -> None:
+    """DEF-002: X-Internal-JWT MUST carry aud + a unique jti (required by middleware)."""
+    import jwt as pyjwt
+    from knowledge_graph.infrastructure.workers.fundamentals_refresh import (
+        _system_jwt_headers,
+    )
+
+    headers = _system_jwt_headers("")  # HS256 dev fallback
+    decoded = pyjwt.decode(headers["X-Internal-JWT"], options={"verify_signature": False})
+    assert decoded["aud"] == "worldview-internal"
+    assert decoded["iss"] == "worldview-gateway"
+    assert decoded["sub"] == "system:kg-fundamentals-refresh"
+    assert decoded["jti"]

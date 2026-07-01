@@ -50,12 +50,10 @@ from __future__ import annotations
 
 import asyncio
 import random
-import time
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
 import httpx
-import jwt
 import prometheus_client as prom
 
 from market_ingestion.application.use_cases.trigger_ingestion import TriggerIngestionUseCase
@@ -63,6 +61,7 @@ from market_ingestion.domain.enums import DatasetType, FundamentalsVariant, Prov
 from market_ingestion.domain.errors import ProviderRateLimited
 from market_ingestion.infrastructure.db.session import _build_factories
 from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
+from observability.internal_jwt import mint_internal_jwt
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -462,39 +461,22 @@ class FundamentalsRefreshWorker:
     def _sign_internal_jwt(self) -> str:
         """Sign a short-lived internal JWT for the market-data call.
 
-        Mirrors ``services/knowledge-graph/.../build_market_data_signer``.
-        Returns an HS256 dev token when no RS256 private key is configured;
-        production deployments must inject the same key S9 uses so
-        market-data's ``InternalJWTMiddleware`` accepts the request.
+        DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the
+        token always includes ``aud="worldview-internal"`` + a unique ``jti``
+        (required by ``InternalJWTMiddleware``).  Returns an HS256 dev token
+        when no RS256 private key is configured; production deployments must
+        inject the same key S9 uses so market-data accepts the request.
         """
-        now = int(time.time())
-        payload = {
-            "iss": "worldview-gateway",
-            "sub": "system:fundamentals-refresh-worker",
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "tenant_id": "00000000-0000-0000-0000-000000000000",
-            "role": "system",
-            "iat": now,
-            "exp": now + 300,
-        }
         # SecretStr-or-str compatibility — settings may expose either.
         raw_key = getattr(self._settings, "internal_jwt_private_key", "")
         if hasattr(raw_key, "get_secret_value"):
             raw_key = raw_key.get_secret_value()
-        if raw_key:
-            from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
-            private_key = load_pem_private_key(raw_key.encode(), password=None)
-            return str(
-                jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[arg-type]
-            )
-        # Dev fallback — same shared secret as the KG signer so behaviour is
-        # consistent across all worker → market-data calls in dev.
         return str(
-            jwt.encode(
-                payload,
-                "dev-skip-verification-key-for-kg-structured-enrichment",
-                algorithm="HS256",
+            mint_internal_jwt(
+                sub="system:fundamentals-refresh-worker",
+                ttl_seconds=300,
+                private_key_pem=raw_key or "",
+                dev_hs256_secret="dev-skip-verification-key-for-kg-structured-enrichment",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
             )
         )
 

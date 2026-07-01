@@ -32,14 +32,12 @@ silent regression immediately rather than via the price-staleness flag.
 
 from __future__ import annotations
 
-import time
 from decimal import Decimal
 from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
-import jwt as pyjwt
-
 from observability import get_logger  # type: ignore[import-untyped]
+from observability.internal_jwt import mint_internal_jwt  # type: ignore[import-untyped]
 from portfolio.application.use_cases.get_exposure import CurrentPriceClient
 
 if TYPE_CHECKING:
@@ -58,19 +56,13 @@ def _system_jwt_headers() -> dict[str, str]:
     swap this for an RS256 token issued by S9 (out of scope here; F-007
     fix is the auth handshake, not the key-rotation pipeline).
     """
-    now = int(time.time())
-    token = pyjwt.encode(
-        {
-            "iss": "worldview-gateway",
-            "sub": "system:portfolio-current-price-client",
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "tenant_id": "00000000-0000-0000-0000-000000000000",
-            "role": "system",
-            "iat": now,
-            "exp": now + 86400,
-        },
-        "dev-skip-verification-key-for-portfolio-current-price",
-        algorithm="HS256",
+    # DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
+    # always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
+    # ``InternalJWTMiddleware`` once real verification is enabled).
+    token = mint_internal_jwt(
+        sub="system:portfolio-current-price-client",
+        ttl_seconds=86400,
+        dev_hs256_secret="dev-skip-verification-key-for-portfolio-current-price",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
     )
     return {"X-Internal-JWT": token}
 

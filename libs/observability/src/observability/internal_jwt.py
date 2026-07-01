@@ -38,6 +38,123 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# ── Canonical internal-JWT identity constants ─────────────────────────────────
+# These MUST match what ``InternalJWTMiddleware`` validates below
+# (issuer="worldview-gateway", audience="worldview-internal") and what the S9
+# api-gateway ``jwt_utils`` mints.  Centralised here so every service-to-service
+# minter emits a token that is correct-by-construction.
+INTERNAL_JWT_ISSUER = "worldview-gateway"
+INTERNAL_JWT_AUDIENCE = "worldview-internal"
+
+# Nil UUID used as user_id/tenant_id for system-to-system (no real user) calls.
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def build_internal_jwt_claims(
+    *,
+    sub: str,
+    tenant_id: str = _NIL_UUID,
+    role: str = "system",
+    ttl_seconds: int,
+    user_id: str | None = _NIL_UUID,
+    service_name: str | None = None,
+    scope: str | None = None,
+    issuer: str = INTERNAL_JWT_ISSUER,
+    audience: str = INTERNAL_JWT_AUDIENCE,
+    extra_claims: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a correctly-claimed internal-JWT payload (single source of truth).
+
+    DEF-002 GAP FIX: every internal-JWT minter previously omitted the ``aud``
+    claim (and usually ``jti``).  ``InternalJWTMiddleware`` REQUIRES both
+    ``aud`` (validated == ``worldview-internal``) and, when present, uses
+    ``jti`` for replay protection.  Those tokens "worked" only because their
+    target services ran ``skip_verification=True``; the moment real
+    verification is enabled every one of them 401s.  This helper guarantees
+    the ``aud`` + ``jti`` + ``iss`` + timestamps are always present and
+    consistent.
+
+    Repo rules honoured: ``jti`` is a UUIDv7 (``common.ids.new_uuid7``) and
+    ``iat``/``exp`` derive from ``common.time.utc_now`` (UTC-only).
+    """
+    # Local imports keep ``observability`` importable in minimal environments
+    # (pure-logger consumers) that don't need JWT minting.
+    from common.ids import new_uuid7  # type: ignore[import-untyped]
+    from common.time import utc_now  # type: ignore[import-untyped]
+
+    iat = int(utc_now().timestamp())
+    claims: dict[str, Any] = {
+        "iss": issuer,
+        "aud": audience,  # DEF-002: required by InternalJWTMiddleware
+        "sub": sub,
+        "tenant_id": tenant_id,
+        "role": role,
+        "jti": str(new_uuid7()),  # F-012: enables JTI replay protection
+        "iat": iat,
+        "exp": iat + ttl_seconds,
+    }
+    if user_id is not None:
+        claims["user_id"] = user_id
+    if service_name is not None:
+        claims["service_name"] = service_name
+    if scope is not None:
+        claims["scope"] = scope
+    if extra_claims:
+        claims.update(extra_claims)
+    return claims
+
+
+def mint_internal_jwt(
+    *,
+    sub: str,
+    tenant_id: str = _NIL_UUID,
+    role: str = "system",
+    ttl_seconds: int = 300,
+    private_key_pem: str = "",
+    dev_hs256_secret: str = "",
+    user_id: str | None = _NIL_UUID,
+    service_name: str | None = None,
+    scope: str | None = None,
+    kid: str | None = None,
+    issuer: str = INTERNAL_JWT_ISSUER,
+    audience: str = INTERNAL_JWT_AUDIENCE,
+    extra_claims: dict[str, Any] | None = None,
+) -> str:
+    """Mint a correctly-claimed internal JWT (``aud`` + ``jti`` guaranteed).
+
+    Signing mode mirrors every existing service-to-service minter:
+
+    * ``private_key_pem`` non-empty  → RS256, signed with the same key S9 uses
+      so backends verify it against the gateway JWKS.
+    * ``private_key_pem`` empty       → HS256 dev fallback using
+      ``dev_hs256_secret`` (only accepted when the target runs
+      ``skip_verification=True``).
+
+    This does NOT change key management — callers keep their own per-service
+    private key / dev secret.  It only makes the *claims* correct so a future
+    verification-enable rollout is safe.
+    """
+    claims = build_internal_jwt_claims(
+        sub=sub,
+        tenant_id=tenant_id,
+        role=role,
+        ttl_seconds=ttl_seconds,
+        user_id=user_id,
+        service_name=service_name,
+        scope=scope,
+        issuer=issuer,
+        audience=audience,
+        extra_claims=extra_claims,
+    )
+    headers = {"kid": kid} if kid else None
+    if private_key_pem:
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+        private_key = load_pem_private_key(private_key_pem.encode(), password=None)
+        return str(jwt.encode(claims, private_key, algorithm="RS256", headers=headers))  # type: ignore[arg-type]
+    return str(jwt.encode(claims, dev_hs256_secret, algorithm="HS256", headers=headers))
+
+
 # ── Default skip lists (overridable per service via constructor) ──────────────
 DEFAULT_SKIP_PATHS: frozenset[str] = frozenset(
     {

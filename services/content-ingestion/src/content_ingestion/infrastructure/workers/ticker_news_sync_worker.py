@@ -27,16 +27,15 @@ Falls back to HS256 dev token when no key is configured.
 from __future__ import annotations
 
 import asyncio
-import time
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
 import httpx
-import jwt
 
 from content_ingestion.application.use_cases.create_source import CreateSourceUseCase
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
+from observability.internal_jwt import mint_internal_jwt  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -252,40 +251,21 @@ class TickerNewsSymbolSyncWorker:
     def _sign_internal_jwt(self) -> str:
         """Sign a short-lived RS256 internal JWT for the market-data call.
 
+        DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the
+        token always carries ``aud="worldview-internal"`` + a unique ``jti``
+        (required by ``InternalJWTMiddleware`` once real verification is on).
         Returns an HS256 dev token when no RS256 private key is configured
-        (dev / CI environments).  Production deployments MUST inject the same
-        RS256 private key that S9 uses so market-data's ``InternalJWTMiddleware``
-        accepts the request.
-
-        Mirrors ``FundamentalsRefreshWorker._sign_internal_jwt`` exactly.
+        (dev / CI); production deployments MUST inject the same RS256 key S9
+        uses so market-data accepts the request.
         """
-        now = int(time.time())
-        payload = {
-            "iss": "worldview-gateway",
-            "sub": "system:ticker-news-sync-worker",
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "tenant_id": "00000000-0000-0000-0000-000000000000",
-            "role": "system",
-            "iat": now,
-            "exp": now + 300,  # 5-minute TTL — same as FundamentalsRefreshWorker
-        }
-
         raw_key = getattr(self._settings, "internal_jwt_private_key", "")
         if hasattr(raw_key, "get_secret_value"):
             raw_key = raw_key.get_secret_value()
-
-        if raw_key:
-            from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
-            private_key = load_pem_private_key(raw_key.encode(), password=None)
-            return str(jwt.encode(payload, private_key, algorithm="RS256"))  # type: ignore[arg-type]
-
-        # Dev fallback — same shared secret as the KG signer and S2 worker so
-        # behaviour is consistent across all worker → market-data calls in dev.
         return str(
-            jwt.encode(
-                payload,
-                "dev-skip-verification-key-for-kg-structured-enrichment",
-                algorithm="HS256",
+            mint_internal_jwt(
+                sub="system:ticker-news-sync-worker",
+                ttl_seconds=300,  # 5-minute TTL — same as FundamentalsRefreshWorker
+                private_key_pem=raw_key or "",
+                dev_hs256_secret="dev-skip-verification-key-for-kg-structured-enrichment",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
             )
         )

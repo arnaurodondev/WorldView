@@ -974,3 +974,22 @@ async def test_sync_holdings_not_wiped_when_all_positions_unresolved() -> None:
     holdings = await uow.holdings.list_by_portfolio(PORTFOLIO_ID)
     assert len(holdings) == 1, "Existing holding must not be deleted when all positions fail resolution"
     assert holdings[0].instrument_id == existing_holding.instrument_id
+
+
+# ── DEF-002: internal-JWT claims (aud + jti) ──────────────────────────────────
+
+
+def test_system_jwt_headers_include_aud_and_jti() -> None:
+    """DEF-002: X-Internal-JWT MUST carry aud + a unique jti (required by middleware)."""
+    import jwt as pyjwt
+    from portfolio.config import Settings
+    from portfolio.workers.brokerage_sync_worker import _system_jwt_headers
+
+    decoded = pyjwt.decode(
+        _system_jwt_headers(Settings())["X-Internal-JWT"],  # type: ignore[call-arg]
+        options={"verify_signature": False},
+    )
+    assert decoded["aud"] == "worldview-internal"
+    assert decoded["iss"] == "worldview-gateway"
+    assert decoded["sub"] == "system:brokerage-sync"
+    assert decoded["jti"]

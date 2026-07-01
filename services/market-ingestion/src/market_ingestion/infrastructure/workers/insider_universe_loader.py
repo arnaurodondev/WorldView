@@ -48,17 +48,16 @@ R9 honoured (REST not DB); R6/R7 — UUIDv7 + UTC; R10 structlog.
 from __future__ import annotations
 
 import asyncio
-import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import httpx
-import jwt
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
 from market_ingestion.infrastructure.db.session import _build_factories
+from observability.internal_jwt import mint_internal_jwt  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -80,30 +79,21 @@ _SECONDS_PER_DAY = 86400
 
 
 def _sign_internal_jwt(settings: Settings) -> str:
-    """Sign a short-lived internal JWT, mirroring FundamentalsRefreshWorker."""
-    now = int(time.time())
-    payload = {
-        "iss": "worldview-gateway",
-        "sub": "system:insider-universe-loader",
-        "user_id": "00000000-0000-0000-0000-000000000000",
-        "tenant_id": "00000000-0000-0000-0000-000000000000",
-        "role": "system",
-        "iat": now,
-        "exp": now + 300,
-    }
+    """Sign a short-lived internal JWT, mirroring FundamentalsRefreshWorker.
+
+    DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
+    always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
+    ``InternalJWTMiddleware`` once real verification is enabled).
+    """
     raw_key = getattr(settings, "internal_jwt_private_key", "")
     if hasattr(raw_key, "get_secret_value"):
         raw_key = raw_key.get_secret_value()
-    if raw_key:
-        from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
-        private_key = load_pem_private_key(raw_key.encode(), password=None)
-        return str(jwt.encode(payload, private_key, algorithm="RS256"))  # type: ignore[arg-type]
     return str(
-        jwt.encode(
-            payload,
-            "dev-skip-verification-key-for-kg-structured-enrichment",
-            algorithm="HS256",
+        mint_internal_jwt(
+            sub="system:insider-universe-loader",
+            ttl_seconds=300,
+            private_key_pem=raw_key or "",
+            dev_hs256_secret="dev-skip-verification-key-for-kg-structured-enrichment",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
         )
     )
 

@@ -350,9 +350,14 @@ class TestTickerNewsWorkerJWT:
             token,
             "dev-skip-verification-key-for-kg-structured-enrichment",
             algorithms=["HS256"],
+            # DEF-002: token now carries aud — decode MUST pass the matching
+            # audience or PyJWT raises InvalidAudienceError.
+            audience="worldview-internal",
         )
         assert payload["sub"] == "system:ticker-news-sync-worker"
         assert payload["role"] == "system"
+        assert payload["aud"] == "worldview-internal"
+        assert payload["jti"]
 
     def test_fetch_us_instruments_response_envelope_handling(self) -> None:
         """_fetch_us_instruments handles both list and {results: [...]} shapes."""
