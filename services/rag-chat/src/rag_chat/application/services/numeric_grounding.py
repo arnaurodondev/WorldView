@@ -40,7 +40,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -769,6 +769,117 @@ def find_out_of_range_tool_citations(
         if row >= counts[tool]:
             out.add(m.group(0))
     return out
+
+
+# ── BUG-2 mechanism 1 — tool-row → positional citation normalisation ──────────
+#
+# The synthesis prompt (``prompts/chat/synthesis.py``) instructs the model to
+# cite tool provenance as ``[tool_name row N]`` (0-indexed within that tool's
+# result set) — and the live models overwhelmingly emit THIS shape, not the
+# plain ``[N]`` positional marker. But the citation assembler
+# (:class:`OutputProcessor`) only recognises ``[N]``, so the structured
+# provenance tags were silently dropped and the answer shipped with an EMPTY
+# citations array (``citations:[]``). The 2026-06-30 investigation confirmed
+# only answers that happened to use ``[1] [2]`` retained their source links.
+#
+# This helper rewrites each ``[tool_name row N]`` marker to ``[<pos>]`` where
+# ``pos`` is the 1-based index of the corresponding retrieved item within the
+# prompt-enumerated item list. Markers that map to no retrieved item (a tool
+# that returned fewer rows than N, or a never-called tool) are LEFT UNTOUCHED so
+# the downstream out-of-range / phantom strip guards can handle them — this
+# helper only PROMOTES genuine provenance to real citations, it never invents
+# one.
+
+
+def normalize_tool_row_citations(
+    response: str,
+    position_resolver: Callable[[str, int], int | None],
+) -> str:
+    """Rewrite ``[tool_name row N]`` provenance tags to ``[<pos>]`` citation markers.
+
+    ``position_resolver(tool_name_lower, row_index)`` returns the 1-based
+    position of the retrieved item that produced ``row_index`` of ``tool_name``
+    within the prompt-enumerated item list, or ``None`` when the pair maps to no
+    retrieved item (out-of-range / phantom — left verbatim for the strip guards).
+
+    Deterministic and side-effect free so the orchestrator + tests share one
+    definition.
+    """
+
+    def _sub(m: re.Match[str]) -> str:
+        tool = m.group("tool").lower()
+        try:
+            row = int(m.group("row"))
+        except ValueError:  # pragma: no cover — regex guarantees digits
+            return m.group(0)
+        pos = position_resolver(tool, row)
+        if pos is None:
+            return m.group(0)
+        return f"[{pos}]"
+
+    return _TOOL_ROW_CITATION_WITH_INDEX_RE.sub(_sub, response)
+
+
+# ── BUG-2 mechanism 2 — material vs incidental numeric claims ─────────────────
+#
+# The numeric-grounding rewrite used to fire whenever ANY extracted number was
+# not found in a tool value. On a QUALITATIVE answer (events, claims,
+# relationships) the only "unsupported" numbers are incidental prose structure —
+# list ordinals, month-day dates, counts ("3 partnerships"), calendar years —
+# which the validator classifies as YEAR / QUARTER / UNKNOWN. Firing a full
+# rewrite turn for those (observed live at up to 16.5 s) replaced a good answer
+# with ``[row N]``-style text AND dropped the citations array
+# (``reason=numeric_grounding_failed``). The 2026-06-30 investigation measured
+# this on 3 of 4 recent answers.
+#
+# ``FieldKind`` families that represent a MATERIAL financial claim genuinely
+# needing tool grounding (the AMD ``$34.6B`` fabrication class). Everything else
+# (YEAR / QUARTER / PROSE, and small UNKNOWN integers) is incidental.
+_MATERIAL_NUMERIC_KINDS: frozenset[FieldKind] = frozenset(
+    {
+        FieldKind.REVENUE,
+        FieldKind.EPS,
+        FieldKind.MARKET_CAP,
+        FieldKind.PRICE,
+        FieldKind.RATIO,
+        FieldKind.RETURN_PCT,
+        FieldKind.SHARES,
+        FieldKind.HEADCOUNT,
+    }
+)
+# An UNKNOWN-classified number this large is almost certainly a real financial
+# magnitude (revenue/market-cap scale) the classifier simply could not bucket —
+# treat it as material so the grounding guarantee is never weakened by a
+# classification miss. Counts, ordinals and dates are all far below this.
+_MATERIAL_UNKNOWN_MIN = 1000.0
+
+
+def material_unsupported_numbers(result: GroundingResult) -> tuple[UnsupportedNumber, ...]:
+    """Return the subset of ``result.unsupported`` that are MATERIAL claims.
+
+    See :data:`_MATERIAL_NUMERIC_KINDS`. Used to decide whether a
+    numeric-grounding failure warrants a rewrite (material) or is merely
+    incidental prose structure on a qualitative answer.
+    """
+    return tuple(
+        u
+        for u in result.unsupported
+        if u.field_kind in _MATERIAL_NUMERIC_KINDS
+        or (u.field_kind == FieldKind.UNKNOWN and abs(u.value) >= _MATERIAL_UNKNOWN_MIN)
+    )
+
+
+def numeric_grounding_effectively_passed(result: GroundingResult) -> bool:
+    """True when the numeric result has NO material unsupported claim.
+
+    Preserves the guarantee for numeric answers: a genuinely unsupported
+    revenue / EPS / price / market-cap / ratio / return / share / headcount
+    figure (or a large unclassified magnitude) still returns ``False`` (rewrite
+    required). It only returns ``True`` for the qualitative case where every
+    "unsupported" number is a date, count, ordinal or year — so the rewrite is
+    skipped and the streamed answer + its citations survive.
+    """
+    return result.passed or not material_unsupported_numbers(result)
 
 
 def flatten_tool_values_count(tool_results: Iterable[Any]) -> int:

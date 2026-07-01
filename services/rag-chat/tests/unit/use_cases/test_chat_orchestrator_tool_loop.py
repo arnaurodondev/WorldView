@@ -917,6 +917,66 @@ class TestMultiIterationBehavior:
         assert "tool_call" not in event_types
         assert "tool_result" not in event_types
 
+    def test_direct_text_after_tools_routes_to_incremental_synthesis(self) -> None:
+        """BUG-4: a direct-text final answer AFTER tools streams via stream_chat.
+
+        When tools ran and the planning turn returns the answer as direct text,
+        the orchestrator must NOT burst-emit that already-generated string. It
+        routes the final answer through the incremental synthesis ``stream_chat``
+        path (which the F1 adapter fix makes genuinely incremental) so tokens
+        arrive one at a time. We assert stream_chat WAS invoked and multiple
+        distinct token events were emitted over the run.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        tool_block = _make_tool_use_block("get_price_history")
+        direct_answer = _make_llm_tool_response(text="The price is $150.", tool_calls=[])
+
+        call_count = [0]
+
+        async def _chat_with_tools(messages, tools=None, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return _make_llm_tool_response(tool_calls=[tool_block])
+            return direct_answer
+
+        # Synthesis stream yields several chunks so we can prove real streaming.
+        stream_calls = [0]
+
+        async def _stream_chat(messages, **kwargs):
+            stream_calls[0] += 1
+            for chunk in ["Apple ", "traded ", "higher ", "today."]:
+                yield chunk
+
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _chat_with_tools
+        pipeline.llm_chain.stream_chat = _stream_chat
+
+        item = _make_retrieved_item()
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        orch = ChatOrchestratorUseCase(
+            pipeline=pipeline,
+            tool_executor_factory=factory,
+            budget=AgentBudget(max_iterations=8),
+        )
+        events = asyncio.run(_collect_events(orch, _make_chat_request(), MagicMock()))
+        event_types = [e.get("event") for e in events]
+
+        # The synthesis stream WAS engaged (not the direct-text burst).
+        assert stream_calls[0] >= 1, "final answer must route through stream_chat"
+        # Multiple token events → genuinely incremental delivery.
+        token_events = [e for e in events if e.get("event") == "token"]
+        assert len(token_events) >= 2, f"expected incremental tokens, got {len(token_events)}"
+        assert "done" in event_types
+        # The discarded planning prose is NOT what shipped as tokens.
+        streamed = "".join(json.loads(e["data"]).get("text", "") for e in token_events)
+        assert "The price is $150." not in streamed
+
 
 class TestMaxIterationsSurrender:
     def test_max_iterations_reached_still_completes(self) -> None:
