@@ -124,6 +124,29 @@ async def test_handler_returns_one_item_per_market_with_clickable_url() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handler_sets_non_null_entity_name_from_category() -> None:
+    """BUG-1: entity_name MUST be non-null (BP-604/605) so entity-grounding does not refuse.
+
+    The market's category is used as a stable subject label (title-cased).
+    """
+    brief = _FakeS3Brief([_market(category="politics")])
+    items = await _handler(brief)._handle_get_prediction_markets(query="election")
+    cm = items[0].citation_meta
+    assert cm.entity_name is not None, "prediction-market entity_name must not be null (BP-604/605)"
+    assert cm.entity_name == "Politics"
+
+
+@pytest.mark.asyncio
+async def test_handler_entity_name_non_null_when_category_missing() -> None:
+    # The handler defaults a missing category to "uncategorized" upstream, so the
+    # label is "Uncategorized" — the key BP-604/605 invariant is that it is NON-NULL.
+    brief = _FakeS3Brief([_market(category=None)])
+    items = await _handler(brief)._handle_get_prediction_markets(query="mystery")
+    assert items[0].citation_meta.entity_name is not None
+    assert items[0].citation_meta.entity_name == "Uncategorized"
+
+
+@pytest.mark.asyncio
 async def test_handler_null_slug_market_uses_search_fallback_url() -> None:
     brief = _FakeS3Brief([_market(market_slug=None, question="Mystery market")])
     items = await _handler(brief)._handle_get_prediction_markets()

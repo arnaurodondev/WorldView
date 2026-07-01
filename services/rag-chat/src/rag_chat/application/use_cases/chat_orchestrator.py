@@ -1999,6 +1999,15 @@ def _check_entity_grounding(
     for item in retrieved_items:
         # The two fields downstream synthesis cites against.
         cm = getattr(item, "citation_meta", None)
+        # BUG-1 (2026-07-01): prediction-market items are TOPIC-matched to the
+        # query (the market question was ILIKE-matched to the user's topic), NOT
+        # entity-scoped to a canonical ticker. Question-entity resolution routinely
+        # mis-scopes such queries (e.g. "odds for Nikki Haley" → "The US"), so no
+        # entity overlap could ever be found and the guard refused a perfectly good
+        # markets answer. Treat any topic-matched polymarket item as grounding: its
+        # presence means the retrieval already matched the user's topic.
+        if getattr(cm, "source_name", None) == "polymarket":
+            return None
         item_ids: set[str] = set()
         if cm is not None:
             item_ids |= _normalise_entity_identifier(getattr(cm, "entity_name", None))
