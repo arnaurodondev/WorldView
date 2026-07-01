@@ -55,6 +55,14 @@ class EODHDProviderSettings(BaseModel):
     # since-watermark batch; hitting the cap is logged as a WARNING (never a
     # silent truncation) so a genuinely huge backlog is visible, not swallowed.
     news_max_pages: int = Field(default=10, ge=1, le=50)
+    # EODHD credit cost billed per /api/news request. EODHD charges a flat rate
+    # per request regardless of how many articles come back; the news endpoint
+    # bills 5 credits/request (matches market-ingestion's EODHD_CREDIT_COST
+    # table for ``news_sentiment``). Every EODHD request S4 issues increments
+    # the SHARED cross-service Valkey quota counter by this amount so the
+    # account-wide monthly total reflects S4's spend, not just S2's.
+    # Configurable via CONTENT_INGESTION_EODHD__CREDITS_PER_REQUEST.
+    credits_per_request: int = Field(default=5, ge=1, le=100)
 
 
 class FinnhubProviderSettings(BaseModel):
@@ -196,6 +204,13 @@ class Settings(BaseSettings):
 
     # ── Valkey ────────────────────────────────────────────────────────────────
     valkey_url: str = "redis://localhost:6379"
+
+    # ── EODHD shared quota ────────────────────────────────────────────────────
+    # Monthly EODHD credit ceiling for the shared cross-service quota counter.
+    # Must match market-ingestion's ``eodhd_monthly_quota`` (both services share
+    # one EODHD account key) so the 80%/100% thresholds are computed against the
+    # same cap. Configurable via CONTENT_INGESTION_EODHD_MONTHLY_QUOTA.
+    eodhd_monthly_quota: int = 100_000
 
     # ── Backfill ─────────────────────────────────────────────────────────────
     backfill_enabled: bool = False

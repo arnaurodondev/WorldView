@@ -37,8 +37,12 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from observability.logging import get_logger  # type: ignore[import-untyped]
+
 if TYPE_CHECKING:
     from messaging.valkey.client import ValkeyClient
+
+logger = get_logger(__name__)
 
 # 32 days in seconds — covers end-of-month + a small buffer before auto-expiry.
 _MONTHLY_TTL_SECONDS: int = 32 * 86_400
@@ -167,6 +171,54 @@ class EodhdQuotaService:
         if new_total >= self._soft_limit:
             return QuotaCheckResult.SOFT_LIMIT_EXCEEDED
         return QuotaCheckResult.OK
+
+    async def record_usage(
+        self,
+        cost: int,
+        service: str,
+        symbol: str | None = None,
+        month: str | None = None,
+    ) -> QuotaCheckResult | None:
+        """Best-effort variant of :meth:`try_consume` for pure *attribution*.
+
+        This is the entry point for consumers (e.g. S4 content-ingestion) that
+        want their EODHD spend to roll up into the SAME shared monthly/daily
+        counters as S2 market-ingestion, but that must NEVER let a Valkey blip
+        break ingestion.  Unlike :meth:`try_consume`, any exception raised by
+        the underlying Valkey calls is swallowed and logged — the caller gets
+        ``None`` and proceeds with the real API request regardless.
+
+        Why a shared method rather than duplicating the increment in each
+        service: the Valkey key scheme + increment semantics live in exactly
+        one place (:meth:`try_consume`).  Both services call into it so the
+        cross-service monthly total (``eodhd:v1:quota:{month}:credits_used``)
+        stays a single true rollup and cannot silently under-count.
+
+        Args:
+            cost:    EODHD credits this request consumed (news = 5/request).
+            service: Caller identity for attribution (e.g. ``"content-ingestion"``).
+            symbol:  Optional ticker symbol for per-symbol attribution.
+            month:   Month key ``"YYYY-MM"`` (defaults to current UTC month).
+
+        Returns:
+            The :class:`QuotaCheckResult` from the increment (so the caller can
+            raise a loud alert on SOFT/HARD limit crossings), or ``None`` when
+            the counter could not be written (Valkey unavailable).
+        """
+        try:
+            return await self.try_consume(cost=cost, service=service, symbol=symbol, month=month)
+        except Exception as exc:
+            # Best-effort: quota accounting must never break ingestion.  A
+            # WARNING (not ERROR) because the request itself still succeeds —
+            # only the attribution counter is temporarily missed.
+            logger.warning(
+                "eodhd_quota_record_failed",
+                service=service,
+                symbol=symbol,
+                cost=cost,
+                error=str(exc),
+            )
+            return None
 
     async def get_status(self, month: str | None = None) -> QuotaStatus:
         """Return a point-in-time snapshot of monthly quota usage.

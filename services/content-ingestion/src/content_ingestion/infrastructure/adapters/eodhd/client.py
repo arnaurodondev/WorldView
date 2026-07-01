@@ -9,6 +9,10 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from content_ingestion.domain.exceptions import AdapterError
+from content_ingestion.infrastructure.adapters.eodhd_quota import (
+    record_eodhd_auth_or_quota_rejection,
+    record_eodhd_request,
+)
 from content_ingestion.infrastructure.metrics.prometheus import record_fetch_attempt
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -16,6 +20,12 @@ if TYPE_CHECKING:
     import httpx
 
     from content_ingestion.config import EODHDProviderSettings
+    from messaging.eodhd_quota.quota_service import EodhdQuotaService
+
+# EODHD returns these when the account key is dead or the monthly quota is
+# exhausted (401 bad/revoked key, 402/403 quota/plan, 429 rate limit). Seeing
+# any of them is the signal that ingestion is about to silently halt.
+_EODHD_AUTH_QUOTA_STATUSES: frozenset[int] = frozenset({401, 402, 403, 429})
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -34,6 +44,7 @@ class EODHDClient:
         http_client: httpx.AsyncClient,
         api_key: str,
         provider_cfg: EODHDProviderSettings,
+        quota_service: EodhdQuotaService | None = None,
     ) -> None:
         self._http = http_client
         self._api_key = api_key
@@ -42,6 +53,11 @@ class EODHDClient:
         # Store the full provider config so fetch_all_pages() can read
         # max_pages_per_cycle without hardcoding it here (rule: no hardcoded values).
         self._provider_cfg = provider_cfg
+        # Shared cross-service EODHD quota counter. Optional so unit tests that
+        # construct the client without Valkey keep working (accounting no-ops).
+        self._quota_service = quota_service
+        # Credits billed per request (config-driven, default 5 for /api/news).
+        self._credits_per_request = provider_cfg.credits_per_request
 
     async def fetch_news(
         self,
@@ -87,6 +103,13 @@ class EODHDClient:
         try:
             response = await self._http.get(self._base_url, params=params)
 
+            # Auth/quota rejection safeguard: 401/402/403/429 mean the shared
+            # EODHD key is dead or the monthly quota is exhausted. Emit a loud
+            # metric + ERROR log so the next exhaustion is unmissable (this was
+            # the silent-halt failure mode of the June exhaustion).
+            if response.status_code in _EODHD_AUTH_QUOTA_STATUSES:
+                record_eodhd_auth_or_quota_rejection("news", response.status_code, symbol=ticker or None)
+
             if response.status_code == 429:
                 status_label = "rate_limited"
                 msg = "EODHD rate limit exceeded (HTTP 429)"
@@ -103,6 +126,16 @@ class EODHDClient:
             raise
         finally:
             record_fetch_attempt("eodhd", status_label, time.monotonic() - start)
+
+        # Successful (2xx) request billed credits → record into the shared
+        # cross-service quota counter. Best-effort: a Valkey failure here can
+        # never break ingestion (record_eodhd_request swallows + logs).
+        await record_eodhd_request(
+            self._quota_service,
+            endpoint="news",
+            credit_cost=self._credits_per_request,
+            symbol=ticker or None,
+        )
 
         data = response.json()
         if not isinstance(data, list):

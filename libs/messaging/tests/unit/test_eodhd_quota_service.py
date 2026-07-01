@@ -117,3 +117,51 @@ async def test_get_daily_credits_used_reads_counter() -> None:
     vk.store["eodhd:v1:quota:day:2026-06-16:credits_used"] = 4242
 
     assert await svc.get_daily_credits_used(day="2026-06-16") == 4242
+
+
+@pytest.mark.unit
+async def test_record_usage_increments_shared_counters() -> None:
+    """record_usage rolls a caller's spend into the SAME shared counters.
+
+    Regression guard for the S4 blind spot: content-ingestion's EODHD spend must
+    land on ``eodhd:v1:quota:{month}:credits_used`` (the cross-service total), not
+    a divergent key, so the account-wide monthly figure is a true rollup.
+    """
+    vk = _FakeValkey()
+    svc = EodhdQuotaService(valkey=vk, hard_limit=100_000)
+
+    result = await svc.record_usage(cost=5, service="content-ingestion", symbol="AAPL.US", month="2026-06")
+
+    assert result == QuotaCheckResult.OK
+    assert vk.store["eodhd:v1:quota:2026-06:credits_used"] == 5
+    assert vk.store["eodhd:v1:quota:2026-06:content-ingestion:credits_used"] == 5
+    assert vk.store["eodhd:v1:quota:2026-06:symbol:AAPL.US:credits_used"] == 5
+
+
+@pytest.mark.unit
+async def test_record_usage_best_effort_swallows_valkey_failure() -> None:
+    """A Valkey failure must NEVER propagate out of record_usage."""
+
+    class _BrokenValkey(_FakeValkey):
+        async def incr(self, key: str, amount: int = 1) -> int:
+            raise RuntimeError("valkey down")
+
+    svc = EodhdQuotaService(valkey=_BrokenValkey(), hard_limit=100_000)
+
+    # Must not raise — returns None to signal the counter was not written.
+    result = await svc.record_usage(cost=5, service="content-ingestion", month="2026-06")
+
+    assert result is None
+
+
+@pytest.mark.unit
+async def test_record_usage_returns_soft_limit_for_alerting() -> None:
+    """record_usage surfaces the threshold result so callers can alert loudly."""
+    vk = _FakeValkey()
+    svc = EodhdQuotaService(valkey=vk, hard_limit=100, soft_limit_ratio=0.80)
+    vk.store["eodhd:v1:quota:2026-06:credits_used"] = 78
+
+    result = await svc.record_usage(cost=5, service="content-ingestion", month="2026-06")
+
+    # 78 + 5 = 83 ≥ soft (80) but < hard (100).
+    assert result == QuotaCheckResult.SOFT_LIMIT_EXCEEDED

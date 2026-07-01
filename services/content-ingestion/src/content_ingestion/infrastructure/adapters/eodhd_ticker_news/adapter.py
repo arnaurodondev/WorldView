@@ -28,11 +28,16 @@ import common.time  # type: ignore[import-untyped]
 from content_ingestion.domain.entities import FetchResult
 from content_ingestion.domain.exceptions import AdapterError
 from content_ingestion.infrastructure.adapters.base import SourceAdapter, url_hash
+from content_ingestion.infrastructure.adapters.eodhd_quota import (
+    record_eodhd_auth_or_quota_rejection,
+    record_eodhd_request,
+)
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from content_ingestion.config import Settings
     from content_ingestion.domain.entities import Source
+    from messaging.eodhd_quota.quota_service import EodhdQuotaService
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -81,11 +86,16 @@ class EODHDTickerNewsAdapter(SourceAdapter):
         - Empty/missing config fields → skip + WARNING, return ``[]``
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, quota_service: EodhdQuotaService | None = None) -> None:
         # Settings is injected by the scheduler when constructing adapters so
         # the API key is read from the environment at runtime rather than
         # being baked into the adapter at import time.
         self._api_key: str = settings.eodhd_api_key
+        # Shared cross-service EODHD quota counter (blind-spot fix). Optional so
+        # unit tests can construct the adapter without Valkey (accounting no-ops).
+        self._quota_service = quota_service
+        # Credits billed per /api/news request (config-driven, default 5).
+        self._credits_per_request: int = settings.eodhd.credits_per_request
         # QUOTA-OPT (2026-06-16): pull the WHOLE batch since the watermark in
         # one request. EODHD bills per-request (flat 5 + 5/ticker) regardless of
         # how many articles come back, so a single ``limit=1000`` request is the
@@ -303,12 +313,29 @@ class EODHDTickerNewsAdapter(SourceAdapter):
             msg = f"EODHD ticker-news HTTP error for {symbol}.{exchange}: {exc}"
             raise AdapterError(msg) from exc
 
+        # Auth/quota rejection safeguard: 401/402/403/429 mean the shared EODHD
+        # key is dead or the monthly quota is exhausted — the exact silent-halt
+        # condition behind the June exhaustion. Emit a loud metric + ERROR log.
+        if resp.status_code in (401, 402, 403, 429):
+            record_eodhd_auth_or_quota_rejection("ticker_news", resp.status_code, symbol=symbol)
+
         if resp.status_code == 429:
             msg = f"EODHD rate-limited for {symbol}.{exchange} (HTTP 429)"
             raise ProviderRateLimited(msg)
         if resp.status_code != 200:
             msg = f"EODHD ticker-news non-200 for {symbol}.{exchange}: HTTP {resp.status_code}"
             raise AdapterError(msg)
+
+        # Successful (200) request billed credits → record into the shared
+        # cross-service quota counter. Per-ticker news is the DOMINANT EODHD
+        # consumer, so this is the single most important accounting call site.
+        # Best-effort: record_eodhd_request swallows + logs any Valkey failure.
+        await record_eodhd_request(
+            self._quota_service,
+            endpoint="ticker_news",
+            credit_cost=self._credits_per_request,
+            symbol=f"{symbol}.{exchange}",
+        )
 
         try:
             payload: object = resp.json()
