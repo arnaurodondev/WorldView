@@ -355,6 +355,244 @@ class TestChunkANNRepositoryBug3:
         assert "dsm.source_type" in main_sql
 
 
+# ── BUG-3 finish: filter-first exact KNN for selective filters ────────────────
+
+
+class TestChunkANNRepositoryExactWhenFiltered:
+    """Regression tests for the filter-first exact-KNN path (feat/fix-bug3-ann-recall).
+
+    Root cause it fixes: raising ``hnsw.ef_search`` cannot surface a ~2%-density
+    source (sec_edgar) under a HARD ``source_type`` post-filter — the HNSW
+    candidate set is dominated by the 98%-news corpus, so the post-filter drops
+    the rare bucket to ~0. When a selective filter is present we FILTER FIRST and
+    run an EXACT ``ORDER BY embedding <=> query`` over the small filtered subset
+    via a ``MATERIALIZED`` CTE (no HNSW dependence), guaranteeing the true nearest
+    filtered rows.
+    """
+
+    @staticmethod
+    def _make_chunk_row(source_type: str = "sec_edgar", score: float = 0.42) -> MagicMock:
+        row = MagicMock()
+        row.chunk_id = uuid.uuid4()
+        row.doc_id = uuid.uuid4()
+        row.section_id = uuid.uuid4()
+        row.heading_path = "Item 1A. Risk Factors"
+        row.chunk_text_key = "chunks/abc.txt"
+        row.document_title = "10-K FY2025"
+        row.section_type = "body"
+        row.source_type = source_type
+        row.score = score
+        return row
+
+    def _make_exact_session(self, filtered_count: int, rows: list[MagicMock]) -> AsyncMock:
+        """Session whose execute() sequence matches the exact path: [COUNT, exact_query]."""
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = filtered_count
+        rows_result = MagicMock()
+        rows_result.all.return_value = rows
+        session.execute = AsyncMock(side_effect=[count_result, rows_result])
+        return session
+
+    @pytest.mark.asyncio
+    async def test_selective_source_filter_uses_exact_materialized_cte(self) -> None:
+        """source_types present → filter-first exact CTE, NOT the HNSW post-filter."""
+        row = self._make_chunk_row()
+        session = self._make_exact_session(filtered_count=1433, rows=[row])
+        repo = ChunkANNRepository(session, ef_search=200)
+
+        results, total = await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="chunk",
+            top_k=5,
+            source_types=["sec_edgar"],
+            tenant_id=None,
+        )
+
+        # Exactly two statements: filtered COUNT, then the exact CTE query.
+        assert session.execute.call_count == 2
+        exact_sql = str(session.execute.call_args_list[1][0][0])
+        # The exact path fences the filtered subset with a MATERIALIZED CTE so the
+        # outer ORDER BY distance cannot use the HNSW index.
+        assert "MATERIALIZED" in exact_sql
+        assert "1 - distance" in exact_sql
+        # It must NOT raise hnsw.ef_search — the exact path does not use HNSW.
+        assert not any("hnsw.ef_search" in str(c[0][0]) for c in session.execute.call_args_list)
+        # The source filter must be present in the filtered subset.
+        assert "dsm.source_type = ANY(:source_types)" in exact_sql
+        # It returns the filtered source rows, ordered by distance; total = filtered count.
+        assert len(results) == 1
+        assert results[0]["source_type"] == "sec_edgar"
+        assert total == 1433
+
+    @pytest.mark.asyncio
+    async def test_exact_path_preserves_public_only_tenant_predicate(self) -> None:
+        """Security invariant: exact path with tenant_id=None stays public-only."""
+        session = self._make_exact_session(filtered_count=10, rows=[self._make_chunk_row()])
+        repo = ChunkANNRepository(session)
+
+        await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="chunk",
+            top_k=5,
+            source_types=["sec_edgar"],
+            tenant_id=None,
+        )
+
+        exact_sql = str(session.execute.call_args_list[1][0][0])
+        assert "c.tenant_id IS NULL" in exact_sql
+        assert "c.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid" in exact_sql
+        # No private-tenant OR leg when unauthenticated.
+        assert "CAST(:tenant_id_str AS UUID)" not in exact_sql
+
+    @pytest.mark.asyncio
+    async def test_exact_path_authenticated_tenant_adds_or_leg(self) -> None:
+        """Authenticated caller: exact path includes public + own-tenant rows."""
+        session = self._make_exact_session(filtered_count=10, rows=[self._make_chunk_row()])
+        repo = ChunkANNRepository(session)
+
+        await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="chunk",
+            top_k=5,
+            source_types=["sec_edgar"],
+            tenant_id=str(uuid.uuid4()),
+        )
+
+        exact_sql = str(session.execute.call_args_list[1][0][0])
+        assert "c.tenant_id IS NULL" in exact_sql
+        assert "CAST(:tenant_id_str AS UUID)" in exact_sql
+
+    @pytest.mark.asyncio
+    async def test_empty_filtered_set_short_circuits_without_query(self) -> None:
+        """filtered COUNT=0 → return early; no exact query, no HNSW fallback."""
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        session.execute = AsyncMock(side_effect=[count_result])
+        repo = ChunkANNRepository(session)
+
+        results, total = await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="chunk",
+            top_k=5,
+            source_types=["nonexistent_source"],
+            tenant_id=None,
+        )
+
+        assert results == []
+        assert total == 0
+        assert session.execute.call_count == 1  # only the COUNT
+
+    @pytest.mark.asyncio
+    async def test_non_selective_filter_falls_back_to_hnsw(self) -> None:
+        """filtered count > exact_max_rows → HNSW ANN path (set_config issued)."""
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 5_000  # exceeds the tiny bound below
+        ef_result = MagicMock()
+        rows_result = MagicMock()
+        rows_result.all.return_value = []
+        total_result = MagicMock()
+        total_result.scalar_one.return_value = 66_800
+        # Exact path: [COUNT] → over bound → HNSW path: [set_config, main, COUNT].
+        session.execute = AsyncMock(side_effect=[count_result, ef_result, rows_result, total_result])
+        repo = ChunkANNRepository(session, ef_search=200, exact_max_rows=1000)
+
+        await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="chunk",
+            top_k=5,
+            source_types=["eodhd_news"],
+            tenant_id=None,
+        )
+
+        all_sql = [str(c[0][0]) for c in session.execute.call_args_list]
+        # The HNSW fallback fired: an ef_search set_config is present.
+        assert any("hnsw.ef_search" in s for s in all_sql)
+        # And no MATERIALIZED exact query ran.
+        assert not any("MATERIALIZED" in s for s in all_sql)
+
+    @pytest.mark.asyncio
+    async def test_flag_disabled_keeps_hnsw_even_when_filtered(self) -> None:
+        """exact_when_filtered=False → HNSW path even with a selective filter."""
+        session = AsyncMock()
+        ef_result = MagicMock()
+        rows_result = MagicMock()
+        rows_result.all.return_value = []
+        total_result = MagicMock()
+        total_result.scalar_one.return_value = 66_800
+        session.execute = AsyncMock(side_effect=[ef_result, rows_result, total_result])
+        repo = ChunkANNRepository(session, ef_search=200, exact_when_filtered=False)
+
+        await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="chunk",
+            top_k=5,
+            source_types=["sec_edgar"],
+            tenant_id=None,
+        )
+
+        all_sql = [str(c[0][0]) for c in session.execute.call_args_list]
+        assert any("hnsw.ef_search" in s for s in all_sql)
+        assert not any("MATERIALIZED" in s for s in all_sql)
+
+    @pytest.mark.asyncio
+    async def test_unfiltered_query_keeps_hnsw_fast_path(self) -> None:
+        """No filter → unchanged HNSW ANN fast path (98% case), no exact CTE."""
+        session = AsyncMock()
+        ef_result = MagicMock()
+        rows_result = MagicMock()
+        rows_result.all.return_value = []
+        total_result = MagicMock()
+        total_result.scalar_one.return_value = 66_800
+        session.execute = AsyncMock(side_effect=[ef_result, rows_result, total_result])
+        repo = ChunkANNRepository(session, ef_search=200)
+
+        await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="chunk",
+            top_k=5,
+            source_types=None,
+            tenant_id=None,
+        )
+
+        all_sql = [str(c[0][0]) for c in session.execute.call_args_list]
+        assert any("hnsw.ef_search" in s for s in all_sql)
+        assert not any("MATERIALIZED" in s for s in all_sql)
+
+    @pytest.mark.asyncio
+    async def test_section_selective_filter_uses_exact_path(self) -> None:
+        """Section ANN also filter-first exact-scans a selective source filter."""
+        section_row = MagicMock()
+        section_row.chunk_id = uuid.uuid4()
+        section_row.doc_id = uuid.uuid4()
+        section_row.section_id = section_row.chunk_id
+        section_row.heading_path = "Risk Factors"
+        section_row.section_type = "body"
+        section_row.document_title = "10-K"
+        section_row.score = 0.5
+        session = self._make_exact_session(filtered_count=200, rows=[section_row])
+        repo = ChunkANNRepository(session)
+
+        results, total = await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="section",
+            top_k=5,
+            source_types=["sec_edgar"],
+            tenant_id=None,
+        )
+
+        exact_sql = str(session.execute.call_args_list[1][0][0])
+        assert "MATERIALIZED" in exact_sql
+        assert "section_embeddings" in exact_sql
+        assert "s.tenant_id IS NULL" in exact_sql
+        assert not any("hnsw.ef_search" in str(c[0][0]) for c in session.execute.call_args_list)
+        assert len(results) == 1
+        assert results[0]["granularity"] == "section"
+        assert total == 200
+
+
 # ── T-C-1-05: API schema accepts tenant_id ────────────────────────────────────
 
 

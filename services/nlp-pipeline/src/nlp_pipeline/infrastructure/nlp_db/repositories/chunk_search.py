@@ -91,11 +91,29 @@ def _build_entity_mention_filter(
 class ChunkANNRepository(ChunkSearchPort):
     """Run ANN searches and fetch entity mention annotations from nlp_db."""
 
-    def __init__(self, session: AsyncSession, ef_search: int = 200) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        ef_search: int = 200,
+        *,
+        exact_when_filtered: bool = True,
+        exact_max_rows: int = 100_000,
+    ) -> None:
         self._session = session
         # BUG-3: pgvector post-filters the HNSW candidate set, so the default
         # ef_search=40 starves any selective WHERE filter. Raise it per ANN query.
+        # This is the UNFILTERED fast path; it is NOT enough on its own for a rare
+        # source under a hard post-filter (see _exact_when_filtered below).
         self._ef_search = ef_search
+        # BUG-3 finish: when a selective filter (source_types / entity_ids /
+        # entity_types) is present, filter FIRST and run an EXACT KNN over the
+        # small filtered subset instead of HNSW-then-post-filter. This GUARANTEES
+        # the true nearest filtered chunks are returned even for a ~2%-density
+        # source (sec_edgar) that ef_search=200 could never surface.
+        self._exact_when_filtered = exact_when_filtered
+        # Safety bound: if the filtered set is larger than this, the filter is not
+        # selective, so HNSW recall is fine and cheaper — fall back to the ANN path.
+        self._exact_max_rows = exact_max_rows
 
     async def _apply_ef_search(self) -> None:
         """Raise ``hnsw.ef_search`` for the current transaction (BUG-3).
@@ -214,6 +232,32 @@ class ChunkANNRepository(ChunkSearchPort):
 
         meta_join = "LEFT JOIN document_source_metadata dsm ON dsm.doc_id = c.doc_id"
 
+        # Shared FROM…WHERE leg reused by the exact-KNN CTE, the HNSW ANN query
+        # and the filtered COUNT so all three see IDENTICAL filter semantics
+        # (source_type / entity / date / tenant). Ends with the WHERE clause so
+        # callers can append additional AND-predicates.
+        from_where_sql = f"""
+            FROM chunk_embeddings ce
+            JOIN chunks c ON c.chunk_id = ce.chunk_id
+            JOIN sections s ON s.section_id = c.section_id
+            {meta_join}
+            WHERE {where_sql}
+        """
+
+        # ── BUG-3 finish: filter-first exact KNN for a SELECTIVE filter ────────
+        # Raising ef_search cannot surface a ~2%-density source under a hard
+        # post-filter; the HNSW top-ef_search is dominated by news. When a
+        # source_type / entity filter is present we filter FIRST and exact-sort
+        # the small filtered subset — guaranteeing the true nearest rows.
+        selective_filter = bool(source_types or entity_ids or entity_types)
+        if self._exact_when_filtered and selective_filter:
+            exact = await self._exact_chunk_knn(from_where_sql, params)
+            if exact is not None:
+                return exact
+            # exact is None → filtered set exceeds the max-rows bound (filter is
+            # not selective), so fall through to the cheaper HNSW ANN path below.
+
+        # ── HNSW ANN fast path (unfiltered, or non-selective filter fallback) ─
         query = text(
             f"""
             SELECT
@@ -226,11 +270,7 @@ class ChunkANNRepository(ChunkSearchPort):
                 s.section_type,
                 dsm.source_type,
                 1 - (ce.embedding <=> cast(:vec AS vector)) AS score
-            FROM chunk_embeddings ce
-            JOIN chunks c ON c.chunk_id = ce.chunk_id
-            JOIN sections s ON s.section_id = c.section_id
-            {meta_join}
-            WHERE {where_sql}
+            {from_where_sql}
               AND 1 - (ce.embedding <=> cast(:vec AS vector)) >= :min_score
             ORDER BY ce.embedding <=> cast(:vec AS vector)
             LIMIT :top_k
@@ -243,25 +283,7 @@ class ChunkANNRepository(ChunkSearchPort):
         result = await self._session.execute(query)
         rows = result.all()
 
-        chunk_results = [
-            {
-                "chunk_id": row.chunk_id,
-                "doc_id": row.doc_id,
-                "section_id": row.section_id,
-                "granularity": "chunk",
-                "text": row.heading_path or "",
-                "score": float(row.score),
-                "section_type": row.section_type,
-                "heading_path": row.heading_path,
-                "chunk_text_key": row.chunk_text_key,
-                # PLAN-0086 Wave C-1: expose document_title for RAG citation assembly.
-                "document_title": row.document_title,
-                # BUG-3 secondary smell: the chunk path never selected source_type,
-                # so every ANN chunk row reported source_type=null. Surface it now.
-                "source_type": row.source_type,
-            }
-            for row in rows
-        ]
+        chunk_results = [self._chunk_row_to_dict(row) for row in rows]
 
         # Approximate total: count of ready chunk embeddings (cheap index scan)
         count_result = await self._session.execute(
@@ -270,6 +292,92 @@ class ChunkANNRepository(ChunkSearchPort):
         total = int(count_result.scalar_one())
 
         return chunk_results, total
+
+    @staticmethod
+    def _chunk_row_to_dict(row: Any) -> dict[str, Any]:
+        """Map a chunk result row to the ANN result dict (shared by both paths).
+
+        The exact-KNN CTE and the HNSW query select the SAME columns, so both
+        produce identical result shapes for downstream citation assembly.
+        """
+        return {
+            "chunk_id": row.chunk_id,
+            "doc_id": row.doc_id,
+            "section_id": row.section_id,
+            "granularity": "chunk",
+            "text": row.heading_path or "",
+            "score": float(row.score),
+            "section_type": row.section_type,
+            "heading_path": row.heading_path,
+            "chunk_text_key": row.chunk_text_key,
+            # PLAN-0086 Wave C-1: expose document_title for RAG citation assembly.
+            "document_title": row.document_title,
+            # BUG-3 secondary smell: the chunk path never selected source_type,
+            # so every ANN chunk row reported source_type=null. Surface it now.
+            "source_type": row.source_type,
+        }
+
+    async def _exact_chunk_knn(
+        self,
+        from_where_sql: str,
+        params: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        """Filter-first EXACT KNN over a selective filtered subset (BUG-3).
+
+        Returns ``(rows, filtered_count)`` when the filtered candidate set is
+        within the ``exact_max_rows`` bound, else ``None`` to signal the caller
+        to fall back to the HNSW ANN path.
+
+        A ``MATERIALIZED`` CTE fences the filtered subset so the outer
+        ``ORDER BY distance`` operates on the materialized rows and CANNOT use
+        the HNSW index — Postgres exact-sorts the (small) filtered set, which
+        guarantees the true nearest chunks for a rare source such as sec_edgar.
+        """
+        # Cheap filtered COUNT: enforces the selectivity bound and doubles as the
+        # accurate total_searched (the exact scan touches exactly these rows).
+        # Dict-form execute tolerates the unused vec/top_k/min_score params.
+        count_result = await self._session.execute(
+            text("SELECT COUNT(*) " + from_where_sql),
+            params,
+        )
+        filtered_count = int(count_result.scalar_one())
+        if filtered_count == 0:
+            return [], 0
+        if filtered_count > self._exact_max_rows:
+            return None
+
+        exact_sql = f"""
+            WITH filtered AS MATERIALIZED (
+                SELECT
+                    c.chunk_id,
+                    c.doc_id,
+                    c.section_id,
+                    c.heading_path,
+                    c.chunk_text_key,
+                    c.document_title,
+                    s.section_type,
+                    dsm.source_type,
+                    ce.embedding <=> cast(:vec AS vector) AS distance
+                {from_where_sql}
+            )
+            SELECT
+                chunk_id,
+                doc_id,
+                section_id,
+                heading_path,
+                chunk_text_key,
+                document_title,
+                section_type,
+                source_type,
+                1 - distance AS score
+            FROM filtered
+            WHERE 1 - distance >= :min_score
+            ORDER BY distance
+            LIMIT :top_k
+        """
+        result = await self._session.execute(text(exact_sql), params)
+        rows = result.all()
+        return [self._chunk_row_to_dict(row) for row in rows], filtered_count
 
     async def _search_sections(
         self,
@@ -301,7 +409,25 @@ class ChunkANNRepository(ChunkSearchPort):
         # authenticated callers additionally see their own tenant.
         where_clauses.append(_tenant_predicate(params, "s.tenant_id", tenant_id))
 
-        where_filter = ("AND " + " AND ".join(where_clauses)) if where_clauses else ""
+        # Shared FROM…WHERE leg (always non-empty: the tenant predicate is
+        # unconditional). Reused by the exact-KNN CTE and the HNSW ANN query.
+        from_where_sql = f"""
+            FROM section_embeddings se
+            JOIN sections s ON s.section_id = se.section_id
+            LEFT JOIN document_source_metadata dsm ON dsm.doc_id = s.doc_id
+            WHERE {" AND ".join(where_clauses)}
+        """
+
+        # ── BUG-3 finish: filter-first exact KNN for a SELECTIVE source filter ─
+        # Sections carry only source_type / date / tenant filters (no entity
+        # filter). A source_types filter on a rare bucket starves HNSW the same
+        # way the chunk path did, so mirror the exact-first strategy here.
+        selective_filter = bool(source_types)
+        if self._exact_when_filtered and selective_filter:
+            exact = await self._exact_section_knn(from_where_sql, params)
+            if exact is not None:
+                return exact
+            # exact is None → filtered set exceeds the bound; fall through to HNSW.
 
         query = text(
             f"""
@@ -313,11 +439,8 @@ class ChunkANNRepository(ChunkSearchPort):
                 s.section_type,
                 dsm.title          AS document_title,
                 1 - (se.embedding <=> cast(:vec AS vector)) AS score
-            FROM section_embeddings se
-            JOIN sections s ON s.section_id = se.section_id
-            LEFT JOIN document_source_metadata dsm ON dsm.doc_id = s.doc_id
-            WHERE 1 - (se.embedding <=> cast(:vec AS vector)) >= :min_score
-              {where_filter}
+            {from_where_sql}
+              AND 1 - (se.embedding <=> cast(:vec AS vector)) >= :min_score
             ORDER BY se.embedding <=> cast(:vec AS vector)
             LIMIT :top_k
             """,
@@ -328,20 +451,7 @@ class ChunkANNRepository(ChunkSearchPort):
         result = await self._session.execute(query)
         rows = result.all()
 
-        section_results = [
-            {
-                "chunk_id": row.chunk_id,
-                "doc_id": row.doc_id,
-                "section_id": row.section_id,
-                "granularity": "section",
-                "text": row.heading_path or "",
-                "score": float(row.score),
-                "section_type": row.section_type,
-                "heading_path": row.heading_path,
-                "document_title": row.document_title,
-            }
-            for row in rows
-        ]
+        section_results = [self._section_row_to_dict(row) for row in rows]
 
         # Count query also scoped to the same tenant context so the total
         # does not leak the count of other tenants' private sections (MED-3).
@@ -357,6 +467,72 @@ class ChunkANNRepository(ChunkSearchPort):
         total = int(count_result.scalar_one())
 
         return section_results, total
+
+    @staticmethod
+    def _section_row_to_dict(row: Any) -> dict[str, Any]:
+        """Map a section result row to the ANN result dict (shared by both paths)."""
+        return {
+            "chunk_id": row.chunk_id,
+            "doc_id": row.doc_id,
+            "section_id": row.section_id,
+            "granularity": "section",
+            "text": row.heading_path or "",
+            "score": float(row.score),
+            "section_type": row.section_type,
+            "heading_path": row.heading_path,
+            "document_title": row.document_title,
+        }
+
+    async def _exact_section_knn(
+        self,
+        from_where_sql: str,
+        params: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        """Filter-first EXACT KNN over a selective filtered section subset (BUG-3).
+
+        Returns ``(rows, filtered_count)`` when within the ``exact_max_rows``
+        bound, else ``None`` to fall back to the HNSW ANN path. The
+        ``MATERIALIZED`` CTE fences the filtered subset so the outer
+        ``ORDER BY distance`` cannot use the HNSW index.
+        """
+        count_result = await self._session.execute(
+            text("SELECT COUNT(*) " + from_where_sql),
+            params,
+        )
+        filtered_count = int(count_result.scalar_one())
+        if filtered_count == 0:
+            return [], 0
+        if filtered_count > self._exact_max_rows:
+            return None
+
+        exact_sql = f"""
+            WITH filtered AS MATERIALIZED (
+                SELECT
+                    se.section_id      AS chunk_id,
+                    s.doc_id,
+                    se.section_id,
+                    s.title            AS heading_path,
+                    s.section_type,
+                    dsm.title          AS document_title,
+                    se.embedding <=> cast(:vec AS vector) AS distance
+                {from_where_sql}
+            )
+            SELECT
+                chunk_id,
+                doc_id,
+                section_id,
+                heading_path,
+                section_type,
+                document_title,
+                1 - distance AS score
+            FROM filtered
+            WHERE 1 - distance >= :min_score
+            ORDER BY distance
+            LIMIT :top_k
+        """
+        result = await self._session.execute(text(exact_sql), params)
+        rows = result.all()
+        return [self._section_row_to_dict(row) for row in rows], filtered_count
 
     async def lexical_search(
         self,

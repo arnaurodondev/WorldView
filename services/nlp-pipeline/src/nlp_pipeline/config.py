@@ -58,6 +58,26 @@ class Settings(BaseSettings):
     # ~66k-embedding corpus; raise for rarer buckets, lower if latency regresses.
     chunk_ann_ef_search: int = 200
 
+    # ── Filter-first exact KNN (BUG-3 finish / feat/fix-bug3-ann-recall) ───────
+    # Raising ef_search alone CANNOT surface a rare source under a HARD post-filter:
+    # the HNSW ANN returns the top-ef_search nearest candidates for the *text*
+    # query (dominated by the ~98%-news corpus), then the source_type/entity
+    # post-filter drops a 2%-density bucket (e.g. sec_edgar = ~1.4k of ~66.8k) to
+    # ~0. Fix: when a SELECTIVE filter (source_types / entity_ids / entity_types)
+    # is present, filter FIRST (tenant + source_type + entity + date) and run an
+    # EXACT ``ORDER BY embedding <=> query`` over just the filtered subset via a
+    # MATERIALIZED CTE fence — no HNSW dependence, so the true nearest filtered
+    # chunks are GUARANTEED. Exact-sorting a few thousand rows is sub-millisecond.
+    # The UNFILTERED path (the 98% case) keeps the fast HNSW ANN unchanged.
+    chunk_ann_exact_when_filtered: bool = True
+
+    # Safety bound for the filter-first exact path: if the filtered candidate set
+    # exceeds this many rows the filter is NOT selective (HNSW recall is already
+    # fine and cheaper), so we fall back to the HNSW ANN path. Sized above the
+    # current corpus (~66.8k) so all present filters take the exact path; lower it
+    # only if a future, much larger corpus makes exact scans of big buckets slow.
+    chunk_ann_exact_max_rows: int = 100_000
+
     # ── FTS planner override (HIGH-1 / feat/fix-s6-search-quality) ────────────
     # The document-search FTS query (document_search.py) has a broad ``tsv_english
     # @@ tsquery`` predicate. For common terms the planner MIS-COSTS a Seq Scan
