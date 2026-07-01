@@ -252,8 +252,19 @@ def get_chunk_search_use_case(
     # BUG-3: raise the HNSW candidate pool so selective post-filters (source_type,
     # tenant, entity, date) keep real rows instead of degenerating to ~0.
     ef_search = int(getattr(settings, "chunk_ann_ef_search", 200)) if settings is not None else 200
+    # BUG-3 finish: filter-first EXACT KNN when a selective filter is present —
+    # ef_search alone cannot surface a ~2%-density source under a hard post-filter.
+    exact_when_filtered = (
+        bool(getattr(settings, "chunk_ann_exact_when_filtered", True)) if settings is not None else True
+    )
+    exact_max_rows = int(getattr(settings, "chunk_ann_exact_max_rows", 100_000)) if settings is not None else 100_000
     return EnhancedChunkSearchUseCase(
-        chunk_ann_repo=ChunkANNRepository(nlp_session, ef_search=ef_search),
+        chunk_ann_repo=ChunkANNRepository(
+            nlp_session,
+            ef_search=ef_search,
+            exact_when_filtered=exact_when_filtered,
+            exact_max_rows=exact_max_rows,
+        ),
         source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
         canonical_entity_repo=CanonicalEntityRepository(intel_session),
         valkey=raw_valkey,
