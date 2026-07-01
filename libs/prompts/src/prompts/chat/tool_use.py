@@ -99,10 +99,20 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          search_events / traverse_graph) and demoting search_documents to
     #          a fallback. Fixes news/competitor/event routing misses that
     #          looped empty search_documents and refused.
-    version="1.10",
+    #   1.11 — 2026-07-01 prediction-market citation-refusal: CITATIONS section
+    #          gains a REAL-TOOL-NAME-ONLY rule (every [<name> row N] tag must
+    #          name an actual tool; non-tool labels like [commentary row N] are
+    #          forbidden; interpretive commentary is unsourced prose with no
+    #          bracket tag) + the COMPARISON commentary line is clarified to
+    #          carry NO row-citation. Root cause: the live model tagged its own
+    #          prose [commentary row N] next to material odds/numbers, tripping
+    #          the (UNCHANGED, still-strict) phantom-citation gate.
+    version="1.11",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.10 adds TOOL ROUTING table per FINAL-67 C4; "
+        "(v1.11 adds REAL-TOOL-NAME-ONLY citation-label rule per prediction-market "
+        "citation-refusal root-cause; "
+        "v1.10 adds TOOL ROUTING table per FINAL-67 C4; "
         "v1.9 adds NO-NARRATION clause per PLAN-0107 follow-up Fix #3; "
         "v1.8 adds PARTIAL DATA RULE per PLAN-0104 W47; v1.7 adds MISSING-METRIC "
         "RULE per PLAN-0104 W39; v1.6 adds 4-section ANSWER STRUCTURE + "
@@ -209,7 +219,19 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "cite them inline using [N1], [N2], … markers — one marker per claim that is "
         "supported by a retrieved item, in the order the items appear in the tool output. "
         "Do NOT invent citation numbers. If no documents were retrieved, do not emit any "
-        "citation markers.\n\n"
+        "citation markers.\n"
+        # 2026-07-01 prediction-market citation-refusal root-cause: the model
+        # tagged its own interpretive prose with a NON-TOOL bracket label
+        # (``[commentary row N]``) next to material numbers (odds %), which the
+        # phantom-citation gate correctly reads as a fabricated tool citation.
+        # Every ``[... row N]`` provenance tag MUST name a real tool.
+        "Any bracketed row-citation of the form [<name> row N] MUST use the EXACT "
+        "name of a tool that actually ran and returned that row (e.g. "
+        "[get_prediction_markets row 0], [query_fundamentals row 2]). NEVER invent a "
+        "non-tool label such as [commentary row N], [analysis row N], or [note row N] — "
+        "a bracketed row-tag whose name is not a real tool is treated as a fabricated "
+        "citation. Interpretive commentary is unsourced prose: write it WITHOUT any "
+        "bracketed row-citation.\n\n"
         # FIX-LIVE-Q (2026-05-25): screener payload has no `ai_focus` flag,
         # so the LLM previously refused to label any returned row as
         # "AI-relevant semiconductor". Provide a tight allowlist the LLM
@@ -331,7 +353,10 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "/ entity. Every numeric cell must be sourced from a tool row — do "
         "NOT interpolate or estimate missing cells, write 'N/A' instead. "
         "Follow the table with 2-4 sentences of interpretive commentary "
-        "covering trends, divergences, and notable inflections. Total answer "
+        "covering trends, divergences, and notable inflections. This commentary "
+        "is UNSOURCED synthesis prose — write it as plain sentences with NO "
+        "bracketed row-citation; only the table's numeric cells carry "
+        "[<tool_name> row N] tags. Total answer "
         "length: 150-300 words. A single-sentence summary is NOT acceptable "
         "for multi-period multi-entity comparisons; the table itself is the "
         "answer, the commentary contextualises it."

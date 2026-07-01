@@ -921,6 +921,47 @@ class TestPhantomToolCitations:
         answer = "Revenue was $24.7B [query_fundamentals row 0]."
         assert find_phantom_tool_citations(answer, []) == {"query_fundamentals"}
 
+    # ── Prediction-market citation-refusal (2026-07-01) ───────────────────────
+    # Root cause: the synthesis model tagged its own interpretive prose with a
+    # NON-TOOL bracket label ([commentary row N]) next to the odds numbers. On a
+    # numeric odds answer that phantom tag tripped the (UNCHANGED) phantom gate →
+    # numeric_grounding_phantom_citation_refused, citations=[], refusal. The
+    # synthesis/tool_use prompts (libs/prompts v1.7 / v1.11) now forbid non-tool
+    # labels and instruct the model to cite odds to [get_prediction_markets row N].
+    # These two tests pin BOTH sides: the old bad label IS phantom (why we refused),
+    # and the new correct label is NOT phantom (why the fix works) — with the guard
+    # left completely untouched.
+
+    def test_prediction_commentary_label_is_phantom_the_bug(self) -> None:
+        """The offending [commentary row N] label on a numeric odds answer is phantom.
+
+        This is the exact live failure: get_prediction_markets ran, but the model
+        labelled the odds prose [commentary row 1] — a non-tool word — so the gate
+        (correctly, per its contract) flags a phantom tool citation and refuses.
+        """
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = "The market gives Yes 62% and No 38% [commentary row 1] on the " "2028 nomination, per Polymarket."
+        called = ["get_prediction_markets"]
+        assert find_phantom_tool_citations(answer, called) == {"commentary"}
+
+    def test_prediction_answer_with_real_tool_label_not_refused(self) -> None:
+        """A prediction odds answer citing the REAL tool label is NOT phantom.
+
+        With the v1.7/v1.11 prompt fix the model cites each odd to
+        [get_prediction_markets row N] (the tool that actually ran), so the phantom
+        gate finds nothing to refuse — the answer + its citations survive. The gate
+        itself is unchanged; only the model's label changed.
+        """
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = (
+            "Yes is priced at 62% [get_prediction_markets row 0] and No at 38% "
+            "[get_prediction_markets row 1] on the 2028 nomination market."
+        )
+        called = ["get_prediction_markets"]
+        assert find_phantom_tool_citations(answer, called) == set()
+
 
 class TestOutOfRangeToolCitations:
     """2026-06-26 #3: [tool row N] whose N is past the tool's returned row count.

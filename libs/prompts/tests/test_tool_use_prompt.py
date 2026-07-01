@@ -271,6 +271,26 @@ class TestToolUsePromptContract:
         # search_documents must be explicitly demoted to a fallback.
         assert "FALLBACK" in prompt
 
+    def test_citations_section_requires_real_tool_name_labels(self) -> None:
+        """v1.11 (2026-07-01) — prediction-market citation-refusal root-cause.
+
+        The live model tagged its own interpretive prose with a NON-TOOL bracket
+        label ([commentary row N]) next to material odds numbers, tripping the
+        strict phantom-citation gate. The CITATIONS section must now forbid
+        non-tool labels and require every [<name> row N] tag to name a real tool,
+        and the COMPARISON commentary must carry no row-citation.
+        """
+        prompt = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-06-01")
+        # Real-tool-name-only rule + the exact non-tool label that caused the bug.
+        assert "MUST use the EXACT " in prompt
+        assert "[commentary row N]" in prompt
+        assert "fabricated" in prompt
+        assert "Interpretive commentary is unsourced prose" in prompt
+        # COMPARISON commentary is clarified to carry no bracketed row-citation.
+        comparison = get_tool_use_system_prompt(intent="COMPARISON", today_iso="2026-06-01")
+        assert "UNSOURCED synthesis prose" in comparison
+        assert "NO " in comparison and "bracketed row-citation" in comparison
+
     def test_financial_data_addendum_contains_partial_data_rule(self) -> None:
         """PLAN-0104 W47 regression — PARTIAL DATA RULE.
 

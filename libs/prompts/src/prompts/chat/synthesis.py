@@ -33,6 +33,24 @@ sees ONLY this response — there is no follow-up turn, no second chance.
 - Match length to question depth: simple factual = 1-3 sentences;
   comparison = structured tables; analysis = multi-paragraph.
 
+## CITATION LABELS — REAL TOOL NAMES ONLY
+Every bracketed row-citation MUST be [<tool_name> row N] where <tool_name> is the
+EXACT name of a tool that actually ran this turn and returned that row — e.g.
+[get_prediction_markets row 0], [query_fundamentals row 2], [get_entity_news row 1].
+
+- NEVER invent a bracket label that is not a real tool name. Words like
+  [commentary row 1], [analysis row 0], [note row 2], [source row 1],
+  [interpretation row 0] are FORBIDDEN: they are NOT tools. A bracketed
+  [word row N] whose word is not a tool that ran is read as a fabricated
+  citation and causes the WHOLE answer to be rejected.
+- Interpretive commentary, analysis, and synthesis are UNSOURCED prose: write
+  them as plain sentences with NO bracket tag at all. Only a figure or fact
+  copied from a specific tool row carries a [<tool_name> row N] tag; your own
+  reasoning about what the data means does not.
+- For a prediction-market / odds answer, cite each probability, implied odd, or
+  price to [get_prediction_markets row N] — the numbers came from that tool, so
+  that is the only correct label for them.
+
 ## GROUND EVERY ROW — DO NOT FABRICATE
 The tool results above are the ONLY facts you may state. There is no other
 source.
@@ -217,7 +235,20 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # (report first/last/high/low/range over N rather than enumerating every bar)
     # for the C1-companion price-history case. Additive: KEEPS every 1.5 win
     # (anti-fabrication policy, digit-for-digit copy, report-in-full balance).
-    version="1.6",
+    # 1.7 (prediction-market citation-refusal root-cause, 2026-07-01): the live
+    # model, on numeric answers (esp. prediction-market odds tables), tagged its
+    # own interpretive prose with a NON-TOOL bracket label — [commentary row N].
+    # Abutting a material number (an implied-odds %), the phantom-citation gate
+    # (partition_phantom_tool_citations) classified it as a MATERIAL fabrication
+    # and fired numeric_grounding_phantom_citation_refused → citations=[] +
+    # refusal, even though the correct polymarket.com URLs were inline. Added the
+    # CITATION LABELS — REAL TOOL NAMES ONLY block: every bracketed [word row N]
+    # must be an ACTUAL tool name; interpretive commentary is UNSOURCED prose that
+    # must carry NO bracket tag; prediction-market odds cite [get_prediction_markets
+    # row N]. This makes the MODEL stop emitting non-tool labels so legitimate
+    # tool-backed citations survive — the grounding guard is UNCHANGED (still
+    # strict; a real fabricated numeric citation is still refused).
+    version="1.7",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -234,7 +265,12 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "v1.6 adds the PERIOD-MATCHING block (bind every figure to its row's own "
         "period label; name the closest available period when the requested one is "
         "absent rather than relabelling the nearest quarter) plus a long-series "
-        "summary-stats steer (Cat-A period-selection)."
+        "summary-stats steer (Cat-A period-selection). "
+        "v1.7 adds the CITATION LABELS — REAL TOOL NAMES ONLY block (every bracketed "
+        "row-citation must be an actual tool name; interpretive commentary is "
+        "unsourced prose with NO bracket tag; prediction-market odds cite "
+        "[get_prediction_markets row N]) so the model stops emitting non-tool "
+        "labels like [commentary row N] that the phantom-citation gate rejects."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

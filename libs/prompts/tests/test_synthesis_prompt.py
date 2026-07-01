@@ -59,10 +59,27 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.6 (Cat-A) added the PERIOD-MATCHING block.
-    assert ident.startswith("chat_synthesis_system@1.6#")
+    # v1.7 (prediction-market citation-refusal) added the CITATION LABELS block.
+    assert ident.startswith("chat_synthesis_system@1.7#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
+
+
+def test_synthesis_prompt_citation_labels_tool_names_only() -> None:
+    """v1.7: the model must be told every bracketed row-citation is a REAL tool
+    name; non-tool labels like [commentary row N] (the live prediction-market
+    citation-refusal trigger) are forbidden; interpretive commentary is unsourced
+    prose with NO bracket tag; odds cite [get_prediction_markets row N]."""
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    assert "CITATION LABELS — REAL TOOL NAMES ONLY" in rendered
+    # The exact non-tool label that caused the live refusal must be named + forbidden.
+    assert "[commentary row 1]" in rendered
+    assert "FORBIDDEN" in rendered
+    # Commentary is unsourced prose — no bracket tag.
+    assert "UNSOURCED prose" in rendered
+    assert "NO bracket tag" in rendered
+    # Prediction-market answers cite the real tool.
+    assert "[get_prediction_markets row N]" in rendered
 
 
 def test_synthesis_prompt_requires_exact_number_transcription() -> None:
