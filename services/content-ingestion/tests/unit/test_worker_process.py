@@ -379,10 +379,14 @@ class TestBuildAdapterKwargs:
     re-introduce the bug.
     """
 
+    # NOTE: SourceType.EODHD is intentionally excluded here — like
+    # EODHD_TICKER_NEWS it now returns early from _build_adapter (constructing
+    # EODHDAdapter directly with firehose kwargs), so it does NOT flow through
+    # the generic ADAPTER_REGISTRY path this test spies on. Its kwargs are
+    # asserted by test_build_adapter_eodhd_general_passes_firehose_kwargs below.
     @pytest.mark.parametrize(
         ("source_type", "expects_rate_limiter"),
         [
-            (SourceType.EODHD, True),
             (SourceType.FINNHUB, True),
             (SourceType.NEWSAPI, False),
             (SourceType.SEC_EDGAR, False),
@@ -471,3 +475,60 @@ class TestBuildAdapterKwargs:
                 f"{source_type.value} adapter must NOT receive rate_limiter "
                 f"(its __init__ does not accept it; passing it triggers TypeError)"
             )
+
+    @patch("content_ingestion.infrastructure.workers.worker._build_factories")
+    @patch("content_ingestion.infrastructure.workers.worker.create_valkey_client_from_url")
+    @patch("content_ingestion.infrastructure.workers.worker.build_object_storage")
+    def test_build_adapter_eodhd_general_passes_firehose_kwargs(
+        self,
+        mock_storage: MagicMock,
+        mock_valkey: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        """The general EODHD adapter receives rate_limiter + the SHADOW firehose kwargs.
+
+        EODHD returns early from _build_adapter, so we spy on EODHDAdapter
+        directly and assert the firehose flags/page params are threaded from
+        settings.eodhd.
+        """
+        from content_ingestion.infrastructure.workers.worker import WorkerProcess
+
+        mock_engine = MagicMock()
+        mock_factory = MagicMock()
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
+        mock_valkey.return_value = AsyncMock()
+
+        settings = _make_settings()
+        # Real ints so the adapter's max(1, page_size) guard works and we can
+        # assert the exact values are forwarded.
+        settings.eodhd = MagicMock(
+            rate_limit_per_second=10,
+            page_size=100,
+            max_pages_per_cycle=3,
+            general_news_firehose_enabled=True,
+            general_news_shadow_mode=True,
+        )
+        settings.eodhd_api_key = "demo"
+
+        worker = WorkerProcess(settings=settings)
+        worker._http_client = MagicMock()
+        worker._valkey = AsyncMock()
+
+        with (
+            patch(
+                "content_ingestion.infrastructure.adapters.eodhd.client.EODHDClient",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "content_ingestion.infrastructure.adapters.eodhd.adapter.EODHDAdapter",
+            ) as adapter_spy,
+        ):
+            worker._build_adapter(SourceType.EODHD, exists_fn=AsyncMock(return_value=False))
+
+        assert adapter_spy.called
+        kwargs = adapter_spy.call_args.kwargs
+        assert "rate_limiter" in kwargs
+        assert kwargs["firehose_enabled"] is True
+        assert kwargs["shadow_mode"] is True
+        assert kwargs["page_size"] == 100
+        assert kwargs["max_pages"] == 3

@@ -38,6 +38,22 @@ class TestEODHDDefaults:
         s = _make_settings()
         assert s.eodhd.ticker_news_poll_interval_seconds == 7200
 
+    def test_general_news_firehose_defaults_off(self) -> None:
+        # SHADOW STAGE: firehose + shadow flags default OFF; cadence conservative.
+        s = _make_settings()
+        assert s.eodhd.general_news_firehose_enabled is False
+        assert s.eodhd.general_news_shadow_mode is False
+        assert s.eodhd.general_news_poll_interval_seconds == 300
+
+    def test_general_news_firehose_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CONTENT_INGESTION_EODHD__GENERAL_NEWS_FIREHOSE_ENABLED", "true")
+        monkeypatch.setenv("CONTENT_INGESTION_EODHD__GENERAL_NEWS_SHADOW_MODE", "true")
+        monkeypatch.setenv("CONTENT_INGESTION_EODHD__GENERAL_NEWS_POLL_INTERVAL_SECONDS", "60")
+        s = _make_settings()
+        assert s.eodhd.general_news_firehose_enabled is True
+        assert s.eodhd.general_news_shadow_mode is True
+        assert s.eodhd.general_news_poll_interval_seconds == 60
+
 
 class TestFinnhubDefaults:
     def test_finnhub_defaults(self) -> None:

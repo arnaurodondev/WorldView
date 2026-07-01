@@ -187,6 +187,15 @@ class SchedulerProcess:
             SourceType.EODHD_TICKER_NEWS: float(self._settings.eodhd.ticker_news_poll_interval_seconds),
         }
 
+        # SHADOW STAGE (2026-07-01): when the general-news firehose is enabled,
+        # override the general ``eodhd`` source's cadence so the EARLY-EXIT sweep
+        # can poll at high frequency (dial ``general_news_poll_interval_seconds``
+        # to 60 once the shadow run looks healthy). Early-exit pins each poll to
+        # ONE request, so a 60s cadence costs ~7.2k credits/day. Gated on the flag
+        # so the default keeps the general feed at the conservative global cadence.
+        if self._settings.eodhd.general_news_firehose_enabled:
+            source_type_intervals[SourceType.EODHD] = float(self._settings.eodhd.general_news_poll_interval_seconds)
+
         uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
         use_case = ScheduleDueSourcesUseCase(
             uow=uow,

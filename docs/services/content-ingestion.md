@@ -432,6 +432,9 @@ All environment variables are prefixed with `CONTENT_INGESTION_`. Nested provide
 | `CONTENT_INGESTION_EODHD__PAGE_SIZE` | `100` | Results per page |
 | `CONTENT_INGESTION_EODHD__MAX_PAGES_PER_CYCLE` | `3` | Max pages per fetch cycle (3 × 100 = 300 articles) |
 | `CONTENT_INGESTION_EODHD__RATE_LIMIT_PER_SECOND` | `10.0` | Token-bucket capacity |
+| `CONTENT_INGESTION_EODHD__GENERAL_NEWS_FIREHOSE_ENABLED` | `false` | SHADOW STAGE: route the general `eodhd` feed through the EARLY-EXIT firehose sweep (1 request/poll) + override its scheduler cadence. Default OFF |
+| `CONTENT_INGESTION_EODHD__GENERAL_NEWS_SHADOW_MODE` | `false` | Emit `s4_general_firehose_*` coverage metrics per sweep (for `scripts/shadow_diff_general_vs_ticker.py`). Default OFF |
+| `CONTENT_INGESTION_EODHD__GENERAL_NEWS_POLL_INTERVAL_SECONDS` | `300` | General-firehose poll cadence when the firehose flag is ON (dial to `60` for the shadow run) |
 | `CONTENT_INGESTION_FINNHUB__BASE_URL` | `https://finnhub.io/api/v1` | Finnhub API root |
 | `CONTENT_INGESTION_FINNHUB__RATE_LIMIT_PER_MINUTE` | `55` | Token-bucket capacity |
 | `CONTENT_INGESTION_NEWSAPI__BASE_URL` | `https://newsapi.org/v2/everything` | NewsAPI endpoint |
