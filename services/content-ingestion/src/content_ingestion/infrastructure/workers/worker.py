@@ -368,7 +368,7 @@ class WorkerProcess:
         client: object
         source_type_val = source_type.value
         if source_type_val == "eodhd":
-            client = EODHDClient(
+            eodhd_client = EODHDClient(
                 http_client=self._http_client,
                 api_key=settings.eodhd_api_key,
                 provider_cfg=settings.eodhd,
@@ -376,7 +376,22 @@ class WorkerProcess:
                 # cross-service Valkey counter so the account-wide total is true.
                 quota_service=self._eodhd_quota_service,
             )
-        elif source_type_val == "sec_edgar":
+            # SHADOW STAGE (2026-07-01): thread the general-news firehose flags so
+            # the filter-less feed can run the high-frequency EARLY-EXIT sweep in
+            # parallel with the per-ticker sources. Return early — EODHDAdapter
+            # takes firehose-specific kwargs the generic call below does not.
+            from content_ingestion.infrastructure.adapters.eodhd.adapter import EODHDAdapter
+
+            return EODHDAdapter(
+                client=eodhd_client,
+                rate_limiter=rate_limiter,
+                exists_fn=exists_fn,
+                firehose_enabled=settings.eodhd.general_news_firehose_enabled,
+                shadow_mode=settings.eodhd.general_news_shadow_mode,
+                page_size=settings.eodhd.page_size,
+                max_pages=settings.eodhd.max_pages_per_cycle,
+            )
+        if source_type_val == "sec_edgar":
             client = SECEdgarClient(
                 http_client=self._http_client,
                 user_agent=settings.sec_edgar_user_agent,

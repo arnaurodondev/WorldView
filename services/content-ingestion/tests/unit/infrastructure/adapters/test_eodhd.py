@@ -10,6 +10,7 @@ from content_ingestion.domain.entities import Source, SourceType
 from content_ingestion.domain.exceptions import AdapterError
 from content_ingestion.domain.value_objects import TokenBucket
 from content_ingestion.infrastructure.adapters.base import RetryConfig
+from content_ingestion.infrastructure.adapters.eodhd import adapter as eodhd_adapter_mod
 from content_ingestion.infrastructure.adapters.eodhd.adapter import EODHDAdapter, _parse_published_at
 from content_ingestion.infrastructure.adapters.eodhd.client import EODHDClient
 
@@ -143,3 +144,197 @@ class TestEODHDAdapterFetch:
         )
         results = await adapter.fetch(_make_source())
         assert len(results) == 1
+
+
+def _general_source(**kwargs: Any) -> Source:
+    """A filter-less GENERAL EODHD source (no ``ticker`` in config)."""
+    defaults: dict[str, Any] = {
+        "name": "eodhd-news",
+        "source_type": SourceType.EODHD,
+        "enabled": True,
+        "config": {},
+    }
+    defaults.update(kwargs)
+    return Source(**defaults)
+
+
+def _firehose_adapter(
+    mock_client: AsyncMock,
+    *,
+    exists_fn: Any,
+    shadow_mode: bool = False,
+    page_size: int = 100,
+    max_pages: int = 3,
+) -> EODHDAdapter:
+    return EODHDAdapter(
+        client=mock_client,
+        rate_limiter=_make_bucket(),
+        exists_fn=exists_fn,
+        retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        firehose_enabled=True,
+        shadow_mode=shadow_mode,
+        page_size=page_size,
+        max_pages=max_pages,
+    )
+
+
+class TestEODHDFirehoseEarlyExit:
+    """SHADOW STAGE: the general early-exit sweep pins high-frequency polls to 1 request."""
+
+    async def test_steady_state_single_request_when_newest_already_seen(self) -> None:
+        # Steady state: the newest article on the feed is one we stored last poll.
+        # exists_fn returns True on the first article → sweep exits after ONE
+        # request with zero new results (the 5-credit/poll case).
+        mock_client = AsyncMock(spec=EODHDClient)
+        mock_client.fetch_news.return_value = [_article("https://ex.com/seen"), _article("https://ex.com/older")]
+        exists_fn = AsyncMock(return_value=True)
+
+        adapter = _firehose_adapter(mock_client, exists_fn=exists_fn, page_size=100)
+        results = await adapter.fetch(_general_source())
+
+        assert results == []
+        assert mock_client.fetch_news.await_count == 1  # exactly one page request
+        mock_client.fetch_all_pages.assert_not_called()  # firehose path, not legacy bulk
+
+    async def test_collects_new_then_stops_on_first_seen_hash_midpage(self) -> None:
+        # A page with two new articles, then an already-stored one, then more:
+        # collect the two new ones, stop the whole sweep at the stored boundary
+        # (the trailing article is never emitted), all in ONE request.
+        new1 = _article("https://ex.com/new1")
+        new2 = _article("https://ex.com/new2")
+        seen = _article("https://ex.com/seen")
+        trailing = _article("https://ex.com/trailing")
+        mock_client = AsyncMock(spec=EODHDClient)
+        mock_client.fetch_news.return_value = [new1, new2, seen, trailing]
+
+        async def _exists(h: str) -> bool:
+            from content_ingestion.infrastructure.adapters.base import url_hash
+
+            return h == url_hash("https://ex.com/seen")
+
+        adapter = _firehose_adapter(mock_client, exists_fn=AsyncMock(side_effect=_exists), page_size=100)
+        results = await adapter.fetch(_general_source())
+
+        assert [r.url for r in results] == ["https://ex.com/new1", "https://ex.com/new2"]
+        assert mock_client.fetch_news.await_count == 1
+
+    async def test_cold_start_paginates_until_partial_page(self) -> None:
+        # Cold start: nothing is stored yet (exists_fn always False), so the sweep
+        # paginates until a partial page signals the feed is drained.
+        mock_client = AsyncMock(spec=EODHDClient)
+        mock_client.fetch_news.side_effect = [
+            [_article("https://ex.com/a"), _article("https://ex.com/b")],  # full page
+            [_article("https://ex.com/c"), _article("https://ex.com/d")],  # full page
+            [_article("https://ex.com/e")],  # partial → drained
+        ]
+        adapter = _firehose_adapter(
+            mock_client,
+            exists_fn=AsyncMock(return_value=False),
+            page_size=2,
+            max_pages=10,
+        )
+        results = await adapter.fetch(_general_source())
+
+        assert len(results) == 5
+        assert mock_client.fetch_news.await_count == 3
+
+    async def test_page_cap_backstop_stops_runaway_pagination(self) -> None:
+        # If EODHD keeps returning full pages of NEW articles, the max_pages
+        # backstop halts the sweep instead of spinning forever.
+        mock_client = AsyncMock(spec=EODHDClient)
+        mock_client.fetch_news.side_effect = [
+            [_article("https://ex.com/a"), _article("https://ex.com/b")],  # full page
+            [_article("https://ex.com/c"), _article("https://ex.com/d")],  # full page → cap hit
+            [_article("https://ex.com/e"), _article("https://ex.com/f")],  # never requested
+        ]
+        adapter = _firehose_adapter(
+            mock_client,
+            exists_fn=AsyncMock(return_value=False),
+            page_size=2,
+            max_pages=2,
+        )
+        results = await adapter.fetch(_general_source())
+
+        assert mock_client.fetch_news.await_count == 2  # capped
+        assert len(results) == 4
+
+    async def test_shadow_mode_records_coverage_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # In shadow mode the sweep emits the coverage signal: new-article count +
+        # symbol-tag count (the general feed's superset advantage).
+        captured: dict[str, Any] = {}
+
+        def _fake_record(**kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(eodhd_adapter_mod, "record_general_firehose_sweep", _fake_record)
+
+        tagged = {**_article("https://ex.com/tagged"), "symbols": ["AAPL.US", "MSFT.US"]}
+        seen = _article("https://ex.com/seen")
+        mock_client = AsyncMock(spec=EODHDClient)
+        mock_client.fetch_news.return_value = [tagged, seen]
+
+        async def _exists(h: str) -> bool:
+            from content_ingestion.infrastructure.adapters.base import url_hash
+
+            return h == url_hash("https://ex.com/seen")
+
+        adapter = _firehose_adapter(
+            mock_client,
+            exists_fn=AsyncMock(side_effect=_exists),
+            shadow_mode=True,
+            page_size=100,
+        )
+        results = await adapter.fetch(_general_source())
+
+        assert len(results) == 1
+        assert captured["outcome"] == "early_exit"
+        assert captured["requests"] == 1
+        assert captured["new_articles"] == 1
+        assert captured["symbol_tags"] == 2
+
+    async def test_firehose_disabled_uses_legacy_bulk_pull(self) -> None:
+        # With the flag OFF the general source keeps the legacy fetch_all_pages
+        # behaviour (backward compatible — no early-exit).
+        mock_client = AsyncMock(spec=EODHDClient)
+        mock_client.fetch_all_pages.return_value = [_article("https://ex.com/a")]
+        adapter = EODHDAdapter(
+            client=mock_client,
+            rate_limiter=_make_bucket(),
+            exists_fn=AsyncMock(return_value=False),
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+            firehose_enabled=False,
+        )
+        results = await adapter.fetch(_general_source())
+
+        assert len(results) == 1
+        mock_client.fetch_all_pages.assert_awaited_once()
+        mock_client.fetch_news.assert_not_called()
+
+    async def test_firehose_requires_exists_fn_else_legacy(self) -> None:
+        # No dedup oracle → no early-exit boundary → fall back to the legacy path.
+        mock_client = AsyncMock(spec=EODHDClient)
+        mock_client.fetch_all_pages.return_value = [_article("https://ex.com/a")]
+        adapter = EODHDAdapter(
+            client=mock_client,
+            rate_limiter=_make_bucket(),
+            exists_fn=None,
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+            firehose_enabled=True,
+        )
+        results = await adapter.fetch(_general_source())
+
+        assert len(results) == 1
+        mock_client.fetch_all_pages.assert_awaited_once()
+        mock_client.fetch_news.assert_not_called()
+
+    async def test_ticker_scoped_source_never_uses_firehose(self) -> None:
+        # A ``ticker``-scoped source is the per-symbol legacy path even with the
+        # firehose flag on — the firehose is only the filter-less general feed.
+        mock_client = AsyncMock(spec=EODHDClient)
+        mock_client.fetch_all_pages.return_value = [_article("https://ex.com/a")]
+        adapter = _firehose_adapter(mock_client, exists_fn=AsyncMock(return_value=False))
+        results = await adapter.fetch(_make_source(config={"ticker": "AAPL.US"}))
+
+        assert len(results) == 1
+        mock_client.fetch_all_pages.assert_awaited_once()
+        mock_client.fetch_news.assert_not_called()

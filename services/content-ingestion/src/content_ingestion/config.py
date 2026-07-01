@@ -64,6 +64,36 @@ class EODHDProviderSettings(BaseModel):
     # Configurable via CONTENT_INGESTION_EODHD__CREDITS_PER_REQUEST.
     credits_per_request: int = Field(default=5, ge=1, le=100)
 
+    # ── General-news firehose (SHADOW STAGE, 2026-07-01) ─────────────────────
+    # Investigation GO-staged (2026-07-01): the GENERAL /api/news feed (no ``s``
+    # filter) is a symbol-tagged SUPERSET of the ~625 per-ticker feeds — ~880/1000
+    # articles carry a ``symbols`` array. Polling it every 60s with EARLY-EXIT on
+    # the first already-stored url_hash pins each poll to ONE request (5 credits)
+    # → ~7.2k credits/day vs ~78.6k today (91% cut) — WITHOUT losing coverage
+    # (nlp-pipeline re-extracts entities from the article body, source-agnostic).
+    #
+    # This is the SHADOW stage: the firehose runs IN PARALLEL with the existing
+    # per-ticker sources (dedup makes double-ingest a no-op) so coverage parity
+    # can be proven via scripts/shadow_diff_general_vs_ticker.py BEFORE cutover
+    # (see that script's CUTOVER PLAN docstring). Nothing here disables
+    # ``ticker_news_sync_enabled`` or the 625 per-ticker sources.
+    #
+    # ``general_news_firehose_enabled`` (default OFF): master switch. When ON the
+    # general ``eodhd`` source uses the page-by-page EARLY-EXIT sweep (instead of
+    # the legacy ``fetch_all_pages`` bulk pull) and its poll cadence is overridden
+    # to ``general_news_poll_interval_seconds`` in the scheduler.
+    general_news_firehose_enabled: bool = False
+    # ``general_news_shadow_mode`` (default OFF): when ON, every firehose sweep
+    # additionally emits a coverage signal (new-article + symbol-tag counters)
+    # so the shadow-diff tool can quantify general vs per-ticker coverage. Ingest
+    # behaviour is unchanged — dedup absorbs any overlap with the per-ticker feed.
+    general_news_shadow_mode: bool = False
+    # Poll cadence for the general firehose. Conservative 300s default so merely
+    # enabling the flag does NOT immediately 60s-poll; dial to 60 once the shadow
+    # run looks healthy. ge=60 guards the EODHD rate limit. Configurable via
+    # CONTENT_INGESTION_EODHD__GENERAL_NEWS_POLL_INTERVAL_SECONDS.
+    general_news_poll_interval_seconds: int = Field(default=300, ge=60)
+
 
 class FinnhubProviderSettings(BaseModel):
     """Operational parameters for the Finnhub provider."""
