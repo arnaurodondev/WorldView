@@ -1,7 +1,13 @@
 """observability — Structured logging, metrics, tracing, and Sentry error capture for worldview."""
 
 from observability.error_capture import register_error_handlers
-from observability.internal_jwt import InternalJWTMiddleware
+from observability.internal_jwt import (
+    INTERNAL_JWT_AUDIENCE,
+    INTERNAL_JWT_ISSUER,
+    InternalJWTMiddleware,
+    build_internal_jwt_claims,
+    mint_internal_jwt,
+)
 from observability.liveness import ConsumerLivenessProbe, make_liveness_probe
 from observability.logging import configure_logging, get_logger
 from observability.metrics import (
@@ -19,9 +25,13 @@ from observability.startup_assert import assert_app_env_or_die
 from observability.tracing import add_otel_middleware, configure_tracing, get_tracer
 
 __all__ = [
+    "INTERNAL_JWT_AUDIENCE",
+    "INTERNAL_JWT_ISSUER",
     "KAFKA_CONSUMER_MESSAGES",
     "ConsumerLivenessProbe",
     "InternalJWTMiddleware",
+    "build_internal_jwt_claims",
+    "mint_internal_jwt",
     "MLMetrics",
     "MetricsServerHandle",
     "SentrySettings",

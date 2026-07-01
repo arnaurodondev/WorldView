@@ -69,6 +69,24 @@ class TestExplicitTimeout:
 # ── Internal JWT header present ───────────────────────────────────────────────
 
 
+class TestInternalJwtClaims:
+    """DEF-002: minted internal JWT must carry aud + a unique jti."""
+
+    def test_make_internal_jwt_dev_fallback_has_aud_and_jti(self) -> None:
+        import jwt as pyjwt
+        from market_data.infrastructure.clients.intelligence_clients import (
+            _make_internal_jwt,
+        )
+
+        # Empty PEM → HS256 dev fallback path.
+        decoded = pyjwt.decode(_make_internal_jwt(""), options={"verify_signature": False})
+        assert decoded["aud"] == "worldview-internal"
+        assert decoded["iss"] == "worldview-gateway"
+        assert decoded["sub"] == "system:intelligence-rollup-worker"
+        assert decoded["role"] == "system"
+        assert decoded["jti"]
+
+
 class TestInternalJwtHeader:
     """Every HTTP request must include X-Internal-JWT."""
 

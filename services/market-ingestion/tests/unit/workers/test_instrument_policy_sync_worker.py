@@ -247,6 +247,10 @@ class TestSignInternalJwt:
         assert decoded["sub"] == "system:instrument-policy-sync-worker"
         assert decoded["iss"] == "worldview-gateway"
         assert decoded["role"] == "system"
+        # DEF-002: token MUST carry aud + a unique jti so it survives real
+        # InternalJWTMiddleware verification once skip_verification is disabled.
+        assert decoded["aud"] == "worldview-internal"
+        assert decoded["jti"]
 
     def test_token_exp_is_in_the_future(self) -> None:
         import time

@@ -564,9 +564,9 @@ def build_market_data_signer(settings: Settings) -> Any:
     empty — this is only accepted by S3 when
     ``MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true`` (dev/test only).
     """
-    import time
-
     import jwt
+
+    from observability.internal_jwt import build_internal_jwt_claims
 
     # Same dev-only HS256 secret as ``fundamentals_refresh`` so behaviour is
     # consistent across all worker → market-data calls in dev.
@@ -591,24 +591,19 @@ def build_market_data_signer(settings: Settings) -> Any:
     _dev_key_warn_every = 100
 
     def _sign() -> str:
-        now = int(time.time())
-        payload = {
-            "iss": "worldview-gateway",
-            "sub": "system:kg-structured-enrichment",
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "tenant_id": "00000000-0000-0000-0000-000000000000",
-            "role": "system",
-            "iat": now,
-            # Short TTL keeps the blast radius small if a token is somehow
-            # leaked.  The signer issues a fresh token on every request so the
-            # 5-minute window is more than enough for one HTTP call.
-            "exp": now + 300,
-        }
+        # DEF-002: build claims via the shared helper so every token carries the
+        # required ``aud="worldview-internal"`` + a unique ``jti``.  Short TTL
+        # (5 min) keeps the blast radius small if a token is somehow leaked; a
+        # fresh token is issued on every call.
+        claims = build_internal_jwt_claims(
+            sub="system:kg-structured-enrichment",
+            ttl_seconds=300,
+        )
         if private_key_pem:
             from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
             private_key = load_pem_private_key(private_key_pem.encode(), password=None)
-            return jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[no-any-return, arg-type]
+            return jwt.encode(claims, private_key, algorithm="RS256")  # type: ignore[no-any-return, arg-type]
 
         # F-P2-06: warn periodically (not once) so a long-running consumer
         # whose bootstrap log has rolled away still surfaces the dev-key
@@ -621,7 +616,7 @@ def build_market_data_signer(settings: Settings) -> Any:
                 "set KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY for production.",
                 tokens_signed_with_dev_key=_dev_key_warn_state["count"],
             )
-        return jwt.encode(payload, _internal_jwt_dev_key, algorithm="HS256")  # type: ignore[no-any-return]
+        return jwt.encode(claims, _internal_jwt_dev_key, algorithm="HS256")  # type: ignore[no-any-return]
 
     return _sign
 

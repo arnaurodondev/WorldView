@@ -504,6 +504,18 @@ def test_sign_internal_jwt_returns_hs256_dev_token_when_no_key() -> None:
     assert len(token) > 20
 
 
+def test_sign_internal_jwt_includes_aud_and_jti() -> None:
+    """DEF-002: token MUST carry aud + a unique jti (required by middleware)."""
+    import jwt as pyjwt
+
+    worker = FundamentalsRefreshWorker(settings=_settings())
+    decoded = pyjwt.decode(worker._sign_internal_jwt(), options={"verify_signature": False})
+    assert decoded["aud"] == "worldview-internal"
+    assert decoded["iss"] == "worldview-gateway"
+    assert decoded["sub"] == "system:fundamentals-refresh-worker"
+    assert decoded["jti"]
+
+
 # ---------------------------------------------------------------------------
 # stop() halts the loop promptly between symbols.
 # ---------------------------------------------------------------------------
