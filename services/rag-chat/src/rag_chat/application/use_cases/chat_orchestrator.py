@@ -4359,8 +4359,16 @@ class ChatOrchestratorUseCase:
                 _iid2 = getattr(_it, "item_id", None)
                 return _pos_by_item_id.get(str(_iid2)) if _iid2 else None
 
+            # 2026-07-01 marker-robustness: expose per-tool row COUNTS so
+            # normalize_tool_row_citations can CLAMP an out-of-range
+            # ``[tool row N]`` (a called tool cited past its last row) to the
+            # last valid row instead of stripping the citation. Returns None for
+            # a never-called tool → the phantom guard still refuses it.
+            def _resolve_row_count(tool_name: str) -> int | None:
+                return _tool_row_counts.get(tool_name)
+
             _pre_norm = full_text
-            full_text = normalize_tool_row_citations(full_text, _resolve_row_position)
+            full_text = normalize_tool_row_citations(full_text, _resolve_row_position, _resolve_row_count)
             if full_text != _pre_norm:
                 log.info("tool_row_citations_normalized", request_id=str(getattr(audit, "turn_id", "") or ""))  # type: ignore[no-any-return]
 
