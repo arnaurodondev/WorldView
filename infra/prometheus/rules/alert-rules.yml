@@ -238,6 +238,21 @@ groups:
           summary: "Synthetic probe {{ $labels.probe_name }} failing for 5m"
           runbook: "Check synthetic monitor logs: docker compose logs synthetic-monitor"
 
+      # DeepInfra shared-key freshness. probe_deepinfra_key reports success=0 when
+      # DeepInfra returns 401/403 for the account key — the exact silent failure
+      # that halted the WHOLE ML pipeline (chat, embedding, extraction, relevance,
+      # resolution, KG, NL screener) when a key was revoked with no freshness alert.
+      # Fires fast (2m) because every ML feature is down until the key is rotated.
+      - alert: DeepInfraKeyDead
+        expr: synthetic_probe_success{probe_name="probe_deepinfra_key"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DeepInfra shared API key is dead/rotated (401/403) — ML pipeline down"
+          description: "The single DeepInfra account key is being rejected. All ML features (chat, embedding, extraction, relevance, resolution, KG descriptions, NL screener) are failing. Rotate the key in worldview-gitops and redeploy."
+          runbook: "infra/gitops/docs/deepinfra-key-rotation.md"
+
       # PLAN-0109 B-1: relevance-scoring worker provider degradation.
       # nlp_pipeline_relevance_scoring_empty_response_total increments whenever
       # the LLM returns empty content, fails JSON parse, or omits the score key.
