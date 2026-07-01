@@ -249,8 +249,11 @@ def get_chunk_search_use_case(
     # embedding_client is set on app.state at startup (app.py:179); pass it
     # through so query_text searches can embed the query without a pre-computed vector.
     embedding_client = getattr(request.app.state, "embedding_client", None)
+    # BUG-3: raise the HNSW candidate pool so selective post-filters (source_type,
+    # tenant, entity, date) keep real rows instead of degenerating to ~0.
+    ef_search = int(getattr(settings, "chunk_ann_ef_search", 200)) if settings is not None else 200
     return EnhancedChunkSearchUseCase(
-        chunk_ann_repo=ChunkANNRepository(nlp_session),
+        chunk_ann_repo=ChunkANNRepository(nlp_session, ef_search=ef_search),
         source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
         canonical_entity_repo=CanonicalEntityRepository(intel_session),
         valkey=raw_valkey,
@@ -297,7 +300,9 @@ def get_search_documents_use_case(
     # through stacked BaseHTTPMiddleware wrappers in Starlette 0.37.x.
     jwt: str | None = getattr(request.state, "internal_jwt", None)
 
-    repo = AsyncpgDocumentSearchRepository(nlp_session)
+    # HIGH-1: force the GIN index for the FTS scan (planner mis-costs a Seq Scan).
+    force_index_scan = bool(getattr(settings, "fts_force_index_scan", True))
+    repo = AsyncpgDocumentSearchRepository(nlp_session, force_index_scan=force_index_scan)
     s5_client = _S5BatchClient(s5_base_url, jwt=jwt)
     s7_client = _S7BatchClient(s7_base_url, jwt=jwt)
 

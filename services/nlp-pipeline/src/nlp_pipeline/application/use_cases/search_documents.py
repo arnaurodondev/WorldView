@@ -215,10 +215,21 @@ class _S7BatchClient:
                     headers=headers,
                 )
                 if resp.status_code != 200:
+                    # HIGH-2: do NOT swallow silently. 401/403 here means the
+                    # X-Internal-JWT was not forwarded (dev path where S6 skips
+                    # JWT verification, so request.state.internal_jwt is None).
+                    # Entity facet NAMES degrade to omitted facets — actionable.
+                    is_auth = resp.status_code in (401, 403)
                     _log.warning(  # type: ignore[no-any-return]
                         "s7_batch_non_200",
                         status_code=resp.status_code,
                         url=f"{self._base_url}/api/v1/entities/batch",
+                        auth_failure=is_auth,
+                        detail=(
+                            "entity facet names unavailable — X-Internal-JWT not forwarded to S7"
+                            if is_auth
+                            else "entity facet names unavailable — S7 batch call failed"
+                        ),
                     )
                     return {}
                 data = resp.json()
@@ -247,19 +258,33 @@ def _hit_from_repo_result(
 ) -> SearchDocumentsHit:
     """Convert a repo SearchDocumentResult + S5 metadata dict into a domain hit.
 
-    Strips sentinel markers from the snippet and applies S5 metadata.
+    Strips sentinel markers from the snippet and applies citation metadata.
+
+    HIGH-2: title/source_url/published_at now come from the repo (selected
+    directly from document_source_metadata) — the S5 batch call was returning
+    401 in the live path and being swallowed, so every result had null metadata.
+    S5 is retained only as a best-effort fallback for the rare docs whose dsm
+    row is not yet populated (``repo_result.<field>`` is None).
     """
     snippet = repo_result.snippet
     offsets: list[tuple[int, int]] = []
     if snippet:
         snippet, offsets = _strip_markers(snippet)
 
+    title = repo_result.title if repo_result.title is not None else s5_meta.get("title")
+    source_url = (
+        repo_result.source_url
+        if repo_result.source_url is not None
+        else (s5_meta.get("source_url") or s5_meta.get("url"))
+    )
+    published_at = repo_result.published_at if repo_result.published_at is not None else s5_meta.get("published_at")
+
     return SearchDocumentsHit(
         doc_id=repo_result.doc_id,
-        title=s5_meta.get("title"),
+        title=title,
         source_type=repo_result.source_type,
-        source_url=s5_meta.get("source_url") or s5_meta.get("url"),
-        published_at=s5_meta.get("published_at"),
+        source_url=source_url,
+        published_at=published_at,
         snippet=snippet,
         match_offsets=offsets,
         score=repo_result.score,
@@ -351,7 +376,12 @@ class SearchDocumentsUseCase:
         # asyncio.gather runs both HTTP calls concurrently; return_exceptions=True
         # prevents one failure from cancelling the other.
         facet_entity_ids = [f.entity_id for f in facet_rows]
-        s5_task = self.s5_client.batch_documents(hit_doc_ids)
+        # HIGH-2: only ask S5 for docs whose citation metadata the repo could NOT
+        # supply from document_source_metadata. In the live path dsm covers ~91%
+        # of titles, so this list is usually empty and the (previously 401'ing)
+        # S5 call is skipped entirely — batch_documents([]) short-circuits to {}.
+        docs_missing_meta = [h.doc_id for h in raw_hits if h.title is None]
+        s5_task = self.s5_client.batch_documents(docs_missing_meta)
         s7_task = self.s7_client.batch_get_entities(facet_entity_ids)
 
         gather_results = await asyncio.gather(

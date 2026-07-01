@@ -124,6 +124,40 @@ class TestSearchDocumentsUseCase:
         assert resp.results[0].title == "Apple Q1"
 
     @pytest.mark.asyncio
+    async def test_high2_prefers_repo_metadata_and_skips_s5(self) -> None:
+        """HIGH-2: title/url/published_at from the repo (dsm) are used directly.
+
+        When the repo supplies citation metadata (selected from
+        document_source_metadata), the use case must NOT call the S5 batch
+        endpoint (which 401'd in the live path) and must surface the repo values.
+        """
+        from datetime import UTC, datetime
+
+        pub = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
+        hit = SearchDocumentResult(
+            doc_id=_DOC_ID_1,
+            source_type="sec_edgar",
+            title="Apple 10-Q",
+            source_url="https://sec.gov/aapl-10q",
+            published_at=pub,
+            snippet=f"foo {_START}bar{_END}",
+            score=0.9,
+        )
+        repo = _make_repo(hits=[hit], total=1, facets=[])
+        s5 = _make_s5()
+        s7 = _make_s7()
+
+        uc = SearchDocumentsUseCase(repo=repo, s5_client=s5, s7_client=s7)
+        resp = await uc.execute(_make_request())
+
+        # S5 must be skipped: batch_documents is called with an EMPTY list
+        # (short-circuits to {}) because the repo already supplied the metadata.
+        s5.batch_documents.assert_awaited_once_with([])
+        assert resp.results[0].title == "Apple 10-Q"
+        assert resp.results[0].source_url == "https://sec.gov/aapl-10q"
+        assert resp.results[0].published_at == pub
+
+    @pytest.mark.asyncio
     async def test_execute_empty_results_skips_facets_and_batch_calls(self) -> None:
         """When repo returns no hits, facets and S5/S7 must NOT be called."""
         repo = _make_repo(hits=[], total=0)

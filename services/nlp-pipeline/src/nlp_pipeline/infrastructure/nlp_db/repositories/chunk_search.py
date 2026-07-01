@@ -27,6 +27,30 @@ from nlp_pipeline.application.ports.chunk_search import ChunkSearchPort
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+# ── Public-tenant sentinel (BUG-3 / feat/fix-s6-search-quality) ───────────────
+# The article consumer stamps public (non-tenant) content with the nil-UUID
+# ``PUBLIC_TENANT_ID`` sentinel — NOT SQL NULL — whenever tenant resolution
+# fails (BP-575).  On the live corpus ~86% of ready chunk embeddings are on
+# sentinel-tenant chunks, so a bare ``tenant_id IS NULL`` public predicate made
+# the vast majority of public content invisible to ANN/lexical search (the
+# ``news_query.py`` repo already handles this three-way; chunk_search did not).
+# We mirror the R35 three-row-class semantics: legacy NULL rows, the sentinel
+# public tenant, and (when authenticated) the caller's own tenant.
+_PUBLIC_TENANT_SENTINEL = "00000000-0000-0000-0000-000000000000"
+
+
+def _tenant_predicate(params: dict[str, Any], column: str, tenant_id: str | None) -> str:
+    """Return a parameterised tenant-visibility predicate for *column*.
+
+    Public rows are BOTH ``NULL`` and the ``PUBLIC_TENANT_ID`` sentinel (BP-575).
+    When *tenant_id* is provided the caller's own rows are additionally visible.
+    """
+    legs = [f"{column} IS NULL", f"{column} = '{_PUBLIC_TENANT_SENTINEL}'::uuid"]
+    if tenant_id is not None:
+        params["tenant_id_str"] = tenant_id
+        legs.append(f"{column} = CAST(:tenant_id_str AS UUID)")
+    return "(" + " OR ".join(legs) + ")"
+
 
 def _build_entity_mention_filter(
     params: dict[str, Any],
@@ -67,8 +91,26 @@ def _build_entity_mention_filter(
 class ChunkANNRepository(ChunkSearchPort):
     """Run ANN searches and fetch entity mention annotations from nlp_db."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, ef_search: int = 200) -> None:
         self._session = session
+        # BUG-3: pgvector post-filters the HNSW candidate set, so the default
+        # ef_search=40 starves any selective WHERE filter. Raise it per ANN query.
+        self._ef_search = ef_search
+
+    async def _apply_ef_search(self) -> None:
+        """Raise ``hnsw.ef_search`` for the current transaction (BUG-3).
+
+        ``set_config(name, value, is_local=true)`` scopes the GUC to the current
+        transaction, so it auto-reverts on commit/rollback and never leaks onto
+        the pooled connection.  The read session runs statements inside an
+        implicit transaction (SQLAlchemy autobegin), so this applies to the ANN
+        query that follows on the same connection.  No-op when ef_search <= 0.
+        """
+        if self._ef_search and self._ef_search > 0:
+            await self._session.execute(
+                text("SELECT set_config('hnsw.ef_search', :ef, true)"),
+                {"ef": str(self._ef_search)},
+            )
 
     async def ann_search(
         self,
@@ -162,16 +204,11 @@ class ChunkANNRepository(ChunkSearchPort):
         if entity_ids or entity_types:
             where_clauses.append(_build_entity_mention_filter(params, entity_ids, entity_types))
 
-        # PLAN-0086 Wave C-1: tenant_id filter — CRITICAL security boundary.
-        # None = public-only: return only chunks with tenant_id IS NULL.
-        # Non-None = tenant context: return public chunks OR chunks for this tenant.
-        # This prevents data leakage between tenants. BP-180 CAST guards used for
-        # nullable params to avoid asyncpg AmbiguousParameterError.
-        if tenant_id is not None:
-            params["tenant_id_str"] = tenant_id
-            where_clauses.append("(c.tenant_id IS NULL OR c.tenant_id = CAST(:tenant_id_str AS UUID))")
-        else:
-            where_clauses.append("c.tenant_id IS NULL")
+        # PLAN-0086 Wave C-1 + BUG-3: tenant_id filter — CRITICAL security boundary.
+        # Public rows = NULL tenant OR the PUBLIC_TENANT_ID sentinel (BP-575);
+        # authenticated callers additionally see their own tenant. See
+        # _tenant_predicate for the R35 three-row-class rationale.
+        where_clauses.append(_tenant_predicate(params, "c.tenant_id", tenant_id))
 
         where_sql = " AND ".join(where_clauses)
 
@@ -187,6 +224,7 @@ class ChunkANNRepository(ChunkSearchPort):
                 c.chunk_text_key,
                 c.document_title,
                 s.section_type,
+                dsm.source_type,
                 1 - (ce.embedding <=> cast(:vec AS vector)) AS score
             FROM chunk_embeddings ce
             JOIN chunks c ON c.chunk_id = ce.chunk_id
@@ -199,6 +237,9 @@ class ChunkANNRepository(ChunkSearchPort):
             """,
         ).bindparams(**params)
 
+        # BUG-3: widen the HNSW candidate pool BEFORE the ANN query so the
+        # post-filter (source_type / tenant / entity / date) has rows to keep.
+        await self._apply_ef_search()
         result = await self._session.execute(query)
         rows = result.all()
 
@@ -215,6 +256,9 @@ class ChunkANNRepository(ChunkSearchPort):
                 "chunk_text_key": row.chunk_text_key,
                 # PLAN-0086 Wave C-1: expose document_title for RAG citation assembly.
                 "document_title": row.document_title,
+                # BUG-3 secondary smell: the chunk path never selected source_type,
+                # so every ANN chunk row reported source_type=null. Surface it now.
+                "source_type": row.source_type,
             }
             for row in rows
         ]
@@ -252,15 +296,10 @@ class ChunkANNRepository(ChunkSearchPort):
             where_clauses.append("dsm.source_type = ANY(:source_types)")
             params["source_types"] = source_types
 
-        # HR-053 / CRIT-1: tenant_id filter — CRITICAL security boundary.
-        # None = public-only: return only sections with tenant_id IS NULL.
-        # Non-None = tenant context: return public sections OR sections for this tenant.
-        # BP-180 CAST used to avoid asyncpg AmbiguousParameterError for nullable params.
-        if tenant_id is not None:
-            params["tenant_id_str"] = tenant_id
-            where_clauses.append("(s.tenant_id IS NULL OR s.tenant_id = CAST(:tenant_id_str AS UUID))")
-        else:
-            where_clauses.append("s.tenant_id IS NULL")
+        # HR-053 / CRIT-1 + BUG-3: tenant_id filter — CRITICAL security boundary.
+        # Public rows = NULL tenant OR the PUBLIC_TENANT_ID sentinel (BP-575);
+        # authenticated callers additionally see their own tenant.
+        where_clauses.append(_tenant_predicate(params, "s.tenant_id", tenant_id))
 
         where_filter = ("AND " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -284,6 +323,8 @@ class ChunkANNRepository(ChunkSearchPort):
             """,
         ).bindparams(**params)
 
+        # BUG-3: widen the HNSW candidate pool before the section ANN query.
+        await self._apply_ef_search()
         result = await self._session.execute(query)
         rows = result.all()
 
@@ -304,19 +345,14 @@ class ChunkANNRepository(ChunkSearchPort):
 
         # Count query also scoped to the same tenant context so the total
         # does not leak the count of other tenants' private sections (MED-3).
-        if tenant_id is not None:
-            count_params: dict[str, Any] = {"tenant_id_str": tenant_id}
-            count_sql = text(
-                "SELECT COUNT(*) FROM section_embeddings se "
-                "JOIN sections s ON s.section_id = se.section_id "
-                "WHERE (s.tenant_id IS NULL OR s.tenant_id = CAST(:tenant_id_str AS UUID))"
-            ).bindparams(**count_params)
-        else:
-            count_sql = text(
-                "SELECT COUNT(*) FROM section_embeddings se "
-                "JOIN sections s ON s.section_id = se.section_id "
-                "WHERE s.tenant_id IS NULL"
-            )
+        # BUG-3: mirror the sentinel-aware predicate used by the SELECT above.
+        count_params: dict[str, Any] = {}
+        count_pred = _tenant_predicate(count_params, "s.tenant_id", tenant_id)
+        count_sql = text(
+            "SELECT COUNT(*) FROM section_embeddings se "
+            "JOIN sections s ON s.section_id = se.section_id "
+            f"WHERE {count_pred}"
+        ).bindparams(**count_params)
         count_result = await self._session.execute(count_sql)
         total = int(count_result.scalar_one())
 
@@ -418,14 +454,12 @@ class ChunkANNRepository(ChunkSearchPort):
         if entity_ids or entity_types:
             entity_filter_sql = "AND " + _build_entity_mention_filter(params, entity_ids, entity_types)
 
-        # PLAN-0086 Wave C-1: tenant_id filter — CRITICAL security boundary.
-        # None = public-only: return only chunks with tenant_id IS NULL.
-        # Non-None = public + tenant chunks. BP-180 CAST guard prevents asyncpg error.
-        if tenant_id is not None:
-            params["tenant_id_str"] = tenant_id
-            tenant_filter_sql = "AND (c.tenant_id IS NULL OR c.tenant_id = CAST(:tenant_id_str AS UUID))"
-        else:
-            tenant_filter_sql = "AND c.tenant_id IS NULL"
+        # PLAN-0086 Wave C-1 + BUG-3: tenant_id filter — CRITICAL security boundary.
+        # Public rows = NULL tenant OR the PUBLIC_TENANT_ID sentinel (BP-575);
+        # authenticated callers additionally see their own tenant. Without the
+        # sentinel leg the lexical path (like the ANN path) hid ~86% of public
+        # chunks — the same defect that made source_types=['sec_edgar'] return 0.
+        tenant_filter_sql = "AND " + _tenant_predicate(params, "c.tenant_id", tenant_id)
 
         # Use a CTE so we can reuse the result set for COUNT and SELECT without
         # re-running the (relatively cheap, but not free) GIN match twice
