@@ -245,6 +245,28 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.11 — 2026-07-01 (prediction-market citation-refusal — real-tool-name-only labels)
+
+- Live QA found prediction-market chat answers returning an EMPTY `citations`
+  array (and sometimes a refusal) even though the correct polymarket.com URLs
+  were inline in the prose. Root cause: the model tagged its own interpretive
+  commentary with a NON-TOOL bracket label — `[commentary row N]` — abutting a
+  material number (an implied-odds %). The phantom-citation gate
+  (`partition_phantom_tool_citations`) correctly reads a `[name row N]` tag whose
+  `name` is not a called tool, next to a material figure, as a fabricated
+  citation and fires `numeric_grounding_phantom_citation_refused`.
+- v1.11 adds a REAL-TOOL-NAME-ONLY rule to the CITATIONS section: every
+  `[<name> row N]` provenance tag MUST name a tool that actually ran; non-tool
+  labels (`[commentary row N]`, `[analysis row N]`, `[note row N]`) are forbidden;
+  interpretive commentary is unsourced prose that carries NO bracketed
+  row-citation. The COMPARISON "interpretive commentary" line is clarified to
+  carry NO row-tag (only the table's numeric cells do).
+- The fix makes the MODEL stop emitting non-tool labels so legitimate
+  tool-backed citations survive. The phantom-citation / numeric-grounding
+  refusal guard in `rag-chat` is **UNCHANGED** — it stays strict and still
+  refused a real Bitcoin/Fed hallucination in the same QA session.
+- All prior strict-no-hallucination rules are **unchanged**.
+
 ### 1.10 — 2026-06-27 (FINAL-67 C4 — tool routing)
 
 - Added the **TOOL ROUTING** table to the planning-turn prompt. The FINAL-67 run
@@ -261,6 +283,23 @@ is unchanged.
 - All prior strict-no-hallucination rules are **unchanged**.
 
 ## chat_synthesis_system
+
+### 1.7 — 2026-07-01 (prediction-market citation-refusal — real-tool-name-only labels)
+
+- Same root cause as `tool_use_system` v1.11 (above), on the delivery-time
+  synthesis prompt: the model emitted a NON-TOOL `[commentary row N]` label next
+  to material odds numbers, which the phantom-citation gate classified as a
+  material fabrication → `citations=[]` + refusal despite correct inline URLs.
+- v1.7 adds the **CITATION LABELS — REAL TOOL NAMES ONLY** block: every bracketed
+  `[<tool_name> row N]` must be an ACTUAL tool that ran; non-tool labels
+  (`[commentary row N]`, `[analysis row N]`, `[note row N]`, `[source row N]`,
+  `[interpretation row N]`) are forbidden; interpretive commentary/synthesis is
+  UNSOURCED prose with NO bracket tag; prediction-market odds/probabilities/prices
+  cite `[get_prediction_markets row N]`.
+- The numeric-grounding / phantom-citation refusal guard is **UNCHANGED** —
+  this is a MODEL-behaviour fix so legitimate tool-backed citations are the only
+  bracketed labels emitted. Every 1.6 win (PERIOD-MATCHING, anti-fabrication
+  policy, digit-for-digit copy, report-in-full balance) is preserved.
 
 ### 1.6 — 2026-06-28 (Cat-A period-selection)
 
