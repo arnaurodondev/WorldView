@@ -48,6 +48,27 @@ class Settings(BaseSettings):
     # operate on bounded batches and complete well under 60 s.
     statement_timeout_ms: int = 60_000
 
+    # ── HNSW ANN candidate-pool size (BUG-3 / feat/fix-s6-search-quality) ──────
+    # pgvector applies the WHERE filters (source_type, tenant, entity, date) AFTER
+    # the HNSW index returns its candidate set. With the pgvector default
+    # ``hnsw.ef_search = 40`` the candidate pool is so small that any selective
+    # post-filter (e.g. ``source_types=['sec_edgar']`` — ~2% of the corpus) shrinks
+    # to near-zero rows. We raise ef_search per-query (``SET LOCAL``) so filtered
+    # ANN keeps a usable candidate pool. 200 is a good recall/latency balance for a
+    # ~66k-embedding corpus; raise for rarer buckets, lower if latency regresses.
+    chunk_ann_ef_search: int = 200
+
+    # ── FTS planner override (HIGH-1 / feat/fix-s6-search-quality) ────────────
+    # The document-search FTS query (document_search.py) has a broad ``tsv_english
+    # @@ tsquery`` predicate. For common terms the planner MIS-COSTS a Seq Scan
+    # cheaper than the GIN ``ix_chunks_tsv_english_gin`` bitmap scan, because it
+    # underestimates the per-row cost of the ``@@`` / ``ts_rank_cd`` operator on
+    # the large stored tsvector. Measured live: the Seq Scan took ~55s vs ~3s for
+    # the GIN bitmap scan (18x). We disable seq scans transaction-locally
+    # (``SET LOCAL enable_seqscan = off``) for the search query so the GIN index
+    # is always used. Set False to fall back to the planner default.
+    fts_force_index_scan: bool = True
+
     # intelligence_db — read/write adapter, ALEMBIC_ENABLED MUST stay false
     # no default: fails fast if env var missing (DEF-027)
     intelligence_database_url: SecretStr  # NLP_PIPELINE_INTELLIGENCE_DATABASE_URL — required

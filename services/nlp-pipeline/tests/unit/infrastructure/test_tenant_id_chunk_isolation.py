@@ -154,13 +154,31 @@ class TestChunkANNRepositoryTenantFilter:
 
     def _make_session(self) -> AsyncMock:
         session = AsyncMock()
+        # BUG-3: the ANN path now issues an extra ``set_config('hnsw.ef_search')``
+        # statement before the main query, so the mock must supply three results:
+        # [ef_search set_config, main ANN query, COUNT].
+        ef_result = MagicMock()
         result_mock = MagicMock()
         result_mock.all.return_value = []
         # scalar_one() for the COUNT query
         count_result = MagicMock()
         count_result.scalar_one.return_value = 0
-        session.execute = AsyncMock(side_effect=[result_mock, count_result])
+        session.execute = AsyncMock(side_effect=[ef_result, result_mock, count_result])
         return session
+
+    @staticmethod
+    def _find_sql(session: AsyncMock, needle: str) -> str:
+        """Return the first executed SQL string containing *needle*.
+
+        The ANN path issues multiple statements (set_config + main query +
+        COUNT); the tenant predicate lives on the main query, so we scan all
+        calls rather than assuming a fixed index.
+        """
+        for call in session.execute.call_args_list:
+            sql_text = str(call[0][0])
+            if needle in sql_text:
+                return sql_text
+        raise AssertionError(f"no executed SQL contained {needle!r}")
 
     @pytest.mark.asyncio
     async def test_ann_search_null_tenant_adds_public_only_filter(self) -> None:
@@ -184,13 +202,13 @@ class TestChunkANNRepositoryTenantFilter:
             tenant_id=None,  # explicit public-only
         )
 
-        # Extract the SQL text from the first execute call
-        call_args = session.execute.call_args_list[0]
-        sql_statement = call_args[0][0]
-        sql_text = str(sql_statement)
+        # Locate the main ANN query (scan past the set_config statement).
+        sql_text = self._find_sql(session, "chunk_embeddings")
 
         # The WHERE clause MUST contain the public-only filter
         assert "c.tenant_id IS NULL" in sql_text
+        # BUG-3: public rows also include the PUBLIC_TENANT_ID sentinel (BP-575).
+        assert "c.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid" in sql_text
 
         # It must NOT contain the OR clause that opens up private chunks
         assert "c.tenant_id = CAST(:tenant_id_str AS UUID)" not in sql_text
@@ -214,9 +232,7 @@ class TestChunkANNRepositoryTenantFilter:
             tenant_id=tenant_id,
         )
 
-        call_args = session.execute.call_args_list[0]
-        sql_statement = call_args[0][0]
-        sql_text = str(sql_statement)
+        sql_text = self._find_sql(session, "chunk_embeddings")
 
         # The OR clause allows both public and tenant-private chunks
         assert "c.tenant_id IS NULL" in sql_text
@@ -245,6 +261,8 @@ class TestChunkANNRepositoryTenantFilter:
 
         assert "c.tenant_id IS NULL" in sql_text
         assert "tenant_id_str" not in sql_text
+        # BUG-3: public rows also include the PUBLIC_TENANT_ID sentinel.
+        assert "c.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid" in sql_text
 
     @pytest.mark.asyncio
     async def test_lexical_search_with_tenant_id_adds_or_filter(self) -> None:
@@ -269,6 +287,72 @@ class TestChunkANNRepositoryTenantFilter:
 
         assert "c.tenant_id IS NULL" in sql_text
         assert "tenant_id_str" in sql_text
+
+
+# ── BUG-3: ANN degeneracy fix (feat/fix-s6-search-quality) ────────────────────
+
+
+class TestChunkANNRepositoryBug3:
+    """Regression tests for the ANN degeneracy fix (BUG-3).
+
+    Two compounding root causes made ANN chunk search return ~0 rows:
+      1. Public content is stamped with the nil-UUID PUBLIC_TENANT_ID sentinel
+         (BP-575), but the search predicate only matched SQL NULL — hiding ~86%
+         of the public corpus (so source_types=['sec_edgar'] returned 0).
+      2. pgvector post-filters the HNSW candidate set; the default ef_search=40
+         starved any selective filter. We raise ef_search per query.
+    """
+
+    def _make_session(self) -> AsyncMock:
+        session = AsyncMock()
+        ef_result = MagicMock()
+        result_mock = MagicMock()
+        result_mock.all.return_value = []
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        session.execute = AsyncMock(side_effect=[ef_result, result_mock, count_result])
+        return session
+
+    @pytest.mark.asyncio
+    async def test_ann_issues_ef_search_set_config(self) -> None:
+        """The ANN path must widen the HNSW candidate pool via set_config."""
+        session = self._make_session()
+        repo = ChunkANNRepository(session, ef_search=200)
+        await repo.ann_search(embedding=[0.1] * 1024, granularity="chunk", top_k=5, tenant_id=None)
+
+        # The FIRST statement raises hnsw.ef_search for the transaction.
+        first_sql = str(session.execute.call_args_list[0][0][0])
+        assert "set_config" in first_sql
+        assert "hnsw.ef_search" in first_sql
+        # The bound value is the configured ef_search.
+        params = session.execute.call_args_list[0][0][1]
+        assert params["ef"] == "200"
+
+    @pytest.mark.asyncio
+    async def test_ann_ef_search_disabled_when_zero(self) -> None:
+        """ef_search<=0 must skip the set_config statement (no-op override)."""
+        session = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.all.return_value = []
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        session.execute = AsyncMock(side_effect=[result_mock, count_result])
+
+        repo = ChunkANNRepository(session, ef_search=0)
+        await repo.ann_search(embedding=[0.1] * 1024, granularity="chunk", top_k=5, tenant_id=None)
+
+        # No set_config statement — first call is the main ANN query.
+        assert "set_config" not in str(session.execute.call_args_list[0][0][0])
+
+    @pytest.mark.asyncio
+    async def test_ann_chunk_query_selects_source_type(self) -> None:
+        """The chunk ANN SELECT must project dsm.source_type (was always null)."""
+        session = self._make_session()
+        repo = ChunkANNRepository(session)
+        await repo.ann_search(embedding=[0.1] * 1024, granularity="chunk", top_k=5, tenant_id=None)
+
+        main_sql = TestChunkANNRepositoryTenantFilter._find_sql(session, "chunk_embeddings")
+        assert "dsm.source_type" in main_sql
 
 
 # ── T-C-1-05: API schema accepts tenant_id ────────────────────────────────────
