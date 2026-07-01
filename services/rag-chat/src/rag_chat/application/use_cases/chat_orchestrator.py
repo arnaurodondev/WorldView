@@ -2408,6 +2408,14 @@ class ChatOrchestratorUseCase:
         # signal). We keep the MAX across iterations so a tool called twice keeps
         # the larger valid range. Keyed by lower-cased tool name.
         _tool_row_counts: dict[str, int] = {}
+        # BUG-2 mechanism 1 (2026-06-30): map (tool_name_lower, row_index) → the
+        # RetrievedItem that produced it, so the post-synthesis citation pass can
+        # normalise ``[tool_name row N]`` provenance tags (the shape the models
+        # actually emit) into ``[<pos>]`` positional markers the OutputProcessor
+        # can assemble into real citations. ``setdefault`` keeps the FIRST call's
+        # rows when a tool is invoked twice (its 0-indexed rows are what the LLM
+        # cites). Keyed by lower-cased tool name to match the LLM's citation casing.
+        _tool_row_items: dict[tuple[str, int], RetrievedItem] = {}
         # FIX-LIVE-Y: skip-final-stream flag (declared at function scope so
         # the late ``if had_tool_calls and not _skip_final_stream`` guard sees
         # it whether or not the inner branch ran). See FIX-LIVE-Y comments
@@ -2654,42 +2662,51 @@ class ChatOrchestratorUseCase:
                         direct_text = _scrubbed_direct.strip()
                     else:
                         direct_text = _scrubbed_direct
+                # ── BUG-4 (2026-06-30): route the FINAL answer through the ────
+                # genuinely-incremental synthesis stream on the common tool-using
+                # flow. When tools have already run this turn (``had_tool_calls``)
+                # and the planning turn returns the answer as direct text, the
+                # OLD path burst-emitted a string-split of an already-generated
+                # answer (``_chunk_text_for_streaming``) — NOT incremental, so the
+                # F1 adapter incremental-yield fix never engaged and the answer
+                # "popped in" as one render. We instead DISCARD the planning-turn
+                # prose and fall through to the post-loop ``stream_chat`` synthesis
+                # (Path B) by leaving ``_skip_final_stream`` False and ``full_text``
+                # empty. That path streams tokens the moment the provider emits
+                # them AND emits ``[tool_name row N]`` provenance the citation
+                # normaliser turns into real citations (BUG-2). Trade-off: one
+                # extra synthesis generation on this flow (the discarded planning
+                # prose); justified because it is the only way to get real
+                # provider-incremental streaming + grounded citations on the
+                # common path.
+                if direct_text and had_tool_calls:
+                    log.info(  # type: ignore[no-any-return]
+                        "direct_text_rerouted_to_synthesis_stream",
+                        iteration=iteration,
+                        direct_len=len(direct_text),
+                        provider=provider_name,
+                    )
+                    # Leave _skip_final_stream=False and full_text="" so Path B
+                    # (had_tool_calls and not _skip_final_stream) synthesises and
+                    # streams the grounded answer incrementally.
+                    break
                 if direct_text:
+                    # NO tools ran this turn — a pure parametric answer with no
+                    # tool results to synthesise from. Re-streaming it would cost a
+                    # second full generation for zero grounding/citation benefit,
+                    # so we keep the chunked burst here (frontend smoothing decouples
+                    # paint cadence for this case). Documented residual of BUG-4.
+                    #
                     # PLAN-0102 W4 T-W4-B (BP-621): record the LLM-generation
                     # wall-clock as ``llm_direct_text_generation`` so the
                     # chat-eval harness can compute ``tps_streaming`` for
-                    # direct-text answers. Without this, every "What is X?"
-                    # question hit the ``llm_synthesis_streaming`` floor and
-                    # returned ``tps_streaming=None`` — the streaming-TPS
-                    # gate had no data on ~100% of questions.
-                    #
-                    # The duration is THIS iteration's ``chat_with_tools``
-                    # call (already captured in ``_planning_elapsed_ms``
-                    # above); the local chunk-and-emit loop below is
-                    # microseconds of string splitting, not generation. We
-                    # record for BOTH iter-0 (pure direct-text answer, no
-                    # tools fired) and iter > 0 (FIX-LIVE-Y path: tools
-                    # fired, then a later iteration returned direct text and
-                    # we skip the second-turn stream) — in both cases this
-                    # iteration's planning call IS the generation that
-                    # produced the user-visible text. ``record_once`` so a
-                    # future loop refactor that re-enters this branch can't
-                    # silently double-count.
+                    # direct-text answers. ``record_once`` so a future loop
+                    # refactor that re-enters this branch can't double-count.
                     phases.record_once("llm_direct_text_generation", _planning_elapsed_ms)
                     for _chunk in _chunk_text_for_streaming(direct_text):
                         yield p.emitter.emit_delta(_chunk)
-                    # FIX-LIVE-Y: when iteration > 0 ends with SUBSTANTIVE
-                    # direct text (e.g. after the all-tools-returned-empty
-                    # graceful path), we MUST suppress the second
-                    # final-streaming turn below. Otherwise a multi-iteration
-                    # loop that started with tool_calls and finished with a
-                    # direct text answer would emit the answer TWICE (once
-                    # here via ``emit_token``, once via ``stream_chat`` at
-                    # line ~1206). Gating on ``direct_text`` (not just
-                    # iteration > 0) keeps the historical behaviour where
-                    # iter-N+1 returns empty text+no tool_calls as a signal
-                    # to "synthesise the final answer from messages" via the
-                    # final ``stream_chat`` turn (existing grounding tests).
+                    # Suppress the second final-streaming turn — we already emitted
+                    # the answer here, so Path B would double-emit.
                     _skip_final_stream = True
                 full_text = direct_text
                 # No tool calls on this iteration — nothing to add to messages.
@@ -3042,6 +3059,16 @@ class ChatOrchestratorUseCase:
                 _tn = tc.name.lower()
                 if _count > _tool_row_counts.get(_tn, 0):
                     _tool_row_counts[_tn] = _count
+                # BUG-2 mechanism 1: remember which RetrievedItem produced each
+                # 0-indexed row so ``[tool_name row N]`` citations can later be
+                # mapped to the item's prompt position. Only real (non-transport-
+                # error) result lists carry items; ``setdefault`` preserves the
+                # first call's rows for a tool invoked more than once.
+                if not isinstance(_item, TransportErrorMarker):
+                    _row_list = _item if isinstance(_item, list) else ([_item] if _item is not None else [])
+                    for _row_idx, _row_item in enumerate(_row_list):
+                        if _row_item is not None:
+                            _tool_row_items.setdefault((_tn, _row_idx), _row_item)
                 # 2026-06-26 #1/#7: per-query empty-search bookkeeping. Only
                 # ``search_documents`` is tracked — it is the free-text routing
                 # sink. We key on the normalised query so a re-issued or lightly
@@ -4268,6 +4295,51 @@ class ChatOrchestratorUseCase:
         # and return []), so the citation resolver must use the identical
         # fallback or every marker resolves against the wrong list.
         prompt_items = reranked or non_none_items
+
+        # ── BUG-2 mechanism 1: promote [tool_name row N] tags to citations ─────
+        # The synthesis prompt tells the model to cite provenance as
+        # ``[tool_name row N]`` and the live models emit that shape almost
+        # exclusively — but ``process_output`` only assembles citations from the
+        # plain ``[N]`` positional form, so those tags were dropped and the
+        # answer shipped with ``citations:[]`` (the 2026-06-30 investigation). We
+        # rewrite each tag that maps to a genuine retrieved item into its 1-based
+        # prompt position BEFORE assembly (identity match against ``prompt_items``
+        # so reranker reordering is honoured). Tags with no backing item are left
+        # for the out-of-range / phantom strip guards below. Runs AFTER grounding
+        # validation (which relies on the original ``[tool_name row N]`` shape for
+        # phantom detection), so both the streamed answer AND a grounding-rewrite
+        # answer keep their source links.
+        if _tool_row_items and prompt_items:
+            from rag_chat.application.services.numeric_grounding import (
+                normalize_tool_row_citations,
+            )
+
+            # Match by object identity first (fast, exact); fall back to
+            # ``item_id`` so a reranker that returns reordered COPIES of the
+            # items still resolves correctly.
+            _pos_by_obj_id: dict[int, int] = {}
+            _pos_by_item_id: dict[str, int] = {}
+            for _i, _it in enumerate(prompt_items):
+                _pos_by_obj_id[id(_it)] = _i + 1
+                _iid = getattr(_it, "item_id", None)
+                if _iid:
+                    _pos_by_item_id.setdefault(str(_iid), _i + 1)
+
+            def _resolve_row_position(tool_name: str, row_index: int) -> int | None:
+                _it = _tool_row_items.get((tool_name, row_index))
+                if _it is None:
+                    return None
+                _pos = _pos_by_obj_id.get(id(_it))
+                if _pos is not None:
+                    return _pos
+                _iid2 = getattr(_it, "item_id", None)
+                return _pos_by_item_id.get(str(_iid2)) if _iid2 else None
+
+            _pre_norm = full_text
+            full_text = normalize_tool_row_citations(full_text, _resolve_row_position)
+            if full_text != _pre_norm:
+                log.info("tool_row_citations_normalized", request_id=str(getattr(audit, "turn_id", "") or ""))  # type: ignore[no-any-return]
+
         answer, citations = p.process_output(full_text, prompt_items)
 
         # ── 2026-06-26 #3: strip out-of-range [tool row N] citations ───────────
@@ -4603,6 +4675,8 @@ class ChatOrchestratorUseCase:
             NumericGroundingValidator,
             find_phantom_tool_citations,
             flatten_tool_values_count,
+            material_unsupported_numbers,
+            numeric_grounding_effectively_passed,
             pin_numbers_to_tool_values,
             response_has_numeric_claims,
         )
@@ -4670,9 +4744,34 @@ class ChatOrchestratorUseCase:
             entity_first_passed = entity_first.passed
             entity_unsupported = entity_first.unsupported
 
+        # ── BUG-2 mechanism 2: skip the numeric rewrite on QUALITATIVE answers ─
+        # The numeric validator flags incidental prose numbers (dates, counts,
+        # list ordinals, years) as "unsupported" on events / claims /
+        # relationship answers that carry NO material financial figure. Firing a
+        # rewrite for those replaced a good streamed answer with ``[row N]``-style
+        # text and DROPPED its citations (reason=numeric_grounding_failed, seen on
+        # 3 of 4 recent answers — 2026-06-30 investigation). ``material`` is the
+        # subset of unsupported numbers that are genuine financial claims
+        # (revenue/EPS/price/market-cap/ratio/return/shares/headcount, or a large
+        # unclassified magnitude). We treat the numeric pass as effectively
+        # passed when there is NO material claim — preserving the grounding
+        # guarantee for the AMD ``$34.6B`` fabrication class (which IS material
+        # and still triggers the rewrite below).
+        _material_first = material_unsupported_numbers(numeric_first)
+        _numeric_ok_first = numeric_grounding_effectively_passed(numeric_first)
+
         # ── STRICTER TRIGGER: both classes grounded → no rewrite, no LLM ──────
-        if numeric_first.passed and entity_first_passed:
-            rag_grounding_validation_total.labels(result="passed").inc()
+        if _numeric_ok_first and entity_first_passed:
+            if numeric_first.passed:
+                rag_grounding_validation_total.labels(result="passed").inc()
+            else:
+                # Numeric "failed" but only on incidental (non-material) numbers.
+                log.info(  # type: ignore[no-any-return]
+                    "numeric_grounding_skipped_no_material_claims",
+                    unsupported_total=len(numeric_first.unsupported),
+                    material_total=len(_material_first),
+                )
+                rag_grounding_validation_total.labels(result="passed_qualitative").inc()
             return response, True
 
         # ── C1 #2: fabricated multi-row series → honest fallback (fail-safe) ──
@@ -4687,7 +4786,7 @@ class ChatOrchestratorUseCase:
         # detect_fabricated_series) so a coherent answer is never mangled.
         from rag_chat.application.services.numeric_grounding import detect_fabricated_series
 
-        if not numeric_first.passed and detect_fabricated_series(response, tool_items):
+        if not _numeric_ok_first and detect_fabricated_series(response, tool_items):
             _question = ""
             for _m in reversed(messages):
                 if _m.get("role") == "user" and isinstance(_m.get("content"), str):
@@ -4733,10 +4832,15 @@ class ChatOrchestratorUseCase:
         # pass, including the INTERNAL_VALIDATION framing that stops the LLM
         # echoing tokens back as a refusal).
         prompt_sections: list[str] = []
-        if not numeric_first.passed:
+        # BUG-2 mechanism 2: only ask the LLM to re-ground MATERIAL numbers. When
+        # we reached the rewrite because the ENTITY pass failed while the numeric
+        # failures were purely incidental (dates/counts/years), listing those
+        # would push the model to mangle correct prose. ``_material_first`` is
+        # empty in that case, so the numeric section is skipped entirely.
+        if not _numeric_ok_first:
             bullets = "\n".join(
                 f"- {u.snippet} ({u.field_kind.value}, closest tool value: {u.closest_tool_value})"
-                for u in numeric_first.unsupported
+                for u in _material_first
             )
             entity_block = ""
             if entity_context is not None:
@@ -4914,15 +5018,17 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
-        # Both classes now grounded → accept the rewrite.
-        if numeric_second.passed and entity_second_passed:
+        # Both classes now grounded → accept the rewrite. BUG-2 mechanism 2:
+        # use the material-claim gate so a rewrite whose only residual numbers
+        # are incidental (dates/counts) is accepted rather than bannered.
+        if numeric_grounding_effectively_passed(numeric_second) and entity_second_passed:
             rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
             return rewritten, True
 
         # ── Residual failure: banner suppression (PRESERVED) then banner ──────
         # Honest-refusal rewrite suppression (W44) — only when the residual is
         # purely numeric (an honest "data unavailable" already conveys it).
-        if entity_second_passed and not numeric_second.passed:
+        if entity_second_passed and not numeric_grounding_effectively_passed(numeric_second):
             _rw_strip = rewritten.lstrip()
             _refusal_signals = (
                 "not currently available",

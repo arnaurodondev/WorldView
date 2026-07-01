@@ -312,6 +312,30 @@ class TestOrchestratorGroundingHook:
         assert "$10.253B" in assistant_response.content
         assert "$34.6B" not in assistant_response.content
 
+    def test_qualitative_answer_does_not_trigger_rewrite(self) -> None:
+        """BUG-2 mechanism 2: incidental numbers (counts/dates) → NO rewrite.
+
+        A qualitative events/claims answer whose only "unsupported" numbers are
+        a count ("3 partnerships") and a date ("in June") must NOT fire the
+        numeric-grounding rewrite (which replaces the answer with ``[row N]``
+        text and drops citations). We assert exactly ONE stream_chat call (no
+        rewrite) and that the streamed qualitative answer is what gets persisted
+        — unchanged. The tool item carries a real figure so the empty-pool gate
+        does not fire.
+        """
+        orch, captured, pipeline = self._build(
+            tool_item_text="Apple Q2 revenue was $10.253B in the latest filing.",
+            stream_chunks=["Apple announced 3 partnerships and expanded services in June."],
+        )
+        _, answer = asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # Exactly one stream_chat call → the numeric rewrite never fired.
+        assert len(captured) == 1, f"qualitative answer must not rewrite; got {len(captured)} calls"
+        # The qualitative answer is preserved (not replaced by a [row N] rewrite).
+        assert "3 partnerships" in answer
+        kwargs = pipeline.persist_chat.await_args.kwargs
+        assert "3 partnerships" in kwargs["assistant_response"].content
+        assert "⚠" not in kwargs["assistant_response"].content
+
     def test_second_failure_appends_banner(self) -> None:
         """Both initial draft AND rewrite invent numbers → banner appended."""
         orch, captured, pipeline = self._build(
