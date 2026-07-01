@@ -2589,6 +2589,12 @@ services:
       PUSHGATEWAY_URL: "http://pushgateway:9091"
       API_BASE_URL: "http://api-gateway:8000"
       SYNTHETIC_JWT: "${SYNTHETIC_MONITOR_JWT:-}"
+      # Single-source DeepInfra key for the freshness probe (probe_deepinfra_key).
+      # Interpolated from the compose environment / infra/compose/.env — set it to
+      # the same value as the *_DEEPINFRA_API_KEY vars in the service docker.env
+      # files. Empty = probe skips (no false alarm). See rotation runbook:
+      # infra/gitops/docs/deepinfra-key-rotation.md
+      DEEPINFRA_API_KEY: "${DEEPINFRA_API_KEY:-}"
     depends_on:
       - pushgateway
     restart: unless-stopped
