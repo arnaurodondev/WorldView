@@ -896,3 +896,83 @@ class TestPgFundamentalMetricsRepository:
         session = uow.get_read_session()
         metrics = await query_available_metrics(session, instr_id)
         assert set(metrics) == {"pe_ratio", "pb_ratio", "enterprise_value"}
+
+
+# ── Prediction market repository — free-text query ESCAPE (BP-712) ────────────
+
+
+class TestPgPredictionMarketRepositoryQuery:
+    """Real-DB regression tests for the free-text ILIKE ESCAPE clause (BP-712).
+
+    Runs the ``list_markets`` free-text branch against a live TimescaleDB
+    container (``standard_conforming_strings=on`` by default) — the exact
+    condition under which the old two-backslash ESCAPE literal raised
+    asyncpg ``InvalidEscapeSequenceError`` → HTTP 500.
+    """
+
+    @staticmethod
+    async def _cleanup(uow) -> None:
+        # prediction_markets is not in the conftest TRUNCATE list, so remove the
+        # rows this test inserted to keep the shared session state clean.
+        from sqlalchemy import text as _sql_text
+
+        await uow.get_write_session().execute(_sql_text("DELETE FROM prediction_markets"))
+        await uow.commit()
+
+    @staticmethod
+    def _market(market_id: str, question: str) -> object:
+        from market_data.domain.entities import PredictionMarket
+
+        return PredictionMarket(market_id=market_id, question=question)
+
+    async def test_free_text_query_filters_without_escape_error(self, uow) -> None:
+        """A free-text query executes cleanly and filters on question text."""
+        try:
+            await uow.prediction_markets.upsert(
+                self._market("mkt-election", "US presidential election outcome 2024"),
+            )
+            await uow.prediction_markets.upsert(
+                self._market("mkt-sports", "Will the home team win the final"),
+            )
+            await uow.commit()
+
+            # Before the fix this raised InvalidEscapeSequenceError (HTTP 500).
+            pairs, total = await uow.prediction_markets.list_markets(
+                status=None,
+                query="election",
+                limit=10,
+                offset=0,
+            )
+
+            assert total == 1
+            assert len(pairs) == 1
+            assert pairs[0][0].market_id == "mkt-election"
+        finally:
+            await self._cleanup(uow)
+
+    async def test_percent_in_query_is_escaped_not_wildcard(self, uow) -> None:
+        """A literal ``%`` in the query is escaped, not treated as a wildcard.
+
+        Proves the single-backslash ESCAPE char is consistent with the
+        ``safe_query`` metacharacter escaping: ``"win 50%"`` must match a
+        literal ``50%`` substring only, so it does NOT match ``"win 50k"``.
+        """
+        try:
+            await uow.prediction_markets.upsert(
+                self._market("mkt-50k", "Will BTC win 50k this year"),
+            )
+            await uow.commit()
+
+            # Pattern becomes `%win 50\%%` — the escaped % matches a literal %,
+            # which "win 50k" does not contain → zero rows (not a wildcard hit).
+            pairs, total = await uow.prediction_markets.list_markets(
+                status=None,
+                query="win 50%",
+                limit=10,
+                offset=0,
+            )
+
+            assert total == 0
+            assert pairs == []
+        finally:
+            await self._cleanup(uow)

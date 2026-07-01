@@ -204,8 +204,19 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
 
         if query is not None:
             # Escape ILIKE metacharacters before building the pattern (M-002).
+            # The escape char is a single backslash: literal backslashes in the
+            # user query are doubled ("\\"), and %/_ are backslash-prefixed so
+            # they match literally instead of acting as wildcards.
             safe_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            predicates.append("m.question ILIKE :query_like ESCAPE '\\\\'")
+            # BP-712: the ESCAPE clause must be a SINGLE character. This Python
+            # literal renders to SQL `ESCAPE '\'` (one backslash). The previous
+            # `ESCAPE '\\\\'` rendered to SQL `ESCAPE '\\'` which, under
+            # standard_conforming_strings=on (the Postgres default), is a
+            # TWO-char string literal → asyncpg InvalidEscapeSequenceError →
+            # HTTP 500 on every free-text query (the chat tool always supplies
+            # one). A single backslash matches the escape char used to build
+            # `safe_query` above, so metacharacter escaping stays consistent.
+            predicates.append("m.question ILIKE :query_like ESCAPE '\\'")
             params["query_like"] = f"%{safe_query}%"
 
         where_sql = (" WHERE " + " AND ".join(predicates)) if predicates else ""
