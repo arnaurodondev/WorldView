@@ -6,6 +6,7 @@ Critical invariant: UNRESOLVED entity mentions are NEVER discarded.
 from __future__ import annotations
 
 import uuid
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -931,3 +932,207 @@ class TestStage2ExchangeQualifierStrip:
         called_tickers = alias_repo.batch_ticker_isin_match.call_args.args[0]
         assert "BRK.B" in called_tickers
         assert "BRK" not in called_tickers
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-07-01 — Stage-2 class-gate: fix the class-blind ticker mis-resolution
+# class (US/DE/CEO/MA/FTC/AI) WITHOUT regressing Apple or other majors.
+#
+# Live evidence (nlp_db entity_mentions, resolution_stage=2):
+#   "US"  currency               846x -> a US-ticker equity
+#   "DE"  location               326x -> Deere & Company
+#   "CEO" person                  95x -> equity
+#   "MA"  location                50x -> Mastercard Inc
+#   "FTC" regulatory_body         37x -> Filtronic Plc
+#   "AI"  macroeconomic_indicator  -  -> C3.ai, Inc.
+# Root cause: Stage-2 matched any all-caps <=6-char surface against a ticker,
+# ignoring GLiNER's own class.  The prior deferred fix keyed off the
+# mention_class/entity_type MISMATCH and broke Apple (organization ->
+# financial_instrument is the LEGITIMATE common case).  The correct axis is the
+# mention_class semantic category.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+from nlp_pipeline.application.blocks.entity_resolution import (
+    _ticker_stage_allowed,
+)
+
+
+class TestTickerStageAllowedUnit:
+    """Unit-level guard for the class gate itself."""
+
+    @pytest.mark.parametrize(
+        "denied",
+        [
+            MentionClass.CURRENCY,
+            MentionClass.LOCATION,
+            MentionClass.PERSON,
+            MentionClass.REGULATORY_BODY,
+            MentionClass.GOVERNMENT_BODY,
+            MentionClass.MACROECONOMIC_INDICATOR,
+        ],
+    )
+    def test_non_equity_classes_are_denied(self, denied: MentionClass) -> None:
+        assert _ticker_stage_allowed(denied) is False
+
+    @pytest.mark.parametrize(
+        "allowed",
+        [
+            MentionClass.ORGANIZATION,
+            MentionClass.FINANCIAL_INSTRUMENT,
+            MentionClass.FINANCIAL_INSTITUTION,
+            MentionClass.INDEX,
+            MentionClass.COMMODITY,
+        ],
+    )
+    def test_company_compatible_classes_are_allowed(self, allowed: MentionClass) -> None:
+        assert _ticker_stage_allowed(allowed) is True
+
+    def test_accepts_bare_string_class(self) -> None:
+        # Forward-compat: string form (not enum) still gated correctly.
+        assert _ticker_stage_allowed("location") is False
+        assert _ticker_stage_allowed("organization") is True
+
+
+async def _resolve_one(text: str, mention_class: MentionClass, ticker_isin_map: dict[str, uuid.UUID]):
+    """Run the full block for a single mention and return the resolved mention."""
+    mention = _make_mention(text, mention_class=mention_class)
+    alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+        ticker_isin_map=ticker_isin_map,
+    )
+    intelligence_session = MagicMock()
+    intelligence_session.execute = AsyncMock()
+    # Churn-guard COUNT(*) -> 0 so provisional path (if reached) does not blow up.
+    intelligence_session.execute.return_value = MagicMock(scalar_one=MagicMock(return_value=0))
+    intelligence_session.begin_nested = MagicMock()
+
+    resolved, _ = await run_entity_resolution_block(
+        [mention],
+        alias_repo=alias_repo,
+        embedding_repo=embedding_repo,
+        canonical_entity_repo=canonical_repo,
+        resolution_audit_repo=audit_repo,
+        embedding_client=_make_embedding_client(),
+        intelligence_session=intelligence_session,
+        model_id="bge",
+        instruction_prefix="",
+    )
+    return resolved[0], alias_repo
+
+
+class TestStage2ClassGateBlocksMisResolution:
+    """The failing cases: a non-equity-class surface must NOT resolve via ticker."""
+
+    # (surface, GLiNER class) pairs pulled from the live mis-resolution counts.
+    FAILING_CASES: ClassVar = [
+        ("US", MentionClass.CURRENCY),
+        ("DE", MentionClass.LOCATION),
+        ("CEO", MentionClass.PERSON),
+        ("MA", MentionClass.LOCATION),
+        ("CA", MentionClass.LOCATION),
+        ("MO", MentionClass.LOCATION),
+        ("FTC", MentionClass.REGULATORY_BODY),
+        ("CMA", MentionClass.REGULATORY_BODY),
+        ("AI", MentionClass.MACROECONOMIC_INDICATOR),
+        ("VIX", MentionClass.MACROECONOMIC_INDICATOR),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface,mclass", FAILING_CASES)
+    async def test_non_equity_surface_not_ticker_resolved(self, surface: str, mclass: MentionClass) -> None:
+        equity_id = uuid.uuid4()
+        # The equity ticker collision EXISTS in the map — the gate must ignore it.
+        resolved, alias_repo = await _resolve_one(surface, mclass, {surface: equity_id})
+        assert resolved.resolved_entity_id != equity_id
+        assert resolved.resolved_entity_id is None
+        assert resolved.resolution_outcome == ResolutionOutcome.UNRESOLVED
+        # The gate should also avoid even QUERYING the ticker for a denied class.
+        called_tickers = alias_repo.batch_ticker_isin_match.call_args.args[0]
+        assert surface not in called_tickers
+
+
+class TestStage2ClassGateKeepsMajors:
+    """Apple + peers: company-compatible classes still resolve via ticker."""
+
+    MAJORS: ClassVar = [
+        ("AAPL", MentionClass.ORGANIZATION),
+        ("AAPL", MentionClass.FINANCIAL_INSTRUMENT),
+        ("AAPL", MentionClass.COMMODITY),  # GLiNER mislabel, but still an equity ticker
+        ("MSFT", MentionClass.ORGANIZATION),
+        ("GOOGL", MentionClass.ORGANIZATION),
+        ("AMZN", MentionClass.ORGANIZATION),
+        ("NVDA", MentionClass.ORGANIZATION),
+        ("MA", MentionClass.ORGANIZATION),  # Mastercard as a real company mention
+        ("JPM", MentionClass.FINANCIAL_INSTITUTION),
+        ("SPY", MentionClass.INDEX),  # ETF ticker
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface,mclass", MAJORS)
+    async def test_major_ticker_still_resolves(self, surface: str, mclass: MentionClass) -> None:
+        equity_id = uuid.uuid4()
+        resolved, alias_repo = await _resolve_one(surface, mclass, {surface: equity_id})
+        assert resolved.resolved_entity_id == equity_id
+        assert resolved.resolution_outcome == ResolutionOutcome.AUTO_RESOLVED
+        called_tickers = alias_repo.batch_ticker_isin_match.call_args.args[0]
+        assert surface in called_tickers
+
+
+class TestStage2ClassGatePerMention:
+    """Same surface, two classes in ONE batch: gate is re-checked per mention.
+
+    "MA" tagged organization (Mastercard) must resolve; "MA" tagged location
+    (Massachusetts) must NOT — even though they share the s2_lookup_key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_same_surface_split_by_class(self) -> None:
+        mastercard = uuid.uuid4()
+        org_ma = _make_mention("MA", mention_class=MentionClass.ORGANIZATION)
+        loc_ma = _make_mention("MA", mention_class=MentionClass.LOCATION)
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            ticker_isin_map={"MA": mastercard},
+        )
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock(return_value=MagicMock(scalar_one=MagicMock(return_value=0)))
+        intelligence_session.begin_nested = MagicMock()
+
+        resolved, _ = await run_entity_resolution_block(
+            [org_ma, loc_ma],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+        by_class = {m.mention_class: m for m in resolved}
+        assert by_class[MentionClass.ORGANIZATION].resolved_entity_id == mastercard
+        assert by_class[MentionClass.LOCATION].resolved_entity_id is None
+
+
+class TestStage2ClassGateSingleMentionPath:
+    """The single-mention _stage2_ticker_isin helper is gated too."""
+
+    @pytest.mark.asyncio
+    async def test_denied_class_skips_single_ticker_lookup(self) -> None:
+        equity_id = uuid.uuid4()
+        mention = _make_mention("US", mention_class=MentionClass.CURRENCY)
+        alias_repo, _, _, _ = _make_repos(ticker_result=equity_id)
+        audit: list[MentionResolution] = []
+        await _stage2_ticker_isin(mention, alias_repo, audit)
+        # The gate must null out the ticker so the real repo (which does
+        # `if ticker:`) never queries the equity.  The AsyncMock here returns a
+        # value unconditionally, so we assert on the ARGUMENTS: ticker is None.
+        assert alias_repo.ticker_isin_match.await_args.kwargs["ticker"] is None
+
+    @pytest.mark.asyncio
+    async def test_allowed_class_still_hits_single_ticker_lookup(self) -> None:
+        equity_id = uuid.uuid4()
+        mention = _make_mention("AAPL", mention_class=MentionClass.ORGANIZATION)
+        alias_repo, _, _, _ = _make_repos(ticker_result=equity_id)
+        audit = []
+        result_id, confidence = await _stage2_ticker_isin(mention, alias_repo, audit)
+        assert result_id == equity_id
