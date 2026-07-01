@@ -120,3 +120,46 @@ The `get_filings` handler itself is correct (resolves ticker, pins `sec_edgar`, 
 ## What passed cleanly
 - **Feature 1** — news citations with real clickable URLs + source_name + published_at; empty→null normalization present in code.
 - **Feature 2 (mechanism)** — content-store batch resolve (`/documents/batch` 200 OK, `items_source_linked: 20/20`) backfills real source-article URLs onto KG claim citations; verified end-to-end in the run where the model used `[N]` markers. Aggregates correctly emit `url=null`.
+
+---
+
+# Round-2 re-verification (2026-07-01, second fix wave: rag-chat + market-data rebuilt)
+
+Same method (dev-login JWT → gateway `POST /v1/chat/stream`, live `openai/gpt-oss-120b`).
+
+## ROUND-1 → NOW summary
+
+| Item | Round-1 | Now | Verdict |
+|------|---------|-----|---------|
+| P0 news regression | REFUSED (phantom `[commentary]`) | Not refused; streams; citations carry real finnhub/yahoo URLs when model cites | **FIXED ✅** |
+| BUG-2 KG citations | empty on `【row N】` markers | NON-EMPTY with source-article URLs; new `tool_row_citations_normalized` | **FIXED ✅** |
+| BUG-1 prediction URLs | 0 URLs (500 → entity_grounding refusal) | markets return (ILIKE tokenized), no entity refusal, `https://polymarket.com/event/<slug>` in citations | **FIXED ✅** |
+| BUG-3 filings | empty (tool 0 rows) | `get_filings` returns 5-10 rows; EDGAR `sec.gov/Archives/…-index.htm` URLs in citations | **FIXED ✅** |
+| BUG-4 streaming | fixed | still incremental (260 tok/5.4 s; 392 tok/7.4 s) | **PASS ✅** |
+| Numeric-fabrication guarantee | holds | still fires (`numeric_grounding_failed` on multiple runs) | **PASS ✅** |
+
+## Evidence
+
+### P0 news regression — FIXED
+"latest news on NVIDIA": `get_entity_news` ok (10 items), streamed 260 tokens/5.4 s, **not refused** (no `phantom_citation` in 3 runs). With a "with sources" prompt → citations with real URLs: `https://finnhub.io/api/news?id=…`, `source_name="news"`, ISO `published_at`. The benign-`[commentary]`-no-longer-refuses fix works for the news flow.
+
+### BUG-2 KG citations — FIXED
+"events and claims about NVIDIA": `search_events` ok (20), `items_source_linked: 20`, log `tool_row_citations_normalized` (CJK/full-width bracket normalization), final `citations` NON-EMPTY — event citation with `https://finnhub.io/api/news?id=…`, `source_name="knowledge_graph"`. `numeric_grounding_failed` still fires but no longer empties the citations (rewrite gating). "What partnerships does Apple have" → 1 `relation` citation, `url=null` (correct — aggregate).
+
+### BUG-1 prediction markets — FIXED (delivers URLs)
+Multi-word "2028 presidential nomination" → `get_prediction_markets` `status=ok` item_count=10 (ILIKE tokenization; was 0), **no** `entity_grounding_failed` (entity_name now set). "Polymarket markets about Nikki Haley, cite as [1][2]" → citations carry `https://polymarket.com/event/will-nikki-haley-win-the-2028-republican-presidential-nomination` + `…-2028-us-presidential-election`, `source_name="polymarket"`.
+
+### BUG-3 get_filings — FIXED (delivers EDGAR URLs)
+`get_filings(NVDA/AAPL)` now `status=ok` item_count=5-10 (company-name-anchored query, no hard entity_ids filter; was 0). "List NVIDIA's recent SEC filings, cite [1][2] with EDGAR link" → citations carry canonical EDGAR index URLs: `https://www.sec.gov/Archives/edgar/data/1408100/000114036126025340/0001140361-26-025340-index.htm`.
+
+### BUG-4 streaming — still incremental
+`llm_synthesis_streaming` path; 260 tokens/5.4 s and 392 tokens/7.4 s (dozens of >50 ms inter-token gaps). No regression.
+
+### Numeric-fabrication guarantee — intact
+`numeric_grounding_failed` fired on the events "92 % YoY" figure, on filings date/number claims, and on prediction runs. `numeric_grounding_phantom_citation_refused` still catches fabricated tool citations. Detection was NOT weakened.
+
+## Residual fragility (NOT a regression; cross-cutting, affects all tools)
+Citations still depend on the model emitting mappable markers. When the model uses non-standard provenance markers — `[functions.get_prediction_markets row 0]`, `[get_filings row 10]` (out-of-range) — or emits a phantom `[commentary]` citation, the affected citation is stripped or the answer is refused, so URLs intermittently don't reach the wire. This is the same `[N]`-marker-dependency across news/KG/prediction/filings, not specific to any one feature. With normal `[N]` citing (the common case), all four features now deliver their URLs.
+
+## Net result
+All four fixes land: BUG-1 (polymarket URLs), BUG-2 (KG source URLs), BUG-3 (EDGAR URLs), the P0 news regression, plus BUG-4 streaming and the numeric-fabrication guarantee. Remaining fragility is the cross-cutting citation-marker normalization gap (non-`[N]` markers / phantom labels), which intermittently drops individual citations. No code/containers/git modified during this pass.
