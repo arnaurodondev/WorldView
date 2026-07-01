@@ -106,6 +106,46 @@ _WORD_MAGNITUDE_RE = re.compile(r"^\s+(thousand|million|billion|trillion)\b", re
 # Citation markers we must ignore so [N7] does not count as the number 7.
 _CITATION_RE = re.compile(r"\[N\d+\]")
 
+# ── BUG-2 (2026-07-01) — fullwidth / CJK bracket variants around citations ────
+#
+# The live ``gpt-oss-120b`` model emits its ``[tool_name row N]`` provenance tags
+# with NON-ASCII brackets almost exclusively (CJK lenticular brackets around the
+# tag), and occasionally the fullwidth or tortoise-shell forms. Every citation
+# regex in this module (normalize, phantom, out-of-range, and the validator's
+# ``_PROSE_CITATION_RE`` / ``_CITED_TOOL_RE`` grounding fast-path) is anchored on
+# the ASCII ``[``/``]`` characters, so a CJK-bracketed tag was invisible:
+# citations were dropped (the assembler never saw a ``[N]``) AND the fast-path
+# could not confirm the cited tool, so a genuinely-grounded number was flagged
+# unsupported -> a spurious rewrite that ALSO dropped the citations.
+#
+# We map every open variant to ASCII ``[`` and every close variant to ``]`` at the
+# entry points that matter. Keys are Unicode CODE POINTS (str.translate accepts
+# int keys) so no ambiguous literal characters live in the source. O(n),
+# allocation-light and idempotent (ASCII brackets are absent -> map to themselves).
+_CITATION_BRACKET_TRANSLATION = {
+    0xFF3B: "[",  # FULLWIDTH LEFT SQUARE BRACKET
+    0x3010: "[",  # LEFT BLACK LENTICULAR BRACKET (the live-model default)
+    0x3014: "[",  # LEFT TORTOISE SHELL BRACKET
+    0xFF3D: "]",  # FULLWIDTH RIGHT SQUARE BRACKET
+    0x3011: "]",  # RIGHT BLACK LENTICULAR BRACKET
+    0x3015: "]",  # RIGHT TORTOISE SHELL BRACKET
+}
+
+
+def normalize_citation_brackets(text: str) -> str:
+    """Map fullwidth / CJK citation-bracket variants to ASCII ``[ ]``.
+
+    Recognised open variants: fullwidth (U+FF3B), lenticular (U+3010) and
+    tortoise-shell (U+3014); close variants U+FF3D / U+3011 / U+3015.
+
+    Deterministic and idempotent. Applied to the answer BEFORE grounding
+    validation (so the validator's citation fast-path recognises the tag and does
+    not spuriously rewrite) and inside :func:`normalize_tool_row_citations` (so the
+    tool-row -> positional citation rewrite fires on CJK-bracketed tags too).
+    """
+    return text.translate(_CITATION_BRACKET_TRANSLATION)
+
+
 # ── BP-670 — non-claim number shapes (live Apple-news false positives) ───────
 #
 # The validator flagged 9 "unsupported numbers" in a correctly-cited news
@@ -804,7 +844,13 @@ def normalize_tool_row_citations(
 
     Deterministic and side-effect free so the orchestrator + tests share one
     definition.
+
+    BUG-2 (2026-07-01): the live model emits full-width / CJK brackets
+    (``【search_events row 1】``); we translate every bracket variant to ASCII
+    first so the ASCII-anchored ``_TOOL_ROW_CITATION_WITH_INDEX_RE`` matches them.
     """
+    # Normalise CJK / fullwidth brackets to ASCII so the tag regex sees them.
+    response = normalize_citation_brackets(response)
 
     def _sub(m: re.Match[str]) -> str:
         tool = m.group("tool").lower()
@@ -1950,6 +1996,8 @@ __all__ = [
     "detect_fabricated_series",
     "find_phantom_tool_citations",
     "flatten_tool_values_count",
+    "normalize_citation_brackets",
+    "normalize_tool_row_citations",
     "partition_phantom_tool_citations",
     "pin_numbers_to_tool_values",
     "response_has_numeric_claims",

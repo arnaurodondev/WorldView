@@ -4137,6 +4137,21 @@ class ChatOrchestratorUseCase:
         # that gated the completion-cache write (F-LIVE-008: never cache a
         # validator-rejected answer; it poisons the deterministic key for 24h).
         if had_tool_calls and full_text.strip() and grounded:
+            # BUG-2 (2026-07-01): the live model wraps its ``[tool_name row N]``
+            # provenance tags in full-width / CJK brackets (``【search_events row
+            # 1】``). Every citation regex — including the numeric validator's
+            # grounding fast-path (``_has_grounding_citation``) — is anchored on
+            # ASCII brackets, so a CJK-bracketed citation was invisible: a
+            # genuinely-cited number looked unsupported and a spurious rewrite
+            # fired that ALSO dropped the citations. Normalise the brackets to
+            # ASCII ONCE here, before grounding, so the fast-path recognises the
+            # tag (no spurious rewrite) AND the later normalize_tool_row_citations
+            # promotes it to a real ``[N]`` citation.
+            from rag_chat.application.services.numeric_grounding import (
+                normalize_citation_brackets,
+            )
+
+            full_text = normalize_citation_brackets(full_text)
             # RC-1: resolve the optional repair-rewrite model override. Lazy
             # ``Settings()`` mirrors the existing grounding-timeout lookup; a
             # construction failure (missing env) degrades to None → default
