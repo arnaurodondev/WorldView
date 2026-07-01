@@ -1772,6 +1772,71 @@ class TestPhantomCitationGate:
         assert text != _PHANTOM_CITATION_REFUSAL
         assert text == response
 
+    def test_benign_commentary_label_not_refused(self) -> None:
+        """P0 (2026-07-01): a benign ``[commentary row N]`` prose label must NOT refuse.
+
+        Regression: the live model tags its own editorial prose on a news answer
+        as ``[commentary row 1]``. With no material figure near the tag it is
+        benign — the answer must survive (tag stripped), NOT be nuked.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        response = (
+            "NVIDIA continues to dominate the AI accelerator market and analysts "
+            "remain broadly positive. [commentary row 1] Recent headlines focus on "
+            "new data-center partnerships."
+        )
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        # No numeric claim → no rewrite; the stream must never be reached.
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[],
+                messages=[{"role": "user", "content": "latest news on NVIDIA?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_entity_news"],
+            )
+        )
+        assert passed is True, "benign prose label must not refuse the whole answer"
+        assert text != _PHANTOM_CITATION_REFUSAL
+        assert "[commentary row 1]" not in text, "the benign tag should be stripped from the answer"
+        assert "NVIDIA continues to dominate" in text
+
+    def test_benign_and_material_phantom_still_refuses(self) -> None:
+        """When a benign label co-occurs with a fabricated MATERIAL citation, still refuse."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        response = (
+            "NVIDIA leads the market. [commentary row 1] "
+            "AMD reported revenue of $34.6B [query_fundamentals row 4]."
+        )
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[self._row_with_value(10.0)],
+                messages=[{"role": "user", "content": "AMD revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_entity_news"],
+            )
+        )
+        assert passed is False
+        assert text == _PHANTOM_CITATION_REFUSAL
+
 
 class TestEmptyPoolRefusal:
     @staticmethod

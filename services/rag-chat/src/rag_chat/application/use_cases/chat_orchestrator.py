@@ -1999,6 +1999,15 @@ def _check_entity_grounding(
     for item in retrieved_items:
         # The two fields downstream synthesis cites against.
         cm = getattr(item, "citation_meta", None)
+        # BUG-1 (2026-07-01): prediction-market items are TOPIC-matched to the
+        # query (the market question was ILIKE-matched to the user's topic), NOT
+        # entity-scoped to a canonical ticker. Question-entity resolution routinely
+        # mis-scopes such queries (e.g. "odds for Nikki Haley" → "The US"), so no
+        # entity overlap could ever be found and the guard refused a perfectly good
+        # markets answer. Treat any topic-matched polymarket item as grounding: its
+        # presence means the retrieval already matched the user's topic.
+        if getattr(cm, "source_name", None) == "polymarket":
+            return None
         item_ids: set[str] = set()
         if cm is not None:
             item_ids |= _normalise_entity_identifier(getattr(cm, "entity_name", None))
@@ -4137,6 +4146,21 @@ class ChatOrchestratorUseCase:
         # that gated the completion-cache write (F-LIVE-008: never cache a
         # validator-rejected answer; it poisons the deterministic key for 24h).
         if had_tool_calls and full_text.strip() and grounded:
+            # BUG-2 (2026-07-01): the live model wraps its ``[tool_name row N]``
+            # provenance tags in full-width / CJK brackets (``【search_events row
+            # 1】``). Every citation regex — including the numeric validator's
+            # grounding fast-path (``_has_grounding_citation``) — is anchored on
+            # ASCII brackets, so a CJK-bracketed citation was invisible: a
+            # genuinely-cited number looked unsupported and a spurious rewrite
+            # fired that ALSO dropped the citations. Normalise the brackets to
+            # ASCII ONCE here, before grounding, so the fast-path recognises the
+            # tag (no spurious rewrite) AND the later normalize_tool_row_citations
+            # promotes it to a real ``[N]`` citation.
+            from rag_chat.application.services.numeric_grounding import (
+                normalize_citation_brackets,
+            )
+
+            full_text = normalize_citation_brackets(full_text)
             # RC-1: resolve the optional repair-rewrite model override. Lazy
             # ``Settings()`` mirrors the existing grounding-timeout lookup; a
             # construction failure (missing env) degrades to None → default
@@ -4673,12 +4697,13 @@ class ChatOrchestratorUseCase:
         from rag_chat.application.services.numeric_grounding import (
             FieldKind,
             NumericGroundingValidator,
-            find_phantom_tool_citations,
             flatten_tool_values_count,
             material_unsupported_numbers,
             numeric_grounding_effectively_passed,
+            partition_phantom_tool_citations,
             pin_numbers_to_tool_values,
             response_has_numeric_claims,
+            strip_tool_row_tags,
         )
 
         _called = list(called_tool_names or [])
@@ -4687,15 +4712,32 @@ class ChatOrchestratorUseCase:
         # ── NUMERIC deterministic gates (PRESERVED EXACTLY) ───────────────────
         # Phantom-citation + empty-pool refusals fire BEFORE any rewrite and
         # never spend an LLM call. Identical to the numeric pass.
-        _phantom = find_phantom_tool_citations(response, _called) if _have_called_set else set()
-        if _phantom:
-            log.warning(  # type: ignore[no-any-return]
-                "numeric_grounding_phantom_citation_refused",
-                phantom_tools=sorted(_phantom),
-                called_tools=sorted({t.lower() for t in _called if t}),
-            )
-            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
-            return _PHANTOM_CITATION_REFUSAL, False
+        # ── P0 (2026-07-01) phantom-citation gate — benign prose no longer refuses ─
+        # A phantom ``[name row N]`` tag is a GENUINE fabricated citation only when
+        # it abuts a MATERIAL numeric claim (the AMD ``$34.6B`` class) → refuse.
+        # A phantom tag on pure prose (the live model tagging its own editorial
+        # ``[commentary row 1]`` on a news answer) is benign → strip the tag, keep
+        # the answer. This restores the previously-passing "latest news on NVIDIA"
+        # flow while preserving the numeric-fabrication guarantee: any fabricated
+        # tool-citation attached to a real figure still refuses the whole answer.
+        if _have_called_set:
+            _phantom_material, _phantom_benign = partition_phantom_tool_citations(response, _called)
+            if _phantom_material:
+                log.warning(  # type: ignore[no-any-return]
+                    "numeric_grounding_phantom_citation_refused",
+                    phantom_tools=sorted(_phantom_material),
+                    called_tools=sorted({t.lower() for t in _called if t}),
+                )
+                rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+                return _PHANTOM_CITATION_REFUSAL, False
+            if _phantom_benign:
+                # Strip the benign prose labels so they never leak to the user,
+                # but do NOT refuse — the answer's real content is intact.
+                log.info(  # type: ignore[no-any-return]
+                    "phantom_prose_label_stripped",
+                    stripped_tags=_phantom_benign,
+                )
+                response = strip_tool_row_tags(response, _phantom_benign)
 
         if response_has_numeric_claims(response) and flatten_tool_values_count(tool_items) == 0:
             log.warning(  # type: ignore[no-any-return]
@@ -4988,15 +5030,20 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
-        # 4. Phantom-citation re-check on the rewrite (Theme A).
-        _rewrite_phantom = find_phantom_tool_citations(rewritten, _called) if _have_called_set else set()
-        if _rewrite_phantom:
-            log.warning(  # type: ignore[no-any-return]
-                "combined_grounding_rewrite_phantom_citation_refused",
-                phantom_tools=sorted(_rewrite_phantom),
-            )
-            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
-            return _PHANTOM_CITATION_REFUSAL, False
+        # 4. Phantom-citation re-check on the rewrite (Theme A) — P0-aware:
+        #    only a phantom tag abutting a MATERIAL number refuses; benign prose
+        #    labels are stripped (mirrors the pre-rewrite gate above).
+        if _have_called_set:
+            _rw_phantom_material, _rw_phantom_benign = partition_phantom_tool_citations(rewritten, _called)
+            if _rw_phantom_material:
+                log.warning(  # type: ignore[no-any-return]
+                    "combined_grounding_rewrite_phantom_citation_refused",
+                    phantom_tools=sorted(_rw_phantom_material),
+                )
+                rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+                return _PHANTOM_CITATION_REFUSAL, False
+            if _rw_phantom_benign:
+                rewritten = strip_tool_row_tags(rewritten, _rw_phantom_benign)
 
         # ── Re-validate BOTH classes on the single rewrite ────────────────────
         numeric_second = numeric_validator.validate(rewritten, tool_items, called_tool_names=_called)
@@ -5104,9 +5151,10 @@ class ChatOrchestratorUseCase:
         """
         from rag_chat.application.services.numeric_grounding import (
             NumericGroundingValidator,
-            find_phantom_tool_citations,
             flatten_tool_values_count,
+            partition_phantom_tool_citations,
             response_has_numeric_claims,
+            strip_tool_row_tags,
         )
 
         _called = list(called_tool_names or [])
@@ -5128,15 +5176,32 @@ class ChatOrchestratorUseCase:
         # (tc_portfolio_dividend_yielders, agg_q5_tsla_macro,
         # chain_macro_event_market_reaction, chain_portfolio_worst_fundamentals,
         # chain_unhealthy_entity_investigation, iter3_apple_suppliers_compound).
-        _phantom = find_phantom_tool_citations(response, _called) if _have_called_set else set()
-        if _phantom:
-            log.warning(  # type: ignore[no-any-return]
-                "numeric_grounding_phantom_citation_refused",
-                phantom_tools=sorted(_phantom),
-                called_tools=sorted({t.lower() for t in _called if t}),
-            )
-            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
-            return _PHANTOM_CITATION_REFUSAL, False
+        # ── P0 (2026-07-01) phantom-citation gate — benign prose no longer refuses ─
+        # A phantom ``[name row N]`` tag is a GENUINE fabricated citation only when
+        # it abuts a MATERIAL numeric claim (the AMD ``$34.6B`` class) → refuse.
+        # A phantom tag on pure prose (the live model tagging its own editorial
+        # ``[commentary row 1]`` on a news answer) is benign → strip the tag, keep
+        # the answer. This restores the previously-passing "latest news on NVIDIA"
+        # flow while preserving the numeric-fabrication guarantee: any fabricated
+        # tool-citation attached to a real figure still refuses the whole answer.
+        if _have_called_set:
+            _phantom_material, _phantom_benign = partition_phantom_tool_citations(response, _called)
+            if _phantom_material:
+                log.warning(  # type: ignore[no-any-return]
+                    "numeric_grounding_phantom_citation_refused",
+                    phantom_tools=sorted(_phantom_material),
+                    called_tools=sorted({t.lower() for t in _called if t}),
+                )
+                rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+                return _PHANTOM_CITATION_REFUSAL, False
+            if _phantom_benign:
+                # Strip the benign prose labels so they never leak to the user,
+                # but do NOT refuse — the answer's real content is intact.
+                log.info(  # type: ignore[no-any-return]
+                    "phantom_prose_label_stripped",
+                    stripped_tags=_phantom_benign,
+                )
+                response = strip_tool_row_tags(response, _phantom_benign)
 
         # ── Theme A fix #2 — EMPTY-POOL REFUSAL ────────────────────────────────
         # When the answer makes specific numeric claims but the grounding
@@ -5355,14 +5420,19 @@ class ChatOrchestratorUseCase:
         # Re-validate the rewrite. Theme A fix #2: also re-run the
         # phantom-citation gate on the rewrite — a rewrite that re-invents a
         # ``[tool row N]`` tag must not pass either. Same ground-truth guard.
-        _rewrite_phantom = find_phantom_tool_citations(rewritten, _called) if _have_called_set else set()
-        if _rewrite_phantom:
-            log.warning(  # type: ignore[no-any-return]
-                "numeric_grounding_rewrite_phantom_citation_refused",
-                phantom_tools=sorted(_rewrite_phantom),
-            )
-            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
-            return _PHANTOM_CITATION_REFUSAL, False
+        # P0-aware: only a phantom tag next to a MATERIAL number refuses; benign
+        # prose labels are stripped (mirrors the pre-rewrite gate).
+        if _have_called_set:
+            _rw_phantom_material, _rw_phantom_benign = partition_phantom_tool_citations(rewritten, _called)
+            if _rw_phantom_material:
+                log.warning(  # type: ignore[no-any-return]
+                    "numeric_grounding_rewrite_phantom_citation_refused",
+                    phantom_tools=sorted(_rw_phantom_material),
+                )
+                rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+                return _PHANTOM_CITATION_REFUSAL, False
+            if _rw_phantom_benign:
+                rewritten = strip_tool_row_tags(rewritten, _rw_phantom_benign)
         second_result = validator.validate(rewritten, tool_items, called_tool_names=_called)
         if second_result.passed:
             rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()

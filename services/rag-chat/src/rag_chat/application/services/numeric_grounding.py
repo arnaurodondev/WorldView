@@ -106,6 +106,46 @@ _WORD_MAGNITUDE_RE = re.compile(r"^\s+(thousand|million|billion|trillion)\b", re
 # Citation markers we must ignore so [N7] does not count as the number 7.
 _CITATION_RE = re.compile(r"\[N\d+\]")
 
+# ── BUG-2 (2026-07-01) — fullwidth / CJK bracket variants around citations ────
+#
+# The live ``gpt-oss-120b`` model emits its ``[tool_name row N]`` provenance tags
+# with NON-ASCII brackets almost exclusively (CJK lenticular brackets around the
+# tag), and occasionally the fullwidth or tortoise-shell forms. Every citation
+# regex in this module (normalize, phantom, out-of-range, and the validator's
+# ``_PROSE_CITATION_RE`` / ``_CITED_TOOL_RE`` grounding fast-path) is anchored on
+# the ASCII ``[``/``]`` characters, so a CJK-bracketed tag was invisible:
+# citations were dropped (the assembler never saw a ``[N]``) AND the fast-path
+# could not confirm the cited tool, so a genuinely-grounded number was flagged
+# unsupported -> a spurious rewrite that ALSO dropped the citations.
+#
+# We map every open variant to ASCII ``[`` and every close variant to ``]`` at the
+# entry points that matter. Keys are Unicode CODE POINTS (str.translate accepts
+# int keys) so no ambiguous literal characters live in the source. O(n),
+# allocation-light and idempotent (ASCII brackets are absent -> map to themselves).
+_CITATION_BRACKET_TRANSLATION = {
+    0xFF3B: "[",  # FULLWIDTH LEFT SQUARE BRACKET
+    0x3010: "[",  # LEFT BLACK LENTICULAR BRACKET (the live-model default)
+    0x3014: "[",  # LEFT TORTOISE SHELL BRACKET
+    0xFF3D: "]",  # FULLWIDTH RIGHT SQUARE BRACKET
+    0x3011: "]",  # RIGHT BLACK LENTICULAR BRACKET
+    0x3015: "]",  # RIGHT TORTOISE SHELL BRACKET
+}
+
+
+def normalize_citation_brackets(text: str) -> str:
+    """Map fullwidth / CJK citation-bracket variants to ASCII ``[ ]``.
+
+    Recognised open variants: fullwidth (U+FF3B), lenticular (U+3010) and
+    tortoise-shell (U+3014); close variants U+FF3D / U+3011 / U+3015.
+
+    Deterministic and idempotent. Applied to the answer BEFORE grounding
+    validation (so the validator's citation fast-path recognises the tag and does
+    not spuriously rewrite) and inside :func:`normalize_tool_row_citations` (so the
+    tool-row -> positional citation rewrite fires on CJK-bracketed tags too).
+    """
+    return text.translate(_CITATION_BRACKET_TRANSLATION)
+
+
 # ── BP-670 — non-claim number shapes (live Apple-news false positives) ───────
 #
 # The validator flagged 9 "unsupported numbers" in a correctly-cited news
@@ -804,7 +844,13 @@ def normalize_tool_row_citations(
 
     Deterministic and side-effect free so the orchestrator + tests share one
     definition.
+
+    BUG-2 (2026-07-01): the live model emits full-width / CJK brackets
+    (``【search_events row 1】``); we translate every bracket variant to ASCII
+    first so the ASCII-anchored ``_TOOL_ROW_CITATION_WITH_INDEX_RE`` matches them.
     """
+    # Normalise CJK / fullwidth brackets to ASCII so the tag regex sees them.
+    response = normalize_citation_brackets(response)
 
     def _sub(m: re.Match[str]) -> str:
         tool = m.group("tool").lower()
@@ -880,6 +926,129 @@ def numeric_grounding_effectively_passed(result: GroundingResult) -> bool:
     skipped and the streamed answer + its citations survive.
     """
     return result.passed or not material_unsupported_numbers(result)
+
+
+# ── P0 (2026-07-01) — benign prose bracket labels must NOT refuse the answer ───
+#
+# WHY: the phantom-citation gate (:func:`find_phantom_tool_citations`) refuses the
+# WHOLE answer whenever it sees a ``[name row N]`` tag whose ``name`` was never a
+# called tool. That is correct for a GENUINE fabricated numeric citation
+# (``[query_fundamentals row 4]`` next to an invented ``$34.6B`` figure). But the
+# live ``gpt-oss-120b`` model, on a plain news question, tags its own editorial
+# prose as ``[commentary row 1]`` — a NON-tool word in brackets pointing at no
+# real retrieval. Refusing the entire "latest news on NVIDIA" answer over that
+# benign label is a false positive (regression: that query used to PASS with real
+# finnhub/yahoo URLs).
+#
+# DISCRIMINATOR: a phantom ``[name row N]`` tag is a genuine fabricated citation
+# ONLY when it sits next to a MATERIAL numeric claim (revenue/EPS/price/market-cap/
+# ratio/return/shares/headcount, or a large unclassified magnitude — the AMD
+# ``$34.6B`` class). A phantom tag with NO material number within
+# :data:`_PHANTOM_MATERIAL_WINDOW` chars is a benign prose label — it must be
+# STRIPPED from the answer (so it never leaks to the user) rather than nuke the
+# whole response. This keeps the numeric-fabrication guarantee fully intact: any
+# fabricated tool-citation attached to a material figure is still refused.
+#
+# The window matches :data:`_VALIDATOR_CITATION_WINDOW` (±50 chars) — the exact
+# distance the validator uses to decide whether a bracket citation is "citing" a
+# number. This is deliberately TIGHT: a material fabrication the early gate misses
+# (figure and phantom tag further apart) is still caught by the downstream
+# ``NumericGroundingValidator`` (unsupported material number → rewrite/banner), so
+# erring toward "benign" here only trades an early deterministic refusal for the
+# validator's backstop — it never lets a fabricated figure through unguarded.
+_PHANTOM_MATERIAL_WINDOW = _VALIDATOR_CITATION_WINDOW
+
+
+def _material_number_spans(response: str) -> list[tuple[int, int]]:
+    """Return (start, end) char spans of MATERIAL numeric claims in *response*.
+
+    Spans are reported against the citation-marker-cleaned text (the exact text
+    :func:`partition_phantom_tool_citations` scans for phantom tags), so span
+    offsets line up between the two.
+    """
+    spans: list[tuple[int, int]] = []
+    for value, raw_token, ctx, start, end in _extract_numbers_with_spans(response):
+        kind = classify_number(value, raw_token, ctx)
+        if kind in _MATERIAL_NUMERIC_KINDS or (kind == FieldKind.UNKNOWN and abs(value) >= _MATERIAL_UNKNOWN_MIN):
+            spans.append((start, end))
+    return spans
+
+
+def partition_phantom_tool_citations(
+    response: str,
+    called_tool_names: Iterable[str],
+) -> tuple[set[str], list[str]]:
+    """Split phantom ``[name row N]`` tags into (material, benign).
+
+    A phantom tag is a ``[name row N]`` whose ``name`` was NEVER called. It is:
+
+      * **material** (genuine fabrication → the caller must REFUSE) when a
+        material numeric claim sits within :data:`_PHANTOM_MATERIAL_WINDOW` chars
+        of the tag — the fabricated-figure-with-fake-provenance shape;
+      * **benign** (prose label → the caller should STRIP the tag, keep the
+        answer) otherwise — e.g. the model tagging its own ``[commentary row 1]``.
+
+    Returns ``(material_tool_names, benign_tag_substrings)``. ``material_tool_names``
+    is the set of lower-cased phantom tool names that warrant a refusal;
+    ``benign_tag_substrings`` is the list of exact ``[name row N]`` substrings that
+    should be stripped from the answer.
+
+    :func:`find_phantom_tool_citations` is intentionally left UNCHANGED (the
+    strict "any phantom → refuse" behaviour it encodes is still exercised by the
+    existing regression suite); this function is the P0-aware refinement the
+    orchestrator uses at delivery time.
+    """
+    called = {str(t).strip().lower() for t in called_tool_names if t}
+    # Clean citation markers the SAME way _extract_numbers_with_spans does, so the
+    # phantom-tag offsets and the material-number spans share one coordinate space.
+    cleaned = _CITATION_RE.sub("", response)
+    tag_matches = list(_TOOL_ROW_CITATION_WITH_INDEX_RE.finditer(cleaned))
+    tag_spans = [(m.start(), m.end()) for m in tag_matches]
+
+    # The row INDEX inside a ``[name row N]`` tag is itself a digit; it must NOT be
+    # mistaken for a material numeric claim (otherwise EVERY phantom tag would look
+    # "material" because it abuts its own ``row 1``). Drop any extracted number
+    # whose span falls fully inside a tool-row tag.
+    material_spans = [
+        (ns, ne)
+        for (ns, ne) in _material_number_spans(response)
+        if not any(ts <= ns and ne <= te for ts, te in tag_spans)
+    ]
+
+    material_names: set[str] = set()
+    benign_tags: list[str] = []
+    for m in tag_matches:
+        name = m.group("tool").lower()
+        if name in called:
+            continue  # a real called tool — not phantom, handled by other guards
+        tag_start, tag_end = m.start(), m.end()
+        near_material = any(
+            # overlap / proximity test: the tag window and the number window touch
+            not (tag_end + _PHANTOM_MATERIAL_WINDOW < num_start or num_end + _PHANTOM_MATERIAL_WINDOW < tag_start)
+            for num_start, num_end in material_spans
+        )
+        if near_material:
+            material_names.add(name)
+        else:
+            benign_tags.append(m.group(0))
+    return material_names, benign_tags
+
+
+def strip_tool_row_tags(response: str, tags: Iterable[str]) -> str:
+    """Remove each exact ``[name row N]`` *tag* substring from *response*.
+
+    Also collapses a single orphaned space left where the tag sat (so
+    ``"news today [commentary row 1] and more"`` → ``"news today and more"``),
+    then trims spaces before punctuation. Deterministic and idempotent.
+    """
+    out = response
+    for tag in tags:
+        # Drop the tag plus one adjacent (leading) space when present.
+        out = out.replace(" " + tag, "").replace(tag, "")
+    # Tidy any double spaces / space-before-punctuation the removal introduced.
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"[ \t]+([.,;:!?)])", r"\1", out)
+    return out
 
 
 def flatten_tool_values_count(tool_results: Iterable[Any]) -> int:
@@ -1827,8 +1996,12 @@ __all__ = [
     "detect_fabricated_series",
     "find_phantom_tool_citations",
     "flatten_tool_values_count",
+    "normalize_citation_brackets",
+    "normalize_tool_row_citations",
+    "partition_phantom_tool_citations",
     "pin_numbers_to_tool_values",
     "response_has_numeric_claims",
+    "strip_tool_row_tags",
 ]
 
 

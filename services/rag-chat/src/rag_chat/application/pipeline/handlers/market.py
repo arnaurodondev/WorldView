@@ -2131,6 +2131,17 @@ class MarketHandler(ToolHandler):
             text = "\n".join(lines)
 
             published_at = _parse_iso_datetime(m.get("updated_at"))
+            # BUG-1 (2026-07-01): BP-604/605 requires every retrieval source to set
+            # a non-null entity_id OR citation_meta.entity_name — a null here made
+            # the entity-grounding guard refuse the whole answer
+            # (entity_grounding_failed item_entity_names:[null,null]). Prediction
+            # markets are NOT a single ticker; the market's subject IS the user's
+            # topic (the market was ILIKE-matched to the query). Use the market's
+            # category as a stable, human-readable subject label, falling back to a
+            # generic label. (The entity-grounding guard ALSO exempts topic-matched
+            # polymarket items — see _check_entity_grounding — so grounding no
+            # longer depends on the flaky question-entity resolution.)
+            entity_label = str(cat).strip().title() if isinstance(cat, str) and cat.strip() else "Prediction Market"
             out.append(
                 RetrievedItem.create(
                     item_id=f"tool:prediction_market:{market_id or question[:32]}",
@@ -2146,7 +2157,7 @@ class MarketHandler(ToolHandler):
                         url=url,
                         source_name="polymarket",
                         published_at=published_at,
-                        entity_name=None,
+                        entity_name=entity_label,
                     ),
                 )
             )
