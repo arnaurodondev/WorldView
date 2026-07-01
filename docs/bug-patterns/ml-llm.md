@@ -917,3 +917,43 @@ In `services/rag-chat/src/rag_chat/infrastructure/clients/s7_client.py`, line 13
 - Pay extra attention to S7 graph API endpoints: relations with stale confidence scores return `"confidence": null` (the knowledge-graph route explicitly maps stale rows to `None`).
 
 **Regression test**: Manual curl: `GET /v1/briefings/instrument/{entity_with_null_confidence_relations}` must return 200.
+
+---
+
+## BP-714: Class-blind ticker match mis-resolves common abbreviations (and the "wrong-axis guard breaks the dominant legit case" trap)
+
+**Category**: ML/LLM
+**Severity**: HIGH
+**First seen**: 2026-07-01
+**Services**: nlp-pipeline (S6) — Block 9 entity resolution, Stage 2
+
+**Symptoms**:
+- Systematic wrong entity resolutions: `US`→a US-ticker equity (846×), `DE`→Deere & Company (326×), `CEO`→equity (95×), `MA`→Mastercard (50×), `FTC`→Filtronic (37×), `AI`→C3.ai; US state codes → Weyerhaeuser/SandRidge, etc.
+- ~1,671 of ~15,020 (~11%) all-caps Stage-2 resolutions are categorically non-equity surfaces resolved to a security at 0.95 confidence.
+- Major downstream contributor to the low (~49%) stored-relation support rate — the relations are anchored on a mis-resolved entity.
+
+**Root cause**:
+Stage-2 ticker matching (`_stage2_ticker_isin` + the batch `EntityAliasRepository.batch_ticker_isin_match` path in `services/nlp-pipeline/src/nlp_pipeline/application/blocks/entity_resolution.py`) was **class-blind**: any surface that is all-caps and ≤6 chars (`_ticker_candidate`, gated only on `isupper()` + length) matched `canonical_entities.ticker` at 0.95, **ignoring GLiNER's `mention_class`**. GLiNER's class is a high-confidence signal that a token like `US`/`DE`/`MA` is a currency/location/regulator — never a listed security — but that signal was discarded at the ticker stage.
+
+**The trap (why the earlier fix broke Apple)**:
+A prior deferred fix keyed the guard off a **(mention_class, entity_type) MISMATCH** — it rejected an `organization` mention resolving to a `financial_instrument` canonical. But that IS the dominant *legitimate* case: GLiNER tags `Apple`/`AAPL` as `organization`, while the EODHD-sourced canonical row is `entity_type='financial_instrument'`. Keying off the mismatch dropped **all** major companies. **Wrong axis.** The relationship between the mention's class and the canonical's `entity_type` is NOT the discriminator — the mention's own **semantic category** is.
+
+**Fix** (commit `650ee0082`):
+Gate Stage-2 on the mention_class semantic category via a denylist of categorically-non-equity classes — never inspect the canonical's `entity_type`:
+```python
+_TICKER_STAGE_DENIED_CLASSES = frozenset({
+    "currency", "location", "person",
+    "regulatory_body", "government_body", "macroeconomic_indicator",
+})
+# ticker only built for allowed classes; ISIN path (12-char, unambiguous) is exempt.
+ticker = _ticker_candidate(text) if _ticker_stage_allowed(mention.mention_class) else None
+```
+Company-compatible classes (`organization`, `financial_instrument`, `financial_institution`, `index`, `commodity`) stay **allowed**, so `AAPL` as `organization` → financial_instrument canonical still auto-resolves at 0.95. The gate is **re-checked per mention** in the batch path (`_matched_in_stage2`) so a `MA`-as-`location` in the same batch is not rescued by a `MA`-as-`organization` that seeded the shared lookup key.
+
+**Prevention**:
+- When a lookup collides on a short surface (ticker/code/acronym), gate on the **producer's own class label** (here GLiNER's `mention_class`), not on a derived relationship to the target row's type.
+- Before adding a guard that references two type fields, ask: "Is the *legitimate* common case a mismatch between them?" If yes, the guard is on the wrong axis and will suppress the majority case. Enumerate the dominant legit example (Apple: organization→financial_instrument) explicitly before choosing the discriminator.
+- Prefer an explicit **denylist of impossible categories** over an allowlist derived from cross-field equality — it fails safe (only the enumerated non-equity classes are blocked) and is trivially auditable.
+- Keep unambiguous identifiers (ISIN, 12-char) exempt from category gates — they cannot collide with a common word.
+
+**Regression test**: `services/nlp-pipeline/tests/unit/application/blocks/test_entity_resolution.py` — `TestStage2ClassGateBlocksMisResolution` (10 denied surfaces → UNRESOLVED, and never queried), `TestStage2ClassGateKeepsMajors` (AAPL×3/MSFT/GOOGL/AMZN/NVDA/MA-as-org/JPM/SPY still AUTO_RESOLVED), `TestStage2ClassGatePerMention` (same-surface split by class in one batch), `TestTickerStageAllowedUnit` (unit gate).
