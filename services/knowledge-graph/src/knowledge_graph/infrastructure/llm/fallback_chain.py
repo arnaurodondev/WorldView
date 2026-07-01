@@ -25,6 +25,8 @@ import time
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from ml_clients.pricing import resolve_cost  # type: ignore[import-untyped]
+
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -102,7 +104,6 @@ class FallbackChainClient:
             provider="ollama",
             delays=self._delays_ollama,
             entity_id=entity_id,
-            estimated_cost_usd=0.0,
         )
         if result is not None:
             return result
@@ -113,7 +114,6 @@ class FallbackChainClient:
             provider="gemini",
             delays=self._delays_gemini,
             entity_id=entity_id,
-            estimated_cost_usd=_gemini_embedding_cost(inputs),
         )
         if result is None:
             logger.warning("fallback_chain_exhausted", capability="embedding")  # type: ignore[no-any-return]
@@ -136,7 +136,6 @@ class FallbackChainClient:
             provider="deepinfra",
             delays=self._delays_deepinfra,
             entity_id=entity_id,
-            estimated_cost_usd=_deepinfra_extraction_cost(inp),
         )
         if result is not None:
             return result
@@ -148,7 +147,6 @@ class FallbackChainClient:
             provider="ollama",
             delays=self._delays_ollama,
             entity_id=entity_id,
-            estimated_cost_usd=0.0,
         )
         if result is not None:
             return result
@@ -160,7 +158,6 @@ class FallbackChainClient:
             provider="gemini",
             delays=self._delays_gemini,
             entity_id=entity_id,
-            estimated_cost_usd=_gemini_extraction_cost(inp),
         )
         if result is None:
             logger.warning("fallback_chain_exhausted", capability="extraction")  # type: ignore[no-any-return]
@@ -177,40 +174,51 @@ class FallbackChainClient:
         provider: str,
         delays: tuple[float, ...],
         entity_id: UUID | None,
-        estimated_cost_usd: float,
     ) -> list[EmbeddingOutput] | None:
         if client is None:
             return None
 
+        model_id = getattr(client, "model_id", provider)
+        tokens_in = sum(len(i.text.split()) for i in inputs)
         max_attempts = len(delays) + 1
         for attempt in range(max_attempts):
             t0 = time.monotonic()
             try:
                 result = await client.embed(inputs)
                 latency_ms = int((time.monotonic() - t0) * 1000)
+                # PLAN-0117 W3 (FR-4b): resolve cost via the unified rule instead
+                # of the old char-count heuristic — Ollama → $0/"local", Gemini →
+                # price matrix. No provider cost on the embedding path (Ollama is
+                # local; the Gemini embedding endpoint does not report one).
+                cost, cost_source = resolve_cost(model_id, provider=provider, tokens_in=tokens_in, tokens_out=0)
                 await self._log(
-                    model_id=getattr(client, "model_id", provider),
+                    model_id=model_id,
                     provider=provider,
                     capability="embedding",
-                    tokens_in=sum(len(i.text.split()) for i in inputs),
+                    tokens_in=tokens_in,
                     tokens_out=0,
                     latency_ms=latency_ms,
                     entity_id=entity_id,
-                    estimated_cost_usd=estimated_cost_usd,
+                    estimated_cost_usd=float(cost),
+                    cost_source=cost_source,
                     success=True,
                 )
                 return result
             except Exception as exc:
                 latency_ms = int((time.monotonic() - t0) * 1000)
+                # Failure: no output → resolve with 0 tokens (matrix → $0 for a
+                # priced model, "local" for Ollama). Never a hardcoded silent $0.
+                cost, cost_source = resolve_cost(model_id, provider=provider, tokens_in=tokens_in, tokens_out=0)
                 await self._log(
-                    model_id=getattr(client, "model_id", provider),
+                    model_id=model_id,
                     provider=provider,
                     capability="embedding",
-                    tokens_in=sum(len(i.text.split()) for i in inputs),
+                    tokens_in=tokens_in,
                     tokens_out=0,
                     latency_ms=latency_ms,
                     entity_id=entity_id,
-                    estimated_cost_usd=0.0,
+                    estimated_cost_usd=float(cost),
+                    cost_source=cost_source,
                     success=False,
                 )
                 logger.warning(  # type: ignore[no-any-return]
@@ -230,40 +238,54 @@ class FallbackChainClient:
         provider: str,
         delays: tuple[float, ...],
         entity_id: UUID | None,
-        estimated_cost_usd: float,
     ) -> ExtractionOutput | None:
         if client is None:
             return None
 
+        model_id = getattr(client, "model_id", provider)
+        tokens_in = len(inp.prompt.split()) + len(inp.context.split())
         max_attempts = len(delays) + 1
         for attempt in range(max_attempts):
             t0 = time.monotonic()
             try:
                 result = await client.extract(inp)
                 latency_ms = int((time.monotonic() - t0) * 1000)
+                # PLAN-0117 W3 (FR-1/FR-4b): DeepInfra's verbatim
+                # ``usage.estimated_cost`` (surfaced on ExtractionOutput) wins
+                # (cost_source="provider"); else the price matrix; Ollama → "local".
+                cost, cost_source = resolve_cost(
+                    model_id,
+                    provider=provider,
+                    tokens_in=tokens_in,
+                    tokens_out=len(str(result.result).split()),
+                    provider_estimated_cost=getattr(result, "provider_cost_usd", None),
+                )
                 await self._log(
-                    model_id=getattr(client, "model_id", provider),
+                    model_id=model_id,
                     provider=provider,
                     capability="extraction",
-                    tokens_in=len(inp.prompt.split()) + len(inp.context.split()),
+                    tokens_in=tokens_in,
                     tokens_out=len(str(result.result).split()),
                     latency_ms=latency_ms,
                     entity_id=entity_id,
-                    estimated_cost_usd=estimated_cost_usd,
+                    estimated_cost_usd=float(cost),
+                    cost_source=cost_source,
                     success=True,
                 )
                 return result
             except Exception as exc:
                 latency_ms = int((time.monotonic() - t0) * 1000)
+                cost, cost_source = resolve_cost(model_id, provider=provider, tokens_in=tokens_in, tokens_out=0)
                 await self._log(
-                    model_id=getattr(client, "model_id", provider),
+                    model_id=model_id,
                     provider=provider,
                     capability="extraction",
-                    tokens_in=len(inp.prompt.split()) + len(inp.context.split()),
+                    tokens_in=tokens_in,
                     tokens_out=0,
                     latency_ms=latency_ms,
                     entity_id=entity_id,
-                    estimated_cost_usd=0.0,
+                    estimated_cost_usd=float(cost),
+                    cost_source=cost_source,
                     success=False,
                 )
                 logger.warning(  # type: ignore[no-any-return]
@@ -289,24 +311,3 @@ class FallbackChainClient:
             await self._usage_logger.log(**kwargs)
         except Exception as exc:
             logger.warning("llm_usage_log_write_failed", error=str(exc))  # type: ignore[no-any-return]
-
-
-# ---------------------------------------------------------------------------
-# Simple cost estimators (approximate)
-# ---------------------------------------------------------------------------
-
-
-def _deepinfra_extraction_cost(inp: ExtractionInput) -> float:
-    # $0.14/M input tokens — approximate using char count heuristic
-    chars = len(inp.prompt) + len(inp.context)
-    return round(chars / 1_000_000 * 0.14, 8)
-
-
-def _gemini_embedding_cost(inputs: list[EmbeddingInput]) -> float:
-    total_chars = sum(len(i.text) for i in inputs)
-    return round(total_chars / 1_000_000 * 0.00002, 8)
-
-
-def _gemini_extraction_cost(inp: ExtractionInput) -> float:
-    chars = len(inp.prompt) + len(inp.context)
-    return round(chars / 1_000_000 * 0.075, 8)

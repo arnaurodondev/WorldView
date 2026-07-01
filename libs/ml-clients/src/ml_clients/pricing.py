@@ -274,6 +274,15 @@ LOCAL_FREE_MODELS: frozenset[str] = frozenset(
 # even if it is not (yet) in :data:`MODEL_PRICING`.
 _PROVIDER_COST_PROVIDERS: frozenset[str] = frozenset({"deepinfra"})
 
+# Transport providers that are ALWAYS locally-hosted / free regardless of the
+# specific ``model_id`` (Ollama pulls arbitrary tags; GLiNER is in-process). A
+# call routed through one of these is ``cost_source="local"`` at ``$0`` — and,
+# crucially, must NOT be sent through :func:`compute_cost` (which would emit a
+# spurious ``model_pricing_unknown`` warning for an un-catalogued local tag).
+# This complements :data:`LOCAL_FREE_MODELS` (which lists specific ids): the
+# provider check catches local model tags that were never added to that set.
+_LOCAL_PROVIDERS: frozenset[str] = frozenset({"ollama", "gliner"})
+
 
 def is_priceable(model_id: str, *, provider: str) -> bool:
     """Return True when a call to ``model_id`` has a defined cost path.
@@ -406,6 +415,57 @@ def compute_cost(model_id: str, tokens_in: int, tokens_out: int) -> Decimal:
     return input_cost + output_cost
 
 
+def resolve_cost(
+    model_id: str,
+    *,
+    provider: str,
+    tokens_in: int,
+    tokens_out: int,
+    provider_estimated_cost: object = None,
+) -> tuple[Decimal, str]:
+    """Resolve the persisted USD cost + its provenance for one LLM call.
+
+    This is the **single implementation of the §2.2 cost-source priority**
+    (PLAN-0117) so that S6, S7 and (in W4) S8/S9 never re-derive the ordering
+    and can never drift into the silent-zero regression FR-7 guards. The rule:
+
+      1. **Provider-returned cost wins.** If ``provider_estimated_cost`` parses to
+         a non-negative Decimal (DeepInfra reports ``usage.estimated_cost``),
+         persist it verbatim → ``cost_source="provider"``.
+      2. **Local / free.** If the model is a known-free id
+         (:data:`LOCAL_FREE_MODELS`) OR the transport provider is inherently
+         local (:data:`_LOCAL_PROVIDERS` — Ollama/GLiNER), the call legitimately
+         costs ``$0`` → ``cost_source="local"``. We short-circuit BEFORE
+         :func:`compute_cost` so a local tag never trips ``model_pricing_unknown``.
+      3. **Price-matrix fallback.** Otherwise compute from the canonical matrix
+         → ``cost_source="pricematrix"``. For a genuinely-unknown *paid* model
+         :func:`compute_cost` returns ``0`` and warns — that surfaces the gap
+         (correct behaviour; FR-7 then flags it).
+
+    Args:
+        model_id: Canonical model identifier sent to the provider.
+        provider: Transport provider ("deepinfra" | "ollama" | "gemini" | …).
+        tokens_in: Prompt/input token count.
+        tokens_out: Completion/output token count.
+        provider_estimated_cost: Raw ``usage.estimated_cost`` from the provider
+            response (float/int/str/None); ``None`` when the call path did not
+            capture it (→ matrix or local fallback).
+
+    Returns:
+        ``(cost, cost_source)`` — cost as :class:`decimal.Decimal`, cost_source
+        one of ``"provider"`` | ``"local"`` | ``"pricematrix"``.
+    """
+    # 1. Provider-returned cost is authoritative + self-updating.
+    provider_cost = provider_cost_to_decimal(provider_estimated_cost)
+    if provider_cost is not None:
+        return provider_cost, "provider"
+    # 2. Local / free — never route a local tag through the matrix (no warning).
+    if model_id in LOCAL_FREE_MODELS or provider in _LOCAL_PROVIDERS:
+        return Decimal("0"), "local"
+    # 3. Price-matrix fallback (may warn on a genuinely-unknown paid model).
+    return compute_cost(model_id, tokens_in, tokens_out), "pricematrix"
+
+
 __all__ = [
     "LOCAL_FREE_MODELS",
     "MODEL_PRICING",
@@ -413,4 +473,5 @@ __all__ = [
     "compute_cost",
     "is_priceable",
     "provider_cost_to_decimal",
+    "resolve_cost",
 ]

@@ -619,6 +619,10 @@ class DeepSeekExtractionAdapter:
                         model_used=model_used,
                         fallback_reason=fallback_reason,
                         attempts=attempts,
+                        # PLAN-0117 FR-1: surface the verbatim DeepInfra cost so
+                        # downstream usage-log writers (KG fallback chain, S6
+                        # deep-extraction) can stamp cost_source="provider".
+                        provider_cost_usd=provider_cost_usd,
                     )
                 except (RetryableError, FatalError):
                     # Transient/4xx classification (and exhausted-retry) is done by

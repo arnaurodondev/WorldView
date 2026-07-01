@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import structlog
+from ml_clients.pricing import resolve_cost  # type: ignore[import-untyped]
 from prompts.classification.article_relevance import ARTICLE_RELEVANCE_SCORER  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -150,7 +151,12 @@ class RelevanceCascadeScorer:
                     },
                 )
                 resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
+                body = resp.json()
+                content = body["choices"][0]["message"]["content"]
+                # PLAN-0117 FR-1: DeepInfra returns the exact per-call USD cost on
+                # ``usage.estimated_cost`` — capture it so the row is cost_source
+                # "provider" (authoritative) rather than the matrix estimate.
+                provider_cost = (body.get("usage") or {}).get("estimated_cost")
             parsed = _extract_relevance_json(content)
             score = float(parsed["score"])  # type: ignore[arg-type]
             score = max(0.0, min(1.0, score))
@@ -159,6 +165,7 @@ class RelevanceCascadeScorer:
                 success=True,
                 tokens_in=len(user_content.split()),
                 tokens_out=len(str(content).split()),
+                provider_estimated_cost=provider_cost,
             )
             return score
         except Exception as exc:  # cascade is best-effort — never break routing
@@ -180,10 +187,24 @@ class RelevanceCascadeScorer:
         tokens_in: int,
         tokens_out: int,
         error_code: str | None = None,
+        provider_estimated_cost: object = None,
     ) -> None:
-        """Append one llm_usage_log row per cascade call (best-effort)."""
+        """Append one llm_usage_log row per cascade call (best-effort).
+
+        PLAN-0117 W3 (FR-4b): resolve the real cost + provenance via the unified
+        :func:`resolve_cost` rule — DeepInfra ``usage.estimated_cost`` wins
+        (``cost_source="provider"``); otherwise the price matrix
+        (``cost_source="pricematrix"``). No more hardcoded ``$0``.
+        """
         if self._usage_logger is None:
             return
+        cost, cost_source = resolve_cost(
+            self._model_id,
+            provider="deepinfra",
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            provider_estimated_cost=provider_estimated_cost,
+        )
         try:
             await self._usage_logger.log(
                 model_id=self._model_id,
@@ -192,9 +213,10 @@ class RelevanceCascadeScorer:
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 latency_ms=latency_ms,
-                estimated_cost_usd=0.0,
+                estimated_cost_usd=float(cost),
                 success=success,
                 error_code=error_code,
+                cost_source=cost_source,
             )
         except Exception as exc:  # protocol forbids raising
             logger.warning("relevance_cascade_usage_log_failed", error=str(exc))  # type: ignore[no-any-return]

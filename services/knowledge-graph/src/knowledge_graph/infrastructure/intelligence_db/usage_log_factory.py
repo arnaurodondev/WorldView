@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -60,9 +62,14 @@ class SessionScopedKgUsageLogger:
         estimated_cost_usd: float = 0.0,
         success: bool = True,
         error_code: str | None = None,
+        cost_source: str | None = None,
+        user_id: UUID | None = None,
         **context: object,
     ) -> None:
         """Append one usage-log row in a short-lived session.
+
+        PLAN-0117 W3: threads ``cost_source`` (provenance of the cost) and
+        ``user_id`` (NULL for KG background pipelines) into the row.
 
         Best-effort: any exception (DB unreachable, schema drift, etc.) is
         swallowed and emitted as a structlog WARN with ``exc_info=True``.
@@ -86,6 +93,8 @@ class SessionScopedKgUsageLogger:
                     estimated_cost_usd=estimated_cost_usd,
                     success=success,
                     error_code=error_code,
+                    cost_source=cost_source,
+                    user_id=user_id,
                     **context,
                 )
                 await session.commit()

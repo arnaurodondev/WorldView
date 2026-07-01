@@ -363,7 +363,11 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 
 ---
 
-## Wave 3: S6 + S7 wiring — kill hardcoded `$0`, thread real cost + provenance
+## Wave 3: S6 + S7 wiring — kill hardcoded `$0`, thread real cost + provenance ✅
+
+**Status**: **DONE** — 2026-07-01 · ml-clients 222 unit pass (5 new `resolve_cost` tests) · S6 + S7 touched suites pass (nlp repo/cascade/deep-extraction/workers + KG repo/fallback-chain/factory; 4 new call-site tests, 4 new repo tests) · ruff@0.4.0 + mypy clean across ml-clients/nlp-pipeline/knowledge-graph · import-guards clean · grep for paid-site `estimated_cost_usd=0.0` clean (only the 2 Ollama sites remain, now stamping `cost_source='local'`). **Rebuild/live-smoke deferred to central deployment** (per wave instruction — not run here).
+
+**STEP 0 (shared helper)**: added `ml_clients.pricing.resolve_cost(model_id, *, provider, tokens_in, tokens_out, provider_estimated_cost=None) -> (Decimal, str)` — the single §2.2 priority (provider → local → pricematrix), exported from `ml_clients`. Local detection also short-circuits on `_LOCAL_PROVIDERS={"ollama","gliner"}` so an unlisted local tag never trips `model_pricing_unknown`. Also surfaced `provider_cost_usd` on `ExtractionOutput` (populated by the deepseek adapter) so the KG fallback chain + S6 deep-extraction can stamp `cost_source='provider'`.
 
 **Goal**: Remove every hardcoded `estimated_cost_usd=0.0` at S6 paid call sites, route S6 and S7 usage-log writes through the unified cost path (provider cost → matrix → local), and persist `cost_source` (+ best-effort `user_id`).
 **Depends on**: W1 (unified cost path + carrier), W2 (`cost_source`/`user_id` columns on nlp_db + intelligence_db)
@@ -398,8 +402,8 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - Minimum test count: 2 (+ per-site as feasible)
 
 **Acceptance criteria**:
-- [ ] `grep -rE "estimated_cost_usd\s*=\s*0\.0" services/nlp-pipeline/src` returns only legitimate `cost_source='local'` sites.
-- [ ] Paid sites thread `provider_cost_usd`/`compute_cost` value.
+- [x] `grep -rE "estimated_cost_usd\s*=\s*0\.0" services/nlp-pipeline/src` returns only legitimate `cost_source='local'` sites (the 2 Ollama sites in `unresolved_resolution_worker.py`, now stamping `cost_source='local'`; plus one docstring mention).
+- [x] Paid sites thread `provider_cost_usd`/`compute_cost` value via `resolve_cost`. relevance_cascade + article_relevance_scoring capture `usage.estimated_cost` (→ provider); deep_extraction prefers `ExtractionOutput.provider_cost_usd`; deepinfra unresolved-classify success captures provider cost, failure → matrix.
 
 #### T-A-3-02: S6 — `SessionScopedNlpUsageLogger` persists `cost_source`/`user_id`
 **Type**: impl
@@ -419,7 +423,7 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - Minimum test count: 1
 
 **Acceptance criteria**:
-- [ ] Logger writes `cost_source` + `user_id`; mypy clean.
+- [x] Logger writes `cost_source` + `user_id`; mypy clean. (`SessionScopedNlpUsageLogger.log` gains both kw params → `NlpUsageLogRepository` INSERT persists `cost_source`, `user_id`.)
 
 #### T-A-3-03: S7 — route enrichment writes through unified path, persist `cost_source`
 **Type**: impl
@@ -440,7 +444,7 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - Minimum test count: 2
 
 **Acceptance criteria**:
-- [ ] S7 write path stamps `cost_source`; DeepInfra prefers provider cost; Ollama stays `local`.
+- [x] S7 write path stamps `cost_source`; DeepInfra prefers provider cost (`ExtractionOutput.provider_cost_usd` → `resolve_cost` provider branch); Gemini → `pricematrix`; Ollama stays `local`. Removed the ad-hoc char-count cost heuristics (`_deepinfra_extraction_cost`/`_gemini_*`) in favour of `resolve_cost` (R13).
 
 #### T-A-3-04: S6/S7 integration test — real cost written end-to-end
 **Type**: test
@@ -457,7 +461,7 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - Minimum test count: 2
 
 **Acceptance criteria**:
-- [ ] Both integration tests pass on testcontainers Postgres.
+- [~] **Deferred — no live Postgres in this wave's environment.** The W2 integration tests already proved the two columns apply/roll-back on a real PG16 container; the W3 unit repo tests (`test_log_persists_cost_source_and_user_id` for both nlp + KG) assert the exact bind-params written into the INSERT. Full end-to-end cost-write integration is covered when the central deployment runs the live-smoke step.
 
 #### Pre-read
 - The 4 S6 call-site files (lines noted above) + `usage_log_factory.py`
@@ -465,19 +469,19 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - `libs/ml-clients/src/ml_clients/pricing.py` (`compute_cost`), `usage_log.py`
 
 #### Validation Gate
-- [ ] `ruff` + `mypy` on S6 + S7 changed packages
-- [ ] Unit tests pass — minimum **5** new
-- [ ] Integration tests (testcontainers) pass — minimum **2**
-- [ ] `grep` for hardcoded `estimated_cost_usd=0.0` at paid S6 sites returns none
-- [ ] **Rebuild + redeploy** nlp-pipeline (S6) + knowledge-graph (S7) with new `libs/ml-clients`; **verify the new lib code is actually in the container** (direct `docker build -f services/<svc>/Dockerfile .` + retag per the "compose ships stale libs" caution) before smoke
-- [ ] **Live smoke**: trigger one paid extraction (S6) + one enrichment (S7); confirm a `llm_usage_log` row with `estimated_cost_usd>0` + `cost_source='provider'`; confirm one Ollama call writes `cost_source='local'`, `0`
+- [x] `ruff` + `mypy` on S6 + S7 changed packages (ruff@0.4.0 clean; mypy: ml-clients 28, nlp-pipeline 151, knowledge-graph 192 source files — no issues)
+- [x] Unit tests pass — minimum **5** new (13 new: 5 `resolve_cost`, 2 cascade cost, 2 KG fallback-chain cost, 2 nlp repo, 2 KG repo)
+- [~] Integration tests (testcontainers) — deferred (see T-A-3-04; no live PG in-env; unit repo-bind tests cover the write params)
+- [x] `grep` for hardcoded `estimated_cost_usd=0.0` at paid S6 sites returns none (only 2 Ollama `cost_source='local'` sites remain)
+- [ ] **Rebuild + redeploy** nlp-pipeline (S6) + knowledge-graph (S7) — **DEFERRED to central deployment** (this wave: implement + test only, do not rebuild/deploy)
+- [ ] **Live smoke** — DEFERRED to central deployment
 
 #### Architecture Compliance
-- [ ] R11 — Decimal cost; nullable cols
-- [ ] R12 — structlog on best-effort failure
-- [ ] R13 — cost via `libs/ml-clients` only (no local price math)
-- [ ] Migration ownership — S6 nlp_db columns came from **nlp-pipeline's own W2 migration `0023`**; S7 intelligence_db columns came from **intel-migrations `0064`** (S7 owns no DDL)
-- [ ] R25/R27 — writes through existing logger; no new use case / no read-replica concern
+- [x] R11 — Decimal cost (`resolve_cost` returns Decimal; `Decimal(str(x))` bridge); nullable cols
+- [x] R12 — structlog on best-effort failure (all logger/repo paths swallow + warn)
+- [x] R13 — cost via `libs/ml-clients` only; removed S7 local char-count heuristics
+- [x] Migration ownership — S6 nlp_db columns from **nlp-pipeline W2 `0023`**; S7 intelligence_db columns from **intel-migrations `0064`**
+- [x] R25/R27 — writes through existing logger; no new use case / no read-replica concern
 
 #### Break Impact
 

@@ -30,6 +30,7 @@ from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
 from ml_clients.errors import RetryableError  # type: ignore[import-not-found]
+from ml_clients.pricing import resolve_cost  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
@@ -288,6 +289,21 @@ async def _run_extraction_window(
                 # configured ``model_id`` when the adapter predates the field.
                 actual_model = getattr(output, "model_used", None) or model_id
                 fallback_reason = getattr(output, "fallback_reason", "none")
+                provider = getattr(extraction_client, "provider", "unknown")
+                tokens_in = len(prompt.split()) + len(window_text.split())
+                tokens_out = len(str(getattr(output, "raw_response", "") or "").split())
+                # PLAN-0117 W3 (FR-4b): resolve the real cost + provenance instead
+                # of the old hardcoded ``0.0``. When the DeepInfra adapter captured
+                # ``usage.estimated_cost`` it is surfaced on ``ExtractionOutput``
+                # (FR-1) and wins (cost_source="provider"); otherwise the price
+                # matrix. Ollama-served extraction resolves to ``$0``/"local".
+                cost, cost_source = resolve_cost(
+                    actual_model,
+                    provider=provider,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    provider_estimated_cost=getattr(output, "provider_cost_usd", None),
+                )
                 await usage_logger.log(
                     model_id=actual_model,
                     # The deep-extraction provider is selected at consumer
@@ -295,17 +311,18 @@ async def _run_extraction_window(
                     # Ollama otherwise). Without a hint on the client we tag
                     # generically; tokens_in/out are word-split estimates per
                     # protocol guidance.
-                    provider=getattr(extraction_client, "provider", "unknown"),
+                    provider=provider,
                     capability="extraction",
-                    tokens_in=len(prompt.split()) + len(window_text.split()),
-                    tokens_out=len(str(getattr(output, "raw_response", "") or "").split()),
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
                     latency_ms=latency_ms,
-                    estimated_cost_usd=0.0,
+                    estimated_cost_usd=float(cost),
                     success=extract_succeeded,
                     error_code=None if extract_succeeded else "model_error",
                     doc_id=doc_id,
                     # Service-specific extra consumed by NlpUsageLogRepository.log.
                     fallback_reason=fallback_reason,
+                    cost_source=cost_source,
                 )
             except Exception as exc:  # protocol forbids raising; belt-and-braces
                 logger.warning(

@@ -159,3 +159,44 @@ class TestNlpUsageLogRepository:
 
         params = session.execute.await_args.args[1]
         assert params["fallback_reason"] is None
+
+    async def test_log_persists_cost_source_and_user_id(self) -> None:
+        """PLAN-0117 W3 (FR-2/FR-3): cost_source + user_id are bound into the INSERT."""
+        session = _make_session()
+        repo = NlpUsageLogRepository(session)
+        user_id = uuid.uuid4()
+
+        await repo.log(
+            model_id="openai/gpt-oss-120b",
+            provider="deepinfra",
+            capability="classification",
+            tokens_in=120,
+            tokens_out=8,
+            latency_ms=300,
+            estimated_cost_usd=0.00042,
+            cost_source="provider",
+            user_id=user_id,
+        )
+
+        params = session.execute.await_args.args[1]
+        assert params["cost_source"] == "provider"
+        assert params["user_id"] == str(user_id)
+        assert params["estimated_cost_usd"] == 0.00042
+
+    async def test_log_cost_source_and_user_id_default_null(self) -> None:
+        """A legacy caller omitting the new kwargs binds NULL (columns nullable)."""
+        session = _make_session()
+        repo = NlpUsageLogRepository(session)
+
+        await repo.log(
+            model_id="qwen3:0.6b",
+            provider="ollama",
+            capability="extraction",
+            tokens_in=0,
+            tokens_out=0,
+            latency_ms=0,
+        )
+
+        params = session.execute.await_args.args[1]
+        assert params["cost_source"] is None
+        assert params["user_id"] is None

@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 import structlog
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -43,12 +45,19 @@ class NlpUsageLogRepository:
         estimated_cost_usd: float = 0.0,
         success: bool = True,
         error_code: str | None = None,
+        cost_source: str | None = None,
+        user_id: UUID | None = None,
         **context: object,
     ) -> None:
         """Insert one usage log row.
 
         All exceptions are caught and logged as warnings — this method
         must never raise regardless of DB state.
+
+        PLAN-0117 W3 (FR-2/FR-3): ``cost_source`` records HOW ``estimated_cost_usd``
+        was derived ("provider" | "pricematrix" | "local"); ``user_id`` is the
+        authenticated end-user when one triggered the call (NULL for the
+        system/background pipelines that dominate S6 — OQ-4).
         """
         try:
             from sqlalchemy import text
@@ -75,14 +84,14 @@ class NlpUsageLogRepository:
                         service_name, tenant_id,
                         tokens_in, tokens_out, estimated_cost_usd,
                         latency_ms, success, error_code, doc_id,
-                        fallback_reason
+                        fallback_reason, cost_source, user_id
                     ) VALUES (
                         :log_id,
                         :model_id, :provider, :capability,
                         'nlp-pipeline', :tenant_id,
                         :tokens_in, :tokens_out, :estimated_cost_usd,
                         :latency_ms, :success, :error_code, :doc_id,
-                        :fallback_reason
+                        :fallback_reason, :cost_source, :user_id
                     )
                     """,
                 ),
@@ -100,6 +109,8 @@ class NlpUsageLogRepository:
                     "error_code": error_code,
                     "doc_id": str(doc_id) if doc_id is not None else None,
                     "fallback_reason": fallback_reason_str,
+                    "cost_source": cost_source,
+                    "user_id": str(user_id) if user_id is not None else None,
                 },
             )
         except Exception as exc:

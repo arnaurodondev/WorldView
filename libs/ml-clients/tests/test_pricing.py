@@ -212,3 +212,95 @@ def test_provider_cost_to_decimal_edge_cases() -> None:
     # A valid string / int is parsed.
     assert provider_cost_to_decimal("0.0002") == Decimal("0.0002")
     assert provider_cost_to_decimal(0) == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# resolve_cost — the single §2.2 cost-source priority (PLAN-0117 W3, STEP 0)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_resolve_cost_provider_branch_wins() -> None:
+    """Priority 1: a provider-returned cost is persisted verbatim → 'provider'."""
+    from ml_clients.pricing import resolve_cost
+
+    cost, source = resolve_cost(
+        "openai/gpt-oss-120b",
+        provider="deepinfra",
+        tokens_in=1000,
+        tokens_out=500,
+        provider_estimated_cost=4.1e-07,
+    )
+    assert source == "provider"
+    # Verbatim, not the matrix value — no float drift.
+    assert cost == Decimal("0.00000041")
+
+
+@pytest.mark.unit
+def test_resolve_cost_local_by_model_id() -> None:
+    """Priority 2a: a known LOCAL_FREE_MODELS id → $0 / 'local', no matrix warn."""
+    from ml_clients.pricing import resolve_cost
+
+    cost, source = resolve_cost(
+        "qwen3:0.6b",
+        provider="ollama",
+        tokens_in=1234,
+        tokens_out=99,
+    )
+    assert source == "local"
+    assert cost == Decimal("0")
+
+
+@pytest.mark.unit
+def test_resolve_cost_local_by_provider(caplog: pytest.LogCaptureFixture) -> None:
+    """Priority 2b: an Ollama-served UNLISTED tag → 'local' WITHOUT a matrix warning.
+
+    This is the guardrail the task calls out: routing a local tag through the
+    matrix would emit a spurious ``model_pricing_unknown`` warning.
+    """
+    import logging
+
+    from ml_clients.pricing import resolve_cost
+
+    with caplog.at_level(logging.WARNING):
+        cost, source = resolve_cost(
+            "some-unlisted-ollama-tag:latest",
+            provider="ollama",
+            tokens_in=500,
+            tokens_out=0,
+        )
+    assert source == "local"
+    assert cost == Decimal("0")
+    assert "model_pricing_unknown" not in caplog.text
+
+
+@pytest.mark.unit
+def test_resolve_cost_pricematrix_branch() -> None:
+    """Priority 3: no provider cost + paid model → matrix compute → 'pricematrix'."""
+    from ml_clients.pricing import compute_cost, resolve_cost
+
+    cost, source = resolve_cost(
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        provider="deepinfra",
+        tokens_in=1_000_000,
+        tokens_out=1_000_000,
+    )
+    assert source == "pricematrix"
+    assert cost == compute_cost("Qwen/Qwen3-235B-A22B-Instruct-2507", 1_000_000, 1_000_000)
+    assert cost > 0
+
+
+@pytest.mark.unit
+def test_resolve_cost_malformed_provider_cost_falls_back_to_matrix() -> None:
+    """A malformed/negative provider cost is ignored → matrix (not 'provider')."""
+    from ml_clients.pricing import resolve_cost
+
+    cost, source = resolve_cost(
+        "Qwen/Qwen3-32B",
+        provider="deepinfra",
+        tokens_in=1000,
+        tokens_out=500,
+        provider_estimated_cost="not-a-number",
+    )
+    assert source == "pricematrix"
+    assert cost > 0

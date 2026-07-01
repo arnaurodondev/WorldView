@@ -27,6 +27,7 @@ from ml_clients.pricing import (
     compute_cost,
     is_priceable,
     provider_cost_to_decimal,
+    resolve_cost,
 )
 from ml_clients.protocols import EmbeddingClient, ExtractionClient, NERClient
 from ml_clients.text_budget import estimate_bert_tokens, truncate_for_bge
@@ -65,5 +66,6 @@ __all__ = [
     "estimate_tokens_from_text",
     "is_priceable",
     "provider_cost_to_decimal",
+    "resolve_cost",
     "truncate_for_bge",
 ]
