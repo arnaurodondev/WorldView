@@ -100,6 +100,19 @@ class WorkerProcess:
         _, _, self._write_factory, self._read_factory = _build_factories(settings)
         self._valkey = create_valkey_client_from_url(settings.valkey_url)
 
+        # Shared EODHD quota counter (blind-spot fix, 2026-07-01). S4 is the
+        # largest EODHD consumer but previously wrote no quota keys, so the
+        # account-wide monthly total undercounted true usage. Every EODHD
+        # request now increments the SAME Valkey counters market-ingestion (S2)
+        # uses, via the shared EodhdQuotaService. Best-effort — a Valkey failure
+        # never breaks ingestion (see EodhdQuotaService.record_usage).
+        from messaging.eodhd_quota.quota_service import EodhdQuotaService
+
+        self._eodhd_quota_service = EodhdQuotaService(
+            valkey=self._valkey,
+            hard_limit=settings.eodhd_monthly_quota,
+        )
+
         storage_settings = StorageSettings(
             endpoint=_normalize_endpoint(settings.minio_endpoint),
             access_key=settings.minio_access_key,
@@ -359,6 +372,9 @@ class WorkerProcess:
                 http_client=self._http_client,
                 api_key=settings.eodhd_api_key,
                 provider_cfg=settings.eodhd,
+                # Shared quota accounting — record every request into the
+                # cross-service Valkey counter so the account-wide total is true.
+                quota_service=self._eodhd_quota_service,
             )
         elif source_type_val == "sec_edgar":
             client = SECEdgarClient(
@@ -396,7 +412,13 @@ class WorkerProcess:
                 EODHDTickerNewsAdapter,
             )
 
-            return EODHDTickerNewsAdapter(settings=settings)
+            # Per-ticker news is the DOMINANT EODHD consumer — thread the shared
+            # quota service so each page request rolls up into the account-wide
+            # counter (previously entirely unaccounted → monthly undercount).
+            return EODHDTickerNewsAdapter(
+                settings=settings,
+                quota_service=self._eodhd_quota_service,
+            )
         else:
             raise AdapterError(f"Unknown source type: {source_type_val}")
 

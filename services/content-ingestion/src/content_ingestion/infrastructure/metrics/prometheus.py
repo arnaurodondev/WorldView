@@ -36,6 +36,30 @@ s4_dlq_total = Gauge(
     "Number of open DLQ entries",
 )
 
+# ── EODHD quota accounting (blind-spot fix, 2026-07-01) ───────────────────────
+# S4 is the LARGEST EODHD consumer (per-ticker news, ~520 fetches/hour) yet
+# historically wrote NO shared quota counters, so the account-wide monthly total
+# (and its dashboards/alerts) undercounted true usage and exhaustion fired with
+# no freshness alert.  These metrics make S4's spend + threshold crossings
+# observable so the next exhaustion is loud, not silent.
+
+# Total EODHD credits S4 recorded into the shared cross-service counter.
+s4_eodhd_credits_recorded_total = Counter(
+    "s4_eodhd_credits_recorded_total",
+    "EODHD credits recorded by content-ingestion into the shared Valkey quota counter",
+    ["endpoint"],
+)
+
+# Threshold/exhaustion events — fires on the shared 80% soft limit, the 100%
+# hard limit, or an auth/quota HTTP rejection (401/402/403/429).  Alert on any
+# increase of this counter so exhaustion is caught before ingestion silently
+# halts.
+s4_eodhd_quota_alerts_total = Counter(
+    "s4_eodhd_quota_alerts_total",
+    "EODHD quota safeguard events seen by content-ingestion (soft/hard limit or auth/quota rejection)",
+    ["reason"],
+)
+
 
 def record_fetch(source: str, *, fetched: int, skipped: int, failed: int, duration: float) -> None:
     """Record metrics for a completed fetch cycle."""
@@ -61,3 +85,25 @@ def record_fetch_attempt(source: str, status: str, duration: float) -> None:
     """
     s4_fetches_total.labels(source=source, status=status).inc()
     s4_fetch_duration_seconds.labels(source=source).observe(duration)
+
+
+def record_eodhd_credits(endpoint: str, credit_cost: int) -> None:
+    """Record EODHD credits attributed to S4 for a single request.
+
+    Args:
+        endpoint: EODHD endpoint identifier — e.g. ``"news"`` (general feed)
+            or ``"ticker_news"`` (per-symbol feed).
+        credit_cost: Credit cost of the request (news = 5/request).
+    """
+    if credit_cost > 0:
+        s4_eodhd_credits_recorded_total.labels(endpoint=endpoint).inc(credit_cost)
+
+
+def record_eodhd_quota_alert(reason: str) -> None:
+    """Record an EODHD quota safeguard event so alerts fire loudly.
+
+    Args:
+        reason: One of ``"soft_limit"`` (≥80% monthly), ``"hard_limit"``
+            (≥100% monthly), or ``"auth_or_quota_rejected"`` (HTTP 401/402/403/429).
+    """
+    s4_eodhd_quota_alerts_total.labels(reason=reason).inc()
