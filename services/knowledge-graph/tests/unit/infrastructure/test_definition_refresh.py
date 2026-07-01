@@ -140,6 +140,9 @@ class TestNonCompanyDescriptionGeneration:
             canonical_name=_CANONICAL_NAME,
             entity_type=_ENTITY_TYPE_PERSON,
             context_hints={},
+            # No evidence_provider wired on this worker → news_context degrades to
+            # None and the LLM applies its no-news guard.
+            news_context=None,
         )
         assert result == "Jerome Powell is the Chair of the Federal Reserve."
 
@@ -204,6 +207,172 @@ class TestNonCompanyDescriptionGeneration:
 
 
 # ---------------------------------------------------------------------------
+# News-grounding (description audit 2026-06-17): the worker must fetch the
+# entity's own recent evidence via the injected provider and pass it as
+# news_context, degrading to None on any read error.
+# ---------------------------------------------------------------------------
+
+
+def _make_evidence_provider(snippets: list[str]) -> AsyncMock:
+    """A mock EntityEnrichmentAdapter returning fixed evidence snippets."""
+    provider = AsyncMock()
+    provider.fetch_recent_evidence = AsyncMock(return_value=snippets)
+    return provider
+
+
+class TestNewsGrounding:
+    async def test_non_company_fetches_evidence_and_passes_news_context(self) -> None:
+        """The worker calls fetch_recent_evidence and threads the result into news_context."""
+        session_factory, _ = _make_session_factory([])
+        description_client = _make_description_client("Jerome Powell chairs the Federal Reserve.")
+        llm_client = AsyncMock()
+        snippets = ["Powell signalled a pause in rate hikes.", "The Fed held rates steady."]
+        evidence_provider = _make_evidence_provider(snippets)
+
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        worker = DefinitionRefreshWorker(
+            session_factory,
+            llm_client,
+            description_client=description_client,
+            evidence_provider=evidence_provider,
+        )
+        row = _make_due_row(entity_type=_ENTITY_TYPE_PERSON)
+
+        await worker._resolve_non_company_text(_ENTITY_ID, _ENTITY_TYPE_PERSON, row)
+
+        # Evidence was fetched for THIS entity.
+        evidence_provider.fetch_recent_evidence.assert_awaited_once_with(_ENTITY_ID)
+        # …and threaded into the LLM call as news_context.
+        call_kwargs = description_client.generate_description.call_args.kwargs
+        assert call_kwargs["news_context"] == snippets
+
+    async def test_non_company_degrades_to_none_on_evidence_error(self) -> None:
+        """A failure in fetch_recent_evidence degrades news_context to None (no crash)."""
+        session_factory, _ = _make_session_factory([])
+        description_client = _make_description_client("A grounded description.")
+        llm_client = AsyncMock()
+        evidence_provider = AsyncMock()
+        evidence_provider.fetch_recent_evidence = AsyncMock(side_effect=RuntimeError("read replica down"))
+
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        worker = DefinitionRefreshWorker(
+            session_factory,
+            llm_client,
+            description_client=description_client,
+            evidence_provider=evidence_provider,
+        )
+        row = _make_due_row(entity_type=_ENTITY_TYPE_PERSON)
+
+        # Must not raise despite the provider error.
+        result = await worker._resolve_non_company_text(_ENTITY_ID, _ENTITY_TYPE_PERSON, row)
+
+        evidence_provider.fetch_recent_evidence.assert_awaited_once()
+        call_kwargs = description_client.generate_description.call_args.kwargs
+        assert call_kwargs["news_context"] is None
+        assert result == "A grounded description."
+
+    async def test_no_provider_passes_none_news_context(self) -> None:
+        """With no evidence_provider wired, news_context is None (backward compatible)."""
+        session_factory, _ = _make_session_factory([])
+        description_client = _make_description_client("An ungrounded description.")
+        llm_client = AsyncMock()
+
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        worker = DefinitionRefreshWorker(session_factory, llm_client, description_client=description_client)
+        row = _make_due_row(entity_type=_ENTITY_TYPE_PERSON)
+
+        await worker._resolve_non_company_text(_ENTITY_ID, _ENTITY_TYPE_PERSON, row)
+
+        call_kwargs = description_client.generate_description.call_args.kwargs
+        assert call_kwargs["news_context"] is None
+
+    async def test_null_fi_path_is_grounded(self) -> None:
+        """The NULL-source financial_instrument path also fetches + passes news_context.
+
+        This path backs crypto/FX/index instruments; grounding it keeps their
+        descriptions honest too.
+        """
+        session_factory, _ = _make_session_factory([])
+        description_client = _make_description_client("Bitcoin is a decentralized digital currency.")
+        llm_client = AsyncMock()
+        snippets = ["Bitcoin rallied above $70k."]
+        evidence_provider = _make_evidence_provider(snippets)
+
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        worker = DefinitionRefreshWorker(
+            session_factory,
+            llm_client,
+            description_client=description_client,
+            evidence_provider=evidence_provider,
+        )
+        row = _make_due_row(
+            entity_type="financial_instrument",
+            canonical_name="Bitcoin",
+            source_text=None,
+            ticker="BTC.USD",
+        )
+
+        await worker._resolve_definition_text_for_null_fi(_ENTITY_ID, row)
+
+        evidence_provider.fetch_recent_evidence.assert_awaited_once_with(_ENTITY_ID)
+        call_kwargs = description_client.generate_description.call_args.kwargs
+        assert call_kwargs["news_context"] == snippets
+
+    async def test_manual_trigger_description_path_is_grounded(self) -> None:
+        """Regression proof for the manual trigger_entity_refresh(refresh_type='description').
+
+        That endpoint enqueues entity.refresh.v1 → S6 marks the entity_embedding_state
+        row due → this worker's run() re-describes it. We drive a full run() with a
+        due non-company row and assert the LLM was grounded with the entity's evidence.
+        """
+        description_client = _make_description_client(
+            "Jerome Powell is the Chair of the Federal Reserve, guiding US monetary policy."
+        )
+        llm_client = AsyncMock()
+        llm_client.embed = AsyncMock(return_value=[MagicMock(embedding=[0.1, 0.2, 0.3])])
+        snippets = ["Powell testified before Congress on inflation."]
+        evidence_provider = _make_evidence_provider(snippets)
+
+        session_factory, _session = _make_session_factory([])
+
+        emb_repo_mock = AsyncMock()
+        due_row = _make_due_row(
+            entity_type=_ENTITY_TYPE_PERSON,
+            canonical_name=_CANONICAL_NAME,
+            source_text=None,
+            source_hash=None,
+        )
+        emb_repo_mock.get_due_for_refresh = AsyncMock(return_value=[due_row])
+        emb_repo_mock.upsert = AsyncMock()
+
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        worker = DefinitionRefreshWorker(
+            session_factory,
+            llm_client,
+            description_client=description_client,
+            evidence_provider=evidence_provider,
+        )
+
+        with patch(
+            "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+            return_value=emb_repo_mock,
+        ):
+            await worker.run()
+
+        # The full refresh cycle grounded the LLM with the entity's own evidence.
+        evidence_provider.fetch_recent_evidence.assert_awaited_once_with(_ENTITY_ID)
+        call_kwargs = description_client.generate_description.call_args.kwargs
+        assert call_kwargs["news_context"] == snippets
+        # …and the grounded description was embedded + persisted.
+        emb_repo_mock.upsert.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # financial_instrument: description_client NOT used
 # ---------------------------------------------------------------------------
 
@@ -258,7 +427,7 @@ class TestFinancialInstrumentNullSourceText:
         llm_client = AsyncMock()
         llm_client.embed = AsyncMock(return_value=[MagicMock(embedding=[0.1, 0.2, 0.3])])
 
-        session_factory, session = _make_session_factory([])
+        session_factory, _session = _make_session_factory([])
 
         emb_repo_mock = AsyncMock()
         due_row = _make_due_row(

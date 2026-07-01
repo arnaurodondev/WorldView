@@ -102,10 +102,23 @@ async def main() -> None:
     kg_usage_logger = SessionScopedKgUsageLogger(write_factory)
 
     llm_client = FallbackChainClient(usage_logger=kg_usage_logger)
+    # News-grounding (description audit 2026-06-17): wire an EntityEnrichmentAdapter
+    # so consumer-triggered definition refreshes ground the LLM in the entity's own
+    # recent news evidence. ``_read_factory`` may be None (no replica configured) —
+    # the adapter then falls back to the write factory for its read session (R27).
+    from knowledge_graph.infrastructure.intelligence_db.adapters.entity_enrichment_adapter import (
+        EntityEnrichmentAdapter,
+    )
+
+    _def_evidence_provider = EntityEnrichmentAdapter(
+        write_factory,
+        read_session_factory=_read_factory,
+    )
     definition_worker = DefinitionRefreshWorker(
         write_factory,
         llm_client,
         embedding_model_id=settings.embedding_model_id,
+        evidence_provider=_def_evidence_provider,
     )
 
     config = ConsumerConfig(

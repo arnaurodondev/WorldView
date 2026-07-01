@@ -420,6 +420,22 @@ def build_workers(
         # ``usage_logger`` (used by GeminiDescriptionAdapter); the new
         # ``ProvisionalEnrichmentWorker`` accepts the logger and forwards it
         # into its FallbackChainClient calls (see provisional_enrichment.py).
+        #
+        # News-grounding (description audit 2026-06-17): wire an
+        # ``EntityEnrichmentAdapter`` as the worker's evidence provider so the
+        # periodic Worker 13D-1 refresh AND the manual trigger_entity_refresh
+        # (refresh_type="description") path paraphrase real news evidence instead
+        # of fabricating. The adapter opens its own read-replica session per call
+        # (R27); ``_read_factory`` falls back to the write factory when no
+        # replica is configured.
+        from knowledge_graph.infrastructure.intelligence_db.adapters.entity_enrichment_adapter import (
+            EntityEnrichmentAdapter,
+        )
+
+        _def_evidence_provider = EntityEnrichmentAdapter(
+            write_session_factory,
+            read_session_factory=_read_factory,
+        )
         def_worker = DefinitionRefreshWorker(
             write_session_factory,
             llm_client,
@@ -428,6 +444,7 @@ def build_workers(
             embedding_model_id=embed_model,
             batch_limit=embed_batch_limit,
             read_session_factory=_read_factory,
+            evidence_provider=_def_evidence_provider,
         )
         workers.update(
             {
