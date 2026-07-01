@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -21,6 +22,92 @@ from market_data.infrastructure.db.models.prediction_markets import (
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+
+# --- Free-text search tokenisation (R2 fix: multi-word chat queries) --------
+#
+# WHY: the previous free-text branch matched the ENTIRE query phrase as one
+# ILIKE substring (`%<whole phrase>%`). Natural chat queries such as
+# "2028 Democratic presidential nomination" never appear verbatim inside a
+# single market `question`, so realistic multi-word questions returned 0 rows
+# even though single keywords ("election") matched fine. We now split the query
+# into meaningful word tokens and require the question to contain ALL of them
+# (AND-of-tokens). AND (not OR) is deliberate: OR-of-any-token would match
+# almost every market via a common word like "the"/"win" and return the whole
+# table; AND keeps precision so a nonsense phrase still yields nothing.
+#
+# There is no tsvector/GIN full-text index on `prediction_markets.question`
+# (checked migrations 005/009/010/015), so a proper `websearch_to_tsquery`
+# ranked match is not available without new DDL — tokenised ILIKE is the
+# correct in-place fix and stays consistent with the existing wildcard-escape
+# + single-char ESCAPE safety (M-002 / BP-712).
+
+# Very common words that carry no discriminating signal for market lookup.
+# Kept intentionally small — over-aggressive stopword removal can strip real
+# query intent. Anything short (< 3 chars) is dropped by length anyway.
+_QUERY_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "will",
+        "who",
+        "what",
+        "when",
+        "which",
+        "that",
+        "this",
+        "with",
+        "from",
+        "does",
+        "did",
+        "are",
+        "was",
+        "were",
+        "has",
+        "have",
+        "had",
+        "into",
+        "about",
+    }
+)
+
+# Meaningful tokens are runs of alphanumerics PLUS the ILIKE wildcard chars
+# (% and _). Sentence punctuation (?, ., ,, !, etc.) acts as a delimiter and is
+# stripped, so "nomination?" tokenises to "nomination". The wildcard chars are
+# deliberately KEPT inside a token so a literal "50%" survives as a distinct
+# token and, once escaped below, matches a literal "50%" rather than the number
+# "50" — this preserves the M-002 wildcard-escape contract (a query "win 50%"
+# must not wildcard-match "win 50k").
+_TOKEN_RE = re.compile(r"[a-z0-9%_]+")
+
+
+def _tokenize_query(query: str) -> list[str]:
+    """Split a free-text query into meaningful, de-duplicated search tokens.
+
+    Lower-cases, keeps alphanumeric runs of length >= 3 that are not trivial
+    stopwords, and preserves first-seen order without duplicates. Returns an
+    empty list when nothing meaningful survives (caller falls back to matching
+    the whole phrase so single short/stopword queries still behave sanely).
+    """
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for raw in _TOKEN_RE.findall(query.lower()):
+        if len(raw) < 3 or raw in _QUERY_STOPWORDS or raw in seen:
+            continue
+        seen.add(raw)
+        tokens.append(raw)
+    return tokens
+
+
+def _escape_like_token(token: str) -> str:
+    """Escape ILIKE metacharacters so the token matches literally (M-002).
+
+    Mirrors the escaping used for the whole-phrase fallback: literal backslashes
+    are doubled, then %/_ are backslash-prefixed. Pairs with the single-char
+    ``ESCAPE '\\'`` clause (BP-712).
+    """
+    return token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _row_to_market(row: Any) -> PredictionMarket:
@@ -203,21 +290,35 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
             params["category"] = category.lower()
 
         if query is not None:
-            # Escape ILIKE metacharacters before building the pattern (M-002).
-            # The escape char is a single backslash: literal backslashes in the
-            # user query are doubled ("\\"), and %/_ are backslash-prefixed so
-            # they match literally instead of acting as wildcards.
-            safe_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            # BP-712: the ESCAPE clause must be a SINGLE character. This Python
-            # literal renders to SQL `ESCAPE '\'` (one backslash). The previous
-            # `ESCAPE '\\\\'` rendered to SQL `ESCAPE '\\'` which, under
+            # R2 fix: tokenise the free-text query and require the question to
+            # ILIKE-match ALL meaningful tokens (AND), instead of matching the
+            # whole phrase as one substring. This makes natural multi-word chat
+            # queries ("2028 Democratic presidential nomination") actually match
+            # markets whose question contains those words in any order, while a
+            # nonsense phrase still matches nothing.
+            #
+            # BP-712: the ESCAPE clause must be a SINGLE character. Each Python
+            # literal below renders to SQL `ESCAPE '\'` (one backslash). The
+            # previous `ESCAPE '\\\\'` rendered to SQL `ESCAPE '\\'` which, under
             # standard_conforming_strings=on (the Postgres default), is a
             # TWO-char string literal → asyncpg InvalidEscapeSequenceError →
-            # HTTP 500 on every free-text query (the chat tool always supplies
-            # one). A single backslash matches the escape char used to build
-            # `safe_query` above, so metacharacter escaping stays consistent.
-            predicates.append("m.question ILIKE :query_like ESCAPE '\\'")
-            params["query_like"] = f"%{safe_query}%"
+            # HTTP 500 on every free-text query. A single backslash matches the
+            # escape char used by `_escape_like_token`, so metacharacter
+            # escaping stays consistent (M-002).
+            tokens = _tokenize_query(query)
+            if tokens:
+                # One AND-ed ILIKE predicate per token, each a separately-bound
+                # parameter (no user data ever interpolated into the SQL string).
+                for idx, token in enumerate(tokens):
+                    param_name = f"query_tok_{idx}"
+                    predicates.append(f"m.question ILIKE :{param_name} ESCAPE '\\'")
+                    params[param_name] = f"%{_escape_like_token(token)}%"
+            else:
+                # Fallback: nothing meaningful survived tokenisation (e.g. the
+                # query was all stopwords or a single very short token). Match
+                # the whole phrase so short keyword queries still behave sanely.
+                predicates.append("m.question ILIKE :query_like ESCAPE '\\'")
+                params["query_like"] = f"%{_escape_like_token(query)}%"
 
         where_sql = (" WHERE " + " AND ".join(predicates)) if predicates else ""
         # WHY COALESCE(volume_24h, 0) DESC first: surfaces active/liquid markets
