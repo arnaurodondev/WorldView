@@ -659,3 +659,43 @@ class TestOHLCVIsPartialMapping:
         compiled = stmt.compile(dialect=postgresql.dialect())
         sql_str = str(compiled).lower()
         assert "is_partial" in sql_str, f"is_partial not found in SQL: {sql_str}"
+
+
+class TestPredictionMarketListQueryEscape:
+    """Regression guard for BP-712 — the free-text ILIKE ESCAPE clause.
+
+    ``list_markets`` builds a raw SQL predicate with an ``ESCAPE`` clause when a
+    free-text ``query`` is supplied (the chat prediction-market tool always
+    supplies one).  The ESCAPE operand MUST be a single character: under
+    Postgres ``standard_conforming_strings=on`` the previous literal rendered
+    the SQL string ``ESCAPE '\\'`` (two backslashes = a 2-char literal) which
+    asyncpg rejects with ``InvalidEscapeSequenceError`` → HTTP 500 on every
+    query.  This test asserts the generated SQL now uses a single-backslash
+    escape and never the broken two-backslash form.
+    """
+
+    async def test_list_markets_query_uses_single_char_escape(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketRepository,
+        )
+
+        # Mock the session so the raw SQL is captured without a live DB.
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = []  # empty result → list_markets returns ([], 0)
+        session.execute.return_value = result
+
+        repo = PgPredictionMarketRepository(session)
+        pairs, total = await repo.list_markets(status=None, query="election", limit=5, offset=0)
+
+        assert pairs == []
+        assert total == 0
+
+        # The TextClause passed to execute carries the raw SQL string.
+        text_clause = session.execute.call_args[0][0]
+        sql = text_clause.text
+
+        # Single-char escape present (Python "'\\'" == SQL   ESCAPE '<one backslash>').
+        assert "ESCAPE '\\'" in sql, f"expected single-char ESCAPE, got: {sql}"
+        # The broken two-backslash form (Python "'\\\\'") must be absent.
+        assert "ESCAPE '\\\\'" not in sql, f"two-backslash ESCAPE must not appear: {sql}"
