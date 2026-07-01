@@ -79,7 +79,19 @@ def _chunk(
     )
 
 
-def _make_s6(chunks: list[Any], *, ticker_map: dict[str, UUID | None] | None = None) -> AsyncMock:
+class _FakeResolvedEntity:
+    """Minimal stand-in for ResolvedEntity — only the field the helper reads."""
+
+    def __init__(self, canonical_name: str) -> None:
+        self.canonical_name = canonical_name
+
+
+def _make_s6(
+    chunks: list[Any],
+    *,
+    ticker_map: dict[str, UUID | None] | None = None,
+    name_map: dict[str, str] | None = None,
+) -> AsyncMock:
     s6 = AsyncMock()
 
     async def _resolve(ticker: str) -> UUID | None:
@@ -87,7 +99,16 @@ def _make_s6(chunks: list[Any], *, ticker_map: dict[str, UUID | None] | None = N
             return None
         return ticker_map.get(ticker.upper())
 
+    # BUG-3: the handler resolves ticker → canonical company name for the query
+    # text. Default to [] (no name) so query_text stays predictable; per-test
+    # ``name_map`` supplies a canonical name when the test needs it.
+    async def _resolve_entities(query: str) -> list[Any]:
+        if name_map and query.strip().upper() in name_map:
+            return [_FakeResolvedEntity(name_map[query.strip().upper()])]
+        return []
+
     s6.resolve_entity_by_ticker.side_effect = _resolve
+    s6.resolve_entities.side_effect = _resolve_entities
     s6.search_chunks.return_value = chunks
     return s6
 
@@ -113,7 +134,10 @@ class TestGetFilingsHandler:
         assert s6.resolve_entity_by_ticker.await_count == 1
         req = s6.search_chunks.call_args.args[0]
         assert req.source_types == ["sec_edgar"]
-        assert req.entity_ids == [_AAPL_ID]
+        # BUG-3: NO hard entity_ids filter (sec_edgar chunks aren't entity-linked);
+        # the ticker is anchored into the query text instead.
+        assert req.entity_ids is None
+        assert "AAPL" in req.query_text
 
         # One filing returned, citation points at the canonical EDGAR index URL.
         assert len(items) == 1
@@ -142,9 +166,11 @@ class TestGetFilingsHandler:
 
         s6.resolve_entity_by_ticker.assert_not_awaited()
         req = s6.search_chunks.call_args.args[0]
-        assert req.entity_ids == [_AAPL_ID]
+        # BUG-3: no hard entity_ids filter; the item is still stamped with the id.
+        assert req.entity_ids is None
         assert len(items) == 1
         assert items[0].citation_meta.url == _EDGAR_URL_8K
+        assert items[0].entity_id == _AAPL_ID
 
     @pytest.mark.asyncio
     async def test_dedupes_multiple_chunks_of_same_filing(self) -> None:
@@ -188,9 +214,10 @@ class TestGetFilingsHandler:
         # Only the 10-K is returned when a matching filing exists.
         assert len(items) == 1
         assert "10-K" in (items[0].citation_meta.title or "")
-        # The query was biased toward the requested form.
+        # The query is anchored on the company (ticker) AND biased toward the form.
         req = s6.search_chunks.call_args.args[0]
-        assert req.query_text == "10-K"
+        assert "AAPL" in req.query_text
+        assert "10-K" in req.query_text
 
     @pytest.mark.asyncio
     async def test_form_type_filter_falls_back_when_no_match(self) -> None:
@@ -237,3 +264,54 @@ class TestGetFilingsHandler:
         req = s6.search_chunks.call_args.args[0]
         assert req.date_from is not None
         assert req.date_to is not None
+
+    # ── BUG-3 (2026-07-01): no hard entity filter; company anchored in query text ─
+
+    @pytest.mark.asyncio
+    async def test_resolved_company_name_is_anchored_into_query_text(self) -> None:
+        """The resolved canonical company NAME is added to the query text (BUG-3).
+
+        Filings render the full company name ("NVIDIA Corporation"), so the name
+        is the strongest retrieval signal now that we no longer hard-filter by
+        entity id.
+        """
+        chunks = [
+            _chunk(
+                doc_id="nv-1",
+                chunk_id="c1",
+                text="NVIDIA Corporation ANNUAL REPORT Form 10-K.",
+                url=_EDGAR_URL_10K,
+            ),
+        ]
+        _nvda_id = UUID("018f0000-0000-7000-8000-000000aaaa02")
+        s6 = _make_s6(
+            chunks,
+            ticker_map={"NVDA": _nvda_id},
+            name_map={"NVDA": "NVIDIA Corporation"},
+        )
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="NVDA")
+
+        req = s6.search_chunks.call_args.args[0]
+        assert req.entity_ids is None
+        assert "NVIDIA Corporation" in req.query_text
+        assert "NVDA" in req.query_text
+        assert len(items) == 1
+        assert items[0].citation_meta.url == _EDGAR_URL_10K
+
+    @pytest.mark.asyncio
+    async def test_entity_context_name_used_when_no_ticker(self) -> None:
+        """With no explicit ticker, the scoped EntityContext name anchors the query."""
+        from rag_chat.application.pipeline.tool_executor import EntityContext
+
+        ctx = EntityContext(entity_id=_AAPL_ID, ticker="AAPL", name="Apple Inc.", pinned=False)
+        chunks = [_chunk(doc_id="a-1", chunk_id="c1", text="Apple Inc. Form 10-K", url=_EDGAR_URL_10K)]
+        s6 = _make_s6(chunks)
+        handler = _make_handler(s6, entity_context=ctx)
+
+        await handler._handle_get_filings()
+
+        req = s6.search_chunks.call_args.args[0]
+        assert req.entity_ids is None
+        assert "Apple Inc." in req.query_text

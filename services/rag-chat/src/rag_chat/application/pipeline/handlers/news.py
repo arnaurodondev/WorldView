@@ -490,6 +490,48 @@ class NewsHandler(ToolHandler):
                 return re.sub(r"\s+", " ", m.group(1)).upper()
         return None
 
+    async def _resolve_company_name_for_filings(
+        self,
+        ticker: str | None,
+        entity_id: str | None,
+    ) -> str | None:
+        """Best-effort resolve a ticker/entity to its human company NAME.
+
+        BUG-3: SEC filings render the full company name ("NVIDIA Corporation"),
+        so the name is the strongest retrieval signal when we anchor the company
+        into the chunk-search ``query_text`` (there is no reliable entity-mention
+        link on sec_edgar chunks to filter by). Resolution order:
+
+          1. the active EntityContext scope name (the page the user is on), when
+             the caller did not pass a DIFFERENT explicit ticker;
+          2. else S6 mention resolution of the ticker → canonical_name.
+
+        Always degrades to ``None`` (the ticker itself is still added to the query
+        text by the caller) — never raises, never blocks retrieval.
+        """
+        # 1. Scoped entity name wins UNLESS the LLM passed a specific ticker that
+        #    differs from the scope (trust the explicit request over the page).
+        ctx = self._entity_context
+        if ctx is not None and ctx.name:
+            ctx_ticker = (ctx.ticker or "").strip().upper()
+            req_ticker = (ticker or "").strip().upper()
+            if not req_ticker or req_ticker == ctx_ticker:
+                return str(ctx.name)
+        # 2. Resolve the ticker to a canonical company name via S6 mentions.
+        if self._s6 is not None and ticker and ticker.strip():
+            try:
+                resolved = await self._s6.resolve_entities(ticker.strip())
+            except Exception as exc:  # R9: never block retrieval on a resolve miss
+                log.info("filings_name_resolve_failed", ticker=ticker, error=str(exc))
+                resolved = []
+            if not isinstance(resolved, list):  # defensive: tolerate odd upstream/mocks
+                resolved = []
+            for r in resolved:
+                name = getattr(r, "canonical_name", None)
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+        return None
+
     async def _handle_get_filings(
         self,
         entity_id: str | None = None,
@@ -516,11 +558,19 @@ class NewsHandler(ToolHandler):
         ``EnrichedChunkResult`` already carries ``url`` (EDGAR), ``published_at``
         (filed date), ``title`` and ``source_name``.
 
-        Resolution order (mirrors get_entity_news):
-          1. ``entity_id`` (UUID string) wins when provided.
-          2. else ``ticker`` resolved via S6 alias lookup.
-          3. else the active EntityContext scope, if any.
-          4. else no entity filter (returns recent filings across the corpus).
+        BUG-3 (2026-07-01): the company is anchored via the QUERY TEXT (resolved
+        company name + ticker), NOT a hard ``entity_ids`` filter — sec_edgar
+        chunks are not entity-mention-linked to canonical ids, so an id filter
+        returned 0 filings. The filter-first exact-KNN over the sec_edgar bucket
+        ranks the anchored company's filings first; we still stamp the resolved
+        ``entity_id``/ticker on each item for citation + grounding.
+
+        Company anchoring / label resolution:
+          1. ``ticker`` → resolved company NAME (S6 mentions) + the ticker itself
+             are added to the query text; ``ticker`` also becomes the item label.
+          2. the active EntityContext scope name is used when no explicit ticker.
+          3. ``entity_id`` (UUID) still stamps the item for grounding when given.
+          4. with none of the above → recent filings across the corpus.
 
         ``form_type`` (e.g. "10-K") is a BEST-EFFORT filter: the type is not a
         structured field, so we (a) bias the relevance query toward it and
@@ -564,16 +614,36 @@ class NewsHandler(ToolHandler):
                 log.warning("tool_invalid_date", tool="get_filings", value=s)
                 return None
 
-        # Build the relevance query. The chunk search needs SOME query text; bias
-        # it toward the requested form type, otherwise use a broad high-recall
-        # phrase. The hard source_type + entity filters do the real selection.
+        # BUG-3 (2026-07-01): DO NOT hard-filter by entity_ids. SEC EDGAR chunks
+        # are NOT entity-mention-linked to canonical entity ids — e.g. NVDA's id
+        # has 5914 mentions, ALL in NEWS chunks, ZERO in sec_edgar chunks. So a
+        # hard ``entity_ids=[nvda_id]`` filter returned 0 filings even though
+        # sec_edgar retrieval now works (25 hybrid results without the filter).
+        #
+        # Instead we anchor the COMPANY into the QUERY TEXT (name + ticker) and let
+        # the filter-first exact-KNN over the sec_edgar bucket rank that company's
+        # filings first. Filings render the full company name ("NVIDIA Corporation"),
+        # so the name is the strongest retrieval signal — we resolve it best-effort.
+        company_name = await self._resolve_company_name_for_filings(ticker, entity_id)
+        ticker_upper = ticker.strip().upper() if isinstance(ticker, str) and ticker.strip() else None
         normalised_form = re.sub(r"\s+", " ", form_type).strip().upper() if form_type else None
-        query_text = normalised_form or "annual quarterly report SEC filing"
+        # Compose: "<Company> <TICKER> <FORM|report terms>" — drop the None parts.
+        query_text = " ".join(
+            part
+            for part in (
+                company_name,
+                ticker_upper,
+                normalised_form or "annual quarterly report SEC filing",
+            )
+            if part
+        )
 
         from rag_chat.application.ports.upstream_clients import ChunkSearchRequest
 
         # Over-fetch: chunk search returns multiple chunks per filing, so request
         # a larger window and dedupe by doc_id down to ``capped_results`` filings.
+        # source_types pins the sec_edgar bucket; the company anchoring lives in
+        # query_text (NO entity_ids filter — see BUG-3 note above).
         request = ChunkSearchRequest(
             query_text=query_text,
             top_k=min(50, capped_results * 5),
@@ -581,7 +651,7 @@ class NewsHandler(ToolHandler):
             date_from=_parse_dt(date_from),
             date_to=_parse_dt(date_to),
             source_types=[_SEC_EDGAR_SOURCE_TYPE],
-            entity_ids=[resolved_id] if resolved_id is not None else None,
+            entity_ids=None,
         )
 
         t0 = time.monotonic()
