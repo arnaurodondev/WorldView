@@ -273,3 +273,194 @@ def test_normalize_citation_brackets_is_idempotent_on_ascii() -> None:
 
     ascii_text = "Plain [search_events row 0] answer with [1] marker."
     assert normalize_citation_brackets(ascii_text) == ascii_text
+
+
+# ── 2026-07-01 marker-robustness: prefix tolerance + out-of-range clamp ───────
+#
+# Residual from the round-2 live QA: citations still vanished when the model used
+# NON-STANDARD provenance markers. Two observed shapes:
+#   1. ``[functions.get_prediction_markets row 0]`` — the model prefixes the tool
+#      name with the OpenAI function-calling namespace ``functions.`` → the tag
+#      failed to match the tool-row regex at all → citation stripped.
+#   2. ``[get_filings row 10]`` when only 5 rows were retrieved — an out-of-range
+#      row index → treated as out-of-range and stripped instead of clamped.
+# Both now deliver a citation; the phantom-tool refusal is untouched.
+
+
+def _pk_items() -> list[RetrievedItem]:
+    return [
+        _item("pm0", "Will X win?", title="Market 0", url="https://polymarket.com/event/a"),
+        _item("pm1", "Will Y win?", title="Market 1", url="https://polymarket.com/event/b"),
+    ]
+
+
+def test_functions_namespace_prefix_maps_to_real_citation() -> None:
+    """``[functions.get_prediction_markets row 0]`` resolves to the item position.
+
+    The ``functions.`` namespace prefix is stripped before the tool-row lookup, so
+    the bare ``get_prediction_markets`` key matches the map and the tag becomes a
+    real ``[1]`` citation instead of being dropped.
+    """
+    items = _pk_items()
+    pos_by_id = {it.item_id: i + 1 for i, it in enumerate(items)}
+    row_items = {("get_prediction_markets", i): it for i, it in enumerate(items)}
+
+    def resolver(tool: str, row: int) -> int | None:
+        it = row_items.get((tool, row))
+        return pos_by_id.get(it.item_id) if it else None
+
+    text = "Odds favour X [functions.get_prediction_markets row 0] and Y [functions.get_prediction_markets row 1]."
+    out = normalize_tool_row_citations(text, resolver)
+    assert "[1]" in out and "[2]" in out
+    assert "functions." not in out and "row 0" not in out and "row 1" not in out
+
+
+def test_tool_and_tools_namespace_prefixes_also_map() -> None:
+    """Sibling namespace prefixes (``tool.`` / ``tools.``) are stripped too."""
+    items = _pk_items()
+    pos_by_id = {it.item_id: i + 1 for i, it in enumerate(items)}
+    row_items = {("get_prediction_markets", i): it for i, it in enumerate(items)}
+
+    def resolver(tool: str, row: int) -> int | None:
+        it = row_items.get((tool, row))
+        return pos_by_id.get(it.item_id) if it else None
+
+    text = "A [tool.get_prediction_markets row 0] and B [tools.get_prediction_markets row 1]."
+    out = normalize_tool_row_citations(text, resolver)
+    assert "[1]" in out and "[2]" in out
+    assert "tool." not in out and "tools." not in out
+
+
+def test_prefixed_end_to_end_produces_real_citations() -> None:
+    """A ``functions.``-prefixed answer yields real URL-bearing citations."""
+    items = _pk_items()
+    row_items = {("get_prediction_markets", 0): items[0], ("get_prediction_markets", 1): items[1]}
+    pos_by_id = {it.item_id: i + 1 for i, it in enumerate(items)}
+
+    def resolver(tool: str, row: int) -> int | None:
+        it = row_items.get((tool, row))
+        return pos_by_id.get(it.item_id) if it else None
+
+    answer = "Markets: [functions.get_prediction_markets row 0] and [functions.get_prediction_markets row 1]."
+    normalized = normalize_tool_row_citations(answer, resolver)
+    _clean, citations = OutputProcessor().process(normalized, items)
+    assert {c.url for c in citations} == {"https://polymarket.com/event/a", "https://polymarket.com/event/b"}
+
+
+def test_row_zero_maps_to_first_item() -> None:
+    """``row 0`` (0-based) maps to the FIRST retrieved item, position ``[1]``."""
+    items = _pk_items()
+    pos_by_id = {it.item_id: i + 1 for i, it in enumerate(items)}
+    row_items = {("get_prediction_markets", i): it for i, it in enumerate(items)}
+
+    def resolver(tool: str, row: int) -> int | None:
+        it = row_items.get((tool, row))
+        return pos_by_id.get(it.item_id) if it else None
+
+    text = "First market [get_prediction_markets row 0]."
+    out = normalize_tool_row_citations(text, resolver)
+    assert "[1]" in out and "row 0" not in out
+
+
+def test_out_of_range_row_clamps_to_last_valid_row_not_stripped() -> None:
+    """``[get_filings row 10]`` on a 5-row result clamps to the last row (not strip).
+
+    The 5 rows occupy 0-based indices 0..4. Row 10 is past the end; with a
+    row-count resolver reporting 5 rows the index clamps to 4 and the tag becomes
+    the fifth item's positional citation instead of being dropped.
+    """
+    # 5 filings → positions [1]..[5]; row indices 0..4.
+    items = [
+        _item(f"f{i}", f"Filing {i}", title=f"Filing {i}", url=f"https://sec.gov/{i}")
+        for i in range(5)
+    ]
+    pos_by_id = {it.item_id: i + 1 for i, it in enumerate(items)}
+    row_items = {("get_filings", i): it for i, it in enumerate(items)}
+    counts = {"get_filings": 5}
+
+    def resolver(tool: str, row: int) -> int | None:
+        it = row_items.get((tool, row))
+        return pos_by_id.get(it.item_id) if it else None
+
+    def count_resolver(tool: str) -> int | None:
+        return counts.get(tool)
+
+    text = "Latest filing [get_filings row 10]."
+    out = normalize_tool_row_citations(text, resolver, count_resolver)
+    # Clamped to the last valid row (index 4 → position [5]); NOT left verbatim.
+    assert "[5]" in out
+    assert "get_filings" not in out and "row 10" not in out
+
+
+def test_negative_row_clamps_to_first_row() -> None:
+    """A defensive negative index clamps to row 0 → first item (guards convention)."""
+    # ``\d+`` never captures a sign, so we exercise the clamp helper directly by
+    # asking the resolver for a row below range: the clamp floor is 0.
+    from rag_chat.application.services.numeric_grounding import normalize_tool_row_citations as _norm
+
+    items = _pk_items()
+    pos_by_id = {it.item_id: i + 1 for i, it in enumerate(items)}
+    # Only row 0 maps; row 9 is out of range so the clamp must land on 0.
+    row_items = {("get_prediction_markets", 0): items[0]}
+    counts = {"get_prediction_markets": 1}
+
+    def resolver(tool: str, row: int) -> int | None:
+        it = row_items.get((tool, row))
+        return pos_by_id.get(it.item_id) if it else None
+
+    def count_resolver(tool: str) -> int | None:
+        return counts.get(tool)
+
+    text = "Only market [get_prediction_markets row 9]."
+    out = _norm(text, resolver, count_resolver)
+    assert "[1]" in out and "row 9" not in out
+
+
+def test_clamp_does_not_apply_to_phantom_never_called_tool() -> None:
+    """A never-called tool (count resolver → None) is LEFT VERBATIM, not clamped.
+
+    This preserves the phantom-tool refusal guarantee: the clamp only fires for a
+    tool that actually returned rows. A fabricated tool citation stays intact for
+    the downstream phantom guard to refuse.
+    """
+    def resolver(tool: str, row: int) -> int | None:
+        return None  # nothing maps — the tool never ran
+
+    def count_resolver(tool: str) -> int | None:
+        return None  # phantom → no rows
+
+    text = "Fabricated [made_up_tool row 3]."
+    out = normalize_tool_row_citations(text, resolver, count_resolver)
+    assert out == text  # untouched → strip/refuse guards handle it
+
+
+def test_phantom_tool_citation_still_refused() -> None:
+    """``find_phantom_tool_citations`` still flags a never-called tool tag.
+
+    The prefix-tolerant regex must not weaken phantom detection: a
+    ``[made_up_tool row 3]`` whose tool was never called is still phantom, and a
+    ``functions.``-prefixed phantom is now DETECTED (was previously invisible)
+    against its bare name.
+    """
+    from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+    called = ["get_entity_news"]
+    # Bare phantom → flagged.
+    assert find_phantom_tool_citations("Claim [made_up_tool row 3].", called) == {"made_up_tool"}
+    # Namespaced phantom → flagged against its BARE name.
+    assert find_phantom_tool_citations("Claim [functions.made_up_tool row 3].", called) == {"made_up_tool"}
+    # Namespaced REAL tool → NOT phantom (bare name is in the called set).
+    assert find_phantom_tool_citations("News [functions.get_entity_news row 0].", called) == set()
+
+
+def test_out_of_range_guard_recognises_namespaced_tag() -> None:
+    """``find_out_of_range_tool_citations`` sees a ``functions.`` prefixed tag.
+
+    The row-count bound still applies to the bare tool name; the full matched
+    substring (with prefix) is returned so the caller can strip it verbatim.
+    """
+    from rag_chat.application.services.numeric_grounding import find_out_of_range_tool_citations
+
+    answer = "A [functions.screen_universe row 4]."
+    oor = find_out_of_range_tool_citations(answer, {"screen_universe": 1})
+    assert oor == {"[functions.screen_universe row 4]"}

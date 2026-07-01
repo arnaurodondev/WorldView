@@ -745,8 +745,22 @@ def _has_grounding_citation(
 # relation types like ``[partner_of]``, ``[N1]`` citation markers, ``[entity:UUID]``
 # refs). A ``[name row N]`` whose ``name`` is NOT in the called-tools set is a
 # fabrication marker, full stop.
+#
+# ── 2026-07-01 marker-robustness — NAMESPACE PREFIX TOLERANCE ─────────────────
+# The live model sometimes prefixes the tool name with the OpenAI
+# function-calling namespace, e.g. ``[functions.get_prediction_markets row 0]``
+# (also ``tool.``/``tools.`` and, in principle, any dotted head). Before this fix
+# the tag was INVISIBLE to every consumer of this regex: ``functions`` matched
+# ``(?P<tool>…)`` but the following ``.get_prediction_markets`` failed the
+# ``\s+row`` anchor, so the WHOLE tag did not match and the citation was silently
+# dropped. We now accept ONE optional ``<segment>.`` namespace prefix and capture
+# only the BARE tool name into ``tool`` (the ``ns`` group is discarded), so every
+# downstream lookup keys on the tool-row map's ``tool_name_lower`` key EXACTLY as
+# before — no consumer needs to know the prefix existed. Single-segment only
+# (``[a-z_][a-z0-9_]*\.``): a real tool name is snake_case and never dotted, so
+# any dotted head in a ``[X row N]`` tag is a namespace artifact, not a tool name.
 _TOOL_ROW_CITATION_RE = re.compile(
-    r"\[\s*(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+\d+\s*\]",
+    r"\[\s*(?:(?P<ns>[a-z_][a-z0-9_]*)\.)?(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+\d+\s*\]",
     re.IGNORECASE,
 )
 
@@ -775,8 +789,10 @@ def find_phantom_tool_citations(
 
 # Like _TOOL_ROW_CITATION_RE but captures the row INDEX too, so the
 # out-of-range check below can compare it against the tool's returned row count.
+# Same optional ``<segment>.`` namespace-prefix tolerance as above (2026-07-01):
+# ``[functions.get_filings row 10]`` captures ``tool=get_filings`` / ``row=10``.
 _TOOL_ROW_CITATION_WITH_INDEX_RE = re.compile(
-    r"\[\s*(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+(?P<row>\d+)\s*\]",
+    r"\[\s*(?:(?P<ns>[a-z_][a-z0-9_]*)\.)?(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+(?P<row>\d+)\s*\]",
     re.IGNORECASE,
 )
 
@@ -834,6 +850,7 @@ def find_out_of_range_tool_citations(
 def normalize_tool_row_citations(
     response: str,
     position_resolver: Callable[[str, int], int | None],
+    row_count_resolver: Callable[[str], int | None] | None = None,
 ) -> str:
     """Rewrite ``[tool_name row N]`` provenance tags to ``[<pos>]`` citation markers.
 
@@ -842,23 +859,50 @@ def normalize_tool_row_citations(
     within the prompt-enumerated item list, or ``None`` when the pair maps to no
     retrieved item (out-of-range / phantom — left verbatim for the strip guards).
 
+    ``row_count_resolver(tool_name_lower)`` (optional, 2026-07-01 marker-robustness)
+    returns how many rows the tool actually returned this turn, or ``None`` when the
+    tool was NEVER called. When supplied it enables OUT-OF-RANGE CLAMPING: if the
+    primary resolver cannot map ``(tool, N)`` yet the tool WAS called and returned
+    ``count`` rows (``count > 0``), the row index is clamped into the valid 0-based
+    range ``0..count-1`` (past-the-end ``N → count-1``; negative ``N → 0``) and the
+    resolver is retried. This delivers a citation pointing at that tool's result set
+    instead of stripping the marker — the observed ``[get_filings row 10]`` on a
+    5-row result set now cites the last real filing rather than vanishing. The clamp
+    is GATED on ``count > 0``: a genuinely phantom / never-called tool (``None`` or
+    ``0``) is left verbatim for :func:`find_phantom_tool_citations` /
+    :func:`partition_phantom_tool_citations`, so the phantom-tool refusal guarantee
+    is never weakened — a fabricated-tool citation cannot be clamped into validity.
+
     Deterministic and side-effect free so the orchestrator + tests share one
     definition.
 
     BUG-2 (2026-07-01): the live model emits full-width / CJK brackets
     (``【search_events row 1】``); we translate every bracket variant to ASCII
     first so the ASCII-anchored ``_TOOL_ROW_CITATION_WITH_INDEX_RE`` matches them.
+    The ``_TOOL_ROW_CITATION_WITH_INDEX_RE`` also tolerates a ``functions.`` /
+    ``tool.`` namespace prefix on the tool name and captures only the bare name, so
+    ``[functions.get_prediction_markets row 0]`` resolves against the tool-row map.
     """
     # Normalise CJK / fullwidth brackets to ASCII so the tag regex sees them.
     response = normalize_citation_brackets(response)
 
     def _sub(m: re.Match[str]) -> str:
+        # ``tool`` is already the BARE name — the regex discards any ``functions.``
+        # / ``tool.`` namespace prefix into the (unused) ``ns`` group.
         tool = m.group("tool").lower()
         try:
             row = int(m.group("row"))
         except ValueError:  # pragma: no cover — regex guarantees digits
             return m.group(0)
         pos = position_resolver(tool, row)
+        if pos is None and row_count_resolver is not None:
+            # Out-of-range clamp — ONLY for a tool that was actually called and
+            # returned rows. count is None/0 for a phantom tool → no clamp.
+            count = row_count_resolver(tool)
+            if count is not None and count > 0:
+                clamped = 0 if row < 0 else min(row, count - 1)
+                if clamped != row:
+                    pos = position_resolver(tool, clamped)
         if pos is None:
             return m.group(0)
         return f"[{pos}]"
