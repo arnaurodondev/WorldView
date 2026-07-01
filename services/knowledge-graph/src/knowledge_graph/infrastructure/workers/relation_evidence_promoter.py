@@ -33,8 +33,13 @@ SELECT + INSERT run inside the same transaction and the session is released
 immediately after commit.  No session is held across loop iterations.
 
 Logging contract: ``relation_evidence_promoter_complete`` is emitted after each
-run with ``promoted``, ``blocked_provisional``, ``no_match``, and
-``gated_quality`` counts.
+run with ``promoted``, ``blocked_provisional``, ``no_match``, ``gated_quality``,
+and ``diagnostics_ok`` fields.  The three diagnostic counts run in read sessions
+AFTER the promotion has committed and are best-effort: a ``statement_timeout``
+cancellation (the shared-CTE ``gated_quality`` scan is the usual culprit) is
+caught, reported as a ``-1`` "not measured" sentinel with ``diagnostics_ok=False``
+via ``relation_evidence_promoter_diagnostic_skipped``, and never discards the
+already-committed promotion result.
 """
 
 from __future__ import annotations
@@ -335,35 +340,6 @@ class RelationEvidencePromoterWorker:
 
                 await session.commit()
 
-            # ── Diagnostic counts (separate short-lived read sessions) ────────
-            # These are informational only — failures here must not mask the
-            # promotion result logged immediately after.
-            async with self._sf() as session:
-                prov_result = await session.execute(text(_COUNT_PROVISIONAL_SQL))
-                blocked_provisional = int(prov_result.scalar() or 0)
-
-            async with self._sf() as session:
-                nm_result = await session.execute(text(_COUNT_NO_MATCH_SQL))
-                no_match = int(nm_result.scalar() or 0)
-
-            # Count rows currently held back by the E-3 quality gate.
-            # This informs operations how much evidence is accumulating
-            # in the raw table pending future promotion.
-            async with self._sf() as session:
-                gq_result = await session.execute(
-                    text(_COUNT_GATED_QUALITY_SQL),
-                    {
-                        "conf_threshold": _CONF_THRESHOLD,
-                        "density_threshold": _DENSITY_THRESHOLD,
-                    },
-                )
-                gated_quality = int(gq_result.scalar() or 0)
-
-            # Increment Prometheus counter when the gate is actively blocking
-            # rows — a sustained nonzero value here warrants investigation.
-            if gated_quality > 0:
-                kg_evidence_quality_gated_total.inc(gated_quality)
-
         except Exception as exc:
             logger.error(  # type: ignore[no-any-return]
                 "relation_evidence_promoter_error",
@@ -375,11 +351,92 @@ class RelationEvidencePromoterWorker:
             # does not apply here — raw rows stay in the queue until the next run.
             raise
 
+        # ── Diagnostic counts (separate short-lived read sessions) ────────────
+        # These are informational only — failures here must NOT mask or discard
+        # the promotion result, which has already committed above.  In particular
+        # ``_COUNT_GATED_QUALITY_SQL`` shares the two full-scan density CTEs and,
+        # on a large ``relation_evidence_raw`` table, can exceed the per-connection
+        # ``statement_timeout`` (Postgres SQLSTATE 57014 → asyncpg
+        # ``QueryCanceledError``, surfaced by SQLAlchemy as an OperationalError).
+        # A cancellation here is caught, logged, and swallowed so the successful
+        # promotion is still reported; the affected count is left as a ``-1``
+        # sentinel (== "not measured this run") rather than a misleading ``0``.
+        # This block is OUTSIDE the promotion try/except above precisely so a
+        # diagnostic timeout cannot re-raise past the committed promotion.
+        diagnostics_ok = True
+
+        blocked_provisional, ok = await self._safe_scalar_count(_COUNT_PROVISIONAL_SQL)
+        diagnostics_ok = diagnostics_ok and ok
+
+        no_match, ok = await self._safe_scalar_count(_COUNT_NO_MATCH_SQL)
+        diagnostics_ok = diagnostics_ok and ok
+
+        # Count rows currently held back by the E-3 quality gate.  This is the
+        # expensive diagnostic (shared density CTE pass) most likely to hit the
+        # statement_timeout — hence the graceful QueryCanceledError handling.
+        gated_quality, ok = await self._safe_scalar_count(
+            _COUNT_GATED_QUALITY_SQL,
+            {
+                "conf_threshold": _CONF_THRESHOLD,
+                "density_threshold": _DENSITY_THRESHOLD,
+            },
+        )
+        diagnostics_ok = diagnostics_ok and ok
+
+        # Increment Prometheus counter when the gate is actively blocking rows —
+        # a sustained nonzero value here warrants investigation.  The ``> 0``
+        # guard also naturally skips the ``-1`` timeout sentinel.
+        if gated_quality > 0:
+            kg_evidence_quality_gated_total.inc(gated_quality)
+
         logger.info(  # type: ignore[no-any-return]
             "relation_evidence_promoter_complete",
             promoted=promoted,
             blocked_provisional=blocked_provisional,
             no_match=no_match,
             gated_quality=gated_quality,
+            diagnostics_ok=diagnostics_ok,
             batch_size=_BATCH_SIZE,
         )
+
+    async def _safe_scalar_count(
+        self,
+        sql: str,
+        params: dict[str, object] | None = None,
+    ) -> tuple[int, bool]:
+        """Run a diagnostic scalar-count query, tolerating statement_timeout.
+
+        Diagnostic counts run AFTER the promotion has committed and must never
+        fail the run.  A ``statement_timeout`` cancellation (asyncpg
+        ``QueryCanceledError`` / SQLSTATE 57014, wrapped by SQLAlchemy) is logged
+        as a warning and reported as a ``-1`` "not measured" sentinel; any other
+        error is likewise swallowed with a warning so a transient diagnostic
+        failure cannot discard the successful promotion result.
+
+        Returns
+        -------
+            ``(count, ok)`` — ``count`` is the scalar result (or ``-1`` when the
+            query was cancelled/failed) and ``ok`` is ``False`` on any failure.
+
+        """
+        from sqlalchemy import text
+
+        try:
+            async with self._sf() as session:
+                result = await session.execute(text(sql), params or {})
+                return int(result.scalar() or 0), True
+        except Exception as exc:  # diagnostics are best-effort by contract
+            # Repo convention (cypher_path.py, graph_path_adapter.py, etc.):
+            # detect a DB-side cancellation by inspecting the surfaced message,
+            # since the concrete exception type varies across the asyncpg →
+            # SQLAlchemy wrapping boundary.
+            exc_str = str(exc).lower()
+            is_timeout = "timeout" in exc_str or "canceling" in exc_str or "statement_timeout" in exc_str
+            logger.warning(  # type: ignore[no-any-return]
+                "relation_evidence_promoter_diagnostic_skipped",
+                error=str(exc),
+                reason="statement_timeout" if is_timeout else "diagnostic_error",
+                # Full traceback only for unexpected (non-timeout) failures.
+                exc_info=not is_timeout,
+            )
+            return -1, False
