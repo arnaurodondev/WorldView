@@ -1,15 +1,22 @@
-"""Canonical LLM pricing matrix + cost calculator (PLAN-0107 follow-up).
+"""Canonical LLM pricing matrix + cost calculator (PLAN-0107; unified PLAN-0117).
 
 This is the **single source of truth** for worldview LLM USD-cost calculations.
-It is consumed today by ``rag-chat`` (per call site via ``CostRecorder``); the
-intention is for ``nlp-pipeline`` and ``knowledge-graph`` to adopt this same
-matrix in follow-up waves so every service estimates cost the same way.
+It is consumed by ``rag-chat`` (per call site via ``CostRecorder``); as of
+PLAN-0117 W1 the legacy ``cost.py`` estimator **delegates** to this module, so
+there is exactly ONE price map platform-wide (FR-4a — unification DONE).
 
-Why a separate module from the existing ``cost.py``?
---------------------------------------------------
-``cost.py`` uses ``float`` arithmetic (acceptable for legacy dashboards) and
-buckets prices by ``provider`` + ``model_id``. This module is the *new*
-canonical entry point:
+Cost provenance (PLAN-0117 FR-1/FR-2): DeepInfra returns ``usage.estimated_cost``
+on responses. Adapters capture that verbatim (``cost_source="provider"``) and
+only fall back to :func:`compute_cost` (``cost_source="pricematrix"``) when the
+provider omits a cost. Genuinely-local models (Ollama/GLiNER, see
+:data:`LOCAL_FREE_MODELS`) are ``$0`` with ``cost_source="local"``. A paid model
+must NEVER be logged at ``$0`` — that is the silent-zero regression FR-7 guards.
+
+Why a separate module from the (now-delegating) ``cost.py``?
+------------------------------------------------------------
+``cost.py`` historically used ``float`` arithmetic (acceptable for legacy
+dashboards) and bucketed prices by ``provider`` + ``model_id``. This module is
+the canonical entry point:
 
   * keys solely on ``model_id`` (a model uniquely identifies pricing — the
     provider is purely transport),
@@ -28,7 +35,7 @@ unless stated otherwise.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import structlog
 
@@ -204,7 +211,129 @@ MODEL_PRICING: dict[str, ModelPricing] = {
         output_per_million=Decimal("0.30"),
         notes="as of 2026-06; Google Gemini Flash Lite",
     ),
+    # ── DeepInfra — OpenAI gpt-oss family (PLAN-0117 FR-5) ──────────────────
+    # These became the live extraction/synthesis serving models in 2026-06
+    # (gpt-oss-120b @ medium reasoning is the current S6/S7 extraction model),
+    # yet were absent from the matrix — every call would have fallen through to
+    # the provider-cost path or, if that was missing, logged $0. DeepInfra bills
+    # these per-token; rates below are the published list price. When DeepInfra
+    # returns ``usage.estimated_cost`` the adapter prefers that verbatim; these
+    # entries are the matrix fallback + the FR-7 priceability guarantee.
+    "openai/gpt-oss-120b": ModelPricing(
+        model_id="openai/gpt-oss-120b",
+        input_per_million=Decimal("0.09"),
+        output_per_million=Decimal("0.45"),
+        notes="as of 2026-07; DeepInfra list price (verify at OQ-1)",
+    ),
+    "openai/gpt-oss-20b": ModelPricing(
+        model_id="openai/gpt-oss-20b",
+        input_per_million=Decimal("0.04"),
+        output_per_million=Decimal("0.16"),
+        notes="as of 2026-07; DeepInfra list price (verify at OQ-1)",
+    ),
+    # Qwen3.5-9B — small Qwen used for relevance/classification when routed to
+    # DeepInfra rather than local Ollama. Cheaper tier than Qwen3-32B.
+    "Qwen/Qwen3.5-9B": ModelPricing(
+        model_id="Qwen/Qwen3.5-9B",
+        input_per_million=Decimal("0.04"),
+        output_per_million=Decimal("0.09"),
+        notes="as of 2026-07; DeepInfra list price (verify at OQ-1)",
+    ),
 }
+
+
+# ----------------------------------------------------------------------------
+# Local / free models (PLAN-0117 FR-5).
+# ----------------------------------------------------------------------------
+# Model ids served entirely on-prem (Ollama) or in-process (GLiNER) that
+# legitimately cost $0 — a row with one of these ids + ``estimated_cost_usd == 0``
+# is CORRECT (``cost_source="local"``) and must NOT trip the FR-7 silent-zero
+# alarm. Every id below is a REAL configured id verified from service settings /
+# infra, not invented:
+#   * urchade/gliner_large-v2.1  — GLiNER NER (nlp-pipeline ner_model_id, infra/gliner)
+#   * qwen3:0.6b                 — Ollama relevance/classification (S6) + KG ollama extraction
+#   * qwen2.5:3b                 — rag-chat Ollama classification
+#   * qwen2.5:7b-instruct        — optional Ollama DEEP extraction tier
+#   * bge-reranker-v2-m3         — rag-chat Ollama reranker
+#   * bge-large-en-v1.5 / bge-large — Ollama local embeddings (distinct from the
+#                                 DeepInfra-hosted ``BAAI/bge-large-en-v1.5`` which IS priced)
+LOCAL_FREE_MODELS: frozenset[str] = frozenset(
+    {
+        "urchade/gliner_large-v2.1",
+        "qwen3:0.6b",
+        "qwen2.5:3b",
+        "qwen2.5:7b-instruct",
+        "bge-reranker-v2-m3",
+        "bge-large-en-v1.5",
+        "bge-large",
+    }
+)
+
+# Providers that return a verbatim ``usage.estimated_cost`` on their responses,
+# so a model served through them is always priceable via the provider-cost path
+# even if it is not (yet) in :data:`MODEL_PRICING`.
+_PROVIDER_COST_PROVIDERS: frozenset[str] = frozenset({"deepinfra"})
+
+
+def is_priceable(model_id: str, *, provider: str) -> bool:
+    """Return True when a call to ``model_id`` has a defined cost path.
+
+    A model is priceable when ANY of the following holds:
+      * it has a non-UNKNOWN entry in :data:`MODEL_PRICING` (matrix path), OR
+      * ``provider`` returns a verbatim provider cost (DeepInfra — provider path),
+        so cost is captured even without a matrix entry, OR
+      * ``model_id`` is a genuinely-free local model (:data:`LOCAL_FREE_MODELS`).
+
+    Used by the FR-7 CI/startup guardrail: any configured model that returns
+    False here would silently log ``$0`` and MUST be added to the matrix.
+
+    Args:
+        model_id: Canonical model identifier as sent to the provider.
+        provider: Transport provider name ("deepinfra" | "openrouter" | "gemini"
+            | "ollama" | …).
+
+    Returns:
+        True if a cost path exists; False if a call would be a silent zero.
+    """
+    entry = MODEL_PRICING.get(model_id)
+    if entry is not None and entry.input_per_million >= 0 and entry.output_per_million >= 0:
+        return True
+    if provider in _PROVIDER_COST_PROVIDERS:
+        return True
+    return model_id in LOCAL_FREE_MODELS
+
+
+def provider_cost_to_decimal(estimated_cost: object) -> Decimal | None:
+    """Best-effort convert a provider-returned ``estimated_cost`` to ``Decimal``.
+
+    DeepInfra reports ``usage.estimated_cost`` as a float (often in scientific
+    notation, e.g. ``4.1e-07``). We bridge via ``Decimal(str(x))`` so no binary
+    float artefact leaks into the ``Numeric(12, 6)`` cost columns (R11).
+
+    Returns ``None`` for ``None`` input or any unparseable value — callers then
+    fall back to the price matrix. NEVER raises (NFR-1 best-effort).
+
+    Args:
+        estimated_cost: The raw value from ``response.usage.estimated_cost``
+            (float, int, str, or None).
+
+    Returns:
+        The cost as :class:`decimal.Decimal`, or ``None`` if absent/malformed.
+    """
+    if estimated_cost is None:
+        return None
+    try:
+        # ``str(4.1e-07)`` → "4.1e-07"; Decimal parses scientific notation
+        # exactly, avoiding the float→Decimal binary-expansion artefact of
+        # ``Decimal(4.1e-07)``.
+        value = Decimal(str(estimated_cost))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    # Guard against negative provider costs (error sentinels) — clamp to None so
+    # the caller uses the matrix instead of persisting a negative cost.
+    if value < 0:
+        return None
+    return value
 
 
 def compute_cost(model_id: str, tokens_in: int, tokens_out: int) -> Decimal:
@@ -277,4 +406,11 @@ def compute_cost(model_id: str, tokens_in: int, tokens_out: int) -> Decimal:
     return input_cost + output_cost
 
 
-__all__ = ["MODEL_PRICING", "ModelPricing", "compute_cost"]
+__all__ = [
+    "LOCAL_FREE_MODELS",
+    "MODEL_PRICING",
+    "ModelPricing",
+    "compute_cost",
+    "is_priceable",
+    "provider_cost_to_decimal",
+]

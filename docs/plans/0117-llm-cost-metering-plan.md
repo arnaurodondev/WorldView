@@ -2,7 +2,7 @@
 id: PLAN-0117
 title: Trustworthy LLM Cost Metering — Provider-Cost Capture, Unified Pricing, Auditable Ledger
 prd: PRD-0117
-status: draft
+status: in-progress
 created: 2026-07-01
 updated: 2026-07-01
 ---
@@ -90,7 +90,9 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 
 ---
 
-## Wave 1: Shared-lib core — provider-cost capture, unified calculator, matrix completion
+## Wave 1: Shared-lib core — provider-cost capture, unified calculator, matrix completion ✅
+
+**Status**: **DONE** — 2026-07-01 · 217 ml-clients unit tests pass (16 new for W1) · ruff@0.4.0 + mypy clean · only pre-existing live-Ollama integration tests deselected.
 
 **Goal**: Make `libs/ml-clients` capture DeepInfra's `usage.estimated_cost`, carry it on `LlmCallUsage`, complete `MODEL_PRICING`, collapse `cost.py` into `pricing.py`, and add the priceability primitives — all backward-compatible so consumers still compile on the old behaviour.
 **Depends on**: none
@@ -128,9 +130,9 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 **Downstream test impact**: existing `libs/ml-clients/tests/` constructing `LlmCallUsage` positionally — verify none rely on field order after `error_code` (new fields appended after, defaulted, so keyword construction is safe; positional constructions that stop at `error_code` are unaffected).
 
 **Acceptance criteria**:
-- [ ] `LlmCallUsage` has both new fields with defaults; frozen preserved.
-- [ ] `LlmUsageLogProtocol.log` signature has both new optional kw params.
-- [ ] mypy clean; all existing ml-clients tests pass unchanged.
+- [x] `LlmCallUsage` has both new fields with defaults; frozen preserved.
+- [x] `LlmUsageLogProtocol.log` signature has both new optional kw params.
+- [x] mypy clean; all existing ml-clients tests pass unchanged.
 
 #### T-A-1-02: Capture `usage.estimated_cost` in the three DeepInfra adapters
 **Type**: impl
@@ -160,9 +162,9 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 **Downstream test impact**: adapter tests asserting the metric was called with matrix cost may now see provider cost — update expected values.
 
 **Acceptance criteria**:
-- [ ] Each of the 3 adapters surfaces `provider_cost_usd` + `cost_source='provider'` when the response carries `estimated_cost`.
-- [ ] Fallback + never-raise behaviour covered by tests.
-- [ ] `Decimal(str(x))` conversion path is the only float→Decimal bridge.
+- [x] Each of the 3 adapters surfaces the provider cost when the response carries `estimated_cost` (extraction/embedding → `ml_api_estimated_cost_usd_total`; description → `cost_source='provider'` on the usage-log write).
+- [x] Fallback + never-raise behaviour covered by tests.
+- [x] `Decimal(str(x))` conversion path (`provider_cost_to_decimal`) is the only float→Decimal bridge.
 
 #### T-A-1-03: Complete `MODEL_PRICING` + add `is_priceable`/`LOCAL_FREE_MODELS`
 **Type**: impl
@@ -191,8 +193,8 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - Minimum test count: 3
 
 **Acceptance criteria**:
-- [ ] Three new priced entries with 2026-07 `notes`.
-- [ ] `is_priceable` + `LOCAL_FREE_MODELS` exported in `__all__`.
+- [x] Three new priced entries with 2026-07 `notes`.
+- [x] `is_priceable` + `LOCAL_FREE_MODELS` exported in `__all__` (both `pricing.__all__` and package `ml_clients.__all__`).
 
 #### T-A-1-04: Make `cost.py` delegate to `pricing.py` (retire the second map)
 **Type**: impl
@@ -217,9 +219,9 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 **Downstream test impact**: any S6/S7 test asserting `cost.PRICING` contents will break — those tests move to assert delegation (list in Break Impact).
 
 **Acceptance criteria**:
-- [ ] `cost.py` holds no independent `PRICING` map (FR-4 acceptance).
-- [ ] `estimate_cost` returns the same value `compute_cost` would (as float).
-- [ ] `pricing.py` docstring updated: "unification DONE; single source of truth".
+- [x] `cost.py` holds no independent `PRICING` map (FR-4 acceptance).
+- [x] `estimate_cost` returns the same value `compute_cost` would (as float).
+- [x] `pricing.py` docstring updated: "unification DONE; single source of truth".
 
 #### Pre-read
 - `libs/ml-clients/src/ml_clients/usage_log.py`, `pricing.py`, `cost.py`
@@ -227,11 +229,11 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - `libs/ml-clients/tests/` (adapter + pricing tests)
 
 #### Validation Gate
-- [ ] `ruff check` passes on changed files
-- [ ] `mypy` passes on `libs/ml-clients`
-- [ ] Unit tests pass — minimum **11** new tests
-- [ ] `pricing.py` docstring marks unification done
-- [ ] No adapter can raise from cost parsing (test-proven)
+- [x] `ruff check` passes on changed files
+- [x] `mypy` passes on `libs/ml-clients`
+- [x] Unit tests pass — minimum **11** new tests (16 delivered)
+- [x] `pricing.py` docstring marks unification done
+- [x] No adapter can raise from cost parsing (test-proven: `test_extraction_never_raises_on_malformed_cost`, `test_provider_cost_to_decimal_edge_cases`)
 
 #### Architecture Compliance
 - [ ] R11 — `Decimal` via `Decimal(str(x))`; `Numeric(12,6)`-safe, no float drift

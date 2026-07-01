@@ -140,3 +140,75 @@ def test_unknown_constructor_marks_entry_with_negative_sentinel() -> None:
     # We rely on the negative sentinel inside compute_cost to detect UNKNOWN.
     assert sentinel.input_per_million < 0
     assert sentinel.output_per_million < 0
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0117 T-A-1-03 — new matrix entries + priceability primitives.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_pricing_has_gpt_oss_and_qwen35_9b() -> None:
+    """FR-5: the three genuinely-missing models are now priced (non-negative)."""
+    for model_id in ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "Qwen/Qwen3.5-9B"):
+        assert model_id in MODEL_PRICING, f"{model_id} missing from MODEL_PRICING"
+        entry = MODEL_PRICING[model_id]
+        # Real priced entries, not UNKNOWN sentinels.
+        assert entry.input_per_million >= 0
+        assert entry.output_per_million >= 0
+        assert "2026-07" in entry.notes
+        # Priced entries produce a non-zero cost for non-zero tokens.
+        assert compute_cost(model_id, 1_000_000, 1_000_000) > Decimal("0")
+
+
+@pytest.mark.unit
+def test_local_free_models_nonempty() -> None:
+    """FR-5: ``LOCAL_FREE_MODELS`` is populated with the real configured ids."""
+    from ml_clients.pricing import LOCAL_FREE_MODELS
+
+    assert len(LOCAL_FREE_MODELS) > 0
+    # Spot-check the two canonical local ids verified from service settings.
+    assert "urchade/gliner_large-v2.1" in LOCAL_FREE_MODELS
+    assert "qwen3:0.6b" in LOCAL_FREE_MODELS
+
+
+@pytest.mark.unit
+def test_is_priceable_allowlist() -> None:
+    """FR-7: matrix / DeepInfra-provider / local ids are priceable; a bare
+    unpriced non-local id on a non-provider-cost provider is NOT."""
+    from ml_clients.pricing import is_priceable
+
+    # Matrix entry — priceable regardless of provider.
+    assert is_priceable("Qwen/Qwen3-32B", provider="openrouter") is True
+    # Local model — priceable via the local allow-list.
+    assert is_priceable("qwen3:0.6b", provider="ollama") is True
+    # Unpriced id BUT on DeepInfra → provider-cost path makes it priceable.
+    assert is_priceable("some-brand-new-deepinfra-model", provider="deepinfra") is True
+    # Unpriced, non-local, non-provider-cost provider → silent-zero risk.
+    assert is_priceable("some-unpriced-model", provider="gemini") is False
+    # UNKNOWN sentinel entries are NOT priceable on a non-provider-cost provider.
+    assert is_priceable("gpt-4o-mini", provider="gemini") is False
+
+
+@pytest.mark.unit
+def test_provider_cost_to_decimal_scientific_notation() -> None:
+    """FR-1: ``4.1e-07`` → exact Decimal, no binary float drift."""
+    from ml_clients.pricing import provider_cost_to_decimal
+
+    result = provider_cost_to_decimal(4.1e-07)
+    assert result == Decimal("0.00000041")
+    # str(float) bridge avoids the artefact Decimal(4.1e-07) would introduce.
+    assert result == Decimal("4.1e-07")
+
+
+@pytest.mark.unit
+def test_provider_cost_to_decimal_edge_cases() -> None:
+    """FR-1 / NFR-1: None, malformed, and negative inputs → None (never raise)."""
+    from ml_clients.pricing import provider_cost_to_decimal
+
+    assert provider_cost_to_decimal(None) is None
+    assert provider_cost_to_decimal("not-a-number") is None
+    assert provider_cost_to_decimal(-0.5) is None  # negative sentinel → matrix fallback
+    # A valid string / int is parsed.
+    assert provider_cost_to_decimal("0.0002") == Decimal("0.0002")
+    assert provider_cost_to_decimal(0) == Decimal("0")

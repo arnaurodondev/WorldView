@@ -124,3 +124,96 @@ def test_llm_call_usage_equality_by_value() -> None:
         error_code=None,
     )
     assert a == b
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0117 T-A-1-01 — provider-cost carrier fields (backward compatible).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_llmcallusage_defaults_backward_compat() -> None:
+    """Constructing without the new fields still works; provenance defaults hold.
+
+    Verifies the FR-1/FR-2 fields were APPENDED with defaults so every existing
+    (pre-0117) construction is unaffected: ``provider_cost_usd`` defaults to
+    ``None`` and ``cost_source`` to ``"pricematrix"`` (historical behaviour).
+    """
+    usage = LlmCallUsage(
+        model_id="Qwen/Qwen3-32B",
+        provider="deepinfra",
+        capability="extraction",
+        tokens_in=100,
+        tokens_out=50,
+        estimated_cost_usd=0.001,
+        latency_ms=200,
+        success=True,
+    )
+    assert usage.provider_cost_usd is None
+    assert usage.cost_source == "pricematrix"
+
+
+@pytest.mark.unit
+def test_llmcallusage_invariants() -> None:
+    """FR-2 documented invariants hold for the two provenance edge cases.
+
+    * ``cost_source == "provider"`` ⇒ ``provider_cost_usd is not None``.
+    * ``cost_source == "local"``    ⇒ ``estimated_cost_usd == 0``.
+    """
+    from decimal import Decimal
+
+    provider_usage = LlmCallUsage(
+        model_id="openai/gpt-oss-120b",
+        provider="deepinfra",
+        capability="extraction",
+        tokens_in=100,
+        tokens_out=50,
+        estimated_cost_usd=0.00042,
+        latency_ms=10,
+        success=True,
+        provider_cost_usd=Decimal("0.00042"),
+        cost_source="provider",
+    )
+    assert provider_usage.cost_source == "provider"
+    assert provider_usage.provider_cost_usd is not None
+
+    local_usage = LlmCallUsage(
+        model_id="qwen3:0.6b",
+        provider="ollama",
+        capability="classification",
+        tokens_in=100,
+        tokens_out=50,
+        estimated_cost_usd=0.0,
+        latency_ms=10,
+        success=True,
+        cost_source="local",
+    )
+    assert local_usage.cost_source == "local"
+    assert local_usage.estimated_cost_usd == 0
+
+
+@pytest.mark.unit
+def test_protocol_accepts_cost_source_and_user_id() -> None:
+    """A logger declaring the new kw params still satisfies the protocol."""
+    from uuid import UUID
+
+    class _NewLogger:
+        async def log(
+            self,
+            *,
+            model_id: str,
+            provider: str,
+            capability: str,
+            tokens_in: int,
+            tokens_out: int,
+            latency_ms: int,
+            estimated_cost_usd: float = 0.0,
+            success: bool = True,
+            error_code: str | None = None,
+            cost_source: str | None = None,
+            user_id: UUID | None = None,
+            **context: object,
+        ) -> None:
+            pass  # pragma: no cover
+
+    assert isinstance(_NewLogger(), LlmUsageLogProtocol)

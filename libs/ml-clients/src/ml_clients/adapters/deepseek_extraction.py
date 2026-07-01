@@ -7,12 +7,14 @@ import json
 import os
 import re
 import time
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from ml_clients.dataclasses import ExtractionInput, ExtractionOutput
 from ml_clients.errors import FatalError, RateLimitError, RetryableError, parse_retry_after
+from ml_clients.pricing import provider_cost_to_decimal
 
 if TYPE_CHECKING:
     from observability.metrics import MLMetrics
@@ -482,6 +484,9 @@ class DeepSeekExtractionAdapter:
         tokens_in = 0
         tokens_out = 0
         tokens_cached = 0
+        # PLAN-0117 FR-1: verbatim DeepInfra ``usage.estimated_cost`` when the
+        # response reports it; stays None → matrix fallback in the finally block.
+        provider_cost_usd: Decimal | None = None
         # Task #36 resilience-audit metadata.  These default to "primary served it
         # in one attempt" and are overwritten by _create_with_fallback's return.
         # ``model_used`` drives BOTH the metric labels AND the usage-log row, so the
@@ -534,6 +539,11 @@ class DeepSeekExtractionAdapter:
                         tokens_out = response.usage.completion_tokens or 0
                         details = getattr(response.usage, "prompt_tokens_details", None)
                         tokens_cached = getattr(details, "cached_tokens", 0) or 0
+                        # PLAN-0117 FR-1: DeepInfra returns ``estimated_cost`` on
+                        # ``usage``. Capture verbatim (best-effort — a parse
+                        # failure must NOT break extraction; NFR-1). Preferred
+                        # over the price matrix in the finally block below.
+                        provider_cost_usd = provider_cost_to_decimal(getattr(response.usage, "estimated_cost", None))
                     # With reasoning_effort=none the answer must be in content.
                     # Do NOT fall back to reasoning_content: when reasoning_effort=none fails
                     # the model puts its full thinking chain there (~6 kB of prose) which
@@ -632,7 +642,14 @@ class DeepSeekExtractionAdapter:
                 self._metrics.ml_api_latency_seconds.labels(model_id=model_used, operation="extract").observe(latency)
                 self._metrics.ml_api_tokens_in_total.labels(model_id=model_used).inc(tokens_in)
                 self._metrics.ml_api_tokens_out_total.labels(model_id=model_used).inc(tokens_out)
-                from ml_clients.cost import estimate_cost  # local import avoids circular dep
 
-                cost = estimate_cost("deepinfra", model_used, tokens_in, tokens_out)
+                # PLAN-0117 FR-1: prefer the provider-reported cost (authoritative)
+                # over the price-matrix estimate; only fall back to the matrix when
+                # DeepInfra did not report a cost. Never a silent $0 for a paid model.
+                if provider_cost_usd is not None:
+                    cost = float(provider_cost_usd)
+                else:
+                    from ml_clients.cost import estimate_cost  # local import avoids circular dep
+
+                    cost = estimate_cost("deepinfra", model_used, tokens_in, tokens_out)
                 self._metrics.ml_api_estimated_cost_usd_total.labels(model_id=model_used).inc(cost)

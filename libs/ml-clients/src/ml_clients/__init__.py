@@ -20,12 +20,20 @@ from ml_clients.fallback import (
     FallbackExtractionClient,
     FallbackNERClient,
 )
-from ml_clients.pricing import MODEL_PRICING, ModelPricing, compute_cost
+from ml_clients.pricing import (
+    LOCAL_FREE_MODELS,
+    MODEL_PRICING,
+    ModelPricing,
+    compute_cost,
+    is_priceable,
+    provider_cost_to_decimal,
+)
 from ml_clients.protocols import EmbeddingClient, ExtractionClient, NERClient
 from ml_clients.text_budget import estimate_bert_tokens, truncate_for_bge
 from ml_clients.usage_log import LlmCallUsage, LlmUsageLogProtocol
 
 __all__ = [
+    "LOCAL_FREE_MODELS",
     "MODEL_PRICING",
     "EmbeddingClient",
     "EmbeddingGemmaRouterAdapter",
@@ -55,5 +63,7 @@ __all__ = [
     "estimate_bert_tokens",
     "estimate_cost",
     "estimate_tokens_from_text",
+    "is_priceable",
+    "provider_cost_to_decimal",
     "truncate_for_bge",
 ]
