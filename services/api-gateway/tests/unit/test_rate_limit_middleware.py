@@ -55,6 +55,10 @@ def _make_app() -> FastAPI:
     async def feedback() -> dict[str, bool]:
         return {"ok": True}
 
+    @app.get("/v1/portfolios/export")
+    async def export_csv() -> dict[str, bool]:
+        return {"ok": True}
+
     return app
 
 
@@ -192,6 +196,60 @@ async def test_public_feedback_limit_reads_from_constructor() -> None:
 
     assert statuses[:2] == [200, 200], f"expected 2x200 then 429, got {statuses}"
     assert statuses[2] == 429, f"expected 429 on 3rd request, got {statuses[2]}"
+
+
+@pytest.mark.asyncio
+async def test_export_tier_uses_daily_window_and_limit() -> None:
+    """Export tier: 1/day limit + its OWN (daily) Valkey window.
+
+    Export endpoints (GET /*/export) are a heavy full-table CSV scan and a
+    data-harvesting surface, so they get a dedicated bucket limited per DAY,
+    not per minute. This pins two things at once:
+      1. ``export_limit=1`` → the 2nd export in the window is a 429.
+      2. the export bucket's TTL is ``export_window_seconds`` (86400), NOT the
+         shared 60s ``window_seconds`` — otherwise "1 per day" would silently
+         reset every minute and the cap would be meaningless.
+    """
+    from api_gateway.middleware import RateLimitMiddleware
+
+    valkey = _make_counting_valkey()
+
+    app = _make_app()
+    # RateLimit added last (outermost) so it runs after InjectUser and sees an
+    # authenticated user — the export bucket is a per-user tier, so without a
+    # user the request would fall through to the IP bucket instead.
+    app.add_middleware(
+        RateLimitMiddleware,
+        valkey_client=valkey,
+        max_requests=2000,
+        financial_mutation_limit=20,
+        unauthenticated_limit=20,
+        public_feedback_limit=120,
+        export_limit=1,
+        export_window_seconds=86400,
+    )
+    app.add_middleware(_InjectUserMiddleware)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        statuses = [(await client.get("/v1/portfolios/export")).status_code for _ in range(2)]
+
+    assert statuses[0] == 200, f"first export should pass, got {statuses}"
+    assert statuses[1] == 429, f"second export should 429 (1/day cap), got {statuses}"
+    # The export bucket must TTL over a DAY, not 60s. ``expire`` is called with
+    # ``(key, window)`` when the counter is first created (current == 1).
+    assert valkey.expire.await_count >= 1, "expire must be set on the fresh export key"
+    key, window = valkey.expire.await_args_list[0].args
+    assert window == 86400, f"export bucket must use the daily window, got {window}s"
+    assert key.startswith("rl:v1:export:"), f"expected export bucket key, got {key}"
+
+
+def test_default_export_limit_is_one_per_day() -> None:
+    """The env-driven export tier defaults to 1 request / 86400s (1 per day)."""
+    from api_gateway.config import Settings
+
+    assert Settings.model_fields["rate_limit_export_requests"].default == 1
+    assert Settings.model_fields["rate_limit_export_window_seconds"].default == 86400
 
 
 def test_default_user_bucket_is_2000() -> None:

@@ -277,6 +277,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         financial_mutation_limit=settings.rate_limit_financial_mutation_requests,
         unauthenticated_limit=settings.rate_limit_unauthenticated_requests,
         public_feedback_limit=settings.rate_limit_public_feedback_requests,
+        # Export tier is now env-driven (1/day default) instead of a hardcoded
+        # 10/60s constant — needs both the count and its own daily window.
+        export_limit=settings.rate_limit_export_requests,
+        export_window_seconds=settings.rate_limit_export_window_seconds,
     )
     # OIDCAuth must run before InternalJWT: OIDCAuth validates token + sets request.state.user;
     # InternalJWT then signs and attaches X-Internal-JWT using that user state.

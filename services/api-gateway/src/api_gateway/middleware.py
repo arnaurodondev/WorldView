@@ -474,6 +474,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         public_feedback_limit: int = 120,
         # SEC-103: dedicated low-rate bucket for export endpoints (GET /*/export).
         export_limit: int = _EXPORT_RATE_LIMIT,
+        # Export uses its OWN window (default 1 day) — unlike the other tiers
+        # which all share ``window_seconds`` (60s). A CSV export is a heavy
+        # full-table scan + data-harvesting surface, so the product limit is
+        # "N exports per DAY", not per minute. Kept as a separate knob so the
+        # export bucket's Valkey TTL is set to this value rather than 60s.
+        export_window_seconds: int = 86400,
     ) -> None:
         super().__init__(app)
         self.valkey = valkey_client
@@ -483,6 +489,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.unauthenticated_limit = unauthenticated_limit
         self.public_feedback_limit = public_feedback_limit
         self.export_limit = export_limit
+        self.export_window_seconds = export_window_seconds
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # F-05: Skip rate limiting for health probes, metrics, and internal endpoints.
@@ -555,6 +562,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # ``.get("user_id")`` so a malformed value (e.g. a string slipped in
         # by future code) cannot raise AttributeError mid-dispatch. The
         # ``isinstance`` check makes the contract explicit at the call site.
+        # Default window is the shared 60s bucket; the export tier overrides it
+        # to its own (daily) window below. Every ``expire``/Retry-After below
+        # uses this local, not ``self.window_seconds``, so a non-60s tier TTLs
+        # correctly.
+        window_seconds = self.window_seconds
         if user and isinstance(user, dict) and user.get("user_id"):
             if is_export:
                 # SEC-103: export sub-tier — separate key and tight limit.
@@ -562,6 +574,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # such a route were ever added) would also be capped here.
                 key = f"rl:v1:export:{user['user_id']}"
                 limit = self.export_limit
+                # Export is limited per DAY, not per minute — use its own window.
+                window_seconds = self.export_window_seconds
             elif is_financial_mutation:
                 # Separate Valkey key so the financial-mutation counter does
                 # not eat the general dashboard budget. A user can perform
@@ -617,7 +631,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # the key is already present (current > 1) but has no TTL; the next
             # new window (new key from fresh INCR) will set the TTL correctly.
             if current == 1:
-                await valkey.expire(key, self.window_seconds)
+                await valkey.expire(key, window_seconds)
             if current > limit:  # type: ignore[operator]
                 # PLAN-0052 platform-QA fix: include Retry-After header so
                 # clients (and the user) know when to retry. We use the
@@ -630,7 +644,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     status_code=429,
                     media_type="application/json",
                     headers={
-                        "Retry-After": str(self.window_seconds),
+                        "Retry-After": str(window_seconds),
                         "X-RateLimit-Limit": str(limit),
                         "X-RateLimit-Remaining": "0",
                     },
