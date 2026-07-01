@@ -245,6 +245,76 @@ class TestRetryBudget:
         assert call_count[0] == 1
 
 
+# ── Internal-JWT auth-failure guardrail (2026-07-01 audit) ────────────────────
+
+
+class TestAuthFailureGuardrail:
+    """A 401/403 on an internal call must be logged loudly (never silently swallowed).
+
+    Regression guard for the silent-401 class of bug: previously a 401 was
+    returned as a plain 4xx with NO log and the caller degraded to None, so a
+    misconfigured internal-JWT key looked identical to "no data". The client
+    must now emit an ERROR-level ``intelligence_client_auth_failure`` log.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_401_403_logged_at_error_and_not_retried(self, status: int, monkeypatch: pytest.MonkeyPatch) -> None:
+        call_count = [0]
+
+        async def _mock_get(url: str, headers: dict | None = None, **kwargs: object) -> httpx.Response:
+            call_count[0] += 1
+            mock_resp = MagicMock(spec=httpx.Response)
+            mock_resp.status_code = status
+            return mock_resp
+
+        # Capture ERROR-level log events emitted by the client module logger.
+        error_events: list[tuple[str, dict]] = []
+
+        def _capture_error(event: str, **kwargs: object) -> None:
+            error_events.append((event, dict(kwargs)))
+
+        import market_data.infrastructure.clients.intelligence_clients as mod
+
+        monkeypatch.setattr(mod.logger, "error", _capture_error)
+
+        client = S6NewsRollupClient("http://s6:8006")
+        client._client.get = _mock_get  # type: ignore[method-assign]
+
+        result = await client.get_news_rollup("inst-001")
+
+        # Caller still degrades gracefully to None (keep-last-known semantics)...
+        assert result is None
+        # ...but the auth failure is NOT retried (4xx) and IS logged at ERROR.
+        assert call_count[0] == 1
+        assert any(
+            evt == "intelligence_client_auth_failure" and kw.get("auth_failure") is True for evt, kw in error_events
+        ), f"expected loud auth-failure ERROR log, got: {error_events}"
+
+    @pytest.mark.asyncio
+    async def test_404_does_not_emit_auth_failure_log(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A plain 404 (not an auth failure) must NOT trigger the auth-failure ERROR log."""
+
+        async def _mock_get(url: str, headers: dict | None = None, **kwargs: object) -> httpx.Response:
+            mock_resp = MagicMock(spec=httpx.Response)
+            mock_resp.status_code = 404
+            return mock_resp
+
+        error_events: list[str] = []
+
+        import market_data.infrastructure.clients.intelligence_clients as mod
+
+        monkeypatch.setattr(mod.logger, "error", lambda event, **kw: error_events.append(event))
+
+        client = S7IntelligenceClient("http://s7:8007")
+        client._client.get = _mock_get  # type: ignore[method-assign]
+
+        result = await client.get_intelligence_rollup("inst-001")
+
+        assert result is None
+        assert "intelligence_client_auth_failure" not in error_events
+
+
 # ── Successful parse ──────────────────────────────────────────────────────────
 
 

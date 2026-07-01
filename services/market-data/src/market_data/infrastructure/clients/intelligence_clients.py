@@ -137,6 +137,26 @@ class _BaseIntelligenceClient:
                 resp = await self._client.get(url, headers=self._auth_headers())
                 if resp.status_code < 500:
                     # 2xx, 3xx, 4xx — don't retry (4xx is caller error, not transient)
+                    # GUARDRAIL (2026-07-01 internal-JWT audit): a 401/403 here means
+                    # the X-Internal-JWT this client mints was missing/invalid/rejected
+                    # by the upstream service. Previously this was returned with NO log
+                    # at all and the caller silently degraded to None — the exact
+                    # silent-401 class that hid the FTS citation-enrichment failure.
+                    # Log auth failures at ERROR so a misconfigured internal-JWT key
+                    # (or an upstream that flipped skip_verification off) surfaces
+                    # immediately instead of masquerading as "no intelligence data".
+                    if resp.status_code in (401, 403):
+                        logger.error(
+                            "intelligence_client_auth_failure",
+                            url=url,
+                            status=resp.status_code,
+                            auth_failure=True,
+                            detail=(
+                                "internal X-Internal-JWT rejected by upstream — "
+                                "intelligence rollup field will be silently empty "
+                                "(check MARKET_DATA_INTERNAL_JWT_PRIVATE_KEY / audience)"
+                            ),
+                        )
                     return resp
                 # 5xx — retry once
                 if attempt == 0:
