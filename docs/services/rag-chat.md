@@ -37,6 +37,7 @@ LLM provider fallback, streaming response delivery, citation injection, response
 | POST | `/v1/internal/retrieve` | Eval-harness read-only retrieval (NOT proxied via S9). See Internal Retrieval Endpoint section | X-Internal-JWT (system) |
 | POST | `/internal/v1/briefings` | Generate portfolio risk narrative for the S10 email digest (rate-limited 100/day per user) | X-Internal-JWT |
 | GET | `/internal/v1/llm-costs` | LLM cost aggregates for rag-chat (PLAN-0033); queries `rag_db.llm_usage_log` (no service_name filter — S8-exclusive DB); params: `period` (YYYY-MM), `provider`, `breakdown` | X-Internal-JWT (system) |
+| POST | `/internal/v1/llm-usage` | **PLAN-0117 W4 (FR-6)**: ingest ONE LLM usage record into `rag_db.llm_usage_log` (from S9's direct DeepInfra screener call, which owns no ledger — R9). Body: `model_id`, `provider`, `capability`, `tokens_in/out`, `estimated_cost_usd` (Decimal ≥0), `cost_source` (`provider`\|`pricematrix`\|`local`), `latency_ms`, `success`, `error_code`, `tenant_id`, `user_id`. Best-effort: `200 {"recorded": bool}` — never 5xx on persistence failure (NFR-1); 401 non-internal; 422 bad body. Router → `RecordLlmUsageUseCase` (raw `text()` INSERT, R25/R27) | X-Internal-JWT |
 | GET | `/internal/v1/instruments/{instrument_id}/ai-brief-flag` | Non-failing rollup: whether any cached entity-scoped AI brief exists for the instrument (`has_ai_brief` + `brief_generated_at`); powers the screener `has_ai_brief` flag. Absence → `has_ai_brief=false` + HTTP 200 (L-5b sync worker) | X-Internal-JWT |
 
 ### Public Briefing Endpoints (prefix `/api/v1`, proxied via S9)
@@ -388,7 +389,7 @@ Indexes: `ix_messages_thread_created (thread_id, created_at ASC)`; `ix_messages_
 
 | Table | Migration | Purpose |
 |-------|-----------|---------|
-| `llm_usage_log` | `0003` (+ `0006`) | Per-call LLM cost/usage telemetry powering `/internal/v1/llm-costs`. `0006` added `prompt_cache_read_tokens`, `prompt_cache_creation_tokens`, `tool_calls_count`, `tool_names TEXT[]` |
+| `llm_usage_log` | `0003` (+ `0006`, `0010`) | Per-call LLM cost/usage telemetry powering `/internal/v1/llm-costs`. `0006` added `prompt_cache_read_tokens`, `prompt_cache_creation_tokens`, `tool_calls_count`, `tool_names TEXT[]`. `0010` (PLAN-0117 W2) added `cost_source VARCHAR(16)` + `user_id UUID` (both nullable). Leaf rows (`tool_loop_iter`/`synthesis`) carry the real provider cost (`cost_source='provider'` via `ml_clients.resolve_cost`); the `chat_with_tools` aggregate wrapper stays `$0` with `cost_source='aggregate'` (OQ-3 — no double count) |
 | `user_briefs` | `0004` | Persisted generated briefs (morning + entity); read-only source for `get_morning_brief` and the AI-brief flag |
 | `brief_feedback` | `0004` | Bullet/section/brief-level user feedback (FK → `user_briefs`, CASCADE) |
 | `chat_audit_log` | `0007` | Per-turn observability audit trail (E-12) |

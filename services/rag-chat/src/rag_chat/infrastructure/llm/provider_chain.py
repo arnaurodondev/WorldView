@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
+from uuid import UUID
 
 import httpx
 
@@ -357,7 +358,17 @@ class LLMProviderChain:
                     retry=retry,
                     **kwargs,
                 )
-                # Log token usage if the provider returned it
+                # Log token usage if the provider returned it.
+                #
+                # PLAN-0117 W4 / OQ-3 (leaf-vs-aggregate, resolved against live
+                # rag_db.llm_usage_log 2026-07-01): this ``capability='chat_with_tools'``
+                # row is an AGGREGATE WRAPPER over the SAME DeepInfra round-trip
+                # that the adapter's ``_record_cost`` already logs as the
+                # ``tool_loop_iter`` LEAF (with the real provider cost). We
+                # deliberately keep this wrapper at ``estimated_cost_usd=0.0`` so
+                # each real request is costed EXACTLY ONCE (no double count), and
+                # stamp ``cost_source='aggregate'`` so the FR-7 (W5) silent-zero
+                # guard can exempt it — a $0 row here is correct, not a regression.
                 if self._usage_logger is not None and resp.usage:
                     active_model = getattr(provider, "model_id", provider.name)
                     asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
@@ -370,6 +381,8 @@ class LLMProviderChain:
                             latency_ms=0,
                             estimated_cost_usd=0.0,
                             success=True,
+                            cost_source="aggregate",
+                            user_id=cast(UUID | None, kwargs.get("user_id")),
                         ),
                     )
                 return resp  # type: ignore[no-any-return]

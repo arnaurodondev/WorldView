@@ -2549,6 +2549,10 @@ class ChatOrchestratorUseCase:
                     # accepts ``thread_id`` as an optional kwarg; current adapters
                     # ignore unknown kwargs via **kwargs forwarding.
                     thread_id=request.thread_id,
+                    # PLAN-0117 W4 (FR-3): forward the authenticated user so the
+                    # leaf usage-log row is per-user-attributable for future
+                    # cost quotas. NULL for system/background call paths.
+                    user_id=request.user_id,
                 )
             except Exception as exc:
                 # FIX-LIVE-V (2026-05-25): mid-loop chat_with_tools failure
@@ -3805,6 +3809,9 @@ class ChatOrchestratorUseCase:
                             seed=request.seed,
                             # PLAN-0107: forward thread_id for cost-capture (Agent B).
                             thread_id=request.thread_id,
+                            # PLAN-0117 W4 (FR-3): attribute the synthesis leaf
+                            # cost to the authenticated user for future quotas.
+                            user_id=request.user_id,
                             # Note: tools=[] above (Fix #1 + Fix #2 combined) —
                             # the adapter translates the empty list into
                             # tool_choice="none" so the provider unambiguously

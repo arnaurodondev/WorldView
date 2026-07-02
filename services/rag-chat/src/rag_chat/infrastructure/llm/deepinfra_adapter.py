@@ -143,6 +143,7 @@ class DeepInfraCompletionAdapter:
         model_id: str,
         usage: dict | None,
         call_site: str,
+        user_id: UUID | None = None,
     ) -> None:
         """Forward usage tokens to the injected CostRecorder. Defence-in-depth no-op on errors.
 
@@ -150,12 +151,21 @@ class DeepInfraCompletionAdapter:
         different ``usage`` envelope shape. Centralising the extraction here keeps
         the chain transport-agnostic. The recorder itself is already fault-tolerant
         but we wrap again so a recorder regression NEVER affects the chat path.
+
+        PLAN-0117 W4 (FR-1): DeepInfra returns the authoritative per-call USD cost
+        as ``usage.estimated_cost`` (verified live, e.g. ``4.1e-07``). We surface
+        it verbatim to the recorder as ``provider_estimated_cost`` so the leaf row
+        is priced from the provider (``cost_source='provider'``) rather than our
+        matrix. Absent/malformed → ``None`` → recorder falls back to the matrix
+        (never a silent $0 for a paid model).
         """
         if self._cost_recorder is None:
             return
-        # DeepInfra / OpenAI-compat returns usage = {prompt_tokens, completion_tokens, total_tokens}.
-        # When the provider omits the field (rare), still emit record() with
-        # zeros so the call_site is visible (we want to spot missing-usage paths).
+        # DeepInfra / OpenAI-compat returns usage = {prompt_tokens, completion_tokens,
+        # total_tokens, estimated_cost}. When the provider omits the field (rare),
+        # still emit record() with zeros so the call_site is visible (we want to
+        # spot missing-usage paths).
+        provider_estimated_cost: object = None
         if not usage:
             log.debug(  # type: ignore[no-any-return]
                 "cost_recorder_no_usage",
@@ -168,6 +178,9 @@ class DeepInfraCompletionAdapter:
         else:
             tokens_in = int(usage.get("prompt_tokens", 0) or 0)
             tokens_out = int(usage.get("completion_tokens", 0) or 0)
+            # Raw provider cost (float USD) — forwarded verbatim; the Decimal
+            # conversion + §2.2 priority happen once inside ``resolve_cost``.
+            provider_estimated_cost = usage.get("estimated_cost")
         try:
             await self._cost_recorder.record(
                 thread_id=thread_id,
@@ -175,6 +188,8 @@ class DeepInfraCompletionAdapter:
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 call_site=call_site,
+                provider_estimated_cost=provider_estimated_cost,
+                user_id=user_id,
             )
         except Exception as exc:  # pragma: no cover — defensive
             log.debug(  # type: ignore[no-any-return]
@@ -286,6 +301,7 @@ class DeepInfraCompletionAdapter:
         max_tokens: int = 1024,
         temperature: float = 0.2,
         thread_id: UUID | None = None,
+        user_id: UUID | None = None,
     ) -> LLMToolResponse:
         """Non-streaming structured call — returns text OR tool_calls.
 
@@ -399,6 +415,7 @@ class DeepInfraCompletionAdapter:
                 model_id=fallback_model,
                 usage=fb_result.usage,
                 call_site="tool_loop_iter",
+                user_id=user_id,
             )
             return fb_result
         self._record_ml_call("chat_with_tools", "success", time.perf_counter() - start, model=self._model)
@@ -408,6 +425,7 @@ class DeepInfraCompletionAdapter:
             model_id=self._model,
             usage=result.usage,
             call_site="tool_loop_iter",
+            user_id=user_id,
         )
         return result
 
@@ -505,6 +523,7 @@ class DeepInfraCompletionAdapter:
         max_tokens: int = 1024,
         temperature: float = 0.2,
         thread_id: UUID | None = None,
+        user_id: UUID | None = None,
         tools: list[dict] | None = None,
         seed: int | None = None,
         model: str | None = None,
@@ -607,6 +626,7 @@ class DeepInfraCompletionAdapter:
                 model_id=_effective_model,
                 usage=primary_usage or None,
                 call_site="synthesis",
+                user_id=user_id,
             )
             return
 
@@ -651,6 +671,7 @@ class DeepInfraCompletionAdapter:
             model_id=fallback_model,
             usage=fallback_usage or None,
             call_site="synthesis",
+            user_id=user_id,
         )
 
     async def aclose(self) -> None:

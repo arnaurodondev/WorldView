@@ -192,6 +192,7 @@ with bundle.* values.
 | GET | `/v1/fundamentals/{instrument_id}/splits-dividends` | Stock splits and dividend history → S3 `/splits-dividends` | Yes |
 | GET | `/v1/fundamentals/{instrument_id}/snapshot` | Pre-computed derived metrics snapshot (eps_ttm, beta, avg_volume_30d, FCF, interest coverage, net_debt_to_ebitda, credit_rating) → S3 `instrument_fundamentals_snapshot` table. Always 200 — all fields null for un-backfilled instruments. PLAN-0050 Wave D. | Yes |
 | POST | `/v1/fundamentals/screen` | Dynamic screener | No |
+| POST | `/v1/screener/nl-translate` | NL→filter translation via a DIRECT DeepInfra call (bypasses S8). PLAN-0117 W4 (FR-6): now best-effort POSTs its `usage.estimated_cost` to S8 `/internal/v1/llm-usage` (`capability='screener_nl_translate'`, `cost_source='provider'`) so the previously-untracked spend lands in the S8 ledger — logging failure NEVER fails the screener request (NFR-1) | Yes |
 | GET | `/v1/fundamentals/screen/fields` | Available screener fields | No |
 | GET | `/v1/fundamentals/timeseries` | Fundamental timeseries | No |
 | GET | `/v1/fundamentals/economic-calendar` | Economic events (→ S7 temporal_events, passes `event_type=economic`) | Yes |

@@ -2141,6 +2141,51 @@ _DEEPINFRA_CHAT_URL = "https://api.deepinfra.com/v1/openai/chat/completions"
 _NL_SCREENER_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 
+async def _log_screener_usage_best_effort(request: Request, usage: dict[str, Any] | None) -> None:
+    """POST the screener DeepInfra call's usage to the S8 ledger (PLAN-0117 FR-6).
+
+    Best-effort (NFR-1): on ANY failure — missing usage, S8 down, bad response —
+    we log a warning and return. The screener request must NEVER fail because
+    usage-logging failed.
+
+    ``cost_source='provider'`` when DeepInfra reported ``usage.estimated_cost``
+    (it does live), else ``'pricematrix'`` (tokens only, cost 0) so the record is
+    still self-describing. Auth: forwards the caller's own internal JWT via
+    ``_auth_headers`` so S8's ``AuthContextDep`` derives tenant/user identity.
+    """
+    if not usage:
+        return
+    try:
+        estimated_cost = usage.get("estimated_cost")
+        # Provider-reported cost is authoritative; absent → pricematrix (0 here,
+        # gateway has no matrix). Never invent a non-zero cost.
+        if estimated_cost is not None:
+            cost_source = "provider"
+            cost_value = float(estimated_cost)
+        else:
+            cost_source = "pricematrix"
+            cost_value = 0.0
+        payload = {
+            "model_id": _NL_SCREENER_MODEL,
+            "provider": "deepinfra",
+            "capability": "screener_nl_translate",
+            "tokens_in": int(usage.get("prompt_tokens", 0) or 0),
+            "tokens_out": int(usage.get("completion_tokens", 0) or 0),
+            "estimated_cost_usd": cost_value,
+            "cost_source": cost_source,
+        }
+        clients = _clients(request)
+        resp = await clients.rag_chat.post(
+            "/internal/v1/llm-usage",
+            json=payload,
+            headers=_auth_headers(request),
+        )
+        if resp.status_code != 200:
+            logger.warning("nl_screener_usage_log_non_200", status=resp.status_code)
+    except Exception as exc:
+        logger.warning("nl_screener_usage_log_failed", error=str(exc))
+
+
 @router.post("/screener/nl-translate", response_model=NLScreenerResponse)
 async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NLScreenerResponse:
     """Translate a natural-language query into structured screener filters.
@@ -2207,6 +2252,13 @@ async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NL
     # 3. Extract JSON from LLM response (OpenAI format: choices[0].message.content)
     try:
         chat_body = chat_resp.json()
+        # PLAN-0117 W4 (FR-6 / RC-4): this direct DeepInfra call was previously
+        # untracked — its spend was recorded NOWHERE. Capture the provider cost
+        # + tokens and best-effort POST them to the single S8 ledger via the
+        # internal ingest endpoint. Fired BEFORE the filter-parse below so the
+        # cost is recorded even when the model returns unparseable JSON (the
+        # spend was incurred regardless). NEVER fails the screener request.
+        await _log_screener_usage_best_effort(request, chat_body.get("usage"))
         raw_text: str = ((chat_body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         # Strip markdown code fences if present
         raw_text = raw_text.strip()
