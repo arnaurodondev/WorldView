@@ -29,7 +29,10 @@ sees ONLY this response — there is no follow-up turn, no second chance.
 ## ANSWER FORMAT
 - Answer the question directly.
 - Cite sources inline with [tool_name row N] markers next to specific
-  numeric claims (e.g. "Revenue was $24.7B [query_fundamentals row 0]").
+  numeric claims (e.g. "Revenue was $24.7B [query_fundamentals row 0]") AND
+  next to each specific FACT you copy from a tool row — this includes every
+  news headline / article title you list from get_entity_news or
+  search_documents, not only numbers.
 - Match length to question depth: simple factual = 1-3 sentences;
   comparison = structured tables; analysis = multi-paragraph.
 
@@ -50,6 +53,14 @@ EXACT name of a tool that actually ran this turn and returned that row — e.g.
 - For a prediction-market / odds answer, cite each probability, implied odd, or
   price to [get_prediction_markets row N] — the numbers came from that tool, so
   that is the only correct label for them.
+- For a NEWS / headline answer, EACH headline or article title you list is a
+  FACT copied from a tool row — attach its [get_entity_news row N] tag (or
+  [search_documents row N] when the headline came from document search) to that
+  headline. Listing headlines is TRANSCRIBING tool data, NOT interpretive
+  prose, so the "unsourced commentary" exemption above does NOT apply to them:
+  a news answer that lists headlines with NO row tags is ungrounded and ships
+  with an empty source list. Every headline you surface must carry its row tag,
+  exactly as a number would.
 
 ## GROUND EVERY ROW — DO NOT FABRICATE
 The tool results above are the ONLY facts you may state. There is no other
@@ -248,7 +259,21 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # row N]. This makes the MODEL stop emitting non-tool labels so legitimate
     # tool-backed citations survive — the grounding guard is UNCHANGED (still
     # strict; a real fabricated numeric citation is still refused).
-    version="1.7",
+    # 1.8 (news-headline citation-coverage gap, 2026-07-02): live QA found a
+    # bare-headline NEWS query shipping citations=[] — get_entity_news returned
+    # fresh, citable rows (title + url) but the model listed the headlines as
+    # PROSE with no [get_entity_news row N] tags, so normalize_tool_row_citations
+    # had nothing to promote. Root cause was prompt coverage, not machinery:
+    # v1.7's citation guidance is framed around NUMERIC claims and only gives an
+    # explicit "cite each X" directive for prediction-market odds, while its
+    # "interpretive commentary is UNSOURCED prose — NO bracket tag" rule is
+    # readily over-applied to a text-only headline list. 1.8 closes the gap
+    # symmetrically: the ANSWER FORMAT rule now says cite each FACT (incl. news
+    # headlines), and a new CITATION LABELS bullet mirrors the prediction-market
+    # one — every headline from get_entity_news / search_documents MUST carry its
+    # row tag because listing headlines is transcribing tool data, not
+    # commentary. Additive; the grounding/phantom guards are UNCHANGED.
+    version="1.8",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -270,7 +295,11 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "row-citation must be an actual tool name; interpretive commentary is "
         "unsourced prose with NO bracket tag; prediction-market odds cite "
         "[get_prediction_markets row N]) so the model stops emitting non-tool "
-        "labels like [commentary row N] that the phantom-citation gate rejects."
+        "labels like [commentary row N] that the phantom-citation gate rejects. "
+        "v1.8 closes the news-headline citation-coverage gap: cite each FACT "
+        "(not only numbers) and, mirroring the prediction-market rule, attach a "
+        "[get_entity_news row N] / [search_documents row N] tag to every headline "
+        "listed so bare-headline news answers stop shipping citations=[]."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

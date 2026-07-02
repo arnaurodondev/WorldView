@@ -59,8 +59,9 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.7 (prediction-market citation-refusal) added the CITATION LABELS block.
-    assert ident.startswith("chat_synthesis_system@1.7#")
+    # v1.8 (news-headline citation-coverage gap) added the news-headline citation
+    # directive on top of v1.7's CITATION LABELS block.
+    assert ident.startswith("chat_synthesis_system@1.8#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -80,6 +81,28 @@ def test_synthesis_prompt_citation_labels_tool_names_only() -> None:
     assert "NO bracket tag" in rendered
     # Prediction-market answers cite the real tool.
     assert "[get_prediction_markets row N]" in rendered
+
+
+def test_synthesis_prompt_requires_news_headline_citations() -> None:
+    """v1.8: bare-headline NEWS answers were shipping citations=[] because the
+    model listed headlines as prose with NO [get_entity_news row N] tags. The
+    prompt must now (a) tell the model to cite each FACT (not only numbers),
+    including news headlines, and (b) carry a dedicated news-citation directive
+    that mirrors the prediction-market one so every listed headline keeps its
+    row tag — closing the coverage gap without touching the grounding machinery.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # (a) ANSWER FORMAT now cites FACTS, and explicitly names news headlines.
+    assert "each specific FACT" in rendered
+    assert "news headline" in rendered
+    # (b) the news tools that back headlines are named as the correct labels.
+    assert "[get_entity_news row N]" in rendered
+    assert "[search_documents row N]" in rendered
+    # The exemption for interpretive commentary must be explicitly scoped OUT for
+    # headlines (transcribing tool data, not commentary) so the model does not
+    # over-apply the "no bracket tag" rule to a text-only headline list.
+    assert "does NOT apply to them" in rendered
+    assert "empty source list" in rendered
 
 
 def test_synthesis_prompt_requires_exact_number_transcription() -> None:

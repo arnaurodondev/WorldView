@@ -92,6 +92,21 @@ s4_general_firehose_symbol_tags_total = Counter(
     "Symbol tags observed on general-firehose articles (SHADOW coverage signal)",
 )
 
+# Finnhub earnings-call transcripts fetch skipped because the endpoint is
+# unavailable to our API-key tier. ``reason`` is:
+#   - "disabled"     — the transcripts_enabled capability flag is OFF (default);
+#                      we never issued the request (free-tier guard).
+#   - "premium_403"  — the flag was ON but Finnhub returned HTTP 403 (the plan
+#                      does not include transcripts); the process-level breaker
+#                      then trips and subsequent cycles skip like "disabled".
+# A non-zero, steadily-climbing counter is the loud, scrapeable signal that the
+# transcripts feed is dark — so the 403 is SURFACED, never silently swallowed.
+s4_finnhub_transcripts_skipped_total = Counter(
+    "s4_finnhub_transcripts_skipped_total",
+    "Finnhub transcript fetches skipped because the endpoint is not in the API-key tier",
+    ["reason"],
+)
+
 
 def record_general_firehose_sweep(
     *,
