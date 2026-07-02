@@ -2258,7 +2258,13 @@ async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NL
         # internal ingest endpoint. Fired BEFORE the filter-parse below so the
         # cost is recorded even when the model returns unparseable JSON (the
         # spend was incurred regardless). NEVER fails the screener request.
-        await _log_screener_usage_best_effort(request, chat_body.get("usage"))
+        # M-2 (post-QA): fire-and-forget so the S9→S8 usage-log round-trip never
+        # adds a network hop to the screener's own latency (NFR-5). The coroutine
+        # is already best-effort internally; it holds `request` (and thus the
+        # long-lived app.state httpx clients) alive for its duration.
+        asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
+            _log_screener_usage_best_effort(request, chat_body.get("usage"))
+        )
         raw_text: str = ((chat_body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         # Strip markdown code fences if present
         raw_text = raw_text.strip()

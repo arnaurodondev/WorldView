@@ -1,9 +1,11 @@
 """FR-7b silent-zero cost tripwire tests (PLAN-0117 W5, T-A-5-02).
 
 Covers the pure predicate :func:`is_silent_zero_cost` and the counter emitter
-:func:`record_silent_zero_cost`, including the two REQUIRED exemptions:
-``cost_source='local'`` and ``cost_source='aggregate'`` must NOT trip, while a
-``pricematrix``/``provider`` row with tokens>0 and $0 MUST trip.
+:func:`record_silent_zero_cost`, including the REQUIRED exemptions:
+``cost_source in {'local', 'aggregate', 'provider'}`` must NOT trip (all three
+are legitimately $0 — ``provider`` is the provider's own authoritative figure),
+while a ``pricematrix`` or ``None`` row with tokens>0 and $0 MUST trip (that is
+the RC-1/2/3 "we failed to price a paid call" regression this guard targets).
 """
 
 from __future__ import annotations
@@ -29,18 +31,20 @@ def _counter_value(service: str, model_id: str) -> float:
 
 @pytest.mark.unit
 def test_predicate_trips_on_paid_zero_with_tokens() -> None:
-    """tokens>0 & $0 & paid source → silent-zero."""
+    """tokens>0 & $0 & WE-failed-to-price source (pricematrix / None) → silent-zero."""
     assert is_silent_zero_cost(tokens_in=100, tokens_out=50, estimated_cost_usd=0, cost_source="pricematrix")
-    assert is_silent_zero_cost(tokens_in=1, tokens_out=0, estimated_cost_usd=Decimal("0"), cost_source="provider")
     # None cost_source (legacy/un-migrated caller) is NOT exempt.
     assert is_silent_zero_cost(tokens_in=10, tokens_out=0, estimated_cost_usd=0.0, cost_source=None)
 
 
 @pytest.mark.unit
-def test_predicate_exempts_local_and_aggregate() -> None:
-    """local (Ollama/GLiNER) and aggregate (S8 wrapper) $0 rows are legitimate."""
+def test_predicate_exempts_local_aggregate_and_provider() -> None:
+    """local (Ollama/GLiNER), aggregate (S8 wrapper), and provider (authoritative
+    provider-reported $0, e.g. free-tier) $0 rows are ALL legitimate — M-1 fix."""
     assert not is_silent_zero_cost(tokens_in=100, tokens_out=50, estimated_cost_usd=0, cost_source="local")
     assert not is_silent_zero_cost(tokens_in=100, tokens_out=50, estimated_cost_usd=0, cost_source="aggregate")
+    # provider-reported $0 is authoritative (DeepInfra self-reports); do NOT cry wolf.
+    assert not is_silent_zero_cost(tokens_in=1, tokens_out=0, estimated_cost_usd=Decimal("0"), cost_source="provider")
 
 
 @pytest.mark.unit

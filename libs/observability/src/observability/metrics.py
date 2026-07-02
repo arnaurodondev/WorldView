@@ -54,17 +54,18 @@ except ValueError:
 #
 # It increments whenever a ``llm_usage_log`` row is written with a non-zero
 # token count but ``estimated_cost_usd == 0`` on a PAID cost source — i.e.
-# ``cost_source NOT IN ('local', 'aggregate')``.  ``local`` (Ollama/GLiNER) and
-# ``aggregate`` (the S8 ``chat_with_tools`` wrapper that duplicates a leaf's
-# tokens at $0 to avoid double-counting) are BOTH legitimately $0 and MUST be
-# exempt — otherwise the tripwire would fire on correct rows.  This counter is
+# ``cost_source NOT IN ('local', 'aggregate', 'provider')``.  ``local`` (Ollama/
+# GLiNER), ``aggregate`` (the S8 ``chat_with_tools`` wrapper that duplicates a
+# leaf's tokens at $0 to avoid double-counting), and ``provider`` (the provider's
+# OWN authoritative $0 — DeepInfra self-reports it) are ALL legitimately $0 and
+# MUST be exempt — otherwise the tripwire would fire on correct rows.  This counter is
 # the permanent regression guard for the RC-1/RC-2/RC-3 silent-zero family that
 # left ~315k calls logged at ~$0 (see docs/BUG_PATTERNS.md BP-715).
 try:
     LLM_USAGE_SILENT_ZERO_COST = Counter(
         "llm_usage_silent_zero_cost_total",
         "LLM usage rows written with tokens>0 but $0 cost on a paid source "
-        "(cost_source NOT IN local|aggregate) — PLAN-0117 FR-7b silent-zero tripwire.",
+        "(cost_source NOT IN local|aggregate|provider) — PLAN-0117 FR-7b silent-zero tripwire.",
         labelnames=("service", "model_id"),
     )
 except ValueError:
@@ -78,7 +79,16 @@ except ValueError:
 #   * ``local``     — Ollama / GLiNER, genuinely free.
 #   * ``aggregate`` — S8 ``chat_with_tools`` wrapper row that duplicates a leaf's
 #                     tokens at $0 so each real round-trip is costed exactly once.
-_SILENT_ZERO_EXEMPT_COST_SOURCES: frozenset[str] = frozenset({"local", "aggregate"})
+#   * ``provider``  — the provider's OWN authoritative $0 (DeepInfra returns
+#                     ``usage.estimated_cost``; a free-tier / promo / genuinely-$0
+#                     call reports 0.0). ``cost_source='provider'`` is stamped ONLY
+#                     when ``resolve_cost`` received a real numeric provider cost,
+#                     so a provider-$0 is an accurate figure, not a pricing failure.
+#                     (Post-QA M-1 fix: otherwise the flagship alert cries wolf on
+#                     the provider's own number, eroding the trust it exists to give.)
+# The RC-1/RC-2/RC-3 regression this guard targets always surfaces as a
+# ``pricematrix``/``None`` + $0 row (we failed to price a paid call) — still caught.
+_SILENT_ZERO_EXEMPT_COST_SOURCES: frozenset[str] = frozenset({"local", "aggregate", "provider"})
 
 # Cache for ServiceMetrics registered in the global REGISTRY, keyed by service_name.
 # Prevents duplicate-registration errors when the same service name is used more than

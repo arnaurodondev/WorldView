@@ -232,6 +232,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from api_gateway.routes.market import _NL_SCREENER_MODEL
 
         warn_unpriceable_models("api-gateway", [(_NL_SCREENER_MODEL, "deepinfra")])
+    except ImportError:
+        # By design the gateway does NOT bundle ``ml_clients`` (it is not an LLM
+        # service; it proxies one direct DeepInfra screener call). The FR-7a boot
+        # check is therefore a no-op here — this is EXPECTED, not a failure. The
+        # gateway's screener spend is still guarded downstream: it is persisted via
+        # S8's ``POST /internal/v1/llm-usage``, where the silent-zero tripwire runs.
+        logger.info("priceability_startup_check_skipped", reason="ml_clients not bundled in api-gateway")
     except Exception as exc:  # — guardrail must never block boot
         logger.warning("priceability_startup_check_failed", error=str(exc))
 
