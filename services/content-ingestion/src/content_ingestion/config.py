@@ -100,6 +100,16 @@ class FinnhubProviderSettings(BaseModel):
 
     base_url: str = "https://finnhub.io/api/v1"
     rate_limit_per_minute: int = 55
+    # Capability flag for the earnings-call transcripts endpoints
+    # (``/stock/transcripts/list`` + ``/stock/transcripts``). These are a PAID
+    # Finnhub tier — on our current (free) plan every call returns HTTP 403.
+    # The company-news endpoint on the SAME key works (200 OK), so the key is
+    # valid; only transcripts are tier-gated. Default OFF so we never issue the
+    # permanently-403 request (no per-symbol/per-cycle 403 log spam, and no
+    # api-key-bearing transcript URL handed to httpx's request logger). Flip to
+    # true (CONTENT_INGESTION_FINNHUB__TRANSCRIPTS_ENABLED=true) only once the
+    # account is upgraded to a plan that includes transcripts.
+    transcripts_enabled: bool = False
 
 
 class NewsAPIProviderSettings(BaseModel):

@@ -26,6 +26,16 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
+# Process-level state so the transcripts-unavailable condition is announced
+# LOUDLY but ONCE, not re-logged for every symbol on every scheduler cycle.
+#   * ``_transcripts_disabled_warned`` — the capability-flag-OFF path logged its
+#     single startup WARNING already.
+#   * ``_transcripts_premium_blocked`` — the flag was ON but Finnhub answered
+#     403; once tripped, every later cycle skips the request entirely (acts like
+#     the disabled path) so we never hammer a permanently-403 premium endpoint.
+_transcripts_disabled_warned = False
+_transcripts_premium_blocked = False
+
 
 def _parse_published_at(article: dict[str, Any]) -> datetime | None:
     """Extract published_at from a Finnhub article's Unix timestamp ``datetime`` field."""
@@ -54,11 +64,76 @@ class FinnhubAdapter(SourceAdapter):
         rate_limiter: TokenBucket,
         exists_fn: Any = None,
         retry_config: RetryConfig | None = None,
+        *,
+        transcripts_enabled: bool = False,
     ) -> None:
         self._client = client
         self._rate_limiter = rate_limiter
         self._exists_fn = exists_fn
         self._retry_config = retry_config or RetryConfig()
+        # Capability flag — the earnings-call transcripts endpoint is a PAID
+        # Finnhub tier. Default OFF (free-tier guard): when False we never issue
+        # the permanently-403 request, so there is no per-symbol/per-cycle 403
+        # log spam and no api-key-bearing transcript URL for httpx to log.
+        self._transcripts_enabled = transcripts_enabled
+
+    def _record_transcripts_skip(self) -> None:
+        """Surface a transcripts skip on the metric + a single loud WARNING.
+
+        Called on the flag-OFF / breaker-tripped path (no HTTP request issued).
+        The WARNING fires ONCE per process (``_transcripts_disabled_warned``) so
+        the free-tier state is announced loudly but never spams the log on every
+        symbol/every cycle; the counter still increments every time so the dark
+        feed remains scrapeable.
+        """
+        global _transcripts_disabled_warned
+        from content_ingestion.infrastructure.metrics.prometheus import (
+            s4_finnhub_transcripts_skipped_total,
+        )
+
+        reason = "premium_403" if _transcripts_premium_blocked else "disabled"
+        s4_finnhub_transcripts_skipped_total.labels(reason=reason).inc()
+        if not _transcripts_disabled_warned:
+            _transcripts_disabled_warned = True
+            logger.warning(
+                "finnhub_transcripts_disabled",
+                reason=reason,
+                detail=(
+                    "Finnhub earnings-call transcripts require a paid plan; the "
+                    "current API key is free-tier (company-news works, transcripts "
+                    "return 403). Transcript fetches are skipped. Set "
+                    "CONTENT_INGESTION_FINNHUB__TRANSCRIPTS_ENABLED=true after "
+                    "upgrading the plan to re-enable."
+                ),
+            )
+
+    def _trip_premium_breaker(self, symbol: str, endpoint: str) -> None:
+        """Flip the process-level premium breaker on the first live 403.
+
+        After this, ``fetch`` skips the transcripts request on every later cycle
+        (like the disabled path) so a permanently-403 premium endpoint is never
+        hammered. Emits the metric and a single loud WARNING.
+        """
+        global _transcripts_premium_blocked, _transcripts_disabled_warned
+        from content_ingestion.infrastructure.metrics.prometheus import (
+            s4_finnhub_transcripts_skipped_total,
+        )
+
+        s4_finnhub_transcripts_skipped_total.labels(reason="premium_403").inc()
+        if not _transcripts_premium_blocked:
+            _transcripts_premium_blocked = True
+            _transcripts_disabled_warned = True  # suppress a duplicate disabled WARNING
+            logger.warning(
+                "finnhub_transcripts_unavailable",
+                symbol=symbol,
+                reason="premium_endpoint",
+                endpoint=endpoint,
+                detail=(
+                    "Finnhub returned 403 on the transcripts endpoint — the plan "
+                    "does not include transcripts. Disabling transcript fetches "
+                    "for this process (no further calls will be made)."
+                ),
+            )
 
     async def fetch(self, source: Source, *, is_backfill: bool = False, from_date: str = "") -> list[FetchResult]:
         """Fetch news + transcripts from Finnhub for the configured symbol.
@@ -140,10 +215,24 @@ class FinnhubAdapter(SourceAdapter):
                 )
 
         # Fetch transcripts (premium feature — gracefully skip if account lacks access).
-        # F-104 fix: PremiumEndpointError now short-circuits before the retry loop,
-        # so a free-tier account no longer wastes 3 retries x backoff per symbol per
-        # cycle. Any other error still falls through to the existing soft-skip path.
+        #
+        # The transcripts endpoints are a PAID Finnhub tier; on our free plan they
+        # return HTTP 403 on every call (the company-news endpoint on the SAME key
+        # works, so the key is valid — only transcripts are tier-gated). Two guards
+        # keep this from becoming a repeating, key-leaking 403:
+        #   1. Capability flag OFF (default): skip the request entirely — no HTTP
+        #      call, no 403, no api-key-bearing URL for httpx to log. Announced
+        #      LOUDLY but ONCE per process via a WARNING.
+        #   2. Flag ON but a 403 was already seen this process: a module-level
+        #      breaker (``_transcripts_premium_blocked``) makes every later cycle
+        #      skip too, so we never hammer a permanently-403 premium endpoint.
+        # Either way the skip is surfaced on the ``s4_finnhub_transcripts_skipped_total``
+        # counter so the dark feed is scrapeable, not silently swallowed.
         transcript_list: list[dict[str, Any]] = []
+        if not self._transcripts_enabled or _transcripts_premium_blocked:
+            self._record_transcripts_skip()
+            logger.info("finnhub_fetch_complete", symbol=symbol, new=len(results))
+            return results
         try:
             transcript_list = await self._retry_request(  # type: ignore[assignment]
                 lambda: self._client.fetch_transcript_list(symbol=symbol),
@@ -151,25 +240,17 @@ class FinnhubAdapter(SourceAdapter):
                 context=f"finnhub:transcripts:{symbol}",
             )
         except PremiumEndpointError as exc:
-            # Permanent licensing failure — log once at info, do NOT retry.
-            logger.info(
-                "finnhub_transcripts_unavailable",
-                symbol=symbol,
-                reason="premium_endpoint",
-                endpoint=exc.endpoint,
-            )
+            # Permanent licensing failure — trip the process-level breaker so
+            # every later cycle skips the request entirely (no retry, no repeat
+            # 403), surface it on the metric, and log a single loud WARNING.
+            self._trip_premium_breaker(symbol, exc.endpoint)
         except RateLimitError as e:
             logger.warning("finnhub_rate_limited_transcripts", sleep_secs=e.sleep_secs)
             await asyncio.sleep(e.sleep_secs)
             try:
                 transcript_list = await self._client.fetch_transcript_list(symbol=symbol)  # type: ignore[assignment]
             except PremiumEndpointError as exc:
-                logger.info(
-                    "finnhub_transcripts_unavailable",
-                    symbol=symbol,
-                    reason="premium_endpoint",
-                    endpoint=exc.endpoint,
-                )
+                self._trip_premium_breaker(symbol, exc.endpoint)
         except Exception as exc:
             # Non-403, non-429 errors — keep the soft-skip behaviour but log at warning
             # so the operator notices a real adapter regression (vs. premium licensing).

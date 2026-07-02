@@ -9,12 +9,32 @@ import pytest
 from content_ingestion.domain.entities import Source, SourceType
 from content_ingestion.domain.value_objects import TokenBucket
 from content_ingestion.infrastructure.adapters.base import RetryConfig
+from content_ingestion.infrastructure.adapters.finnhub import adapter as finnhub_adapter_mod
 from content_ingestion.infrastructure.adapters.finnhub.adapter import FinnhubAdapter, _parse_published_at
-from content_ingestion.infrastructure.adapters.finnhub.client import FinnhubClient, RateLimitError
+from content_ingestion.infrastructure.adapters.finnhub.client import (
+    FinnhubClient,
+    PremiumEndpointError,
+    RateLimitError,
+)
 
 import common.time
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _reset_transcripts_process_state() -> Any:
+    """Reset the module-level transcripts breaker/warn flags between tests.
+
+    The adapter uses process-level globals so the free-tier state is announced
+    LOUDLY but ONCE (no per-symbol/per-cycle spam); tests must reset them so one
+    test's tripped breaker never leaks into the next.
+    """
+    finnhub_adapter_mod._transcripts_disabled_warned = False
+    finnhub_adapter_mod._transcripts_premium_blocked = False
+    yield
+    finnhub_adapter_mod._transcripts_disabled_warned = False
+    finnhub_adapter_mod._transcripts_premium_blocked = False
 
 
 def _make_source(**kwargs: Any) -> Source:
@@ -171,3 +191,68 @@ class TestFinnhubAdapterFetch:
         assert results == []
         mock_client.fetch_company_news.assert_not_called()
         mock_client.fetch_transcript_list.assert_not_called()
+
+
+class TestFinnhubTranscriptsCapabilityFlag:
+    """Transcripts are a PAID tier — the free-tier guard must never issue the
+    permanently-403 request and must surface (not swallow) the skip."""
+
+    async def test_disabled_by_default_skips_transcripts_no_http_call(self) -> None:
+        """Default (flag OFF): news still fetched, transcripts never requested."""
+        mock_client = AsyncMock(spec=FinnhubClient)
+        mock_client.fetch_company_news.return_value = [_article(2001)]
+
+        adapter = FinnhubAdapter(
+            client=mock_client,
+            rate_limiter=_make_bucket(),
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        )
+        results = await adapter.fetch(_make_source())
+
+        assert len(results) == 1  # news only
+        mock_client.fetch_company_news.assert_awaited()
+        # The key guarantee: the permanently-403 premium endpoint is NEVER hit.
+        mock_client.fetch_transcript_list.assert_not_called()
+
+    async def test_enabled_fetches_transcripts(self) -> None:
+        """Flag ON: the transcripts endpoint IS called (paid-plan path)."""
+        mock_client = AsyncMock(spec=FinnhubClient)
+        mock_client.fetch_company_news.return_value = []
+        mock_client.fetch_transcript_list.return_value = []
+
+        adapter = FinnhubAdapter(
+            client=mock_client,
+            rate_limiter=_make_bucket(),
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+            transcripts_enabled=True,
+        )
+        await adapter.fetch(_make_source())
+
+        mock_client.fetch_transcript_list.assert_awaited()
+
+    async def test_enabled_403_trips_breaker_and_stops_calling(self) -> None:
+        """Flag ON but 403: the first call trips the process breaker; the second
+        fetch skips the transcripts request entirely (no repeat 403 spam)."""
+        mock_client = AsyncMock(spec=FinnhubClient)
+        mock_client.fetch_company_news.return_value = []
+        mock_client.fetch_transcript_list.side_effect = PremiumEndpointError(
+            endpoint="/api/v1/stock/transcripts/list",
+        )
+
+        adapter = FinnhubAdapter(
+            client=mock_client,
+            rate_limiter=_make_bucket(),
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+            transcripts_enabled=True,
+        )
+
+        # First cycle: the 403 is caught gracefully (no raise) and trips the breaker.
+        results1 = await adapter.fetch(_make_source())
+        assert results1 == []
+        assert mock_client.fetch_transcript_list.await_count == 1
+        assert finnhub_adapter_mod._transcripts_premium_blocked is True
+
+        # Second cycle: breaker tripped → transcripts request is NOT re-issued.
+        results2 = await adapter.fetch(_make_source())
+        assert results2 == []
+        assert mock_client.fetch_transcript_list.await_count == 1  # unchanged
