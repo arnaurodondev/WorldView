@@ -966,3 +966,15 @@ svc-api-gateway:
 
 - **`COOKIE_SECURE=true` by default**: local dev without HTTPS requires
   `API_GATEWAY_COOKIE_SECURE=false`; otherwise the refresh_token cookie is not sent by the browser.
+
+## LLM Cost Metering & Guardrails (PLAN-0117)
+
+S9 owns **no** `llm_usage_log` table of its own. The only direct LLM call it makes — the
+natural-language screener translation at `POST /v1/screener/nl-translate` (a direct
+DeepInfra call) — is cost-tracked by reporting usage to the S8 internal endpoint
+`POST /internal/v1/llm-usage` (`RecordLlmUsageUseCase`), which persists to `rag_db` and
+emits `llm_usage_silent_zero_cost_total`. This keeps all cost accounting centralized.
+
+- **Boot-time priceability warning**: app lifespan calls `warn_unpriceable_models(...)`,
+  logging a structured WARNING if `_NL_SCREENER_MODEL` has no pricing path.
+  See `docs/BUG_PATTERNS.md` BP-715.

@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from observability.metrics import record_silent_zero_cost  # type: ignore[import-untyped]
+
 if TYPE_CHECKING:
     from decimal import Decimal
     from uuid import UUID
@@ -106,6 +108,16 @@ class RecordLlmUsageUseCase:
                 },
             )
             await session.commit()
+            # PLAN-0117 W5 (FR-7b): this internal endpoint also carries the S9
+            # gateway screener usage — guard it against a paid silent-zero too.
+            record_silent_zero_cost(
+                "rag-chat",
+                model_id=model_id,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                estimated_cost_usd=estimated_cost_usd,
+                cost_source=cost_source,
+            )
         except Exception as exc:
             log.warning(
                 "record_llm_usage_failed",

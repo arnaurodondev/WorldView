@@ -1013,3 +1013,25 @@ source is tripped. To reset manually, delete the Valkey key `rag:cb:state:{sourc
 Set `RAG_CHAT_CITATION_CRON_ENABLED=false` (default). Enable only when you want
 daily citation accuracy scoring (consumes LLM tokens). PLAN-0107 switched the
 cadence from weekly Sunday → DAILY 03:00 UTC and the sample window from 7 days → 24 hours.
+
+## LLM Cost Metering & Guardrails (PLAN-0117)
+
+All `llm_usage_log` writes to `rag_db` funnel through the single INSERT choke-point
+`RagChatUsageLogRepository.log`, which emits the cross-service counter
+`llm_usage_silent_zero_cost_total{service, model_id}` whenever a row has
+`tokens_in + tokens_out > 0` AND `estimated_cost_usd == 0` AND
+`cost_source NOT IN ('local','aggregate')`.
+
+- **Both recorder paths are covered**: the leaf per-call recorder and the
+  `chat_with_tools` aggregate wrapper both write via the same choke-point, so the metric
+  observes every row exactly once.
+- **Aggregate wrapper is exempt by design**: `chat_with_tools` writes a roll-up row with
+  `cost_source='aggregate'` and `$0` cost (its constituent leaf calls are already priced
+  individually). The `aggregate` exemption prevents double-counting and keeps the wrapper
+  row from tripping the silent-zero counter.
+- **Internal usage endpoint**: `POST /internal/v1/llm-usage` (`RecordLlmUsageUseCase`)
+  also routes through the choke-point and therefore emits the metric — this is how S9's
+  NL-screener DeepInfra calls get cost-tracked.
+- **Boot-time priceability warning**: app lifespan calls `warn_unpriceable_models(...)`,
+  logging a structured WARNING for any configured chat model with no pricing path.
+  Prometheus alert `LlmUsageSilentZeroCost`; see `docs/BUG_PATTERNS.md` BP-715.

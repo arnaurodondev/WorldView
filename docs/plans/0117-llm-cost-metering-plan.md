@@ -628,7 +628,14 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 
 ---
 
-## Wave 5: Guardrails — CI/startup priceability check + silent-zero metric/alert; docs
+## Wave 5: Guardrails — CI/startup priceability check + silent-zero metric/alert; docs ✅
+
+**Status**: **DONE** — 2026-07-01 · ml-clients priceability guardrail (6 tests) + observability silent-zero (7 tests) pass · ruff@0.4.0 + mypy clean (only pre-existing `sentry_sdk`/`prompts`/`tools` missing-module errors in untouched files) · import-guards clean · arch tests pass · S6/S7 usage-log + rag-chat cost/usage suites green (15 + 11 + 46). **Rebuild/live-smoke deferred to central deployment** (per wave instruction).
+
+**Key deviations from the plan (documented):**
+- **Silent-zero metric = a SINGLE cross-service global counter** `llm_usage_silent_zero_cost_total{service, model_id}` (mirroring the existing `KAFKA_CONSUMER_MESSAGES` global-counter pattern in `observability.metrics`), NOT a per-service-namespaced `MLMetrics` field. This gives the spec's exact `{service, model_id}` label set and lets ONE alert expression cover S6/S7/S8/S9. Predicate + emitter (`is_silent_zero_cost`, `record_silent_zero_cost`) live next to the counter and are unit-tested.
+- **S8 wiring point = `RagChatUsageLogRepository.log`** (the single rag_db INSERT choke-point where BOTH the leaf recorder path AND the `chat_with_tools` aggregate wrapper land) + `RecordLlmUsageUseCase.execute` — instead of `PrometheusAndDbCostRecorder.record`. This is strictly more complete: the aggregate wrapper bypasses `record()` and writes straight to the repo, so wiring at the repo catches every rag_db write (and the `aggregate` exemption makes the wrapper a no-op). Matches the S6/S7 approach (wire at the repository).
+- **Priceability audit surfaced 2 real local gaps** now fixed by adding to `LOCAL_FREE_MODELS`: `bge-large:latest` (S7 Ollama embedding tag) + `deepseek-r1:32b` (S8 Ollama emergency fallback). Also added matrix-fallback entries `deepseek-ai/DeepSeek-V4-Flash-Thinking` + `google/embeddinggemma-300m` (already priceable via the DeepInfra provider path; entries harden the fallback).
 
 **Goal**: Add the FR-7 guardrails that would have caught the entire RC-1/RC-2/RC-3 failure, and land the mandatory documentation updates.
 **Depends on**: W1 (`is_priceable`/`LOCAL_FREE_MODELS`), W3 + W4 (all call sites now emit `cost_source`)
@@ -656,8 +663,8 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - Minimum test count: 2
 
 **Acceptance criteria**:
-- [ ] CI fails if a configured model has no pricing path.
-- [ ] Each consumer logs unpriced configured models at startup.
+- [x] CI fails if a configured model has no pricing path. (`test_all_configured_models_priceable` over `PLATFORM_MODEL_REGISTRY`; NEGATIVE test `test_priceability_check_fails_on_injected_unpriced_model` proves it trips.)
+- [x] Each consumer logs unpriced configured models at startup. (`warn_unpriceable_models` wired in S6 `article_consumer_main`, S7 `scheduler_main`, S8 `app.py` lifespan, S9 `app.py` lifespan — reads LIVE settings, best-effort.)
 
 #### T-A-5-02: FR-7b — silent-zero metric + alert
 **Type**: impl
@@ -678,7 +685,7 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - Minimum test count: 2
 
 **Acceptance criteria**:
-- [ ] Counter increments only on paid silent-zero; alert rule present.
+- [x] Counter increments only on paid silent-zero; alert rule present. (`record_silent_zero_cost` wired at S6/S7/S8 repo INSERTs + S8 `RecordLlmUsageUseCase`; exempts `local` + `aggregate`; alert `LlmUsageSilentZeroCost` in `infra/prometheus/rules/alert-rules.yml`. Tests: trips on pricematrix/provider row, exempts local + aggregate.)
 
 #### T-A-5-03: Documentation updates (mandatory, §12)
 **Type**: docs
@@ -695,7 +702,7 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - `REVIEW_CHECKLIST.md`: "any new LLM call site records real cost via the unified path + `cost_source`".
 
 **Acceptance criteria**:
-- [ ] All §12 docs updated; BP + checklist entries added.
+- [x] All §12 docs updated; BP + checklist entries added. (BP-715 silent-zero family + BP-716 nlp_db-ownership added to `docs/BUG_PATTERNS.md` + `bug-patterns/{ml-llm,database}.md`; REVIEW_CHECKLIST §7c LLM-cost check; `pricing.py` docstring; docs/services/{nlp-pipeline,knowledge-graph,rag-chat,api-gateway}.md + docs/libs/ml-clients.md cost-metering sections; 4 service `.claude-context.md` pitfalls.)
 
 #### Pre-read
 - `libs/ml-clients/src/ml_clients/pricing.py` (`is_priceable`)
@@ -703,16 +710,16 @@ W2 (migrations) ─────────────┴──> W4 (S8 + S9 wi
 - `docs/BUG_PATTERNS.md`, `.claude/review/checklists/REVIEW_CHECKLIST.md`
 
 #### Validation Gate
-- [ ] `ruff` + `mypy` on changed files
-- [ ] Unit/arch tests pass — minimum **4** new
-- [ ] CI priceability gate wired into the pipeline
-- [ ] Docs updated (all §12 targets)
-- [ ] Alert rule validates (e.g. `make grafana-validate` / promtool if applicable)
+- [x] `ruff` + `mypy` on changed files (ruff@0.4.0 clean; mypy clean on metrics.py + ml-clients + S6/S7; rag-chat/api-gateway only pre-existing `prompts`/`tools`/`sentry_sdk` missing-module errors in untouched files)
+- [x] Unit/arch tests pass — **13** new (6 priceability + 7 silent-zero); arch suite green
+- [x] CI priceability gate wired into the pipeline (`test_all_configured_models_priceable` in `libs/ml-clients/tests/` — runs in the standard lib unit-test collection)
+- [x] Docs updated (all §12 targets)
+- [~] Alert rule validates — no `promtool`/`make grafana-validate` target exists in-tree for rule YAML (`grafana-validate` only checks dashboard PromQL against a live Grafana). Rule YAML parses cleanly (verified via `yaml.safe_load`; alert `LlmUsageSilentZeroCost` present). Automated rule-lint is a net-new gap noted for deploy/QA.
 
 #### Architecture Compliance
-- [ ] R12 — structlog for startup warnings
-- [ ] R13 — `is_priceable` from shared lib
-- [ ] R15 — docs updated for the schema/endpoint/metric changes
+- [x] R12 — structlog for startup warnings (`warn_unpriceable_models` logs `llm_models_unpriceable_at_startup`)
+- [x] R13 — `is_priceable`/`record_silent_zero_cost` from shared libs (ml-clients + observability)
+- [x] R15 — docs updated for the schema/endpoint/metric changes
 
 #### Break Impact
 

@@ -223,6 +223,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             error_type=type(exc).__name__,
         )
 
+    # PLAN-0117 W5 (FR-7a): best-effort boot check — WARN if the gateway's direct
+    # DeepInfra screener model has no pricing path (would log $0 → silent-zero).
+    # S9 wires no LLM adapter at boot; the only model it emits is the NL screener.
+    try:
+        from ml_clients.model_registry import warn_unpriceable_models
+
+        from api_gateway.routes.market import _NL_SCREENER_MODEL
+
+        warn_unpriceable_models("api-gateway", [(_NL_SCREENER_MODEL, "deepinfra")])
+    except Exception as exc:  # — guardrail must never block boot
+        logger.warning("priceability_startup_check_failed", error=str(exc))
+
     logger.info("service_started", service=settings.service_name)
     yield
 

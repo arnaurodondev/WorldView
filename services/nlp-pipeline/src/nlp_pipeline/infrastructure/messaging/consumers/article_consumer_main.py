@@ -17,6 +17,8 @@ import signal
 import sys
 from typing import Any
 
+from ml_clients.model_registry import warn_unpriceable_models  # type: ignore[import-untyped]
+
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     create_ml_metrics,
@@ -466,6 +468,25 @@ async def main() -> None:
             "valkey_url": getattr(settings, "valkey_url", None),
             "topics_subscribed": [settings.topic_article_stored],
         },
+    )
+
+    # PLAN-0117 W5 (FR-7a): best-effort boot check — log a WARNING for any
+    # configured model with no pricing path (would log $0 → silent-zero). Reads
+    # LIVE settings so env overrides are covered; never fatal.
+    warn_unpriceable_models(
+        "nlp-pipeline",
+        [
+            (settings.embedding_api_model_id, "deepinfra"),
+            (settings.extraction_api_model_id, "deepinfra"),
+            (settings.extraction_fallback_model_id, "deepinfra"),
+            (settings.relevance_scoring_api_model_id, "deepinfra"),
+            (settings.unresolved_resolution_api_model_id, "deepinfra"),
+            (settings.embedding_model_id, "ollama"),
+            (settings.extraction_model_id, "ollama"),
+            (settings.relevance_scoring_model, "ollama"),
+            (settings.unresolved_resolution_classification_model, "ollama"),
+            (settings.ner_model_id, "gliner"),
+        ],
     )
 
     try:

@@ -12,6 +12,16 @@ provider omits a cost. Genuinely-local models (Ollama/GLiNER, see
 :data:`LOCAL_FREE_MODELS`) are ``$0`` with ``cost_source="local"``. A paid model
 must NEVER be logged at ``$0`` — that is the silent-zero regression FR-7 guards.
 
+The FR-7 guardrail (PLAN-0117 W5) that keeps this true has two arms, both built
+on :func:`is_priceable`:
+  * **Priceability CI test + startup log** — :mod:`ml_clients.model_registry`
+    enumerates every configured ``(model_id, provider)`` and fails CI (and warns
+    at each service's boot) if any has no cost path.
+  * **Runtime silent-zero metric** — ``observability.metrics`` increments
+    ``llm_usage_silent_zero_cost_total`` at every ``llm_usage_log`` write when a
+    row has tokens>0, ``$0`` cost, and a PAID ``cost_source`` (not ``local`` /
+    ``aggregate``). See docs/BUG_PATTERNS.md BP-715.
+
 Why a separate module from the (now-delegating) ``cost.py``?
 ------------------------------------------------------------
 ``cost.py`` historically used ``float`` arithmetic (acceptable for legacy
@@ -239,6 +249,29 @@ MODEL_PRICING: dict[str, ModelPricing] = {
         output_per_million=Decimal("0.09"),
         notes="as of 2026-07; DeepInfra list price (verify at OQ-1)",
     ),
+    # ── DeepInfra — additional in-use models surfaced by the FR-7 audit ──────
+    # These are configured serving defaults across S7/S8 (V4-Flash-Thinking is
+    # the current KG extraction + description model and the S8 completion model;
+    # embeddinggemma-300m is the ml-clients router embedding model). They are
+    # already priceable via the DeepInfra provider-cost path (``is_priceable``
+    # returns True for any deepinfra model), so these entries are purely the
+    # matrix FALLBACK for the rare case DeepInfra omits ``usage.estimated_cost``
+    # — without them such a call would fall through to $0 and (correctly) trip
+    # the FR-7b silent-zero guard. DeepInfra self-reports authoritative cost.
+    "deepseek-ai/DeepSeek-V4-Flash-Thinking": ModelPricing(
+        model_id="deepseek-ai/DeepSeek-V4-Flash-Thinking",
+        # Reasoning ("Thinking") variant of V4-Flash — same input tier, higher
+        # output rate (reasoning tokens count as output). Matrix fallback only.
+        input_per_million=Decimal("0.14"),
+        output_per_million=Decimal("0.56"),
+        notes="as of 2026-07; DeepInfra reasoning tier; matrix fallback (provider cost authoritative)",
+    ),
+    "google/embeddinggemma-300m": ModelPricing(
+        model_id="google/embeddinggemma-300m",
+        input_per_million=Decimal("0.005"),
+        output_per_million=Decimal("0"),  # embeddings have no output token billing
+        notes="as of 2026-07; DeepInfra-hosted embedding (input-only billed)",
+    ),
 }
 
 
@@ -257,6 +290,11 @@ MODEL_PRICING: dict[str, ModelPricing] = {
 #   * bge-reranker-v2-m3         — rag-chat Ollama reranker
 #   * bge-large-en-v1.5 / bge-large — Ollama local embeddings (distinct from the
 #                                 DeepInfra-hosted ``BAAI/bge-large-en-v1.5`` which IS priced)
+#   * bge-large:latest           — S7 Ollama embedding tag (knowledge-graph
+#                                 embedding_model_id; the ``:latest`` Ollama tag
+#                                 variant of bge-large)
+#   * deepseek-r1:32b            — rag-chat Ollama emergency completion fallback
+#                                 (ollama_completion_model)
 LOCAL_FREE_MODELS: frozenset[str] = frozenset(
     {
         "urchade/gliner_large-v2.1",
@@ -266,6 +304,8 @@ LOCAL_FREE_MODELS: frozenset[str] = frozenset(
         "bge-reranker-v2-m3",
         "bge-large-en-v1.5",
         "bge-large",
+        "bge-large:latest",
+        "deepseek-r1:32b",
     }
 )
 

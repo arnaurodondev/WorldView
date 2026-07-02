@@ -159,6 +159,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     await jwt_mw.startup()
 
+    # PLAN-0117 W5 (FR-7a): best-effort boot check — WARN on any configured chat
+    # model with no pricing path (would log $0 → silent-zero). Reads LIVE settings.
+    _warn_unpriceable_models_at_startup(settings)
+
     log.info("rag_chat_started", service=settings.service_name)  # type: ignore[no-any-return]
     yield
 
@@ -178,6 +182,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if read_engine is not engine:
         await read_engine.dispose()
     log.info("rag_chat_stopped", service=settings.service_name)  # type: ignore[no-any-return]
+
+
+def _warn_unpriceable_models_at_startup(settings: RagChatSettings) -> None:
+    """PLAN-0117 W5 (FR-7a): boot-time priceability check for rag-chat models.
+
+    Logs a best-effort WARNING listing any *configured* model id that has no
+    pricing path (matrix / provider-cost / local-free). Reads LIVE settings so
+    env overrides are covered. Never raises — a guardrail must not block boot.
+    """
+    from ml_clients.model_registry import warn_unpriceable_models
+
+    # (model_id, provider) for every model id rag-chat can emit. ``None`` model
+    # ids (e.g. an unset grounding_rewrite_model) are filtered out.
+    pairs: list[tuple[str, str]] = [
+        (settings.deepinfra_classification_model, "deepinfra"),
+        (settings.completion_model, settings.completion_provider),
+        (settings.openrouter_completion_model, "openrouter"),
+        (settings.deepinfra_stream_chat_fallback_model, "deepinfra"),
+        (settings.citation_judge_model, settings.citation_judge_provider),
+        (settings.ollama_classification_model, "ollama"),
+        (settings.ollama_completion_model, "ollama"),
+        (settings.ollama_reranker_model, "ollama"),
+    ]
+    warn_unpriceable_models("rag-chat", [(m, p) for (m, p) in pairs if m])
 
 
 def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:

@@ -957,3 +957,35 @@ Company-compatible classes (`organization`, `financial_instrument`, `financial_i
 - Keep unambiguous identifiers (ISIN, 12-char) exempt from category gates — they cannot collide with a common word.
 
 **Regression test**: `services/nlp-pipeline/tests/unit/application/blocks/test_entity_resolution.py` — `TestStage2ClassGateBlocksMisResolution` (10 denied surfaces → UNRESOLVED, and never queried), `TestStage2ClassGateKeepsMajors` (AAPL×3/MSFT/GOOGL/AMZN/NVDA/MA-as-org/JPM/SPY still AUTO_RESOLVED), `TestStage2ClassGatePerMention` (same-surface split by class in one batch), `TestTickerStageAllowedUnit` (unit gate).
+
+---
+
+## BP-715 — Silent-zero LLM cost: hardcoded `$0` + two divergent price maps (PLAN-0117)
+
+**Symptom**: The `llm_usage_log` ledger — the single source of truth for cost dashboards and the future per-user/per-tenant cost-quota feature — recorded only **~$29.58** across **~315k logged LLM calls / ~403M tokens**. The largest, most expensive operations (chat tool-loops, news extraction, KG enrichment, the gateway NL-screener call) all recorded **$0**. Grafana cost panels showed a spend 1–2 orders of magnitude below reality.
+
+**Root causes (a compounding family):**
+- **RC-1 — audit value computed-then-discarded / hardcoded `$0`.** S6 nlp-pipeline hardcoded `estimated_cost_usd=0.0` at every usage-log call site; the cost calculator was never invoked. 100% of S6 rows were $0 including 26.7M-token `gpt-oss-120b` runs. (This is the "audit-returned-value-must-be-persisted" feedback pattern applied to cost.)
+- **RC-2 — two lists that must agree but don't.** Two independent price maps existed: `cost.py` (float, keyed provider+model, tiny map) vs `pricing.py` (Decimal, keyed model, canonical). Only rag-chat used the canonical one; S6/S7 pointed at `cost.py`, so any model outside its 3-entry map cost $0.
+- **RC-3** — S8 priced some capabilities but not the highest-volume `chat_with_tools`/`tool_loop_iter`/`synthesis`; S9's direct DeepInfra screener call was tracked nowhere.
+
+**Fix (PLAN-0117 W1–W5):**
+1. Capture DeepInfra's verbatim `usage.estimated_cost` in the adapters → persist as `cost_source='provider'` (authoritative, self-updating; no price map to maintain).
+2. Collapse to ONE calculator: `pricing.resolve_cost(model_id, provider=…, tokens_in, tokens_out, provider_estimated_cost=…) -> (Decimal, cost_source)` implements the single §2.2 priority (provider → local → pricematrix). `cost.py` delegates to `pricing.py`.
+3. Add auditable `cost_source` + `user_id` columns to all three `llm_usage_log` tables.
+4. **Guardrails (the permanent tripwire — this is the part that makes the regression un-repeatable):**
+   - **Priceability check (FR-7a).** `is_priceable(model_id, *, provider)` is True iff the model is in `MODEL_PRICING` (non-UNKNOWN), OR served by a provider-cost provider (DeepInfra), OR in `LOCAL_FREE_MODELS`. `PLATFORM_MODEL_REGISTRY` (in `ml_clients.model_registry`) enumerates every configured `(model_id, provider)` across services; the CI test `test_all_configured_models_priceable` FAILS the build if any is unpriceable (a NEGATIVE test proves it trips on an injected unpriced id). Each of S6/S7/S8/S9 also calls `warn_unpriceable_models(...)` at boot to log a best-effort WARNING listing any *configured* (live-settings) model with no pricing path.
+   - **Runtime silent-zero metric (FR-7b).** A single cross-service counter `llm_usage_silent_zero_cost_total{service, model_id}` (defined in `observability.metrics`, alert in `infra/prometheus/rules/alert-rules.yml`) increments at every `llm_usage_log` write choke-point when `tokens_in + tokens_out > 0 AND estimated_cost_usd == 0 AND cost_source NOT IN ('local', 'aggregate')`.
+
+**The two REQUIRED exemptions (get these wrong and the guard fires on correct rows):**
+- `cost_source='local'` — Ollama/GLiNER are genuinely free.
+- `cost_source='aggregate'` — the S8 `provider_chain.chat_with_tools` wrapper logs a $0 row that duplicates a leaf's tokens so each real round-trip is costed exactly ONCE (OQ-3). A $0 aggregate row is correct, not a regression.
+- A `cost_source` of `None` (a legacy / un-migrated caller) is intentionally **not** exempt — a paid model with tokens>0, $0, and no provenance is exactly what the guard must surface.
+
+**Prevention checklist for any new LLM call site:**
+- Record real cost via `resolve_cost` + persist `cost_source`; never write a bare `0.0` for a paid model.
+- Pass the exact provider `model` string to the pricing path (casing/whitespace mismatch = silent zero — BP-family "prompt input vs lookup mismatch").
+- If you add a new configured model id, add it to `PLATFORM_MODEL_REGISTRY` (and to `MODEL_PRICING`/`LOCAL_FREE_MODELS` as appropriate) — the CI priceability test is the tripwire.
+- Wire the silent-zero emitter at the DB write choke-point (the repository INSERT), not just at one convenience recorder, so ALL write paths (incl. aggregate wrappers and direct-repo callers) are covered.
+
+Related: BP-272 (`latency_ms=0`/`tokens_in=0` corrupts cost analytics). Status: **FIXED** (PLAN-0117). References: `libs/ml-clients/src/ml_clients/pricing.py`, `libs/ml-clients/src/ml_clients/model_registry.py`, `libs/observability/src/observability/metrics.py` (`is_silent_zero_cost`, `record_silent_zero_cost`, `LLM_USAGE_SILENT_ZERO_COST`), the three `llm_usage_log` repositories + `RecordLlmUsageUseCase`.

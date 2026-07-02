@@ -893,3 +893,18 @@ The `ConfidenceWorker` runs every 15 minutes. Check:
 3. Use `SELECT status, count(*) FROM provisional_entity_queue GROUP BY 1` to assess queue state.
 4. Check noise classification rate — if Layer 2 is classifying too aggressively,
    verify the DeepInfra model is available (`meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo`).
+
+## LLM Cost Metering & Guardrails (PLAN-0117)
+
+Every `llm_usage_log` row written to `intelligence_db` now stamps `cost_source` and
+`user_id`, and the per-call cost is resolved via the unified `resolve_cost` (delegating
+to `ml_clients.pricing`) — never hardcoded to `$0`.
+
+- **Silent-zero metric**: the write choke-point `LlmUsageLogRepository.log` emits the
+  cross-service counter `llm_usage_silent_zero_cost_total{service, model_id}` whenever a
+  row has `tokens_in + tokens_out > 0` AND `estimated_cost_usd == 0` AND
+  `cost_source NOT IN ('local','aggregate')` — i.e. a paid provider call that priced to
+  zero. Steady-state expectation is 0 (Prometheus alert `LlmUsageSilentZeroCost`).
+- **Boot-time priceability warning**: the S7 scheduler entrypoint calls
+  `warn_unpriceable_models(...)` at startup, logging a structured WARNING for any configured
+  model that has no pricing path. See `docs/BUG_PATTERNS.md` BP-715.

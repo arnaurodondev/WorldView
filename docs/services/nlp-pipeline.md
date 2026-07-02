@@ -861,3 +861,19 @@ Structured log output (structlog, JSON format) includes: `service=nlp-pipeline`,
 2. Inspect the error detail for the root cause.
 3. Fix the underlying issue (schema mismatch, DB error, etc.).
 4. Retry or resolve via `POST /admin/dlq/{id}/retry` or `POST /admin/dlq/{id}/resolve`.
+
+## LLM Cost Metering & Guardrails (PLAN-0117)
+
+Every `llm_usage_log` row written to `nlp_db` now stamps `cost_source` and `user_id`,
+and the per-call cost is resolved via the unified `resolve_cost` (delegating to
+`ml_clients.pricing`) — never hardcoded to `$0`. Ollama/GLiNER local calls carry
+`cost_source='local'` and are legitimately free.
+
+- **Silent-zero metric**: the write choke-point `NlpUsageLogRepository.log` emits the
+  cross-service counter `llm_usage_silent_zero_cost_total{service, model_id}` whenever a
+  row has `tokens_in + tokens_out > 0` AND `estimated_cost_usd == 0` AND
+  `cost_source NOT IN ('local','aggregate')` — i.e. a paid provider call that priced to
+  zero. This should never fire in steady state (Prometheus alert `LlmUsageSilentZeroCost`).
+- **Boot-time priceability warning**: the article-consumer entrypoint calls
+  `warn_unpriceable_models(...)` at startup, logging a structured WARNING for any configured
+  model that has no pricing path. See `docs/BUG_PATTERNS.md` BP-715.

@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from observability.metrics import record_silent_zero_cost  # type: ignore[import-untyped]
+
 if TYPE_CHECKING:
     from uuid import UUID
 
@@ -112,6 +114,18 @@ class NlpUsageLogRepository:
                     "cost_source": cost_source,
                     "user_id": str(user_id) if user_id is not None else None,
                 },
+            )
+            # PLAN-0117 W5 (FR-7b): trip the cross-service silent-zero guard when
+            # this row burned tokens yet persisted $0 on a PAID source (cost_source
+            # NOT IN local|aggregate). ``record_silent_zero_cost`` is best-effort
+            # and never raises, so it is safe inside the write try-block.
+            record_silent_zero_cost(
+                "nlp-pipeline",
+                model_id=model_id,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                estimated_cost_usd=estimated_cost_usd,
+                cost_source=cost_source,
             )
         except Exception as exc:
             # Observer must never affect subject — swallow all DB errors

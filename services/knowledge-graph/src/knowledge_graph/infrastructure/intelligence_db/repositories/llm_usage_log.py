@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING
 import structlog
 from sqlalchemy import text
 
+from observability.metrics import record_silent_zero_cost  # type: ignore[import-untyped]
+
 if TYPE_CHECKING:
     from uuid import UUID
 
@@ -120,6 +122,17 @@ INSERT INTO llm_usage_log (
                     "cost_source": cost_source,
                     "user_id": str(user_id) if user_id else None,
                 },
+            )
+            # PLAN-0117 W5 (FR-7b): trip the cross-service silent-zero guard when
+            # this row burned tokens yet persisted $0 on a PAID source (cost_source
+            # NOT IN local|aggregate). Best-effort — never raises.
+            record_silent_zero_cost(
+                "knowledge-graph",
+                model_id=model_id,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                estimated_cost_usd=estimated_cost_usd,
+                cost_source=cost_source,
             )
         except Exception as exc:
             logger.warning("kg_usage_log_failed", error=str(exc))

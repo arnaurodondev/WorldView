@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from observability.metrics import record_silent_zero_cost  # type: ignore[import-untyped]
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,6 +113,20 @@ class RagChatUsageLogRepository:
                     "cost_source": str(cost_source) if cost_source is not None else None,
                     "user_id": str(user_id) if user_id is not None else None,
                 },
+            )
+            # PLAN-0117 W5 (FR-7b): the single rag_db INSERT choke-point — BOTH the
+            # ``PrometheusAndDbCostRecorder`` leaf path AND the provider_chain
+            # ``chat_with_tools`` aggregate wrapper land here. Trip the guard only
+            # for a PAID silent-zero; the ``aggregate`` wrapper (tokens>0, $0) is
+            # exempt by design (no double count), as is any ``local`` row. Passing
+            # the resolved ``cost_source`` makes those exemptions automatic.
+            record_silent_zero_cost(
+                "rag-chat",
+                model_id=model_id,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                estimated_cost_usd=estimated_cost_usd,
+                cost_source=str(cost_source) if cost_source is not None else None,
             )
         except Exception as exc:
             logger.warning("rag_usage_log_failed", error=str(exc))
