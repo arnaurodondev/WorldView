@@ -1003,6 +1003,48 @@ def numeric_grounding_effectively_passed(result: GroundingResult) -> bool:
 _PHANTOM_MATERIAL_WINDOW = _VALIDATOR_CITATION_WINDOW
 
 
+# ── (2026-07-03) Deterministic backstop for the prediction-market false refusal ─
+#
+# WHY a proximity-only discriminator is not enough here: prediction-market answers
+# are ENTIRELY about odds numbers (``Yes 63%``), so when the model slips and tags
+# its own prose ``Yes 63% [commentary row 0]`` the ``[commentary row 0]`` tag lands
+# INSIDE ``_PHANTOM_MATERIAL_WINDOW`` of ``63%`` → classified MATERIAL → HARD
+# REFUSAL (see audit docs/audits/2026-07-03-prediction-market-refusal.md). The
+# v1.11 prompt rule lowers the incidence but is probabilistic on gpt-oss-120b.
+#
+# This allowlist is the deterministic guarantee. A ``[<name> row N]`` whose ``name``
+# is one of these words is UNAMBIGUOUSLY the model mislabeling its own interpretive
+# prose — never a fabricated tool citation — because:
+#   1. Every REAL tool is a snake_case verb identifier registered in the tool
+#      manifest (``get_prediction_markets``, ``query_fundamentals``). None of these
+#      plain English nouns can ever be a tool name, so the tag cannot be citing a
+#      (real or fabricated) tool row — it is a prose label the model bracketed.
+#   2. The fabrication guard is FULLY PRESERVED: a genuinely fabricated tool name
+#      (``[query_fundamentals row 9]`` when that tool never ran) stays OUTSIDE this
+#      allowlist and is STILL classified material → still refuses.
+#   3. The odds/figures themselves stay independently protected by the numeric-
+#      substantiation gate (``material_unsupported_numbers`` /
+#      ``pin_numbers_to_tool_values``, chat_orchestrator ~4757) and the real
+#      ``[get_prediction_markets row N]`` citation. Stripping a mislabeled *tag*
+#      never removes the numeric grounding of the value it sat next to.
+#
+# Kept lower-case; matched against the lower-cased ``tool`` capture group.
+_BENIGN_PROSE_TAG_NAMES = frozenset(
+    {
+        "commentary",
+        "analysis",
+        "note",
+        "notes",
+        "interpretation",
+        "summary",
+        "context",
+        "caveat",
+        "disclaimer",
+        "observation",
+    }
+)
+
+
 def _material_number_spans(response: str) -> list[tuple[int, int]]:
     """Return (start, end) char spans of MATERIAL numeric claims in *response*.
 
@@ -1065,6 +1107,15 @@ def partition_phantom_tool_citations(
         name = m.group("tool").lower()
         if name in called:
             continue  # a real called tool — not phantom, handled by other guards
+        if name in _BENIGN_PROSE_TAG_NAMES:
+            # Deterministic backstop (2026-07-03): a known-non-tool prose word can
+            # NEVER be a fabricated tool citation, so it is benign REGARDLESS of
+            # material-number proximity. This is what stops the prediction-market
+            # ``Yes 63% [commentary row 0]`` false refusal without weakening the
+            # fabrication guard for real snake_case tool names. See
+            # _BENIGN_PROSE_TAG_NAMES for the full safety rationale.
+            benign_tags.append(m.group(0))
+            continue
         tag_start, tag_end = m.start(), m.end()
         near_material = any(
             # overlap / proximity test: the tag window and the number window touch

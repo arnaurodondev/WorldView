@@ -132,3 +132,66 @@ def test_strict_finder_flags_both_partition_splits_them() -> None:
     assert material == {"query_fundamentals"}
     assert "commentary" not in material
     assert benign == ["[commentary row 1]"]
+
+
+# ── (2026-07-03) Deterministic allowlist backstop — prediction-market refusal ──
+
+
+def test_prose_label_adjacent_to_material_number_is_benign() -> None:
+    """A prediction-market odds answer ``Yes 63% [commentary row 0]`` must NOT refuse.
+
+    This is the residual prediction-market false-refusal
+    (docs/audits/2026-07-03-prediction-market-refusal.md): the ``[commentary row 0]``
+    tag sits INSIDE the material-number window of ``63%``, so a proximity-only
+    discriminator would misclassify it material → hard refusal. The known-non-tool
+    allowlist classifies it benign regardless of proximity.
+    """
+    response = "The market currently implies Yes 63% [commentary row 0] for the outcome."
+    called = ["get_prediction_markets"]
+
+    material, benign = partition_phantom_tool_citations(response, called)
+
+    assert material == set(), "an allowlisted prose label next to odds must NOT be material"
+    assert benign == ["[commentary row 0]"], "the prose tag should be stripped, not refused"
+
+
+@pytest.mark.parametrize(
+    "word",
+    ["commentary", "analysis", "note", "interpretation", "summary", "context", "caveat"],
+)
+def test_allowlisted_words_adjacent_to_number_are_benign(word: str) -> None:
+    """Every allowlisted prose word stays benign even abutting a material figure."""
+    response = f"Revenue was $34.6B [{word} row 2] according to consensus."
+    called = ["get_prediction_markets"]
+
+    material, benign = partition_phantom_tool_citations(response, called)
+
+    assert material == set()
+    assert benign == [f"[{word} row 2]"]
+
+
+def test_fabricated_tool_next_to_number_still_refuses_despite_allowlist() -> None:
+    """The fabrication guard is INTACT: a real-shaped tool name is NOT allowlisted.
+
+    ``query_fundamentals`` was never called yet is cited next to an invented
+    ``$34.6B`` — it must STILL be classified material (refuse). The allowlist only
+    exempts plain-English prose words, never snake_case tool identifiers.
+    """
+    response = "Revenue was $34.6B [query_fundamentals row 9]."
+    called = ["get_prediction_markets"]  # query_fundamentals absent
+
+    material, benign = partition_phantom_tool_citations(response, called)
+
+    assert material == {"query_fundamentals"}, "fabricated tool citation must stay refusable"
+    assert benign == [], "a material phantom tag must not be silently stripped"
+
+
+def test_real_prediction_markets_citation_is_untouched() -> None:
+    """A genuine ``[get_prediction_markets row 1]`` (tool WAS called) is not phantom."""
+    response = "The market implies Yes 63% [get_prediction_markets row 1] on the outcome."
+    called = ["get_prediction_markets"]
+
+    material, benign = partition_phantom_tool_citations(response, called)
+
+    assert material == set(), "a real called-tool citation must never be flagged"
+    assert benign == [], "a real called-tool citation must never be stripped"
