@@ -254,6 +254,81 @@ class TestToolUsePromptContract:
         _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
         assert _ver >= (1, 9)
 
+    def test_prompt_template_version_bumped_for_research_loop(self) -> None:
+        """v1.12 core RESEARCH LOOP + ANALYST REASONING sections bump the floor.
+
+        2026-07-03 broadened the parallel-batching rule from the
+        valuation-only VALUATION CONTEXT addendum to a core all-intent
+        RESEARCH LOOP section, and added the ANALYST REASONING section.
+        Both change the template body (flipping the content hash), so the
+        semver version MUST advance to >= 1.12. Pinning the floor catches an
+        accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 12), f"expected version >= 1.12 for RESEARCH LOOP bump, got {_ver}"
+
+    def test_core_contains_parallel_research_loop_directive(self) -> None:
+        """Point 1 — general parallel tool batching in ROUND 1.
+
+        The previously valuation-only "single parallel planning turn" rule is
+        now a CORE (all-intent) directive: round 1 must batch every
+        INDEPENDENT tool the question already determines (news + fundamentals
+        + events + graph), and later rounds are reserved for ADAPTIVE
+        follow-up whose args are only knowable from prior results. This test
+        pins the section so a future edit cannot silently re-narrow it or drop
+        the adaptive-loop preservation.
+        """
+        # The directive is CORE — it must appear on EVERY intent, not just
+        # FINANCIAL_DATA (that was the old narrow scope).
+        for intent in ("GENERAL", "COMPARISON", "MACRO", "REASONING", "PORTFOLIO", "SIGNAL_INTEL"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-03")
+            assert (
+                "RESEARCH LOOP — PLAN WIDE, THEN GO DEEP" in prompt
+            ), f"intent={intent}: missing RESEARCH LOOP section"
+            # ROUND 1 = parallel batch of independent tools.
+            assert "ROUND 1 — PLAN WIDE (parallel batch)" in prompt
+            assert "IN ONE\ntool_calls block, in parallel" in prompt
+            assert "INDEPENDENT" in prompt
+            # The general fan-out must name the four tool families so the model
+            # batches news + numbers + events + graph together, not one/round.
+            assert "get_entity_news" in prompt
+            assert "search_events" in prompt
+            assert "traverse_graph" in prompt or "search_entity_relations" in prompt
+            # ROUND 2+ preserves the ADAPTIVE loop — this is the critical
+            # constraint (do NOT force everything into round 1).
+            assert "ROUND 2+ — GO DEEP (adaptive follow-up)" in prompt
+            assert "newly-surfaced entity" in prompt
+            assert "STOP and\nsynthesise" in prompt or "STOP" in prompt
+
+    def test_core_contains_analyst_reasoning_directive(self) -> None:
+        """Point 2 — deeper senior-analyst reasoning, grounding preserved.
+
+        The ANALYST REASONING section elevates the loop from a lookup bot to
+        a senior analyst: explicit falsifiable hypotheses, second-order
+        implication chains, cross-tool entity linkage, adaptive depth, then
+        grounded synthesis. The final GROUNDING IS ABSOLUTE clause must
+        re-assert that deeper reasoning never licenses an ungrounded claim —
+        this test pins that so the reasoning uplift can never be read as a
+        grounding relaxation.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "REASONING", "MACRO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-03")
+            assert "ANALYST REASONING" in prompt, f"intent={intent}: missing ANALYST REASONING section"
+            # The five reasoning moves.
+            assert "HYPOTHESES:" in prompt
+            assert "SECOND-ORDER IMPLICATIONS:" in prompt
+            assert "CONNECT ENTITIES ACROSS TOOLS:" in prompt
+            assert "ADAPTIVE DEPTH:" in prompt
+            assert "SYNTHESISE, THEN STOP:" in prompt
+            # Second-order chain example must be present (the concrete
+            # supplier->customer->guidance chain the owner asked for).
+            assert "customer input cost" in prompt
+            # GROUNDING IS ABSOLUTE re-assertion — the anti-fabrication
+            # backstop must survive the reasoning uplift.
+            assert "GROUNDING IS ABSOLUTE" in prompt
+            assert "NEVER licenses an ungrounded or fabricated" in prompt
+            assert "open question the data could not answer" in prompt
+
     def test_prompt_contains_tool_routing_table(self) -> None:
         """FINAL-67 C4 — TOOL ROUTING table maps question shape to the right tool.
 
