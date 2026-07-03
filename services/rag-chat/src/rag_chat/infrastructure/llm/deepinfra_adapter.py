@@ -527,8 +527,14 @@ class DeepInfraCompletionAdapter:
         tools: list[dict] | None = None,
         seed: int | None = None,
         model: str | None = None,
+        call_site: str = "synthesis",
     ) -> AsyncIterator[str]:
         """Stream the final answer turn from an OpenAI-format messages list.
+
+        PLAN-0117 (attribution): ``call_site`` tags the leaf ``llm_usage_log``
+        row so grounding-repair / degraded-synthesis rewrites are distinguishable
+        from the primary synthesis turn in the ledger. Defaults to
+        ``"synthesis"`` so existing callers are unchanged (forward-compatible).
 
         RC-1 (2026-06-18): ``model`` overrides the adapter's configured
         ``self._model`` for THIS call only — used by the combined
@@ -625,7 +631,7 @@ class DeepInfraCompletionAdapter:
                 thread_id=thread_id,
                 model_id=_effective_model,
                 usage=primary_usage or None,
-                call_site="synthesis",
+                call_site=call_site,
                 user_id=user_id,
             )
             return
@@ -670,7 +676,7 @@ class DeepInfraCompletionAdapter:
             thread_id=thread_id,
             model_id=fallback_model,
             usage=fallback_usage or None,
-            call_site="synthesis",
+            call_site=call_site,
             user_id=user_id,
         )
 

@@ -68,8 +68,13 @@ class LlmChatProvider(Protocol):
         temperature: float = 0.2,
         seed: int | None = None,
         model: str | None = None,
+        call_site: str = "synthesis",
     ) -> AsyncIterator[str]:
         """Streaming chat for the final LLM turn after tools have been executed.
+
+        PLAN-0117 (attribution): ``call_site`` tags the persisted cost row so
+        grounding-repair / degraded-synthesis rewrites are separable from the
+        primary synthesis turn. Defaults to ``"synthesis"`` (forward-compatible).
 
         RC-1 (2026-06-18): ``model`` optionally overrides the provider's
         configured model for THIS call only (used by the combined

@@ -4006,6 +4006,13 @@ class ChatOrchestratorUseCase:
                     temperature=0.0,
                     tools=[],
                     seed=request.seed,
+                    # PLAN-0117 (attribution): bump the per-thread total + stamp
+                    # the user so degraded-synthesis salvage spend is not dropped
+                    # from chat_threads.estimated_cost_usd / per-user quota.
+                    thread_id=request.thread_id,
+                    user_id=request.user_id,
+                    # Distinguish salvage spend from the real synthesis turn.
+                    call_site="degraded_synthesis",
                 ):
                     _reprompted += _chunk
             except Exception as exc:  # — degrade gracefully, never crash the turn
@@ -4206,6 +4213,11 @@ class ChatOrchestratorUseCase:
                     # RC-1: configurable repair-rewrite model (None → default
                     # completion model, unchanged behaviour).
                     rewrite_model=_grounding_rewrite_model,
+                    # PLAN-0117 (attribution): thread the identity down so the
+                    # grounding-repair rewrite's leaf cost bumps the per-thread
+                    # total + stamps the user (per-user quota, PRD-0118).
+                    thread_id=request.thread_id,
+                    user_id=request.user_id,
                 )
         elif not grounded:
             # BP-605: never cache a refusal answer — its content is a
@@ -4664,6 +4676,8 @@ class ChatOrchestratorUseCase:
         run_entity_pass: bool = True,
         seed: int | None = None,
         rewrite_model: str | None = None,
+        thread_id: UUID | None = None,
+        user_id: UUID | None = None,
     ) -> tuple[str, bool]:
         """RC-1 — single combined numeric + entity-name grounding pass.
 
@@ -4993,6 +5007,13 @@ class ChatOrchestratorUseCase:
                 # RC-1: route the single repair completion to the override model
                 # when configured; None preserves the default completion model.
                 model=rewrite_model,
+                # PLAN-0117 (attribution): bump the per-thread total + stamp the
+                # user so grounding-repair rewrite spend is not dropped from
+                # chat_threads.estimated_cost_usd / per-user quota, and tag it
+                # so repair spend is separable from synthesis in the ledger.
+                thread_id=thread_id,
+                user_id=user_id,
+                call_site="grounding_rewrite",
             ):
                 buf += chunk
             return buf
@@ -5134,6 +5155,8 @@ class ChatOrchestratorUseCase:
         entity_context: Any = None,
         called_tool_names: list[str] | None = None,
         seed: int | None = None,
+        thread_id: UUID | None = None,
+        user_id: UUID | None = None,
     ) -> tuple[str, bool]:
         """PLAN-0093 E-2 T-E-2-02 — numeric-grounding validation pass.
 
@@ -5368,6 +5391,12 @@ class ChatOrchestratorUseCase:
                 tools=[],
                 # PLAN-0107 follow-up: forward seed for eval-mode reproducibility.
                 seed=seed,
+                # PLAN-0117 (attribution): bump per-thread total + stamp user so
+                # numeric-grounding rewrite spend lands on the thread/quota, and
+                # tag it distinct from synthesis in the ledger.
+                thread_id=thread_id,
+                user_id=user_id,
+                call_site="grounding_rewrite",
             ):
                 rewritten += chunk
         except Exception as exc:
@@ -5538,6 +5567,8 @@ class ChatOrchestratorUseCase:
         prior_tool_calls: list[Any] | None = None,
         seed: int | None = None,
         allow_rewrite: bool = True,
+        thread_id: UUID | None = None,
+        user_id: UUID | None = None,
     ) -> tuple[str, bool]:
         """F-LIVE-NEW-002 — entity-name grounding pass.
 
@@ -5782,6 +5813,12 @@ class ChatOrchestratorUseCase:
                 tools=[],
                 # PLAN-0107 follow-up: forward seed for eval-mode reproducibility.
                 seed=seed,
+                # PLAN-0117 (attribution): bump per-thread total + stamp user so
+                # entity-grounding rewrite spend lands on the thread/quota, and
+                # tag it distinct from synthesis in the ledger.
+                thread_id=thread_id,
+                user_id=user_id,
+                call_site="grounding_rewrite",
             ):
                 buf += chunk
             return buf
