@@ -246,11 +246,20 @@ class Settings(BaseSettings):
     valkey_url: str = "redis://localhost:6379"
 
     # ── EODHD shared quota ────────────────────────────────────────────────────
-    # Monthly EODHD credit ceiling for the shared cross-service quota counter.
-    # Must match market-ingestion's ``eodhd_monthly_quota`` (both services share
-    # one EODHD account key) so the 80%/100% thresholds are computed against the
-    # same cap. Configurable via CONTENT_INGESTION_EODHD_MONTHLY_QUOTA.
+    # Monthly EODHD credit counter cap — REPORTING/ATTRIBUTION ONLY (no longer
+    # blocks; see the incident note below). Configurable via
+    # CONTENT_INGESTION_EODHD_MONTHLY_QUOTA.
     eodhd_monthly_quota: int = 100_000
+
+    # EODHD's REAL rate limit is per calendar day (UTC), NOT per month — verified
+    # via GET /api/user (dailyRateLimit=100000). The shared quota guard enforces
+    # THIS value as the hard cap against the per-UTC-day counter. Must match
+    # market-ingestion's ``eodhd_daily_quota`` (both services share one EODHD
+    # account key). Configurable via CONTENT_INGESTION_EODHD_DAILY_QUOTA.
+    # INCIDENT 2026-07-03: the old monthly-only guard tripped a false hard block
+    # ~3 days into every month because normal daily usage (~75k credits/day)
+    # blew past a 100k MONTHLY cap; the daily cap is the correct enforcement.
+    eodhd_daily_quota: int = 100_000
 
     # ── Backfill ─────────────────────────────────────────────────────────────
     backfill_enabled: bool = False

@@ -9,7 +9,46 @@ import logging
 import pytest
 import structlog
 
-from observability.logging import configure_logging, get_logger
+from observability.logging import (
+    SecretRedactingFilter,
+    _redact_secrets,
+    configure_logging,
+    get_logger,
+)
+
+
+class TestSecretRedaction:
+    """Guards the httpx plaintext-key leak fix (incident 2026-07-03)."""
+
+    def test_redacts_eodhd_api_token_keeps_last4(self) -> None:
+        url = "HTTP Request: GET https://eodhd.com/api/news?api_token=6a3b6d4598dec9.89061021&fmt=json"
+        out = _redact_secrets(url)
+        assert "6a3b6d4598dec9.89061021" not in out
+        assert "api_token=***REDACTED-1021" in out
+
+    def test_redacts_finnhub_token(self) -> None:
+        out = _redact_secrets("GET https://finnhub.io/x?token=d7msqbpr01qngrvpaoj0&x=1")
+        assert "d7msqbpr01qngrvpaoj0" not in out
+        assert "token=***REDACTED-aoj0" in out
+
+    def test_leaves_non_secret_query_params_untouched(self) -> None:
+        out = _redact_secrets("GET /api/news?limit=1000&from=2026-07-03&offset=0")
+        assert out == "GET /api/news?limit=1000&from=2026-07-03&offset=0"
+
+    def test_filter_redacts_record_args(self) -> None:
+        # httpx passes the URL as a %-format arg, not baked into msg.
+        rec = logging.LogRecord(
+            name="httpx",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg='HTTP Request: %s "%s"',
+            args=("GET https://eodhd.com/api/news?api_token=6a3b6d4598dec9.89061021", "HTTP/1.1 200 OK"),
+            exc_info=None,
+        )
+        assert SecretRedactingFilter().filter(rec) is True
+        assert "89061021" not in rec.getMessage()
+        assert "api_token=***REDACTED-1021" in rec.getMessage()
 
 
 class TestConfigureLogging:

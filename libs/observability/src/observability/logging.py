@@ -3,10 +3,54 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from typing import Any
 
 import structlog
+
+# ── Secret redaction ─────────────────────────────────────────────────────────
+# httpx logs every request at INFO with the FULL URL, including query-string
+# secrets — e.g. ``GET https://eodhd.com/api/news?api_token=...`` and Finnhub's
+# ``?token=...``.  This leaked the live EODHD/Finnhub keys in plaintext logs
+# (incident 2026-07-03).  This filter masks any ``<name>=<value>`` query
+# parameter whose name looks like a credential, keeping only the last 4 chars so
+# operators can still identify WHICH key is in use (e.g. confirm a rotation)
+# without exposing the secret.
+_SECRET_QS_RE = re.compile(
+    r"(?i)\b(api_?token|api_?key|access_?token|token|secret|password|apikey)=([^&\s\"'#]+)",
+)
+
+
+def _redact_secrets(text: str) -> str:
+    """Mask credential-looking query-string values in *text*, keeping last 4."""
+
+    def _repl(match: re.Match[str]) -> str:
+        name, value = match.group(1), match.group(2)
+        tail = value[-4:] if len(value) > 4 else ""
+        return f"{name}=***REDACTED{('-' + tail) if tail else ''}"
+
+    return _SECRET_QS_RE.sub(_repl, text)
+
+
+class SecretRedactingFilter(logging.Filter):
+    """Stdlib logging filter that scrubs query-string secrets from records.
+
+    Attached to the root handler so it covers stdlib loggers (notably ``httpx``)
+    as well as structlog events routed through the same handler.  It rewrites
+    ``record.msg`` and any string ``record.args`` BEFORE formatting, so the
+    secret never reaches stdout/Loki.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str) and "=" in record.msg:
+            record.msg = _redact_secrets(record.msg)
+        if record.args:
+            if isinstance(record.args, tuple):
+                record.args = tuple(_redact_secrets(a) if isinstance(a, str) else a for a in record.args)
+            elif isinstance(record.args, dict):
+                record.args = {k: (_redact_secrets(v) if isinstance(v, str) else v) for k, v in record.args.items()}
+        return True
 
 
 def _inject_otel_trace_context(
@@ -86,6 +130,9 @@ def configure_logging(
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
+    # Mask query-string secrets (api_token=, token=, …) in every record before
+    # it is written — prevents httpx from leaking live API keys at INFO.
+    handler.addFilter(SecretRedactingFilter())
 
     root = logging.getLogger()
     root.handlers.clear()

@@ -111,6 +111,8 @@ class WorkerProcess:
         self._eodhd_quota_service = EodhdQuotaService(
             valkey=self._valkey,
             hard_limit=settings.eodhd_monthly_quota,
+            # EODHD's REAL cap is per-UTC-day — this is what actually blocks.
+            daily_hard_limit=settings.eodhd_daily_quota,
         )
 
         storage_settings = StorageSettings(
