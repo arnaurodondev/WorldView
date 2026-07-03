@@ -203,7 +203,7 @@ dev-ps:
 # Docker VM. On a CPU-constrained host the idle/low-frequency consumers add base
 # poll + Kafka-rebalance overhead that starves the hot paths (GLiNER NER, KG
 # queries). ``dev-lean`` STOPS the Tier-1 idle consumers and collapses the
-# article-consumer fleet 3->1; ``dev-full`` brings everything back. Both are
+# article-consumer fleet 2->1; ``dev-full`` brings everything back. Both are
 # REVERSIBLE and NON-destructive — containers are stopped/started (not removed),
 # no rebuild, no data loss. NOT touched: the active market-data / KG / extraction
 # consumers (stop those individually with ``$(COMPOSE_DEV) stop <svc>`` if needed).
@@ -220,24 +220,30 @@ SLIM_SERVICES := \
   market-data-insider-transactions-consumer \
   market-data-prediction-market-consumer
 
-## Slim the running dev stack: stop Tier-1 idle consumers + collapse article-consumer 3->1 (reversible, no data loss)
+# The article-consumer fleet uses KIP-345 static membership: each replica is its
+# OWN compose service (…-consumer-0, …-consumer-1) with a distinct instance id,
+# NOT a scalable single service. `--scale nlp-pipeline-article-consumer=N` fails
+# with "no such service". To collapse the fleet 2->1 we STOP replica -1 (keeping
+# -0 hot); dev-full starts it back. Add future replicas here to keep them lean.
+ARTICLE_CONSUMER_LEAN_STOP := nlp-pipeline-article-consumer-1
+ARTICLE_CONSUMER_ALL := nlp-pipeline-article-consumer-0 nlp-pipeline-article-consumer-1
+
+## Slim the running dev stack: stop Tier-1 idle consumers + collapse article-consumer 2->1 (reversible, no data loss)
 dev-lean:
-	$(COMPOSE_DEV) stop $(SLIM_SERVICES)
-	$(COMPOSE_DEV) up -d --no-build --no-deps --no-recreate --scale nlp-pipeline-article-consumer=1 nlp-pipeline-article-consumer
+	$(COMPOSE_DEV) stop $(SLIM_SERVICES) $(ARTICLE_CONSUMER_LEAN_STOP)
 	@echo ""
-	@echo "🍃 Lean mode ON — Tier-1 consumers stopped + article-consumer scaled to 1."
+	@echo "🍃 Lean mode ON — Tier-1 consumers stopped + article-consumer collapsed to 1 (replica -1 stopped)."
 	@echo "   Restore the full platform with:  make dev-full"
 
-## Restore the full dev stack: start Tier-1 consumers + article-consumer back to 3 replicas
+## Restore the full dev stack: start Tier-1 consumers + article-consumer back to both replicas
 dev-full:
-	$(COMPOSE_DEV) start $(SLIM_SERVICES)
-	$(COMPOSE_DEV) up -d --no-build --no-deps --no-recreate --scale nlp-pipeline-article-consumer=3 nlp-pipeline-article-consumer
+	$(COMPOSE_DEV) start $(SLIM_SERVICES) $(ARTICLE_CONSUMER_ALL)
 	@echo ""
-	@echo "🚀 Full mode — all Tier-1 consumers started + article-consumer scaled to 3."
+	@echo "🚀 Full mode — all Tier-1 consumers started + article-consumer back to 2 replicas."
 
 ## Show running/stopped status of just the Tier-1 (slimmable) services
 dev-lean-status:
-	$(COMPOSE_DEV) ps --all $(SLIM_SERVICES) nlp-pipeline-article-consumer
+	$(COMPOSE_DEV) ps --all $(SLIM_SERVICES) $(ARTICLE_CONSUMER_ALL)
 
 ## Rebuild all images without cache and restart
 dev-rebuild:
