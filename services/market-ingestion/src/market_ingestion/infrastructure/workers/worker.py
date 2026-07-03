@@ -426,13 +426,14 @@ class WorkerProcess:
         return ValkeyZeroBarTracker(valkey=valkey)
 
     def _build_quota_service(self) -> Any | None:
-        """Build the shared cross-replica EODHD monthly quota service.
+        """Build the shared cross-replica EODHD quota service.
 
         Backed by the same Valkey instance as the circuit breaker / zero-bar
         tracker.  Returns None when Valkey is not configured (local/test) so the
         pipeline degrades to the per-process token bucket as the sole defence.
-        The monthly hard limit defaults to EODHD's 100k/month but can be
-        overridden via the ``eodhd_monthly_quota`` setting.
+        The DAILY hard limit (EODHD's real per-UTC-day cap) is what actually
+        blocks; it defaults to 100k/day but can be overridden via the
+        ``eodhd_daily_quota`` setting.  The monthly counter is reporting-only.
         """
         valkey = self._build_valkey_client()
         if valkey is None:
@@ -441,7 +442,14 @@ class WorkerProcess:
             from messaging.eodhd_quota.quota_service import EodhdQuotaService
 
             hard_limit = int(getattr(self._settings, "eodhd_monthly_quota", EodhdQuotaService.HARD_LIMIT))
-            return EodhdQuotaService(valkey=valkey, hard_limit=hard_limit)
+            daily_hard_limit = int(
+                getattr(self._settings, "eodhd_daily_quota", EodhdQuotaService.DAILY_HARD_LIMIT),
+            )
+            return EodhdQuotaService(
+                valkey=valkey,
+                hard_limit=hard_limit,
+                daily_hard_limit=daily_hard_limit,
+            )
         except Exception as exc:
             logger.warning("quota_service_unavailable", error=str(exc))
             return None

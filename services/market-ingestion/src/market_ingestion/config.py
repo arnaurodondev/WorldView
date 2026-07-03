@@ -80,6 +80,20 @@ class Settings(BaseSettings):
     # Valkey / Redis
     valkey_url: str = "redis://localhost:6379/0"
 
+    # ── EODHD shared quota ────────────────────────────────────────────────────
+    # These are FORMAL fields (not just read via getattr) so the env overrides
+    # MARKET_INGESTION_EODHD_MONTHLY_QUOTA / _DAILY_QUOTA actually take effect —
+    # previously they were silently dropped by ``extra="ignore"``.
+    #
+    # eodhd_monthly_quota: monthly credit counter cap — REPORTING ONLY (no block).
+    # eodhd_daily_quota:   EODHD's REAL per-UTC-day cap — the value that BLOCKS.
+    # Verified via GET /api/user (dailyRateLimit=100000). INCIDENT 2026-07-03:
+    # the old monthly-only guard tripped a false hard block a few days into every
+    # month because normal daily usage blew past a 100k MONTHLY cap. Both values
+    # must match content-ingestion's (shared EODHD account key + Valkey counters).
+    eodhd_monthly_quota: int = 100_000
+    eodhd_daily_quota: int = 100_000
+
     # Scheduler
     scheduler_tick_interval_seconds: float = 60.0
     scheduler_max_tasks_per_tick: int = 1000

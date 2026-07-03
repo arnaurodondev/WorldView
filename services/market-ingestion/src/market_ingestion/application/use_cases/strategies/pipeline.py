@@ -74,7 +74,7 @@ async def pre_fetch_checks(
 
     Raises ProviderRateLimited (after calling persist_retry) when limits are hit.
     """
-    # -- Step 0: Monthly quota check -----------------------------------------
+    # -- Step 0: Daily quota check (EODHD's real cap is per-UTC-day) ----------
     if quota_service is not None and preferred == Provider.EODHD:
         from market_ingestion.application.use_cases.strategies.routing import _task_credit_cost
         from messaging.eodhd_quota.quota_service import QuotaCheckResult
@@ -82,8 +82,8 @@ async def pre_fetch_checks(
         cost = _task_credit_cost(task)
         quota_result = await quota_service.try_consume(cost=cost, service=service_name, symbol=task.symbol)
         if quota_result == QuotaCheckResult.HARD_LIMIT_EXCEEDED:
-            log.warning("quota_hard_limit_exceeded", cost=cost, monthly_quota_limit=quota_service._hard_limit)
-            exc = ProviderRateLimited("Monthly EODHD quota exhausted -- task deferred")
+            log.warning("quota_hard_limit_exceeded", cost=cost, daily_quota_limit=quota_service._daily_hard_limit)
+            exc = ProviderRateLimited("Daily EODHD quota exhausted -- task deferred")
             await persist_retry(task, exc, uow)
             from market_ingestion.application.metrics.eodhd import eodhd_quota_blocked_total
 

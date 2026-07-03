@@ -95,8 +95,9 @@ async def record_eodhd_request(
             symbol=symbol,
             service=SERVICE_NAME,
             message=(
-                "Shared EODHD monthly hard limit reached — ingestion will start "
-                "failing (401/402). Rotate key or raise quota."
+                "Shared EODHD DAILY hard limit reached — ingestion will start "
+                "failing (429/402) until the next UTC day. Raise eodhd_daily_quota "
+                "only if the account's real dailyRateLimit is higher."
             ),
         )
     elif result == QuotaCheckResult.SOFT_LIMIT_EXCEEDED:
@@ -106,7 +107,7 @@ async def record_eodhd_request(
             endpoint=endpoint,
             symbol=symbol,
             service=SERVICE_NAME,
-            message="Shared EODHD monthly usage crossed 80% — approaching exhaustion.",
+            message="Shared EODHD DAILY usage crossed 80% — approaching today's limit.",
         )
 
 
