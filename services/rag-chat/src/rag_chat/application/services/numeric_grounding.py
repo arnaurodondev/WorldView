@@ -372,6 +372,95 @@ def _extract_orphan_rationalisations(text: str) -> list[str]:
     return orphans
 
 
+# ── Framing / intent-aware grounding (Point 2 Stage 1, 2026-07-03) ────────────
+#
+# WHY: the hard material-grounding gate below classifies a number as MATERIAL
+# purely by KIND/MAGNITUDE (revenue/market-cap scale = material). It has no
+# notion of HYPOTHETICAL / PROJECTION framing, so a legitimately REASONED figure
+# — "this **could** add ~$2B to next-quarter revenue" — is a large uncited
+# number → MATERIAL → false-positive refusal/rewrite. As users ask more
+# analytical / what-if questions these false positives grow.
+#
+# The fix distinguishes a CLAIMED RETRIEVED FACT ("revenue **was** $34.6B", no
+# citation → still refuse — the AMD fabrication class) from a REASONED
+# PROJECTION or an explicitly DERIVED figure (allow). A number that already
+# failed tool-grounding is DOWNGRADED to non-material — and thus allowed —
+# only when its sentence context is:
+#   (a) HEDGED / projection-framed BEFORE the number — one of the owner-approved
+#       hedge markers (could/would/might/estimate(d)/roughly/approximately/~/
+#       about/if/assuming/projected/implies/potential), OR
+#   (b) explicitly COMPUTED / DERIVED — a derivation sentence (derived/computed/
+#       calculated/sum of/difference/product of…) referencing figures.
+#
+# ── SAFETY RATIONALE (the fabrication guarantee is fully preserved) ───────────
+#   1. This ONLY reclassifies numbers ALREADY in ``result.unsupported`` — i.e.
+#      numbers that already failed BOTH the tool-value match AND the ±50-char
+#      grounding-citation fast-path. A number with a real citation never reaches
+#      here, so cited/grounded numbers are untouched.
+#   2. A bare factual assertion with NO hedge before it and NO derivation in its
+#      sentence ("revenue was $34.6B") stays MATERIAL → still refuses. The
+#      no-fabrication grounding guarantee for FACTUAL claims is intact.
+#   3. Hedge markers are matched ONLY in the PRE-window (sentence start → the
+#      number) so a trailing hedge on a different clause ("revenue was $34.6B,
+#      which could grow") does NOT downgrade the factual figure. Derivation
+#      verbs are unambiguous enough to scan the whole sentence.
+#   4. "may" is deliberately EXCLUDED from the hedge lexicon (it collides with
+#      the month "May" once the context is lower-cased — "May revenue was $X").
+#      Only the owner-approved markers are used. Erring toward keeping the guard.
+#
+# Owner-approved hedge markers + safe morphological variants. Symbols ``~`` /
+# ``≈`` are approximation markers the models emit directly before a figure.
+_HEDGE_RE = re.compile(
+    r"(?:~|≈"
+    r"|\bcould\b|\bwould\b|\bmight\b"
+    r"|\bestimate[sd]?\b|\broughly\b|\bapproximately\b|\bapprox\.?"
+    r"|\babout\b|\bif\b|\bassum(?:e|es|ing|ed)\b"
+    r"|\bproject(?:s|ed|ion|ions)?\b|\bimpl(?:y|ies|ied)\b"
+    r"|\bpotential(?:ly)?\b)",
+    re.IGNORECASE,
+)
+# Explicit derivation / computation verbs — an uncited figure the model itself
+# says it DERIVED/COMPUTED from other figures is reasoned, not a retrieved fact.
+_DERIVATION_RE = re.compile(
+    r"(?:\bderive[sd]?\b|\bcomput(?:e|es|ed|ing)\b|\bcalculat(?:e|es|ed|ing)\b"
+    r"|\bsum of\b|\bdifference\b|\bproduct of\b|\bsubtract(?:ing)?\b|\badding\b"
+    r"|\bimpl(?:y|ies|ied)\b)",
+    re.IGNORECASE,
+)
+# Sentence terminators used to bound the pre-window / full-sentence scans. A
+# period is a boundary ONLY when it is NOT between two digits — otherwise the
+# decimal point inside a number token ($34.6B) would falsely split the sentence
+# and hide a derivation clause ("…derived from $34.6B revenue minus $26.6B…").
+_SENTENCE_BOUNDARY_RE = re.compile(r"[!?\n]|(?<!\d)\.(?!\d)")
+
+
+def _sentence_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """Return (sentence_start, sentence_end) char offsets around ``[start:end]``.
+
+    ``sentence_start`` is just after the last terminator before ``start``;
+    ``sentence_end`` is at the first terminator at/after ``end`` (or EOF).
+    """
+    lo = 0
+    for m in _SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
+        lo = m.end()
+    hi_m = _SENTENCE_BOUNDARY_RE.search(text, end)
+    hi = hi_m.start() if hi_m else len(text)
+    return lo, hi
+
+
+def _framing_allows(sentence_pre: str, sentence_full: str) -> bool:
+    """True when the number is HEDGED (projection language before it) or DERIVED.
+
+    ``sentence_pre`` is the sentence text BEFORE the number (hedge scope);
+    ``sentence_full`` is the whole sentence (derivation scope). See the block
+    comment above for the safety rationale — this NEVER allows a bare factual
+    assertion, only explicitly reasoned/projected/derived figures.
+    """
+    if _HEDGE_RE.search(sentence_pre):
+        return True
+    return bool(_DERIVATION_RE.search(sentence_full))
+
+
 # ── Public result types ──────────────────────────────────────────────────────
 
 
@@ -385,6 +474,16 @@ class UnsupportedNumber:
     closest_tool_value: float | None
     # The verbatim text snippet from the response (helpful for re-prompt).
     snippet: str
+    # Point 2 Stage 1 (2026-07-03) — framing/intent-aware downgrade signals.
+    # ``hedged_or_derived`` is True when this number's sentence hedges it as a
+    # projection or explicitly derives it (see :func:`_framing_allows`); such a
+    # number is downgraded to non-material in :func:`material_unsupported_numbers`
+    # so a reasoned "could add ~$2B" is not treated as a fabricated fact. Default
+    # False keeps every existing constructor (quarter/prose/tests) unchanged.
+    # ``context`` is the number's lower-cased sentence, retained so the
+    # analytical-intent relaxation can re-scan the full sentence for a hedge.
+    hedged_or_derived: bool = False
+    context: str = ""
 
 
 @dataclass(frozen=True)
@@ -944,32 +1043,77 @@ _MATERIAL_NUMERIC_KINDS: frozenset[FieldKind] = frozenset(
 _MATERIAL_UNKNOWN_MIN = 1000.0
 
 
-def material_unsupported_numbers(result: GroundingResult) -> tuple[UnsupportedNumber, ...]:
-    """Return the subset of ``result.unsupported`` that are MATERIAL claims.
-
-    See :data:`_MATERIAL_NUMERIC_KINDS`. Used to decide whether a
-    numeric-grounding failure warrants a rewrite (material) or is merely
-    incidental prose structure on a qualitative answer.
-    """
-    return tuple(
-        u
-        for u in result.unsupported
-        if u.field_kind in _MATERIAL_NUMERIC_KINDS
-        or (u.field_kind == FieldKind.UNKNOWN and abs(u.value) >= _MATERIAL_UNKNOWN_MIN)
+def _is_material_kind(u: UnsupportedNumber) -> bool:
+    """True when ``u``'s KIND/MAGNITUDE marks it a material financial claim."""
+    return u.field_kind in _MATERIAL_NUMERIC_KINDS or (
+        u.field_kind == FieldKind.UNKNOWN and abs(u.value) >= _MATERIAL_UNKNOWN_MIN
     )
 
 
-def numeric_grounding_effectively_passed(result: GroundingResult) -> bool:
+def material_unsupported_numbers(
+    result: GroundingResult,
+    *,
+    analytical_intent: bool = False,
+) -> tuple[UnsupportedNumber, ...]:
+    """Return the subset of ``result.unsupported`` that are MATERIAL claims.
+
+    A number is material when its KIND/MAGNITUDE marks it a financial claim
+    (see :data:`_MATERIAL_NUMERIC_KINDS`) AND its framing does NOT reveal it as
+    a reasoned projection or an explicitly derived figure.
+
+    Point 2 Stage 1 (2026-07-03) — FRAMING/INTENT-AWARE DOWNGRADE. A
+    material-by-kind number is downgraded to non-material (i.e. ALLOWED, no
+    rewrite) when:
+      * ``u.hedged_or_derived`` — its sentence hedges it as a projection
+        ("could add ~$2B") or explicitly derives it ("$X, derived from …"); OR
+      * ``analytical_intent`` is True AND its full sentence contains a hedge
+        marker — the intent classifier flagged an analytical / what-if question,
+        so a hedged figure anywhere in the sentence is relaxed.
+
+    The fabrication guarantee is preserved: a bare factual assertion with no
+    hedge/derivation ("revenue was $34.6B") is NEVER downgraded (see the
+    ``_HEDGE_RE`` / ``_framing_allows`` block comment for the full rationale),
+    and only numbers that ALREADY failed tool-grounding + citation checks reach
+    this function at all.
+
+    ``analytical_intent`` defaults False so existing callers are unchanged; it
+    is the minimal wiring point for the intent signal (read-only, no orchestrator
+    edit required to keep current behaviour).
+    """
+    out: list[UnsupportedNumber] = []
+    for u in result.unsupported:
+        if not _is_material_kind(u):
+            continue  # incidental (year/quarter/prose/small-int) — never material
+        # ``getattr`` defaults keep duck-typed test doubles (which may omit the
+        # Point-2 fields) working — a fake without framing signals is treated as
+        # a bare factual claim, i.e. STAYS material (never weakens the guard).
+        if getattr(u, "hedged_or_derived", False):
+            continue  # framing-aware downgrade: reasoned projection / derived figure
+        context = getattr(u, "context", "")
+        if analytical_intent and context and _HEDGE_RE.search(context):
+            continue  # intent-relaxed full-sentence hedge on an analytical question
+        out.append(u)
+    return tuple(out)
+
+
+def numeric_grounding_effectively_passed(
+    result: GroundingResult,
+    *,
+    analytical_intent: bool = False,
+) -> bool:
     """True when the numeric result has NO material unsupported claim.
 
     Preserves the guarantee for numeric answers: a genuinely unsupported
     revenue / EPS / price / market-cap / ratio / return / share / headcount
-    figure (or a large unclassified magnitude) still returns ``False`` (rewrite
-    required). It only returns ``True`` for the qualitative case where every
-    "unsupported" number is a date, count, ordinal or year — so the rewrite is
-    skipped and the streamed answer + its citations survive.
+    figure (or a large unclassified magnitude) stated as a FACT still returns
+    ``False`` (rewrite required). It returns ``True`` for the qualitative case
+    (every "unsupported" number is a date/count/ordinal/year) AND for the
+    reasoned-projection case (every material number is hedged/derived) — so the
+    rewrite is skipped and the streamed answer + its citations survive.
+
+    ``analytical_intent`` is threaded through to :func:`material_unsupported_numbers`.
     """
-    return result.passed or not material_unsupported_numbers(result)
+    return result.passed or not material_unsupported_numbers(result, analytical_intent=analytical_intent)
 
 
 # ── P0 (2026-07-01) — benign prose bracket labels must NOT refuse the answer ───
@@ -1731,6 +1875,17 @@ class NumericGroundingValidator:
                     per_kind_passed[kind] += 1
                     continue
                 per_kind_failed[kind] += 1
+                # Point 2 Stage 1: capture the number's SENTENCE framing so the
+                # material gate can downgrade a reasoned projection / derived
+                # figure. Hedge markers are scanned ONLY in the pre-window
+                # (sentence start → this number) so a trailing hedge on another
+                # clause never excuses a bare factual assertion; derivation verbs
+                # are scanned over the whole sentence. Uses the cleaned response +
+                # this token's spans so offsets line up.
+                _sent_lo, _sent_hi = _sentence_bounds(cleaned_response, span_start, span_end)
+                _pre = cleaned_response[_sent_lo:span_start]
+                _full = cleaned_response[_sent_lo:_sent_hi]
+                _hedged_or_derived = _framing_allows(_pre, _full)
                 unsupported.append(
                     UnsupportedNumber(
                         value=value,
@@ -1738,6 +1893,8 @@ class NumericGroundingValidator:
                         tolerance_used=tol,
                         closest_tool_value=closest,
                         snippet=raw_tok,
+                        hedged_or_derived=_hedged_or_derived,
+                        context=_full.lower(),
                     )
                 )
 

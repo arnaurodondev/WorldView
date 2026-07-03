@@ -263,9 +263,9 @@ def test_cjk_cited_number_grounds_via_fast_path_no_rewrite() -> None:
     # The orchestrator normalises brackets before grounding — do the same here.
     normalized = normalize_citation_brackets(answer)
     result = validator.validate(normalized, tool_results=[tool_item], called_tool_names=["search_events"])
-    assert numeric_grounding_effectively_passed(result) is True, (
-        "a CJK-cited number to a called tool must ground (no spurious rewrite)"
-    )
+    assert (
+        numeric_grounding_effectively_passed(result) is True
+    ), "a CJK-cited number to a called tool must ground (no spurious rewrite)"
 
 
 def test_normalize_citation_brackets_is_idempotent_on_ascii() -> None:
@@ -370,10 +370,7 @@ def test_out_of_range_row_clamps_to_last_valid_row_not_stripped() -> None:
     the fifth item's positional citation instead of being dropped.
     """
     # 5 filings → positions [1]..[5]; row indices 0..4.
-    items = [
-        _item(f"f{i}", f"Filing {i}", title=f"Filing {i}", url=f"https://sec.gov/{i}")
-        for i in range(5)
-    ]
+    items = [_item(f"f{i}", f"Filing {i}", title=f"Filing {i}", url=f"https://sec.gov/{i}") for i in range(5)]
     pos_by_id = {it.item_id: i + 1 for i, it in enumerate(items)}
     row_items = {("get_filings", i): it for i, it in enumerate(items)}
     counts = {"get_filings": 5}
@@ -423,6 +420,7 @@ def test_clamp_does_not_apply_to_phantom_never_called_tool() -> None:
     tool that actually returned rows. A fabricated tool citation stays intact for
     the downstream phantom guard to refuse.
     """
+
     def resolver(tool: str, row: int) -> int | None:
         return None  # nothing maps — the tool never ran
 
@@ -464,3 +462,89 @@ def test_out_of_range_guard_recognises_namespaced_tag() -> None:
     answer = "A [functions.screen_universe row 4]."
     oor = find_out_of_range_tool_citations(answer, {"screen_universe": 1})
     assert oor == {"[functions.screen_universe row 4]"}
+
+
+# ── Point 2 Stage 1 (2026-07-03): framing/intent-aware numeric gate ──────────
+#
+# The material-grounding gate must distinguish a CLAIMED RETRIEVED FACT (still
+# refuse when uncited — the AMD $34.6B fabrication class) from a REASONED
+# PROJECTION or an explicitly DERIVED figure (now allowed). These pin the
+# owner-approved allow/refuse boundary end-to-end through the validator.
+
+
+def _tool(text: str) -> RetrievedItem:
+    """A single tool result whose text carries a number, tagged entity nvda."""
+    return _item("t0", text, title="src", url="https://s")
+
+
+def test_framing_bare_factual_figure_still_refuses() -> None:
+    """(1) 'revenue was $34.6B' uncited → STILL material/refuse (fabrication guard)."""
+    validator = NumericGroundingValidator()
+    answer = "AMD's Q2 2026 revenue was $34.6B according to the latest results."
+    result = validator.validate(answer, tool_results=[], called_tool_names=[])
+    mat = material_unsupported_numbers(result)
+    assert any(u.field_kind == FieldKind.REVENUE for u in mat), mat
+    assert numeric_grounding_effectively_passed(result) is False
+
+
+def test_framing_hedged_projection_now_allowed() -> None:
+    """(2) 'could add ~$2B to next-quarter revenue' uncited → NOW allowed (hedged)."""
+    validator = NumericGroundingValidator()
+    answer = "The new data-center deal could add ~$2B to next-quarter revenue."
+    result = validator.validate(answer, tool_results=[], called_tool_names=[])
+    # The number is still surfaced as unsupported (no tool value), but it is
+    # framed as a projection so the MATERIAL gate downgrades it → no rewrite.
+    assert any(u.hedged_or_derived for u in result.unsupported), result.unsupported
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_framing_derived_figure_allowed() -> None:
+    """(3) '$X, derived from the cited $Y - $Z' -> allowed (explicit derivation)."""
+    validator = NumericGroundingValidator()
+    answer = "Gross margin of $8B, derived from the cited $34.6B revenue minus $26.6B cost."
+    result = validator.validate(answer, tool_results=[], called_tool_names=[])
+    # Every material figure in the derivation sentence is downgraded.
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_framing_incidental_year_unchanged() -> None:
+    """(4) an incidental year/quarter → unchanged (never material either way)."""
+    validator = NumericGroundingValidator()
+    answer = "NVIDIA announced the partnership in 2026 with a major cloud provider."
+    result = validator.validate(answer, tool_results=[], called_tool_names=[])
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_framing_real_citation_unchanged() -> None:
+    """(5) a real citation → unchanged: a grounded figure never enters unsupported."""
+    validator = NumericGroundingValidator()
+    tool = _tool("Revenue was 34600000000 for the quarter.")
+    answer = "AMD revenue was $34.6B [query_fundamentals row 0]."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    # Grounded by the tool value + citation — no unsupported material claim.
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_framing_trailing_hedge_does_not_excuse_fact() -> None:
+    """A hedge on a LATER clause must NOT downgrade a bare factual figure."""
+    validator = NumericGroundingValidator()
+    answer = "AMD revenue was $34.6B, and it could grow further next year."
+    result = validator.validate(answer, tool_results=[], called_tool_names=[])
+    # 'could' sits AFTER the number → pre-window has no hedge → stays material.
+    assert any(u.field_kind == FieldKind.REVENUE and not u.hedged_or_derived for u in result.unsupported)
+    assert numeric_grounding_effectively_passed(result) is False
+
+
+def test_framing_analytical_intent_relaxes_full_sentence_hedge() -> None:
+    """analytical_intent=True relaxes a hedge anywhere in the sentence."""
+    validator = NumericGroundingValidator()
+    # Hedge ('could') trails the figure → strict flag stays False …
+    answer = "Revenue reaches $2B in this scenario, if the deal could close."
+    result = validator.validate(answer, tool_results=[], called_tool_names=[])
+    # … but with an analytical/what-if question the full-sentence hedge relaxes it.
+    assert material_unsupported_numbers(result, analytical_intent=True) == ()
+    assert numeric_grounding_effectively_passed(result, analytical_intent=True) is True
