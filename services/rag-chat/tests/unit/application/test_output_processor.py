@@ -370,3 +370,65 @@ def test_output_bug_a_mstr_news_last_14_days_verbatim(processor: OutputProcessor
     answer, _ = processor.process(raw, items)
     assert "(Last  Days)" not in answer, f"'14' was deleted: {answer!r}"
     assert "(Last 14 Days)" in answer
+
+
+# ── R3 (2026-07-03): PII redaction must NOT corrupt inline EDGAR URLs ──────────
+# Root cause: docs/audits/2026-07-03-chat-bug2-bug4-rootcause.md §R3. The phone
+# regex matched the 10-digit SEC accession prefix embedded in a filing index URL
+# and redacted it to [REDACTED], breaking the clickable link in the answer prose.
+
+
+@pytest.mark.unit
+def test_redact_pii_preserves_edgar_accession_url() -> None:
+    """A SEC EDGAR index URL survives PII redaction verbatim (R3)."""
+    from rag_chat.application.pipeline.output_processor import _redact_pii
+
+    url = "https://www.sec.gov/Archives/edgar/data/1498547/000119312526286851/0001193125-26-286851-index.htm"
+    text = f"Apple's 10-K is filed here: {url}"
+    out = _redact_pii(text)
+    assert "[REDACTED]" not in out, f"URL accession was redacted: {out!r}"
+    assert url in out, f"EDGAR URL not preserved verbatim: {out!r}"
+
+
+@pytest.mark.unit
+def test_contains_pii_ignores_url_embedded_digit_runs() -> None:
+    """URL-embedded accession runs do not trip the PII detector (no false log)."""
+    from rag_chat.application.pipeline.output_processor import _contains_pii
+
+    url = "https://www.sec.gov/Archives/edgar/data/1498547/000119312526286851/0001193125-26-286851-index.htm"
+    assert _contains_pii(f"Filing: {url}") is False
+
+
+@pytest.mark.unit
+def test_redact_pii_still_redacts_real_phone_outside_url() -> None:
+    """Genuine PII outside a URL is still redacted (guard not weakened)."""
+    from rag_chat.application.pipeline.output_processor import _contains_pii, _redact_pii
+
+    text = "Call investor relations at 415-555-0198 for details."
+    assert _contains_pii(text) is True
+    assert "[REDACTED]" in _redact_pii(text)
+    assert "415-555-0198" not in _redact_pii(text)
+
+
+@pytest.mark.unit
+def test_redact_pii_mixed_url_and_phone() -> None:
+    """PII outside the URL is redacted while the URL span is preserved."""
+    from rag_chat.application.pipeline.output_processor import _redact_pii
+
+    url = "https://www.sec.gov/Archives/edgar/data/1498547/000119312526286851/0001193125-26-286851-index.htm"
+    text = f"See {url} or call 212-555-0147."
+    out = _redact_pii(text)
+    assert url in out
+    assert "212-555-0147" not in out
+    assert "[REDACTED]" in out
+
+
+@pytest.mark.unit
+def test_output_process_keeps_edgar_url_in_answer(processor: OutputProcessor) -> None:
+    """End-to-end through process(): EDGAR link in prose stays intact (R3)."""
+    url = "https://www.sec.gov/Archives/edgar/data/1498547/000119312526286851/0001193125-26-286851-index.htm"
+    items = [_item()]
+    raw = f"Apple's most recent filing is available at {url} [1]."
+    answer, _ = processor.process(raw, items)
+    assert url in answer, f"EDGAR URL mangled by output pipeline: {answer!r}"
+    assert "[REDACTED]" not in answer

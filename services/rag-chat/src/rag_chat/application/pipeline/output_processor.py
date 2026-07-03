@@ -113,6 +113,20 @@ _PII_PATTERNS = [
     re.compile(r"\b(?:\d[ -]?){13,16}\b"),  # credit card (rough)
 ]
 
+# URL spans are EXEMPT from PII redaction (R3, 2026-07-03 root-cause).
+# WHY: the phone pattern matches any bare 10-digit run, and a SEC EDGAR
+# accession number embedded in a filing index URL — e.g.
+# ``…/000119312526286851/0001193125-26-286851-index.htm`` — contains exactly
+# such a run (``0001193125`` → ``000-119-3125``). Redacting it rewrites the URL
+# to ``…/[REDACTED]-26-286851-index.htm``, silently breaking every clickable
+# EDGAR link the model writes inline. A URL is machine-generated structure, not
+# user-entered PII, so we exempt whole ``http(s)://…`` spans rather than
+# weakening the phone/SSN/card patterns globally (which would let real PII
+# through elsewhere). ``\S+`` greedily consumes the URL up to the next
+# whitespace; trailing punctuation kept inside the span is harmless because the
+# span is preserved verbatim.
+_URL_SPAN_RE = re.compile(r"https?://\S+")
+
 
 def _clean_optional_str(value: str | None) -> str | None:
     """Collapse empty / whitespace-only strings to ``None``.
@@ -135,14 +149,39 @@ def _clean_optional_str(value: str | None) -> str | None:
     return stripped or None
 
 
+def _redact_pii_outside_urls(text: str) -> str:
+    """Apply the PII patterns to ``text`` but keep any URL span verbatim.
+
+    See ``_URL_SPAN_RE`` for why URLs are exempt (EDGAR accession numbers look
+    like phone numbers). We redact only the gaps BETWEEN URL spans and stitch
+    the original URL back in untouched.
+    """
+    out: list[str] = []
+    last = 0
+    for m in _URL_SPAN_RE.finditer(text):
+        gap = text[last : m.start()]
+        for pattern in _PII_PATTERNS:
+            gap = pattern.sub("[REDACTED]", gap)
+        out.append(gap)
+        out.append(m.group(0))  # URL kept verbatim
+        last = m.end()
+    tail = text[last:]
+    for pattern in _PII_PATTERNS:
+        tail = pattern.sub("[REDACTED]", tail)
+    out.append(tail)
+    return "".join(out)
+
+
 def _contains_pii(text: str) -> bool:
-    return any(p.search(text) for p in _PII_PATTERNS)
+    # Scan with URL spans blanked so a URL-embedded digit run (EDGAR accession)
+    # does not trigger a spurious PII warning + redaction pass on every filings
+    # answer. Real PII outside URLs is still detected.
+    scan = _URL_SPAN_RE.sub(" ", text)
+    return any(p.search(scan) for p in _PII_PATTERNS)
 
 
 def _redact_pii(text: str) -> str:
-    for pattern in _PII_PATTERNS:
-        text = pattern.sub("[REDACTED]", text)
-    return text
+    return _redact_pii_outside_urls(text)
 
 
 class OutputProcessor:
