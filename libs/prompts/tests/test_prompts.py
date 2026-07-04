@@ -61,7 +61,9 @@ class TestMorningBriefing:
             safety=SAFETY_FOOTER,
             current_date="2026-04-26",  # required after v2.1 — date context for LLM
         )
-        assert "Never speculate beyond the evidence provided" in result
+        # v1.9 footer reconciliation: the blanket forecast ban became a
+        # grounded/hedged-projection permission; the signature line changed.
+        assert "Never speculate beyond what the retrieved evidence can ground" in result
 
     def test_v45_six_section_spec(self) -> None:
         """Prompt must instruct the LLM to emit the v4.5 six-section investor brief.
@@ -222,7 +224,9 @@ class TestInstrumentBriefing:
             relationships_context="",
             safety=SAFETY_FOOTER,
         )
-        assert "Never speculate beyond the evidence provided" in result
+        # v1.9 footer reconciliation: the blanket forecast ban became a
+        # grounded/hedged-projection permission; the signature line changed.
+        assert "Never speculate beyond what the retrieved evidence can ground" in result
 
 
 class TestPromptVersions:

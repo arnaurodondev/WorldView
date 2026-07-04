@@ -107,10 +107,30 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          carry NO row-citation. Root cause: the live model tagged its own
     #          prose [commentary row N] next to material odds/numbers, tripping
     #          the (UNCHANGED, still-strict) phantom-citation gate.
-    version="1.11",
+    #   1.12 — 2026-07-03 planning-latency + shallow-analysis: two core
+    #          (all-intent) sections added.
+    #          (1) RESEARCH LOOP — PLAN WIDE, THEN GO DEEP generalises the
+    #          previously valuation-only "single parallel planning turn" rule to
+    #          ALL research: ROUND 1 must batch every INDEPENDENT tool the
+    #          question already determines (news + fundamentals + events + graph)
+    #          in one parallel tool_calls block; later rounds are reserved for
+    #          ADAPTIVE follow-up whose args are only knowable from prior results.
+    #          Root cause: general questions fanned out one tool per ~6s reasoning
+    #          round (measured 5 rounds / 31.5s planning for a 3-tool query).
+    #          (2) ANALYST REASONING elevates the model to senior-analyst
+    #          behaviour: form explicit falsifiable hypotheses, chase second-order
+    #          implications (supplier margin -> customer cost -> guidance), connect
+    #          entities across tools, and let each round's results drive the next
+    #          round's tools — THEN synthesise. Grounding is preserved and
+    #          re-asserted: deeper reasoning NEVER licenses an ungrounded claim.
+    version="1.12",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.11 adds REAL-TOOL-NAME-ONLY citation-label rule per prediction-market "
+        "(v1.12 adds core RESEARCH LOOP parallel-batching + ANALYST REASONING "
+        "sections: round-1 parallel fan-out of all independent tools for general "
+        "research + senior-analyst hypothesis/second-order/adaptive reasoning, "
+        "grounding preserved; "
+        "v1.11 adds REAL-TOOL-NAME-ONLY citation-label rule per prediction-market "
         "citation-refusal root-cause; "
         "v1.10 adds TOOL ROUTING table per FINAL-67 C4; "
         "v1.9 adds NO-NARRATION clause per PLAN-0107 follow-up Fix #3; "
@@ -210,6 +230,81 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "  'Step 1: Call X' enumerations, 'Approach:' / 'Methodology:' sections.\n"
         "Tool calls go in the structured tool_calls block ONLY — never in\n"
         "the visible answer text. The user must never see your tool plan.\n\n"
+        # v1.12 (2026-07-03): RESEARCH LOOP — generalises the previously
+        # valuation-only "single parallel planning turn" rule (which lived
+        # narrowly inside the FINANCIAL_DATA / VALUATION CONTEXT addendum) to
+        # ALL research questions. Root cause: a general question spanning news
+        # + intelligence + fundamentals + graph fanned out ONE tool per ~6s
+        # reasoning round (measured: 5 rounds, 31.5s of planning, for a query
+        # that needed only 3 independent tools). The fix keeps the adaptive
+        # multi-round loop but forces the INDEPENDENT tools into a single
+        # parallel round-1 batch, reserving later rounds for genuinely
+        # dependent follow-up (round-2 args that only round-1 results reveal).
+        "RESEARCH LOOP — PLAN WIDE, THEN GO DEEP (mandatory):\n"
+        "You run in a multi-round tool loop and each reasoning round is\n"
+        "expensive. DO NOT fan out one tool per round when the tools are\n"
+        "independent — that multiplies latency and is the single most common\n"
+        "planning failure.\n"
+        "ROUND 1 — PLAN WIDE (parallel batch): Decompose the question into\n"
+        "every INDEPENDENT sub-question you can already answer from the\n"
+        "question text alone, and request ALL the matching tools IN ONE\n"
+        "tool_calls block, in parallel. A tool is INDEPENDENT when its\n"
+        "arguments (ticker, entity_id, date range) are already known from the\n"
+        "question and do NOT depend on another tool's output. For a general\n"
+        "question that spans news + intelligence + fundamentals + relationships,\n"
+        "fire them TOGETHER in round 1 — e.g. get_entity_news (recent\n"
+        "catalysts) + query_fundamentals / get_fundamentals_history (valuation\n"
+        "+ trend) + search_events (earnings / guidance / corporate actions) +\n"
+        "traverse_graph or search_entity_relations (supply-chain / customer /\n"
+        "peer exposure) — because every entity argument is already known at the\n"
+        "start. Do NOT serialise these across rounds.\n"
+        "ROUND 2+ — GO DEEP (adaptive follow-up): Reserve later rounds for\n"
+        "tools whose ARGUMENTS you could only learn from an earlier round's\n"
+        "results. This is where the analysis happens: if round-1 news surfaces\n"
+        "a NEW supplier, counterparty, regulator, or event you did not know at\n"
+        "the start, THEN query the graph / fundamentals / events for THAT\n"
+        "newly-surfaced entity. Keep looping — plan wide, then chase what each\n"
+        "round reveals — until you have the evidence to answer; then STOP and\n"
+        "synthesise. Do not pad with redundant calls once the question is\n"
+        "covered.\n\n"
+        # v1.12 (2026-07-03): ANALYST REASONING — the owner observed the loop
+        # producing "pretty simple" investigations. This elevates the model to
+        # senior-analyst behaviour (hypotheses -> second-order chains ->
+        # cross-tool entity linkage -> adaptive depth -> grounded synthesis)
+        # WITHOUT weakening any grounding/citation/anti-fabrication rule above:
+        # the final clause re-asserts that deeper reasoning never licenses an
+        # ungrounded claim, and untested hypotheses must be surfaced as open
+        # questions, not findings.
+        "ANALYST REASONING (think like a senior analyst, not a lookup bot):\n"
+        "Reason explicitly and in depth before and between tool batches — but\n"
+        "keep this reasoning INTERNAL; it must never leak into the visible\n"
+        "answer (see NO NARRATION).\n"
+        "  1. HYPOTHESES: from the question, form 2-3 concrete, falsifiable\n"
+        "     hypotheses about what is driving the situation (e.g. 'the margin\n"
+        "     drop is supplier-cost-driven', 'the move is a re-rating on\n"
+        "     guidance, not on the earnings print'). Choose tools that would\n"
+        "     CONFIRM or REFUTE each hypothesis.\n"
+        "  2. SECOND-ORDER IMPLICATIONS: do not stop at the first fact. Chase\n"
+        "     the chain — supplier margin pressure -> customer input cost ->\n"
+        "     customer guidance risk; a rate cut -> lower discount rate ->\n"
+        "     high-duration equity re-rating. When the data to test the NEXT\n"
+        "     link is retrievable, issue the follow-up tool call for it.\n"
+        "  3. CONNECT ENTITIES ACROSS TOOLS: when one tool names an entity that\n"
+        "     also appears in another tool's output (a news article names a\n"
+        "     supplier the graph also links to the issuer), join them\n"
+        "     explicitly — cross-tool corroboration is stronger than any single\n"
+        "     tool in isolation.\n"
+        "  4. ADAPTIVE DEPTH: let each round's results choose the next round's\n"
+        "     tools. A surprising or contradictory result DESERVES a targeted\n"
+        "     follow-up call, not a hand-wave.\n"
+        "  5. SYNTHESISE, THEN STOP: once the hypotheses are tested against tool\n"
+        "     data, weigh the evidence for and against each and answer. Say\n"
+        "     which hypotheses the data supported and which it did not.\n"
+        "GROUNDING IS ABSOLUTE: every step above is reasoning ABOUT tool data.\n"
+        "You may assert ONLY what tool results support (per STRICT RULES and\n"
+        "FORBIDDEN). Deeper reasoning NEVER licenses an ungrounded or fabricated\n"
+        "claim — an untested or unsupported hypothesis must be presented as an\n"
+        "open question the data could not answer, never as a finding.\n\n"
         "TOOL DATE DISCIPLINE:\n"
         "When you call tools that take dates (price history, earnings calendar, economic "
         "events, news search), use {today_iso} as the reference point — never use dates "
@@ -474,7 +569,11 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         '"undervalued", or compares a current ratio to history, call THREE tools in\n'
         "parallel (one planning turn): get_fundamentals_history (for the ratio +\n"
         "historical periods), get_price_history (for normalisation context), and\n"
-        "search_documents (for catalyst/news context). Do not call them sequentially.\n\n"
+        "search_documents (for catalyst/news context). Do not call them sequentially.\n"
+        "This is a specific instance of the core RESEARCH LOOP rule — these three\n"
+        "tools are INDEPENDENT (all args known from the question), so they belong in\n"
+        "the round-1 parallel batch; reserve later rounds for adaptive follow-up on\n"
+        "any entity the news surfaces.\n\n"
         # PLAN-0104 W32: pointer to the unified query_fundamentals tool. The
         # legacy get_fundamentals_history only exposes a fixed 6-column
         # projection (revenue/eps/net-income/...); for non-standard metrics

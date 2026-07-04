@@ -376,6 +376,18 @@ rag_grounding_validation_total = Counter(
     ["result"],
 )
 
+# ── Point 2 Stage 2: grounding-rewrite false-positive self-check ──────────────
+# The gpt-oss-20b rewrite model is instructed to FIRST judge whether the flagged
+# ungrounded numbers are genuinely fabricated vs. legitimate reasoning /
+# projections / hedged estimates / values derived from cited figures. When it
+# emits the bare ``FALSE_POSITIVE`` sentinel we DISCARD the rewrite and keep the
+# ORIGINAL answer (grounding_passed=True). Each increment is one turn where the
+# self-check spared us a spurious rewrite — the metric that measures the win.
+rag_grounding_false_positive_skip_total = Counter(
+    "rag_grounding_false_positive_skip_total",
+    "Grounding rewrites skipped because the rewrite model judged the flag a false positive",
+)
+
 # ── E-12: Per-turn audit log ──────────────────────────────────────────────────
 
 rag_audit_entries_total = Counter(

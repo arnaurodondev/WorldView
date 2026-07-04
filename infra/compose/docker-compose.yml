@@ -33,6 +33,9 @@ services:
     image: minio/minio:RELEASE.2025-04-08T15-41-24Z
     command: server /data --console-address ":9001"
     profiles: [infra, lib-test, all]
+    # Restart the object store if it dies (e.g. OOM) — S3/MinIO backs every
+    # service's artifact storage; a silent stay-down stalls the whole platform.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only — prevent external access to infra
       - "127.0.0.1:7480:9000"    # S3 API (matches STORAGE_ENDPOINT default)
@@ -140,6 +143,9 @@ services:
       context: ../postgres
       dockerfile: Dockerfile
     profiles: [infra, all]
+    # Restart the intelligence DB if it dies (has died exit-255 before) — S6/S7
+    # workers DNS-crashloop while it is down, silently stalling the KG pipeline.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only — prevent external DB access.
       # 5433 on the host avoids clashing with the OLTP instance's 5432.
@@ -696,6 +702,7 @@ services:
   prometheus:
     image: prom/prometheus:v3.2.1
     profiles: [monitoring, infra, all]
+    restart: unless-stopped  # single-instance metrics store; auto-recover on crash
     ports:
       - "9090:9090"
     volumes:
@@ -712,6 +719,7 @@ services:
   tempo:
     image: grafana/tempo:2.7.2
     profiles: [monitoring, infra, all]
+    restart: unless-stopped  # single-instance trace store; auto-recover on crash
     command: ["-config.file=/etc/tempo.yml"]
     ports:
       - "3200:3200"
@@ -730,6 +738,7 @@ services:
   loki:
     image: grafana/loki:3.5.0
     profiles: [monitoring, infra, all]
+    restart: unless-stopped  # single-instance log store; auto-recover on crash
     command: ["-config.file=/etc/loki/local-config.yml"]
     ports:
       - "3100:3100"
@@ -746,6 +755,7 @@ services:
   grafana:
     image: grafana/grafana:11.6.0
     profiles: [monitoring, infra, all]
+    restart: unless-stopped  # single-instance dashboards; auto-recover on crash
     ports:
       - "3000:3000"
     environment:
@@ -775,6 +785,7 @@ services:
   alloy:
     image: grafana/alloy:v1.8.3
     profiles: [monitoring, infra, all]
+    restart: unless-stopped  # telemetry collector; auto-recover on crash
     command:
       - run
       - /etc/alloy/config.alloy
@@ -804,6 +815,9 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0
     profiles: [monitoring, infra, all]
+    # Restart the alert router — if it stays down, incident alerts (e.g. the very
+    # freshness/OOM alerts that would surface an outage) are silently lost.
+    restart: unless-stopped
     ports:
       - "9093:9093"
     volumes:
@@ -830,6 +844,7 @@ services:
   postgres_exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
     profiles: [monitoring, infra, all]
+    restart: unless-stopped  # metrics exporter; auto-recover on crash
     environment:
       # WHY env var expansion: credentials must not be hardcoded; docker.env sets
       # POSTGRES_USER/POSTGRES_PASSWORD at runtime.  Defaults match the dev values
@@ -847,6 +862,7 @@ services:
   redis_exporter:
     image: oliver006/redis_exporter:v1.62.0
     profiles: [monitoring, infra, all]
+    restart: unless-stopped  # metrics exporter; auto-recover on crash
     environment:
       # WHY redis_exporter not valkey_exporter: oliver006/redis_exporter is fully
       # compatible with Valkey (fork of Redis 7.2) — the Redis protocol is identical.
@@ -1424,6 +1440,19 @@ services:
       context: ../gliner
       dockerfile: Dockerfile
     profiles: [infra, all]
+    # ── Auto-restart (resilience gap fix — momentum-panel outage 2026-07-03) ───
+    # WHY: gliner-server previously had NO restart policy while every NLP consumer
+    # that DEPENDS on it uses `restart: unless-stopped`. On 2026-07-02 08:03 the
+    # container was OOM-killed (exit 137) and Docker never brought it back, so the
+    # hostname `gliner-server` fell out of Docker DNS. Every article since then
+    # failed NER with "[Errno -2] Name or service not known", was retried 5x and
+    # dead-lettered (462+ articles), so ZERO entity_mentions were written for ~33h.
+    # That silently emptied the dashboard NEWS MOMENTUM panel's default 24h window
+    # (the trending-entities aggregation needs resolved mentions). A restart policy
+    # turns a transient OOM into a self-healing blip instead of a multi-day outage,
+    # matching the consumer fleet. (Root cause of the OOM itself — the 8G cap under
+    # host memory pressure — is tracked separately; this is the resilience floor.)
+    restart: unless-stopped
     ports:
       - "8090:8080"
     environment:

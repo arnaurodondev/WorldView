@@ -296,7 +296,12 @@ def _build_quota_service(settings: Settings) -> EodhdQuotaService | None:
         from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
         hard_limit = int(getattr(settings, "eodhd_monthly_quota", EodhdQuotaService.HARD_LIMIT))
-        return EodhdQuotaService(valkey=ValkeyClient(url=str(valkey_url)), hard_limit=hard_limit)
+        daily_hard_limit = int(getattr(settings, "eodhd_daily_quota", EodhdQuotaService.DAILY_HARD_LIMIT))
+        return EodhdQuotaService(
+            valkey=ValkeyClient(url=str(valkey_url)),
+            hard_limit=hard_limit,
+            daily_hard_limit=daily_hard_limit,
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("quota_service_unavailable", error=str(exc))
         return None

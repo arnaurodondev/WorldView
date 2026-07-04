@@ -59,8 +59,9 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.7 (prediction-market citation-refusal) added the CITATION LABELS block.
-    assert ident.startswith("chat_synthesis_system@1.7#")
+    # v1.9 (analytical / what-if forecast-refusal) added the ANALYTICAL / WHAT-IF
+    # projection block on top of v1.8's news-headline citation directive.
+    assert ident.startswith("chat_synthesis_system@1.9#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -80,6 +81,28 @@ def test_synthesis_prompt_citation_labels_tool_names_only() -> None:
     assert "NO bracket tag" in rendered
     # Prediction-market answers cite the real tool.
     assert "[get_prediction_markets row N]" in rendered
+
+
+def test_synthesis_prompt_requires_news_headline_citations() -> None:
+    """v1.8: bare-headline NEWS answers were shipping citations=[] because the
+    model listed headlines as prose with NO [get_entity_news row N] tags. The
+    prompt must now (a) tell the model to cite each FACT (not only numbers),
+    including news headlines, and (b) carry a dedicated news-citation directive
+    that mirrors the prediction-market one so every listed headline keeps its
+    row tag — closing the coverage gap without touching the grounding machinery.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # (a) ANSWER FORMAT now cites FACTS, and explicitly names news headlines.
+    assert "each specific FACT" in rendered
+    assert "news headline" in rendered
+    # (b) the news tools that back headlines are named as the correct labels.
+    assert "[get_entity_news row N]" in rendered
+    assert "[search_documents row N]" in rendered
+    # The exemption for interpretive commentary must be explicitly scoped OUT for
+    # headlines (transcribing tool data, not commentary) so the model does not
+    # over-apply the "no bracket tag" rule to a text-only headline list.
+    assert "does NOT apply to them" in rendered
+    assert "empty source list" in rendered
 
 
 def test_synthesis_prompt_requires_exact_number_transcription() -> None:
@@ -137,6 +160,46 @@ def test_synthesis_prompt_period_matching_block() -> None:
     # The C1-companion long-series steer.
     assert "long price / time series" in rendered
     assert "summary statistics" in rendered
+
+
+def test_synthesis_prompt_permits_grounded_hedged_projections() -> None:
+    """v1.9 (analytical / what-if forecast-refusal): the owner's headline use case
+    is analytical / what-if questions, which the live SYNTHESIS model refused
+    outright ("I can't provide a forecast … that's speculative"). The prompt must
+    now (a) tell the model to REASON and PROJECT rather than refuse, (b) require
+    every projection be DERIVED from cited retrieved figures with the derivation
+    shown, (c) require every projected number be HEDGED / labelled a
+    scenario/estimate (using the hedge markers the numeric_grounding gate
+    downgrades), and (d) still FORBID inventing the base inputs — the
+    no-fabrication rule for factual claims is preserved.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # (a) the block exists and says reason/project, not refuse.
+    assert "ANALYTICAL / WHAT-IF QUESTIONS" in rendered
+    assert "DO NOT\nrefuse" in rendered or "DO NOT refuse" in rendered.replace("\n", " ")
+    assert "blanket forecast refusal is a FAILURE" in rendered.replace("\n", " ")
+    # (b) derive from cited evidence, show the chain.
+    assert "BUILD the projection from retrieved evidence" in rendered
+    assert "derivation chain" in rendered
+    # (c) hedge + label as estimate/scenario; the hedge lexicon aligns with the gate.
+    assert "HEDGE and LABEL every projected number" in rendered
+    for marker in ("roughly", "could", "assuming", "projected", "implies"):
+        assert marker in rendered
+    assert "ESTIMATE, never a retrieved fact" in rendered
+    # (d) never invent the base inputs — no-fabrication preserved.
+    assert "NEVER invent the base inputs" in rendered
+    assert "bare number\n  pulled from nowhere is still forbidden" in rendered
+    # The factual-claim grounding rules are explicitly NOT relaxed.
+    assert "does NOT" in rendered
+    assert "relax the grounding rules for FACTUAL claims" in rendered
+
+    # The SAFETY_FOOTER blanket forecast ban must be reconciled (no longer a hard
+    # "do not project future values" that dominates the what-if permission).
+    assert "Do not extrapolate trends, project future values" not in rendered
+    # The footer now permits a hedged, derived what-if projection.
+    assert "HYPOTHETICAL / WHAT-IF question the user explicitly asks" in rendered
+    # …while still forbidding a projected value as a definite fact.
+    assert "definite retrieved fact" in rendered
 
 
 def test_synthesis_prompt_forbids_refusing_present_data() -> None:

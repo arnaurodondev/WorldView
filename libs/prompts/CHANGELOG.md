@@ -245,6 +245,39 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.12 — 2026-07-03 (general parallel tool batching + deeper analyst reasoning)
+
+- **Point 1 — RESEARCH LOOP (general parallel batching).** The "single
+  parallel planning turn" rule previously lived only inside the FINANCIAL_DATA
+  `VALUATION CONTEXT` addendum, so it fired only for expensive/cheap/overvalued
+  questions. General questions (news + intelligence + fundamentals + graph)
+  fanned out ONE tool per ~6s reasoning round — measured 5 rounds / 31.5s of
+  planning for a query that needed only 3 independent tools. v1.12 promotes the
+  rule to a CORE (all-intent) `RESEARCH LOOP — PLAN WIDE, THEN GO DEEP` section:
+  ROUND 1 must batch every INDEPENDENT tool the question already determines
+  (get_entity_news + query_fundamentals/get_fundamentals_history + search_events
+  + traverse_graph/search_entity_relations) in a single parallel `tool_calls`
+  block. The ADAPTIVE loop is explicitly PRESERVED — ROUND 2+ is reserved for
+  follow-up whose args are only knowable from earlier results (round-1 news
+  surfaces a supplier -> round-2 graph query for that supplier), so parallelism
+  does not collapse the analyst reasoning. The `VALUATION CONTEXT` addendum now
+  cross-references this core rule as a specific instance.
+- **Point 2 — ANALYST REASONING (deeper multi-step investigation).** The owner
+  found investigations "pretty simple". v1.12 adds a core `ANALYST REASONING`
+  section elevating the loop to senior-analyst behaviour: (1) form 2-3 explicit
+  falsifiable HYPOTHESES and pick tools that confirm/refute each; (2) chase
+  SECOND-ORDER IMPLICATIONS (supplier margin -> customer input cost -> customer
+  guidance risk; rate cut -> discount rate -> high-duration re-rating);
+  (3) CONNECT ENTITIES ACROSS TOOLS for cross-tool corroboration; (4) ADAPTIVE
+  DEPTH — each round's results choose the next round's tools; (5) SYNTHESISE,
+  THEN STOP, saying which hypotheses the data supported.
+- **Grounding preserved.** A closing `GROUNDING IS ABSOLUTE` clause re-asserts
+  that every reasoning step is about tool data only and that deeper reasoning
+  NEVER licenses an ungrounded or fabricated claim — an untested hypothesis must
+  be surfaced as an open question, never as a finding. All prior STRICT
+  RULES / FORBIDDEN / NO NARRATION / citation rules are **unchanged**; the
+  reasoning stays INTERNAL (never narrated). Body edit flips the content hash.
+
 ### 1.11 — 2026-07-01 (prediction-market citation-refusal — real-tool-name-only labels)
 
 - Live QA found prediction-market chat answers returning an EMPTY `citations`

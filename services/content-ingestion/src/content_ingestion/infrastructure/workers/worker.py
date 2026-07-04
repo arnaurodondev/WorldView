@@ -111,6 +111,8 @@ class WorkerProcess:
         self._eodhd_quota_service = EodhdQuotaService(
             valkey=self._valkey,
             hard_limit=settings.eodhd_monthly_quota,
+            # EODHD's REAL cap is per-UTC-day — this is what actually blocks.
+            daily_hard_limit=settings.eodhd_daily_quota,
         )
 
         storage_settings = StorageSettings(
@@ -409,6 +411,17 @@ class WorkerProcess:
                 http_client=self._http_client,
                 api_key=settings.finnhub_api_key,
                 provider_cfg=settings.finnhub,
+            )
+            # Transcripts are a paid Finnhub tier — thread the capability flag so
+            # the adapter guards the (otherwise permanently-403) request. finnhub
+            # takes an extra kwarg the generic construction path below does not,
+            # so build + return it here (via the registry class so the adapter
+            # remains swappable/spy-able like every other source type).
+            return adapter_cls(  # type: ignore[call-arg]
+                client=client,
+                rate_limiter=rate_limiter,
+                exists_fn=exists_fn,
+                transcripts_enabled=settings.finnhub.transcripts_enabled,
             )
         elif source_type_val == "newsapi":
             client = NewsAPIClient(

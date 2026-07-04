@@ -716,13 +716,15 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // finalize cleanly instead of slapping a false "Response interrupted"
         // banner under a fully-delivered answer (the user-reported bug).
         let sawAnswerComplete = false;
-        // Wave 3: text from the `final_answer` SSE event. S8 emits the full
-        // answer as ONE final_answer frame in addition to the token frames.
-        // Normally tokens win (finalContent is non-empty), but some backend
-        // paths (cache hits, guardrail responses) emit NO token frames at all
-        // — previously those settled as an EMPTY optimistic message and the
-        // answer only appeared after a thread refetch. final_answer is the
-        // fallback content source for exactly that shape.
+        // Wave 3 / RC-3: text from the `final_answer` SSE event. S8 emits the
+        // full answer as ONE final_answer frame in addition to the token frames.
+        // It is emitted AFTER post-synthesis grounding validation, so it is the
+        // AUTHORITATIVE final text: when grounding repairs or refuses the draft
+        // it differs from the streamed tokens, and finalize() must end the bubble
+        // on THIS text (RC-3 precedence flip). It also covers backend paths that
+        // emit NO token frames at all (cache hits, guardrail responses) — those
+        // used to settle as an EMPTY optimistic message until a thread refetch.
+        // finalize() falls back to the streamed tokens only when this is empty.
         let finalAnswerText = "";
 
         // Helper: finalise a CLEAN stream end (done event / [DONE] sentinel)
@@ -738,9 +740,29 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           // this only keeps the transient bubble consistent before it is nulled.
           typewriterRef.current?.flush();
           setStreaming(null);
-          // Wave 3: tokens are the primary content source; final_answer is
-          // the fallback for zero-token streams (see finalAnswerText above).
-          const content = finalContent || finalAnswerText;
+          // RC-3 (flash-of-ungrounded-answer fix): the `final_answer` event is
+          // AUTHORITATIVE and takes PRECEDENCE over the streamed tokens.
+          //
+          // WHY the precedence flip (was `finalContent || finalAnswerText`):
+          // S8 emits `final_answer` AFTER post-synthesis grounding validation.
+          // That phase can REPAIR the draft (e.g. correct a hallucinated number)
+          // or REFUSE it entirely — in which case `final_answer` differs from the
+          // tokens the user just watched stream (`finalContent`). The old order
+          // kept the pre-repair draft on screen; the corrected/refusal text only
+          // appeared later when the async thread refetch swapped the optimistic
+          // bubble — a visible "flash of ungrounded answer" (and, for a refusal,
+          // a materially different message shown only after the user had already
+          // read the un-repaired one). Preferring `final_answer` reconciles the
+          // bubble to the grounded truth in one clean swap at finalize time.
+          //
+          // COMMON CASE (no repair): grounding leaves the answer unchanged, so
+          // `final_answer` === the streamed tokens — promoting it is a no-op swap
+          // (identical string → the smooth streaming reveal is untouched).
+          //
+          // ROBUSTNESS: some streams never emit a `final_answer` frame at all
+          // (a genuinely interrupted synthesis). `finalAnswerText` is "" then, so
+          // we fall back to the streamed `finalContent` and never blank the bubble.
+          const content = finalAnswerText || finalContent;
           if (content || pendingCitations.length > 0) {
             // Wave 2: MessageWithMeta — spread the metadata-event fields onto
             // the optimistic message so MessageBubble's meta strip shows
@@ -1173,12 +1195,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               // answer completed — see sawAnswerComplete declaration.
               sawAnswerComplete = true;
             } else if (eventName === "final_answer") {
-              // Wave 3: S8 emits the complete answer as one final_answer frame
-              // alongside (after) the token frames. Captured as the FALLBACK
-              // content source for streams that emitted no token frames at all
-              // (cache hits, guardrail responses) — finalize() prefers the
-              // token-accumulated finalContent when it is non-empty, so this
-              // never overrides genuinely streamed text.
+              // Wave 3 / RC-3: S8 emits the complete answer as one final_answer
+              // frame alongside (after) the token frames, post grounding
+              // validation. Captured as the AUTHORITATIVE final content:
+              // finalize() prefers this over the streamed tokens so a grounding
+              // repair/refusal reconciles the bubble in place (RC-3), and it
+              // still covers zero-token streams (cache hits, guardrail responses).
               const fa = data as { text?: unknown };
               if (typeof fa.text === "string") {
                 finalAnswerText = fa.text;

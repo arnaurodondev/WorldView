@@ -48,11 +48,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# EODHD's plan grants ~100,000 credits/month.  Amortised over ~30.4 days that is
-# ~3,289 credits/day.  We derive the daily cap from the service's monthly hard
-# limit so the two budgets stay consistent if the plan changes.
-_AVG_DAYS_PER_MONTH: float = 30.4
-
 
 @dataclass
 class DailyBudgetStatus:
@@ -117,13 +112,15 @@ class DailyBudgetTracker:
             logger.debug("daily_budget_no_quota_service")
             return DailyBudgetStatus(date=today, allotted=0, spent=0, headroom_ratio=1.0)
 
-        # Real daily cap = monthly hard limit amortised over an average month.
-        hard_limit = self._quota_service._hard_limit
-        daily_cap = hard_limit / _AVG_DAYS_PER_MONTH
+        # Real daily cap = EODHD's per-UTC-day hard limit (dailyRateLimit), the
+        # value the guard actually enforces.  Previously this amortised the
+        # MONTHLY hard limit over 30.4 days (~3,289/day), which grossly
+        # underestimated true headroom now that we know the limit is per-day.
+        daily_cap = self._quota_service._daily_hard_limit
         allotted = int(daily_cap * self._safety_factor)
 
         if allotted <= 0:
-            logger.warning("eodhd_daily_budget_zero_allotment", hard_limit=hard_limit)
+            logger.warning("eodhd_daily_budget_zero_allotment", daily_cap=daily_cap)
             return DailyBudgetStatus(date=today, allotted=0, spent=0, headroom_ratio=0.0)
 
         # Cumulative credits billed so far today (UTC) from the shared counter.

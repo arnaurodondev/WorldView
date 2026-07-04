@@ -1869,14 +1869,22 @@ describe("useChatStream — Wave 3 false-interrupt hardening", () => {
     expect(assistant.content).toBe("Cached: Apple reported record revenue.");
   });
 
-  it("tokens still WIN over final_answer when both are present (refusal-text divergence)", async () => {
-    // Live trace 2026-06-11: the token stream carried the real answer while
-    // final_answer carried an unrelated refusal string. The fallback must
-    // never override genuinely streamed text.
+  // ── RC-3: reconcile to the grounding-repaired final_answer ────────────────
+  // These three cases pin the corrected precedence (docs/audits/
+  // 2026-07-03-chat-midstream-failure-ux.md RC-3). They REPLACE the prior
+  // "tokens win over final_answer" test, which encoded the very bug RC-3
+  // fixes: the backend emits `final_answer` AFTER grounding validation, so a
+  // divergent final_answer is the REPAIRED/REFUSAL text and must win — the
+  // ungrounded streamed draft must not persist as the settled message.
+
+  it("RC-3: streamed tokens differ from a later final_answer → bubble ends on final_answer (grounding repair/refusal wins)", async () => {
+    // The user watches the ungrounded draft stream, then grounding validation
+    // REFUSES it and emits a corrected final_answer. The settled message MUST
+    // be the final_answer text, not the pre-repair draft the user briefly saw.
     mockFetchWithFrames([
-      'event: token\ndata: {"text":"Real streamed answer."}\n\n',
+      'event: token\ndata: {"text":"Bitcoin will hit $200k next week."}\n\n',
       "event: final_answer\n" +
-        'data: {"text":"I cannot find information about the entities."}\n\n',
+        'data: {"text":"I cannot verify that claim against the sources."}\n\n',
       'event: done\ndata: {"type":"done"}\n\n',
     ]);
 
@@ -1888,7 +1896,61 @@ describe("useChatStream — Wave 3 false-interrupt hardening", () => {
     });
 
     const assistant = result.current.localMessages[1] as { content: string };
-    expect(assistant.content).toBe("Real streamed answer.");
+    // RC-3 precedence flip: the grounding-repaired final_answer replaces the
+    // streamed draft in one clean swap.
+    expect(assistant.content).toBe(
+      "I cannot verify that claim against the sources.",
+    );
+    // The transient bubble is gone (promoted to the settled message).
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.chatError).toBeNull();
+  });
+
+  it("RC-3: final_answer EQUAL to the streamed tokens → no disruption (common no-repair case)", async () => {
+    // The overwhelming common case: grounding leaves the answer unchanged, so
+    // final_answer === the streamed tokens. Promoting final_answer is then a
+    // no-op swap — the settled content is identical and nothing visibly jumps.
+    mockFetchWithFrames([
+      'event: token\ndata: {"text":"Apple is "}\n\n',
+      'event: token\ndata: {"text":"doing fine."}\n\n',
+      "event: final_answer\n" + 'data: {"text":"Apple is doing fine."}\n\n',
+      'event: done\ndata: {"type":"done"}\n\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    const assistant = result.current.localMessages[1] as { content: string };
+    // Identical to the streamed tokens — the smooth-streaming UX is preserved.
+    expect(assistant.content).toBe("Apple is doing fine.");
+    expect(result.current.chatError).toBeNull();
+  });
+
+  it("RC-3: tokens present but final_answer absent/empty → falls back to streamed content (bubble never blanked)", async () => {
+    // Robustness: a stream that emits tokens but no final_answer frame (an
+    // interrupted synthesis, or an empty final_answer text) must fall back to
+    // the streamed content — never blank the bubble.
+    mockFetchWithFrames([
+      'event: token\ndata: {"text":"Streamed answer, no final_answer frame."}\n\n',
+      // Explicit EMPTY final_answer — must still fall back to the tokens.
+      'event: final_answer\ndata: {"text":""}\n\n',
+      'event: done\ndata: {"type":"done"}\n\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("Streamed answer, no final_answer frame.");
+    expect(result.current.chatError).toBeNull();
   });
 
   it("a GENUINE early interruption (no terminal events) still surfaces the banner", async () => {
