@@ -80,7 +80,11 @@ class Settings(BaseSettings):
 
     # ── Completion model config (PRD-0016 §6.2, T-B-2-01) ────────────────────
     completion_provider: str = "deepinfra"  # RAG_CHAT_COMPLETION_PROVIDER
-    completion_model: str = "deepseek-ai/DeepSeek-V4-Flash-Thinking"  # RAG_CHAT_COMPLETION_MODEL
+    # DEF-035 (2026-07-03): the previous default `deepseek-ai/DeepSeek-V4-Flash-Thinking`
+    # does NOT exist on DeepInfra and 404s — prod only survived via the
+    # RAG_CHAT_COMPLETION_MODEL=openai/gpt-oss-120b env override. Default now points at a
+    # real DeepInfra model (matches prod) so an unset env can't break completions.
+    completion_model: str = "openai/gpt-oss-120b"  # RAG_CHAT_COMPLETION_MODEL
     # OpenRouter fallback model — configurable independently from the DeepInfra primary.
     openrouter_completion_model: str = "deepseek/deepseek-r1-distill-qwen-32b"  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
 

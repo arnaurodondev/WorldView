@@ -57,6 +57,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_budget_exceeded_total,
     rag_cache_hits,
     rag_citations_scrubbed_total,
+    rag_grounding_false_positive_skip_total,
     rag_grounding_validation_total,
     rag_latency,
     rag_no_tool_calls_first_turn,
@@ -1080,6 +1081,37 @@ _EMPTY_POOL_REFUSAL = (
     "be unavailable or hold no records for this request — please try again, or "
     "narrow the question to a specific ticker, metric, or time period."
 )
+# Point 2 Stage 2 — grounding-rewrite false-positive self-check sentinel.
+# The rewrite model is instructed to FIRST decide whether the flagged ungrounded
+# numbers are genuinely fabricated facts, or legitimate reasoning / projections /
+# hedged estimates / values derived from cited figures. If they are legitimate
+# (a false positive) it must output EXACTLY this token and nothing else; the
+# orchestrator then KEEPS the original answer instead of applying a rewrite.
+_FALSE_POSITIVE_SENTINEL = "FALSE_POSITIVE"
+
+
+def _is_false_positive_sentinel(text: str) -> bool:
+    """True when the rewrite model emitted a bare ``FALSE_POSITIVE`` self-check.
+
+    Case-insensitive; tolerates surrounding whitespace and light punctuation
+    (quotes, backticks, trailing ``.``/``!``). SAFETY: a full rewrite BODY that
+    merely mentions the token is NOT the sentinel — we only treat a bare/near-bare
+    response as the sentinel so a genuine rewrite is never discarded. We bound the
+    stripped length to a few characters beyond the token itself.
+    """
+    if not text:
+        return False
+    # Strip whitespace + the light wrapping punctuation a small model tends to add.
+    stripped = text.strip().strip("`\"'*.!:_ \t\r\n").strip()
+    if not stripped:
+        return False
+    # Bare/near-bare only: the sentinel plus at most a couple of stray chars.
+    # A real rewrite body is far longer than the sentinel token.
+    if len(stripped) > len(_FALSE_POSITIVE_SENTINEL) + 3:
+        return False
+    return stripped.upper() == _FALSE_POSITIVE_SENTINEL
+
+
 # Theme D: fallback when the synthesis turn produced only a plan and the
 # single re-prompt failed to yield a substantive answer.
 _PLAN_ONLY_REFUSAL = (
@@ -4218,6 +4250,14 @@ class ChatOrchestratorUseCase:
                     # total + stamps the user (per-user quota, PRD-0118).
                     thread_id=request.thread_id,
                     user_id=request.user_id,
+                    # Point 2 Stage 2 — relax the numeric gate for analytical /
+                    # hypothetical turns. CONTRADICTION (bear/bull case, "what
+                    # argues against X", counter-argument) and REASONING are the
+                    # analytical intents the classifier tags; on those the Stage 1
+                    # gate downgrades a FULLY-HEDGED-SENTENCE number (a projection /
+                    # estimate), never a bare factual assertion — the fabrication
+                    # guarantee is intact for factual lookups.
+                    analytical_intent=intent in (QueryIntent.CONTRADICTION, QueryIntent.REASONING),
                 )
         elif not grounded:
             # BP-605: never cache a refusal answer — its content is a
@@ -4678,6 +4718,7 @@ class ChatOrchestratorUseCase:
         rewrite_model: str | None = None,
         thread_id: UUID | None = None,
         user_id: UUID | None = None,
+        analytical_intent: bool = False,
     ) -> tuple[str, bool]:
         """RC-1 — single combined numeric + entity-name grounding pass.
 
@@ -4828,8 +4869,13 @@ class ChatOrchestratorUseCase:
         # passed when there is NO material claim — preserving the grounding
         # guarantee for the AMD ``$34.6B`` fabrication class (which IS material
         # and still triggers the rewrite below).
-        _material_first = material_unsupported_numbers(numeric_first)
-        _numeric_ok_first = numeric_grounding_effectively_passed(numeric_first)
+        # Point 2 Stage 2 — thread ``analytical_intent`` into the numeric gate so
+        # the Stage 1 relaxation activates on what-if / analytical / contradiction
+        # turns. The relaxation only downgrades a number whose FULL SENTENCE is
+        # hedged (Stage 1's design) — it NEVER exempts a bare factual assertion, so
+        # the fabrication guarantee is preserved.
+        _material_first = material_unsupported_numbers(numeric_first, analytical_intent=analytical_intent)
+        _numeric_ok_first = numeric_grounding_effectively_passed(numeric_first, analytical_intent=analytical_intent)
 
         # ── STRICTER TRIGGER: both classes grounded → no rewrite, no LLM ──────
         if _numeric_ok_first and entity_first_passed:
@@ -4966,11 +5012,32 @@ class ChatOrchestratorUseCase:
             return has_prose and not has_tool_calls
 
         filtered_history = [m for m in messages if not _is_prose_assistant(m)]
+        # Point 2 Stage 2 — false-positive self-check preamble. The deterministic
+        # validators are conservative and over-flag: a projection, a hedged
+        # estimate ("roughly ~$15B"), a value derived by arithmetic from cited
+        # figures, or explicit reasoning are all LEGITIMATE and are NOT fabricated
+        # facts. Ask the rewrite model to judge this FIRST. On a false positive it
+        # emits the bare sentinel and we keep the (already-fine) original — a
+        # ~0.8s short-output resolve on gpt-oss-20b instead of a ~15s full rewrite.
+        self_check_preamble = (
+            "You are reviewing your previous answer for numeric/entity grounding.\n"
+            "FIRST, judge whether the flagged items below are GENUINELY fabricated "
+            "facts, or instead LEGITIMATE content: your own explicit reasoning, a "
+            "clearly-labelled projection or scenario, a hedged estimate (e.g. "
+            '"roughly", "approximately", "~"), or a value you DERIVED by arithmetic '
+            "from figures that ARE present in the tool results.\n"
+            f"- If EVERY flagged item is legitimate (a false positive), output EXACTLY "
+            f"`{_FALSE_POSITIVE_SENTINEL}` and NOTHING else — do not explain, do not "
+            "rewrite.\n"
+            "- Otherwise, rewrite the answer with the numbers and names properly "
+            "grounded, following the instructions below.\n\n"
+        )
         rewrite_messages = [
             *filtered_history,
             {
                 "role": "user",
                 "content": (
+                    f"{self_check_preamble}"
                     f"{combined_instructions}\n\n"
                     "Provide a fresh response that answers the question directly using only "
                     "values and entities supported by the tool results above. Do NOT "
@@ -5032,6 +5099,25 @@ class ChatOrchestratorUseCase:
             log.warning("combined_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # ── Point 2 Stage 2: false-positive self-check sentinel ───────────────
+        # The rewrite model judged the flagged numbers/names to be legitimate
+        # reasoning / projections / hedged estimates / derived values rather than
+        # fabricated facts, and emitted the bare ``FALSE_POSITIVE`` sentinel. The
+        # ORIGINAL answer is fine → return it unchanged with grounding_passed=True.
+        # SAFETY: ``_is_false_positive_sentinel`` only matches a bare/near-bare
+        # token — a full rewrite body that merely mentions the token is treated as
+        # a rewrite, never discarded.
+        if _is_false_positive_sentinel(rewritten):
+            log.info(  # type: ignore[no-any-return]
+                "grounding_rewrite_false_positive_skipped",
+                original_len=len(response),
+                material_unsupported=len(_material_first),
+                entity_unsupported=len(entity_unsupported),
+            )
+            rag_grounding_false_positive_skip_total.inc()
+            rag_grounding_validation_total.labels(result="false_positive_skip").inc()
+            return response, True
 
         # ── Post-rewrite guards (ALL PRESERVED from both passes) ──────────────
         # 1. Tool-call / planning stub (BP-674/675) — keep the grounded original.
@@ -5104,14 +5190,19 @@ class ChatOrchestratorUseCase:
         # Both classes now grounded → accept the rewrite. BUG-2 mechanism 2:
         # use the material-claim gate so a rewrite whose only residual numbers
         # are incidental (dates/counts) is accepted rather than bannered.
-        if numeric_grounding_effectively_passed(numeric_second) and entity_second_passed:
+        if (
+            numeric_grounding_effectively_passed(numeric_second, analytical_intent=analytical_intent)
+            and entity_second_passed
+        ):
             rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
             return rewritten, True
 
         # ── Residual failure: banner suppression (PRESERVED) then banner ──────
         # Honest-refusal rewrite suppression (W44) — only when the residual is
         # purely numeric (an honest "data unavailable" already conveys it).
-        if entity_second_passed and not numeric_grounding_effectively_passed(numeric_second):
+        if entity_second_passed and not numeric_grounding_effectively_passed(
+            numeric_second, analytical_intent=analytical_intent
+        ):
             _rw_strip = rewritten.lstrip()
             _refusal_signals = (
                 "not currently available",

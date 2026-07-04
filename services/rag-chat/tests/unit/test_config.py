@@ -41,6 +41,24 @@ def test_citation_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.citation_run_budget_s == 600.0
 
 
+def test_completion_model_default_is_real_deepinfra_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DEF-035: the completion_model default must be a model that exists on DeepInfra.
+
+    The previous default ``deepseek-ai/DeepSeek-V4-Flash-Thinking`` 404s on
+    DeepInfra — an unset ``RAG_CHAT_COMPLETION_MODEL`` would break completions.
+    The default now matches prod (``openai/gpt-oss-120b``).
+    """
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    s = _make_settings()
+    assert s.completion_model == "openai/gpt-oss-120b"
+    # Regression guard: the known-404 model must never be the default again.
+    assert "DeepSeek-V4-Flash-Thinking" not in s.completion_model
+
+
 def test_citation_judge_provider_validates_enum(monkeypatch: pytest.MonkeyPatch) -> None:
     """Invalid citation_judge_provider raises ValidationError."""
     for key in list(os.environ):

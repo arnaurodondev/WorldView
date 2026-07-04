@@ -639,6 +639,119 @@ class TestOrchestratorGroundingHook:
         assert pipeline.persist_chat.await_count == 1
         assert pipeline.write_completion_cache.await_count == 1
 
+    # ── Point 2 Stage 2 — false-positive self-check sentinel ──────────────────
+    def test_rewrite_false_positive_sentinel_keeps_original(self) -> None:
+        """Rewrite emits the bare FALSE_POSITIVE sentinel → keep the ORIGINAL.
+
+        The initial draft carries a material unsupported number ($34.6B, not in
+        the tool item), so the numeric gate fires the rewrite. The rewrite model
+        judges the flag a false positive and returns EXACTLY the sentinel. The
+        orchestrator must DISCARD the (empty) rewrite, ship the original answer
+        unchanged with grounding_passed=True (no banner), and increment the
+        false-positive-skip counter.
+        """
+        from rag_chat.application.metrics.prometheus import (
+            rag_grounding_false_positive_skip_total,
+        )
+
+        before = rag_grounding_false_positive_skip_total._value.get()
+        orch, captured, pipeline = self._build(
+            stream_chunks=["Q2 revenue was $34.6B per the filing."],
+            rewrite_chunks=["FALSE_POSITIVE"],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # 2 stream_chat calls: initial draft + the self-check rewrite turn.
+        assert len(captured) == 2
+        # The ORIGINAL (not the sentinel) is persisted, grounding treated as passed.
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        assert "$34.6B" in content
+        assert "FALSE_POSITIVE" not in content
+        assert "⚠" not in content
+        assert "could not be matched" not in content
+        # Grounding passed → the completion cache write still fires.
+        assert pipeline.write_completion_cache.await_count == 1
+        # The false-positive-skip counter incremented by exactly one.
+        assert rag_grounding_false_positive_skip_total._value.get() == before + 1
+
+    def test_rewrite_real_body_is_applied_not_treated_as_sentinel(self) -> None:
+        """A genuine rewrite body (not the bare sentinel) is applied as before.
+
+        Guards against the sentinel handler misfiring on a real rewrite that
+        happens to be long/substantive — it must go through the normal apply path.
+        """
+        orch, captured, pipeline = self._build(
+            stream_chunks=["Q2 revenue was $34.6B per the filing."],
+            rewrite_chunks=["Q2 revenue was $10.253B [N1]."],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The rewrite body replaced the fabricated figure.
+        assert "$10.253B" in content
+        assert "$34.6B" not in content
+
+    # ── Point 2 Stage 2 — analytical_intent gate relaxation wiring ────────────
+    def _run_intent_case(self, *, message: str, draft: str) -> int:
+        """Run the full turn for ``message``/``draft``; return stream_chat call count."""
+        from uuid import UUID
+
+        from rag_chat.domain.entities.chat import ChatContext, ChatRequest
+
+        orch, captured, _ = self._build(
+            stream_chunks=[draft],
+            rewrite_chunks=["Q2 revenue was $10.253B [N1]."],
+        )
+        request = ChatRequest(
+            message=message,
+            context=ChatContext(),
+            tenant_id=UUID(_FAKE_UUID),
+            user_id=UUID(_FAKE_UUID),
+            thread_id=None,
+        )
+        asyncio.run(_collect(orch, request, MagicMock()))
+        return len(captured)
+
+    def test_analytical_intent_relaxes_hedged_sentence(self) -> None:
+        """On an analytical (CONTRADICTION) turn a hedged-sentence figure is relaxed.
+
+        The unsupported $34.6B sits in a sentence whose HEDGE ("if …") follows the
+        number — so ``hedged_or_derived`` (pre-window only) is False and the
+        relaxation depends ENTIRELY on ``analytical_intent`` being wired through.
+        A "bear case" question is classified CONTRADICTION → analytical → the full
+        sentence hedge relaxes the gate → NO rewrite (one stream_chat call).
+        """
+        calls = self._run_intent_case(
+            message="What is the bear case against Apple?",
+            draft="The bear case: revenue drops to $34.6B if the lawsuit succeeds.",
+        )
+        assert calls == 1, "analytical intent must relax the hedged-sentence figure (no rewrite)"
+
+    def test_non_analytical_intent_does_not_relax_hedged_sentence(self) -> None:
+        """The SAME hedged-after-number draft on a GENERAL turn is NOT relaxed.
+
+        Proves the relaxation is driven by the intent wiring: without analytical
+        intent the full-sentence hedge is ignored and the material figure still
+        triggers the rewrite (two stream_chat calls).
+        """
+        calls = self._run_intent_case(
+            message="What was Apple's Q2 revenue?",
+            draft="The bear case: revenue drops to $34.6B if the lawsuit succeeds.",
+        )
+        assert calls == 2, "non-analytical turn must NOT relax the hedged sentence (rewrite fires)"
+
+    def test_analytical_intent_still_refuses_bare_fact(self) -> None:
+        """Even on an analytical turn a BARE factual assertion is never relaxed.
+
+        The fabrication guarantee: a material unsupported number stated as a plain
+        fact (no hedge anywhere in the sentence) still fires the rewrite even when
+        the turn is analytical.
+        """
+        calls = self._run_intent_case(
+            message="What is the bear case against Apple?",
+            draft="The bear case is simple: revenue is $34.6B.",
+        )
+        assert calls == 2, "a bare unsupported fact must still trigger a rewrite on analytical turns"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PLAN-0104 W29 — direct unit tests for the two-way text-token fallback in
@@ -1817,8 +1930,7 @@ class TestPhantomCitationGate:
         )
 
         response = (
-            "NVIDIA leads the market. [commentary row 1] "
-            "AMD reported revenue of $34.6B [query_fundamentals row 4]."
+            "NVIDIA leads the market. [commentary row 1] " "AMD reported revenue of $34.6B [query_fundamentals row 4]."
         )
         pipeline = MagicMock()
         pipeline.llm_chain = MagicMock()
