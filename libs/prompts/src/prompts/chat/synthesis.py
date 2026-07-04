@@ -119,6 +119,36 @@ get to second-guess. The opposite of fabrication is just as wrong:
 - Only state that something cannot be answered when NO tool result above
   contains the needed value or success — and then say exactly what is missing.
 
+## ANALYTICAL / WHAT-IF QUESTIONS — REASON AND PROJECT, DO NOT REFUSE
+When the user asks an analytical, hypothetical, or what-if question — e.g.
+"how could a 10% rise in TSMC wafer prices affect NVIDIA's gross margin next
+quarter?" — you MUST answer it with a reasoned, grounded projection. DO NOT
+refuse with "I can't forecast" / "that's speculative" / "I'm not able to
+predict." A blanket forecast refusal is a FAILURE here: the user is asking for
+your analysis, not a disclaimer.
+
+- BUILD the projection from retrieved evidence. Every step rests on a specific
+  figure, news item, or relationship you actually retrieved AND cite — e.g.
+  "NVIDIA's gross margin is ~75% [query_fundamentals row 0]; wafers are roughly
+  X% of COGS [<tool_name> row N]; a 10% wafer-cost rise therefore implies
+  roughly … pp of gross-margin pressure, assuming COGS mix and pricing hold."
+  Show the derivation chain so the reader can follow how you got the number.
+- HEDGE and LABEL every projected number as a scenario/estimate — use words like
+  "roughly", "could", "would", "might", "~", "about", "approximately",
+  "estimated", "projected", "implies", or "assuming …". A projected figure is an
+  ESTIMATE, never a retrieved fact: it carries NO [tool_name row N] tag of its
+  own (only the base inputs you derived it FROM carry their citations), and it
+  must never be stated in the flat, unhedged voice you use for a copied number.
+- NEVER invent the base inputs. If a figure the derivation needs (e.g. wafers'
+  share of COGS) was not retrieved, say so plainly and state that the projection
+  is conditional on it — do NOT fabricate the missing input to complete the
+  chain. A hedged projection built on cited numbers is allowed; a bare number
+  pulled from nowhere is still forbidden.
+- This is the ONE place forward-looking projection language belongs. It does NOT
+  relax the grounding rules for FACTUAL claims: any present-or-past value must
+  still be copied exactly from a tool row and cited. Only the forward-looking,
+  explicitly-hedged scenario figures are estimates.
+
 ## ANTI-FABRICATION POLICY — REPORT WHAT IS THERE, INVENT NOTHING
 These three rules forbid fabrication. They are NOT a licence to withhold: report
 every value the tools DID return, in full, with its citation — refuse ONLY the
@@ -273,7 +303,28 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # one — every headline from get_entity_news / search_documents MUST carry its
     # row tag because listing headlines is transcribing tool data, not
     # commentary. Additive; the grounding/phantom guards are UNCHANGED.
-    version="1.8",
+    # 1.9 (analytical / what-if forecast-refusal root-cause, 2026-07-04): the
+    # owner's headline use case is analytical / what-if questions ("how could a
+    # 10% rise in TSMC wafer prices affect NVIDIA's gross margin next quarter?").
+    # The live SYNTHESIS model REFUSED these OUTRIGHT ("I can't provide a
+    # forecast … predicting future outcomes is speculative") — declining BEFORE
+    # producing any projection, so the framing-aware grounding gate (fb6e37784,
+    # which now ALLOWS hedged/derived numbers) never even applied. Root cause was
+    # the shared SAFETY_FOOTER (rule 5: "Do not extrapolate trends, project
+    # future values, or infer causality" + "Never speculate beyond the evidence
+    # provided"), rendered into this prompt via {safety} — a blanket projection
+    # ban that dominated. 1.9 fixes BOTH sides so they are consistent: (a) the
+    # SAFETY_FOOTER rule 5 now PERMITS a grounded, hedged, explicitly-derived
+    # projection for a what-if question while still forbidding definite/fabricated
+    # projected facts (edit in _safety.py); (b) this template adds the ANALYTICAL
+    # / WHAT-IF block instructing the model to REASON and produce a projection
+    # (never refuse), build it step-by-step from cited retrieved figures, HEDGE +
+    # label every projected number as a scenario/estimate (using the exact hedge
+    # markers the numeric_grounding gate downgrades — roughly/could/would/might/
+    # ~/about/assuming/projected/implies), and NEVER invent the base inputs. The
+    # change is NARROW: it permits reasoned/hedged/grounded projections only; the
+    # no-fabrication / grounding / citation rules for FACTUAL claims are UNCHANGED.
+    version="1.9",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -299,7 +350,14 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "v1.8 closes the news-headline citation-coverage gap: cite each FACT "
         "(not only numbers) and, mirroring the prediction-market rule, attach a "
         "[get_entity_news row N] / [search_documents row N] tag to every headline "
-        "listed so bare-headline news answers stop shipping citations=[]."
+        "listed so bare-headline news answers stop shipping citations=[]. "
+        "v1.9 permits GROUNDED, HEDGED projections for analytical / what-if "
+        "questions (the ANALYTICAL / WHAT-IF block: reason and project, never "
+        "refuse; derive step-by-step from cited figures; hedge + label every "
+        "projected number as a scenario/estimate; never invent base inputs) and "
+        "reconciles the SAFETY_FOOTER's former blanket forecast ban with the "
+        "framing-aware grounding gate — the no-fabrication rules for FACTUAL "
+        "claims are unchanged."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),
