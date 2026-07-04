@@ -4,6 +4,12 @@ from __future__ import annotations
 
 SOURCE_AUTHORITY: dict[str, float] = {
     # SEC primary filings — highest authority
+    # ``sec_edgar`` is the canonical literal the LIVE ingestion pipeline stamps on
+    # every SEC filing (S4 EDGAR adapter → dsm.source_type). The per-form keys
+    # below are OLD seed/fixture names the live pipeline never produces, so without
+    # this entry every real filing fell through to ``default`` (0.50) instead of
+    # top authority — a silent end-to-end taxonomy mismatch (R1 Fix ②).
+    "sec_edgar": 1.00,
     "sec_10k": 1.00,
     "sec_10q": 1.00,
     "sec_8k": 0.95,

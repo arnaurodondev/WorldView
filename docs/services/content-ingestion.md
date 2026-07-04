@@ -358,12 +358,14 @@ All news-source `SourceType` values come from `contracts.enums.ContentSourceType
 |--------|--------------|------|------------|-------------|-----------------|
 | **EODHD News** (global) | per-source config | `EODHD_API_KEY` query param | Token bucket (10 req/s) | `sha256(article.link)` | Date-range via `from`/`to` |
 | **EODHD Ticker News** (`eodhd_ticker_news`) | 1 hour (`ticker_news_poll_interval_seconds=3600`) | `EODHD_API_KEY` query param | Token bucket (10 req/s) | `sha256(article.link)` | Date-range via `from`/`to` |
-| **SEC EDGAR** | 30 min | User-Agent header (required) | `asyncio.Semaphore(8)` | `sha256(accession_no + filename)` | Date-range via `startdt`/`enddt` |
+| **SEC EDGAR** | 30 min | User-Agent header (required) | `asyncio.Semaphore(8)` | `sha256(accession_no)` | Date-range via `startdt`/`enddt`; per-CIK via `config["ciks"]` |
 | **Finnhub** | 15 min | `FINNHUB_API_KEY` query param | Token bucket (55 req/min) | `sha256(str(article_id))` | Date-range on news + transcripts |
 | **NewsAPI** | 4 hours* | `NEWSAPI_KEY` (`X-Api-Key` header) | Valkey daily counter (100 req/day default) | `sha256(article.url)` | Date-range via `from` |
 | **Polymarket** | Configurable | None (public Gamma API) | `max_pages_per_cycle=20` | `(market_id, fetched_at)` unique | Full catalogue re-fetch |
 
 *NewsAPI default poll interval is 4 hours (`poll_interval_seconds=14400`) to stay under the 100 req/day free-tier limit.
+
+**SEC EDGAR primary-document fetch (R1 Fix, 2026-07-04):** the adapter fetches the **primary filing document**, not the `…-index.htm` directory page (which carried only ~40 words of filer/form/CIK boilerplate — the R1 grounding-gap root cause). For each filing it fetches the `{accession}/index.json` manifest, resolves the primary document (`resolve_primary_document`: largest form-matching `.htm`, excluding XBRL instance/linkbase/`R\d+.htm` viewer files and exhibits), downloads that HTML, and synthesizes a citation title `"{FORM} — {Company} ({Period})"` (persisted to `document_source_metadata.title`, previously NULL for 100% of `sec_edgar` docs). Filings with no groundable HTML body are skipped. **Coverage:** an unscoped EFTS search only returns the most-recent filings across all filers, so watched companies (e.g. Apple) were never ingested; the source `config["ciks"]` watchlist (seeded by migration `0010`) scopes the search per-CIK. Existing pre-fix docs are re-driven by `scripts/ops/backfill_sec_edgar_primary_docs.py` (dry-run default, `--apply` to re-emit via the outbox).
 
 **Retry policy (all adapters):** 3x exponential backoff (1s/2s/4s). `AdapterError` raised after exhaustion → task moves to DLQ.
 
@@ -432,9 +434,6 @@ All environment variables are prefixed with `CONTENT_INGESTION_`. Nested provide
 | `CONTENT_INGESTION_EODHD__PAGE_SIZE` | `100` | Results per page |
 | `CONTENT_INGESTION_EODHD__MAX_PAGES_PER_CYCLE` | `3` | Max pages per fetch cycle (3 × 100 = 300 articles) |
 | `CONTENT_INGESTION_EODHD__RATE_LIMIT_PER_SECOND` | `10.0` | Token-bucket capacity |
-| `CONTENT_INGESTION_EODHD__GENERAL_NEWS_FIREHOSE_ENABLED` | `false` | SHADOW STAGE: route the general `eodhd` feed through the EARLY-EXIT firehose sweep (1 request/poll) + override its scheduler cadence. Default OFF |
-| `CONTENT_INGESTION_EODHD__GENERAL_NEWS_SHADOW_MODE` | `false` | Emit `s4_general_firehose_*` coverage metrics per sweep (for `scripts/shadow_diff_general_vs_ticker.py`). Default OFF |
-| `CONTENT_INGESTION_EODHD__GENERAL_NEWS_POLL_INTERVAL_SECONDS` | `300` | General-firehose poll cadence when the firehose flag is ON (dial to `60` for the shadow run) |
 | `CONTENT_INGESTION_FINNHUB__BASE_URL` | `https://finnhub.io/api/v1` | Finnhub API root |
 | `CONTENT_INGESTION_FINNHUB__RATE_LIMIT_PER_MINUTE` | `55` | Token-bucket capacity |
 | `CONTENT_INGESTION_NEWSAPI__BASE_URL` | `https://newsapi.org/v2/everything` | NewsAPI endpoint |
