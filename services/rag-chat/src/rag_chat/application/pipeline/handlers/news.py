@@ -33,6 +33,14 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # Maximum characters for tool result text injected into LLM context.
 _TOOL_RESULT_MAX_CHARS = 4000
 
+# Fix ③ (2026-07-04): max chars of the filing BODY snippet injected per row.
+# sec_edgar chunks carry no structured filer/company field (title/source_name are
+# null) — the filer name lives ONLY in the chunk text. We surface a short,
+# whitespace-collapsed excerpt so the model can SEE which company each filing
+# belongs to (and attribute / cite it, or refuse a genuinely-absent one) instead
+# of being handed an anonymous "8-K — <date>" row. Kept short to bound prompt cost.
+_FILING_SNIPPET_MAX_CHARS = 400
+
 # Recognises the common SEC form types embedded in a filing's title or body text.
 # All SEC EDGAR filings are stored under the single generic source_type
 # ``sec_edgar`` (the per-form type — 10-K / 10-Q / 8-K — is NOT persisted as a
@@ -490,6 +498,46 @@ class NewsHandler(ToolHandler):
                 return re.sub(r"\s+", " ", m.group(1)).upper()
         return None
 
+    @staticmethod
+    def _filing_names_company(
+        text: str | None,
+        title: str | None,
+        company_name: str | None,
+        ticker: str | None,
+    ) -> bool:
+        """True when a filing row actually names the QUERIED company.
+
+        Fix ③ (2026-07-04): sec_edgar chunks are NOT entity-mention-linked, so
+        retrieval anchored only by query text can return filings for the WRONG
+        company (an Apple query surfacing an ADIAL 8-K). We must therefore NOT
+        stamp the queried ticker as the filing's ``entity_name`` unless the
+        filing text/title actually names the company — otherwise a non-matching
+        filer is mislabelled as the queried ticker (the model then can't tell an
+        ADIAL filing apart from an Apple one, and grounding trusts a false ref).
+
+        Match (case-insensitive) is corroborated when the filing body/title
+        contains EITHER the resolved legal company name — the strongest signal,
+        since filings render the full name ("NVIDIA Corporation") — or its
+        distinctive leading token ("nvidia"), to tolerate suffix variance
+        (Inc./Corp./…), OR the ticker as a standalone token.
+        """
+        haystack = f"{title or ''}\n{text or ''}".lower()
+        if not haystack.strip():
+            return False
+        if company_name:
+            cn = company_name.strip().lower()
+            if cn and cn in haystack:
+                return True
+            # Distinctive leading token (≥4 chars avoids generic short words).
+            lead = cn.split()[0] if cn.split() else ""
+            if len(lead) >= 4 and lead in haystack:
+                return True
+        if ticker:
+            tk = ticker.strip().lower()
+            if tk and re.search(rf"\b{re.escape(tk)}\b", haystack):
+                return True
+        return False
+
     async def _resolve_company_name_for_filings(
         self,
         ticker: str | None,
@@ -681,18 +729,44 @@ class NewsHandler(ToolHandler):
             detected_form = self._detect_form_type(result.title, result.text)
             # Compose a human title: "10-K filing — 2026-01-31" when we know both.
             date_label = result.published_at.date().isoformat() if result.published_at else "date unknown"
-            if detected_form:
+
+            # Fix ③ (2026-07-04): does THIS filing actually name the queried
+            # company? (sec_edgar retrieval can surface the wrong company.)
+            names_company = self._filing_names_company(result.text, result.title, company_name, ticker_upper)
+
+            # Fold the filer/company identity into the title when we can confirm
+            # it — "10-K filing — NVIDIA Corporation (2026-01-31)" — so the LLM
+            # (and the rendered citation) knows WHOSE filing this is. When the
+            # row does NOT corroborate the queried company we deliberately keep
+            # the neutral form+date title (the body snippet below still carries
+            # the real filer), rather than falsely attribute it to the query.
+            if detected_form and names_company and company_name:
+                title = f"{detected_form} filing — {company_name} ({date_label})"
+            elif detected_form:
                 title = f"{detected_form} filing — {date_label}"
             elif result.title:
                 title = result.title
             else:
                 title = f"SEC filing — {date_label}"
 
-            # Text injected into the LLM context: title + form + date + link.
+            # Text injected into the LLM context: title + form + date + link, AND
+            # a body snippet — the ONLY place the filer/company name appears on a
+            # sec_edgar row. Without it the model sees an anonymous filing and
+            # cannot attribute or cite it (Fix ③).
             text_lines = [title]
             text_lines.append(f"  Source: SEC EDGAR | Filed: {date_label}")
+            snippet = re.sub(r"\s+", " ", result.text).strip() if result.text else ""
+            if snippet:
+                text_lines.append(f"  Filer/content: {snippet[:_FILING_SNIPPET_MAX_CHARS]}")
             if result.url:
                 text_lines.append(f"  Filing: {result.url}")
+
+            # Fix ③: only stamp the queried ticker as this row's entity_name when
+            # the filing actually names the company — otherwise leave it UNSET so a
+            # non-matching filer (e.g. an ADIAL 8-K under an Apple query) is not
+            # mislabelled as the query ticker (which would also poison the
+            # entity-name grounding allow-list downstream).
+            row_entity_name = _entity_label if names_company else None
             item = RetrievedItem.create(
                 item_id=f"tool:filing:{doc_id}",
                 item_type=ItemType.chunk,
@@ -709,7 +783,7 @@ class NewsHandler(ToolHandler):
                     url=result.url,  # canonical EDGAR filing index URL
                     source_name="sec_edgar",
                     published_at=result.published_at,
-                    entity_name=_entity_label,
+                    entity_name=row_entity_name,
                 ),
             )
             # When a specific form was requested, partition matches vs the rest so

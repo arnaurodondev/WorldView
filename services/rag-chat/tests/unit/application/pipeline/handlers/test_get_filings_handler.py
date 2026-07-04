@@ -315,3 +315,123 @@ class TestGetFilingsHandler:
         req = s6.search_chunks.call_args.args[0]
         assert req.entity_ids is None
         assert "Apple Inc." in req.query_text
+
+
+class TestGetFilingsFilerIdentity:
+    """Fix ③ (2026-07-04): filer/company identity must reach the LLM + citation.
+
+    Before the fix, ``get_filings`` fed the model ANONYMOUS rows (form + date +
+    url only — the filer name in ``result.text`` was used for form detection then
+    DISCARDED) and force-stamped ``entity_name=<ticker>`` on EVERY row regardless
+    of the actual filer. sec_edgar chunks are not entity-linked, so retrieval can
+    return the WRONG company's filings — mislabelling them as the queried ticker.
+    """
+
+    @pytest.mark.asyncio
+    async def test_filer_name_in_item_text_and_citation_title_when_matched(self) -> None:
+        """A corroborated filing carries the company NAME in item text + title."""
+        chunks = [
+            _chunk(
+                doc_id="nv-1",
+                chunk_id="c1",
+                text="NVIDIA Corporation ANNUAL REPORT Form 10-K for fiscal year 2026.",
+                url=_EDGAR_URL_10K,
+            ),
+        ]
+        _nvda_id = UUID("018f0000-0000-7000-8000-000000aaaa02")
+        s6 = _make_s6(
+            chunks,
+            ticker_map={"NVDA": _nvda_id},
+            name_map={"NVDA": "NVIDIA Corporation"},
+        )
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="NVDA")
+
+        assert len(items) == 1
+        item = items[0]
+        # Company identity is now in BOTH the citation title and the prompt text.
+        assert "NVIDIA Corporation" in (item.citation_meta.title or "")
+        assert "NVIDIA Corporation" in item.text
+        # The queried ticker IS stamped because the filing corroborates it.
+        assert item.citation_meta.entity_name == "NVDA"
+
+    @pytest.mark.asyncio
+    async def test_body_snippet_injected_so_filer_is_visible(self) -> None:
+        """The filing body (where the filer name lives) is injected into item text.
+
+        Even when the queried ticker/company is not resolved to a name, the raw
+        chunk body — the only place the filer appears — must reach the prompt so
+        the model can attribute the filing.
+        """
+        chunks = [
+            _chunk(
+                doc_id="ad-1",
+                chunk_id="c1",
+                text="CURRENT REPORT Form 8-K AGREEMENT AND PLAN OF MERGER ADIAL PHARMACEUTICALS INC",
+                url=_EDGAR_URL_8K,
+            ),
+        ]
+        # ticker resolves to an id but NO canonical name (name_map omitted).
+        s6 = _make_s6(chunks, ticker_map={"AAPL": _AAPL_ID})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="AAPL")
+
+        assert len(items) == 1
+        # The real filer name from the body reaches the prompt (was discarded before).
+        assert "ADIAL PHARMACEUTICALS" in items[0].text
+
+    @pytest.mark.asyncio
+    async def test_entity_name_not_stamped_for_non_matching_filer(self) -> None:
+        """A filing whose filer ≠ queried company is NOT labelled with the ticker.
+
+        Apple is queried but retrieval returns an ADIAL 8-K (wrong company). The
+        row must NOT carry ``entity_name='AAPL'`` and must NOT falsely attribute
+        the filing to Apple in its title.
+        """
+        chunks = [
+            _chunk(
+                doc_id="ad-1",
+                chunk_id="c1",
+                text="CURRENT REPORT Form 8-K AGREEMENT AND PLAN OF MERGER ADIAL PHARMACEUTICALS INC",
+                url=_EDGAR_URL_8K,
+            ),
+        ]
+        s6 = _make_s6(
+            chunks,
+            ticker_map={"AAPL": _AAPL_ID},
+            name_map={"AAPL": "Apple Inc."},  # resolves, but filing is ADIAL
+        )
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="AAPL")
+
+        assert len(items) == 1
+        item = items[0]
+        # entity_name is NO LONGER force-stamped to the query ticker.
+        assert item.citation_meta.entity_name is None
+        # Title is not falsely attributed to Apple.
+        assert "Apple" not in (item.citation_meta.title or "")
+        # But the true filer is still visible in the prompt text.
+        assert "ADIAL PHARMACEUTICALS" in item.text
+
+    @pytest.mark.asyncio
+    async def test_entity_name_stamped_when_ticker_token_in_body(self) -> None:
+        """Corroboration via the ticker token alone (no resolved name) stamps it."""
+        chunks = [
+            _chunk(
+                doc_id="t-1",
+                chunk_id="c1",
+                text="TSLA Tesla, Inc. ANNUAL REPORT Form 10-K.",
+                url=_EDGAR_URL_10K,
+            ),
+        ]
+        _tsla_id = UUID("018f0000-0000-7000-8000-000000aaaa03")
+        s6 = _make_s6(chunks, ticker_map={"TSLA": _tsla_id})  # no name_map
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="TSLA")
+
+        assert len(items) == 1
+        assert items[0].citation_meta.entity_name == "TSLA"
