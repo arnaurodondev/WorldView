@@ -65,22 +65,64 @@ def _filing_form(source_data: dict[str, Any]) -> str:
     return str(raw).strip()
 
 
+def _extract_efts_primary_doc(filing: dict[str, Any], source_data: dict[str, Any]) -> str | None:
+    """Extract the authoritative primary-document filename from an EFTS hit.
+
+    Issue #3 (2026-07-04): the old resolver preferred manifest items whose
+    ``type`` matched ``form_type``, but the ``index.json`` directory-listing
+    ``type`` is a generic *file/icon* type (``"text.gif"`` for every item) — NOT
+    the SEC document type — so the match NEVER fired and it always fell back to
+    "largest non-XBRL .htm".  For an 8-K an EX-99.1 exhibit can be larger than the
+    body, yielding the WRONG document.
+
+    EFTS already tells us the primary document authoritatively.  Two encodings are
+    seen in the wild:
+      1. The hit ``_id`` is ``"{accession}:{primary_document_filename}"`` — the
+         part after the colon is the primary doc (the common EFTS shape).
+      2. Some responses carry it under ``_source`` as ``primary_doc`` /
+         ``primaryDocument`` / ``primary_document``.
+
+    Returns the filename, or ``None`` when the hit does not carry one (caller then
+    falls back to the manifest heuristic).
+    """
+    for key in ("primary_doc", "primaryDocument", "primary_document"):
+        val = source_data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    hit_id = filing.get("_id")
+    if isinstance(hit_id, str) and ":" in hit_id:
+        candidate = hit_id.split(":", 1)[1].strip()
+        if candidate:
+            return candidate
+    return None
+
+
 def resolve_primary_document(
     manifest: dict[str, Any],
     *,
     form_type: str,
     accession_no: str,
+    efts_primary_doc: str | None = None,
 ) -> str | None:
-    """Resolve the primary filing document filename from an EDGAR ``index.json`` manifest.
+    """Resolve the primary filing document filename.
 
-    Selection rules (R1 Fix ①):
+    Authoritative source (Issue #3 fix, 2026-07-04): when the EFTS search hit
+    provides the primary-document filename (``efts_primary_doc``), it is used
+    directly — EFTS knows the true primary document, whereas the ``index.json``
+    ``type`` field is a useless generic file type (``"text.gif"``).  We only
+    accept it when it is a real HTML body (``.htm``/``.html``, not the index page,
+    not an XBRL/viewer artefact) and — when a manifest is available — it actually
+    appears in the manifest (guards against a stale/typo filename → 404).
+
+    Manifest-heuristic fallback (R1 Fix ①), used ONLY when EFTS gives no usable
+    primary doc:
       1. Consider only ``.htm``/``.html`` items.
       2. Exclude the ``…-index.htm`` directory page itself.
       3. Exclude XBRL instance/linkbase/viewer artefacts (:func:`_is_xbrl_or_viewer`).
       4. Prefer items whose manifest ``type`` matches the requested ``form_type``
-         (e.g. type ``10-K`` for a 10-K filing) — this skips exhibits (EX-*).
+         (retained for the rare filing that carries a real SEC ``type``).
       5. Among the preferred pool, pick the LARGEST by ``size`` (the narrative is
-         invariably the biggest HTML document); tie-break by name for determinism.
+         usually the biggest HTML document); tie-break by name for determinism.
 
     Returns the filename, or ``None`` when no suitable HTML document exists (e.g. a
     text-only filing) so the caller can skip rather than store boilerplate.
@@ -88,17 +130,21 @@ def resolve_primary_document(
     directory = manifest.get("directory") or {}
     items = directory.get("item") or []
     if not isinstance(items, list):
-        return None
+        items = []
 
     index_name = f"{accession_no}-index.htm".lower()
     form_norm = (form_type or "").strip().upper()
 
     candidates: list[tuple[str, str, int]] = []  # (name, type, size)
+    manifest_names: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
             continue
         name = str(item.get("name", "")).strip()
-        if not name or not name.lower().endswith((".htm", ".html")):
+        if not name:
+            continue
+        manifest_names.add(name.lower())
+        if not name.lower().endswith((".htm", ".html")):
             continue
         if name.lower() == index_name:
             continue
@@ -109,6 +155,18 @@ def resolve_primary_document(
         except (TypeError, ValueError):
             size = 0
         candidates.append((name, str(item.get("type", "")).strip(), size))
+
+    # Authoritative EFTS primary document — trust it when it is a real HTML body
+    # and (when we have a manifest) it is present in the manifest listing.
+    if efts_primary_doc:
+        efts_name = efts_primary_doc.strip()
+        efts_lower = efts_name.lower()
+        is_html_body = (
+            efts_lower.endswith((".htm", ".html")) and efts_lower != index_name and not _is_xbrl_or_viewer(efts_name)
+        )
+        in_manifest = (not manifest_names) or (efts_lower in manifest_names)
+        if is_html_body and in_manifest:
+            return efts_name
 
     if not candidates:
         return None
@@ -265,8 +323,40 @@ class SECEdgarAdapter(SourceAdapter):
             if isinstance(searched, list):
                 filings = searched
 
+        # Issue #1/#2 (2026-07-04): BOUND the expensive per-filing work per cycle.
+        # A watchlist search returns many filings across many CIKs; fetching every
+        # filing's manifest + primary document in one task run took hours, blew the
+        # worker task-timeout / 300 s lease, and got re-claimed from scratch → an
+        # infinite reclaim loop that committed nothing.  We cap the number of NEW
+        # (post-dedup) filings we fetch this cycle; already-stored filings are
+        # skipped cheaply and do NOT count against the cap.  Each cycle commits a
+        # bounded batch and the next scheduler tick continues (dedup + watermark
+        # guarantee forward progress), so the full 3-year backfill still completes,
+        # just safely.  Fallback 25 mirrors the default when no provider_cfg is
+        # injected (legacy/test path).
+        max_per_cycle = self._provider_cfg.max_filings_per_cycle if self._provider_cfg is not None else 25
+
+        # Process OLDEST-first so the watermark (advanced to the newest item we
+        # actually persisted) never leap-frogs over still-unfetched older filings —
+        # which would strand them outside the next search window.  Filings without a
+        # parseable date sort last (fetched only once dated ones are drained).
+        _sentinel = datetime.max.replace(tzinfo=UTC)
+        filings.sort(key=lambda f: _parse_published_at(f) or _sentinel)
+
         results: list[FetchResult] = []
+        processed = 0
         for filing in filings:
+            # Bounded-cycle backstop: stop once we have done ``max_per_cycle`` worth
+            # of expensive manifest+document fetches. Remaining filings are picked up
+            # on the next cycle (they are skipped cheaply via dedup once stored).
+            if processed >= max_per_cycle:
+                logger.info(
+                    "sec_edgar_cycle_cap_reached",
+                    cap=max_per_cycle,
+                    total_candidates=len(filings),
+                )
+                break
+
             source_data = filing.get("_source", filing)
 
             # BP-460: EFTS returns "adsh" (not "accession_no") as the accession number.
@@ -291,6 +381,10 @@ class SECEdgarAdapter(SourceAdapter):
                 logger.debug("sec_edgar_dedup_skip", url_hash=filing_hash[:12])
                 continue
 
+            # This filing is NEW → it requires the expensive manifest + document
+            # fetches below, so it counts against the bounded-cycle cap.
+            processed += 1
+
             # BP-460: Construct the EDGAR filing index URL.
             # Format: https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_dashes}/{acc_no_dashes}-index.htm
             # where {cik} has no leading zeros and {acc_no_dashes} has no dashes.
@@ -314,10 +408,15 @@ class SECEdgarAdapter(SourceAdapter):
                     retry_config=self._retry_config,
                     context=f"sec_edgar:manifest:{accession_no}",
                 )
+                # Issue #3: pass the authoritative EFTS primary-document filename so
+                # the resolver uses it directly instead of the broken manifest-``type``
+                # match (which never fires) → largest-.htm heuristic.
+                efts_primary_doc = _extract_efts_primary_doc(filing, source_data)
                 primary_filename = resolve_primary_document(
                     manifest if isinstance(manifest, dict) else {},
                     form_type=form_type,
                     accession_no=accession_no,
+                    efts_primary_doc=efts_primary_doc,
                 )
                 if not primary_filename:
                     # No groundable HTML body (e.g. a text-only filing). Skip rather

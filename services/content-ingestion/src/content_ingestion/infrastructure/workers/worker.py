@@ -457,7 +457,17 @@ class WorkerProcess:
         # a TokenBucket. Passing `rate_limiter=` raised TypeError which
         # surfaced as "got an unexpected keyword argument 'rate_limiter'"
         # and put every freshly-seeded SEC EDGAR task into FAILED.
-        if source_type_val in ("newsapi", "sec_edgar"):
+        if source_type_val == "sec_edgar":
+            # Thread provider_cfg so the adapter honours max_filings_per_cycle
+            # (bounded-backfill cap) AND its market-hours pacing. Previously the
+            # SEC adapter was built WITHOUT provider_cfg, so the cap defaulted and
+            # (before this fix) the fetch was unbounded → reclaim loop (Issue #1/#2).
+            return adapter_cls(  # type: ignore[call-arg]
+                client=client,
+                exists_fn=exists_fn,
+                provider_cfg=settings.sec_edgar,
+            )
+        if source_type_val == "newsapi":
             return adapter_cls(  # type: ignore[call-arg]
                 client=client,
                 exists_fn=exists_fn,

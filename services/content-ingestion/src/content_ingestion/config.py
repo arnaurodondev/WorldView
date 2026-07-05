@@ -135,6 +135,24 @@ class SECEdgarProviderSettings(BaseModel):
     max_concurrent: int = 8
     market_hours_interval_seconds: int = 60
     off_hours_interval_seconds: int = 1800
+    # Bounded-backfill cap (fix for the SEC re-claim loop, 2026-07-04).  A single
+    # ``sec-edgar-filings`` task fans out over the WHOLE CIK watchlist x the full
+    # backfill window; fetching every filing's manifest + primary document in ONE
+    # task run took hours, blew the worker task-timeout / 300 s lease, and got
+    # re-claimed from CIK 0 by the other worker slot → an infinite reclaim loop
+    # that committed nothing and hammered SEC.  We now bound the number of NEW
+    # (post-dedup) filings whose manifest + document we fetch per cycle — the same
+    # backstop shape as the EODHD firehose ``max_pages_per_cycle`` and Polymarket's
+    # ``max_pages_per_cycle``.  Already-stored filings are skipped cheaply via the
+    # dedup check and do NOT count against this cap, so each cycle performs a
+    # bounded amount of expensive I/O, COMMITS, and the next scheduler tick
+    # continues where it left off (dedup + watermark guarantee forward progress).
+    # 25 filings ≈ 25 manifest + 25 document fetches + N CIK searches, which
+    # completes well inside the 120 s worker task-timeout.  Raise to drain a large
+    # historical backfill faster (still bounded by the lease); lower if SEC
+    # rate-limits.  Overridable via
+    # ``CONTENT_INGESTION_SEC_EDGAR__MAX_FILINGS_PER_CYCLE``.
+    max_filings_per_cycle: int = 25
 
 
 class PolymarketProviderSettings(BaseModel):
