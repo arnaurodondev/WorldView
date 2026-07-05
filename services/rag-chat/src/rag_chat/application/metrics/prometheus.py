@@ -572,6 +572,21 @@ rag_entity_resolver_ambiguous_total = Counter(
     labelnames=["reason"],  # stop_word_strip | delta_below_threshold | low_top_similarity
 )
 
+# RC-1 (2026-07-05): the pre-loop S6 ``/entities/resolve`` call is the #1 chat
+# reliability failure — a stale pooled keep-alive socket (nlp-pipeline drops the
+# idle connection during a long ~80s turn) raises ``UpstreamTransportError`` on
+# the NEXT turn and used to kill the whole chat turn ("Exception in ASGI
+# application"). We now retry once on a fresh connection and, if resolution is
+# STILL unreachable, degrade to empty entities so the turn survives. This
+# counter makes the degradation (an answer that is less entity-grounded)
+# dashable rather than silently masked.
+rag_entity_resolution_degraded_total = Counter(
+    "rag_entity_resolution_degraded_total",
+    "Pre-loop S6 entity resolution was unreachable after retries; the turn "
+    "proceeded with empty resolved entities (graceful degradation, RC-1)",
+    labelnames=["reason"],  # upstream_unreachable | upstream_timeout | upstream_5xx
+)
+
 # ── PLAN-0099 Wave C: agentic brief generator (experimental) ─────────────────
 brief_agentic_llm_calls_total = Counter(
     "brief_agentic_llm_calls_total",

@@ -351,15 +351,38 @@ class ChatPipeline:
         # avoid importing prometheus_client at module-load when these
         # paths are unused (tests, eval harness).
         from rag_chat.application.metrics.prometheus import (
+            rag_entity_resolution_degraded_total,
             rag_entity_resolver_ambiguous_total,
         )
+        from rag_chat.application.pipeline.transport_error import UpstreamTransportError
         from rag_chat.application.services.resolver_gates import (
             GatedEntity,
             ResolverGateConfig,
             filter_resolver_candidates,
         )
 
-        raw_entities = await self.s6_client.resolve_entities(message)
+        # RC-1 (2026-07-05): graceful degradation. The pre-loop S6 resolve is
+        # the #1 chat reliability failure — a stale pooled keep-alive socket
+        # raises ``UpstreamTransportError`` (a BaseException, so a plain
+        # ``except Exception`` would NOT catch it). The S6Client already retried
+        # once on a fresh connection; if it STILL failed, resolution is
+        # genuinely unreachable. We must NOT let that kill the whole turn:
+        # degrade to an empty entity list so the agent loop + synthesis still
+        # run and the user gets an answer (less entity-grounded, but an answer).
+        # Behaviour when resolution SUCCEEDS is unchanged.
+        try:
+            raw_entities = await self.s6_client.resolve_entities(message)
+        except UpstreamTransportError as exc:
+            log.warning(
+                "entity_resolution_degraded",
+                reason=exc.reason,
+                path=exc.path,
+                elapsed_ms=exc.elapsed_ms,
+                detail="S6 /entities/resolve unreachable after retry; proceeding "
+                "with empty resolved entities (RC-1 graceful degradation)",
+            )
+            rag_entity_resolution_degraded_total.labels(reason=exc.reason).inc()
+            return []
         if not raw_entities:
             return raw_entities
 
