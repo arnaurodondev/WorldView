@@ -42,7 +42,7 @@ SEC fair-access
 SEC caps clients at 10 req/s and REQUIRES a descriptive User-Agent. This script
 issues at most 2 requests per filing (manifest + primary doc) and throttles to
 ``--rate`` requests/second (default 5, well under the cap) via an async limiter.
-Set ``SEC_EDGAR_USER_AGENT`` (e.g. ``"worldview/1.0 you@example.com"``).
+Set ``CONTENT_INGESTION_SEC_EDGAR_USER_AGENT`` (e.g. ``"worldview/1.0 you@example.com"``; unprefixed ``SEC_EDGAR_USER_AGENT`` also accepted).
 
 Idempotency
 -----------
@@ -66,7 +66,7 @@ Environment
 -----------
     CONTENT_STORE_DB_URL     (default: postgresql+asyncpg://postgres:postgres@localhost:5432/content_store_db)
     CONTENT_INGESTION_DB_URL (default: postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db)
-    SEC_EDGAR_USER_AGENT     (REQUIRED for --apply; SEC rejects requests without it)
+    CONTENT_INGESTION_SEC_EDGAR_USER_AGENT  (REQUIRED for --apply; unprefixed SEC_EDGAR_USER_AGENT also accepted; SEC rejects requests without it)
     Storage (MinIO/S3) config is read from the standard ``STORAGE_*`` env vars
     used by ``storage.settings.StorageSettings``.
 """
@@ -80,6 +80,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,25 @@ _DEFAULT_STATE_FILE = ".sec_backfill_state.json"
 # 200 words is a conservative floor: real filings run into the thousands, index
 # pages ~40. NULL title is the other tell.
 _DEFECT_WORD_FLOOR = 200
+
+# Issue #4: the content-ingestion service reads its SEC User-Agent from the
+# pydantic-settings-PREFIXED env var (Settings.sec_edgar_user_agent,
+# env_prefix="CONTENT_INGESTION_"). This standalone ops script must use the SAME
+# source of truth, else SEC's WAF 403s every request. Fall back to the unprefixed
+# name for flexibility. NOT reading Settings() directly on purpose: its non-empty
+# default would mask the "neither set" case and break the --apply guard.
+_UA_ENV_PRIMARY = "CONTENT_INGESTION_SEC_EDGAR_USER_AGENT"
+_UA_ENV_FALLBACK = "SEC_EDGAR_USER_AGENT"
+
+
+def resolve_user_agent(env: Mapping[str, str]) -> str:
+    """Return the SEC User-Agent from the prefixed env var, else the unprefixed, else ''."""
+    for name in (_UA_ENV_PRIMARY, _UA_ENV_FALLBACK):
+        value = env.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
 
 # Parse CIK + accession from the stored index URL:
 #   https://www.sec.gov/Archives/edgar/data/320193/000147793226002885/0001477932-26-002885-index.htm
@@ -302,9 +322,12 @@ async def _apply_one(
 
 
 async def _run(args: argparse.Namespace) -> None:
-    user_agent = os.environ.get("SEC_EDGAR_USER_AGENT", "").strip()
+    user_agent = resolve_user_agent(os.environ)
     if args.apply and not user_agent:
-        raise SystemExit("SEC_EDGAR_USER_AGENT must be set for --apply (SEC rejects requests without a User-Agent).")
+        raise SystemExit(
+            "CONTENT_INGESTION_SEC_EDGAR_USER_AGENT (or SEC_EDGAR_USER_AGENT) must be set for "
+            "--apply (SEC rejects requests without a compliant User-Agent).",
+        )
     # Dry-run still hits SEC; use a placeholder UA if none provided.
     effective_ua = user_agent or "worldview-backfill/1.0 (dry-run)"
 
