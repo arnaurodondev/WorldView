@@ -2536,6 +2536,23 @@ class ChatOrchestratorUseCase:
             """Return ms since the tool loop started — used by every agent_iteration emit."""
             return int((time.monotonic() - _loop_start_monotonic) * 1000.0)
 
+        # DEF-036 (2026-07-04): planner/synthesis model split. The tool-loop
+        # PLANNING turn (``chat_with_tools`` below) uses ``planning_model`` — a
+        # fast parallel-tool-calling model (Qwen3-235B in the live stack) — while
+        # the final ANSWER SYNTHESIS (``stream_chat``) keeps ``completion_model``
+        # (gpt-oss-120b, best grounding discipline). Resolved ONCE here (lazy
+        # ``Settings()`` mirrors the grounding-rewrite lookup); on construction
+        # failure we degrade to ``None`` → the adapter's configured model, which
+        # is byte-identical to the pre-split single-model behaviour. Default of
+        # ``planning_model`` equals ``completion_model`` so an unset
+        # RAG_CHAT_PLANNING_MODEL keeps planning == synthesis.
+        try:
+            from rag_chat.config import Settings as _RagChatSettings
+
+            _planning_model: str | None = _RagChatSettings().planning_model  # type: ignore[call-arg]
+        except Exception:
+            _planning_model = None
+
         # ── E-6: Agent loop ───────────────────────────────────────────────────
         for iteration in range(budget.max_iterations):
             # PLAN-0107: emit per-iteration progress event BEFORE the
@@ -2569,6 +2586,10 @@ class ChatOrchestratorUseCase:
                     tools=tool_defs if tool_defs else None,
                     max_tokens=budget.max_tokens_per_iter,
                     temperature=0.1,
+                    # DEF-036: run the planning turn on the (fast) planner model.
+                    # ``None`` → adapter's configured model (unchanged behaviour).
+                    # Threads through ProviderChain **kwargs → adapter ``model``.
+                    model=_planning_model,
                     # FIX-LIVE-EE (2026-05-25): only iter-0 gets the in-place
                     # transient-retry path. Mid-loop failures (iter > 0) fall
                     # through to FIX-LIVE-V's recovery branch below, which is

@@ -85,6 +85,16 @@ class Settings(BaseSettings):
     # RAG_CHAT_COMPLETION_MODEL=openai/gpt-oss-120b env override. Default now points at a
     # real DeepInfra model (matches prod) so an unset env can't break completions.
     completion_model: str = "openai/gpt-oss-120b"  # RAG_CHAT_COMPLETION_MODEL
+    # DEF-036 (2026-07-04): planner/synthesis model split.  A model benchmark
+    # (docs/audits/2026-07-04-planner-model-benchmark.md) showed a fast
+    # parallel-tool-calling model (Qwen3-235B-A22B) is best for the tool-loop
+    # PLANNING turn (`chat_with_tools`), while gpt-oss-120b keeps the best
+    # grounding discipline for the final ANSWER SYNTHESIS (`stream_chat`).  This
+    # setting drives ONLY the planning turn; synthesis keeps ``completion_model``.
+    # Default = the SAME value as ``completion_model`` so an unset env is
+    # byte-identical to the old single-model behavior (planning == synthesis);
+    # operators set RAG_CHAT_PLANNING_MODEL=Qwen/Qwen3-235B-A22B to enable the split.
+    planning_model: str = "openai/gpt-oss-120b"  # RAG_CHAT_PLANNING_MODEL
     # OpenRouter fallback model — configurable independently from the DeepInfra primary.
     openrouter_completion_model: str = "deepseek/deepseek-r1-distill-qwen-32b"  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
 

@@ -1155,9 +1155,9 @@ class TestPendingActionJsonWarning:
         # structlog renders the event name + key=value context into stdout.
         captured = capsys.readouterr()
         combined = captured.out + captured.err
-        assert (
-            "pending_action_json_parse_failure" in combined
-        ), f"expected pending_action_json_parse_failure log event, got: {combined!r}"
+        assert "pending_action_json_parse_failure" in combined, (
+            f"expected pending_action_json_parse_failure log event, got: {combined!r}"
+        )
         # The warning must carry pending_id + error context so operators can
         # triage the malformed upstream payload.
         assert "pending_id" in combined, f"warning missing pending_id key: {combined!r}"
@@ -1240,3 +1240,125 @@ class TestAgentIterationEvents:
         assert first["tools_completed_total"] == 0  # no tools have run yet
         assert isinstance(first["elapsed_ms"], int)
         assert first["elapsed_ms"] >= 0
+
+
+class TestPlannerSynthesisModelSplit:
+    """DEF-036: the tool-loop PLANNING turn uses ``planning_model``; the final
+    ANSWER SYNTHESIS (``stream_chat``) keeps ``completion_model``.
+
+    These assert the wiring end-to-end through the orchestrator: the planning
+    ``chat_with_tools`` call must carry ``model=<planning override>`` while the
+    synthesis ``stream_chat`` call must NOT carry a ``model`` kwarg (so it falls
+    back to the adapter's configured completion/synthesis model).
+    """
+
+    @staticmethod
+    def _prime_planning_env(monkeypatch: Any, planning_model: str) -> None:
+        """Set the minimal env so the orchestrator's lazy ``Settings()`` builds
+        and resolves ``planning_model`` to the override."""
+        monkeypatch.setenv("APP_ENV", "test")
+        monkeypatch.setenv(
+            "RAG_CHAT_DATABASE_URL",
+            "postgresql+asyncpg://fake:fake@localhost:5432/fake_rag_db",
+        )
+        monkeypatch.setenv("RAG_CHAT_S1_INTERNAL_TOKEN", "test-token")
+        monkeypatch.setenv("RAG_CHAT_PLANNING_MODEL", planning_model)
+
+    def test_planning_call_uses_planning_model_synthesis_keeps_completion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Planning ``chat_with_tools`` gets ``model=planning_model``; synthesis
+        ``stream_chat`` gets NO ``model`` override (keeps completion_model)."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        planning_model = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+        self._prime_planning_env(monkeypatch, planning_model)
+
+        tool_block = _make_tool_use_block("get_price_history")
+        direct_answer = _make_llm_tool_response(text="The price is $150.", tool_calls=[])
+
+        # Capture the kwargs each planning turn receives.
+        planning_kwargs: list[dict] = []
+        call_count = [0]
+
+        async def _chat_with_tools(messages, tools=None, **kwargs):
+            planning_kwargs.append(kwargs)
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return _make_llm_tool_response(tool_calls=[tool_block])
+            return direct_answer
+
+        # Capture the kwargs the synthesis stream receives.
+        stream_kwargs: list[dict] = []
+
+        async def _stream_chat(messages, **kwargs):
+            stream_kwargs.append(kwargs)
+            for chunk in ["Apple ", "traded ", "higher."]:
+                yield chunk
+
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _chat_with_tools
+        pipeline.llm_chain.stream_chat = _stream_chat
+
+        item = _make_retrieved_item()
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        orch = ChatOrchestratorUseCase(
+            pipeline=pipeline,
+            tool_executor_factory=factory,
+            budget=AgentBudget(max_iterations=8),
+        )
+        asyncio.run(_collect_events(orch, _make_chat_request(), MagicMock()))
+
+        # (a) EVERY planning turn threads the planner model override.
+        assert planning_kwargs, "planning chat_with_tools was never called"
+        for kw in planning_kwargs:
+            assert kw.get("model") == planning_model, f"planning turn must use planning_model, got {kw.get('model')!r}"
+
+        # (b) The synthesis stream_chat must NOT carry a model override — it
+        # keeps the adapter's configured completion_model (synthesis discipline).
+        assert stream_kwargs, "synthesis stream_chat was never called"
+        for kw in stream_kwargs:
+            assert kw.get("model") is None, (
+                f"synthesis must keep completion_model (no override), got {kw.get('model')!r}"
+            )
+
+    def test_planning_model_unset_is_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With RAG_CHAT_PLANNING_MODEL unset, the planning turn passes
+        ``model=completion_model`` (== gpt-oss-120b default) — byte-identical to
+        the pre-split single-model behaviour (planning == synthesis model)."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        # Prime the required env but DELETE any planner override so the default
+        # (== completion_model) applies.
+        monkeypatch.setenv("APP_ENV", "test")
+        monkeypatch.setenv(
+            "RAG_CHAT_DATABASE_URL",
+            "postgresql+asyncpg://fake:fake@localhost:5432/fake_rag_db",
+        )
+        monkeypatch.setenv("RAG_CHAT_S1_INTERNAL_TOKEN", "test-token")
+        monkeypatch.delenv("RAG_CHAT_PLANNING_MODEL", raising=False)
+        monkeypatch.delenv("RAG_CHAT_COMPLETION_MODEL", raising=False)
+
+        planning_kwargs: list[dict] = []
+
+        async def _chat_with_tools(messages, tools=None, **kwargs):
+            planning_kwargs.append(kwargs)
+            return _make_llm_tool_response(text="Direct answer.", tool_calls=[])
+
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _chat_with_tools
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, budget=AgentBudget(max_iterations=8))
+        asyncio.run(_collect_events(orch, _make_chat_request(), MagicMock()))
+
+        assert planning_kwargs, "planning chat_with_tools was never called"
+        # Default planning_model == completion_model default (gpt-oss-120b).
+        assert planning_kwargs[0].get("model") == "openai/gpt-oss-120b"

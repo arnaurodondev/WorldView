@@ -198,6 +198,10 @@ def _warn_unpriceable_models_at_startup(settings: RagChatSettings) -> None:
     pairs: list[tuple[str, str]] = [
         (settings.deepinfra_classification_model, "deepinfra"),
         (settings.completion_model, settings.completion_provider),
+        # DEF-036: the planner turn can emit cost rows under ``planning_model``
+        # (e.g. Qwen3-235B) on the completion provider — include it so an
+        # unpriceable planner override is caught at boot.
+        (settings.planning_model, settings.completion_provider),
         (settings.openrouter_completion_model, "openrouter"),
         (settings.deepinfra_stream_chat_fallback_model, "deepinfra"),
         (settings.citation_judge_model, settings.citation_judge_provider),

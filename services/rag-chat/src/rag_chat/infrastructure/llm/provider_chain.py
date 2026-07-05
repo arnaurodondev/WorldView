@@ -370,7 +370,16 @@ class LLMProviderChain:
                 # stamp ``cost_source='aggregate'`` so the FR-7 (W5) silent-zero
                 # guard can exempt it — a $0 row here is correct, not a regression.
                 if self._usage_logger is not None and resp.usage:
-                    active_model = getattr(provider, "model_id", provider.name)
+                    # DEF-036: honour the per-call ``model`` override (planning
+                    # turn) for the aggregate-wrapper label so it agrees with the
+                    # leaf ``tool_loop_iter`` cost row's ``model_id``. Falls back
+                    # to the provider's configured model when no override is set.
+                    _model_override = kwargs.get("model")
+                    active_model = (
+                        _model_override
+                        if isinstance(_model_override, str)
+                        else getattr(provider, "model_id", provider.name)
+                    )
                     asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
                         self._usage_logger.log(
                             model_id=active_model,
@@ -382,7 +391,7 @@ class LLMProviderChain:
                             estimated_cost_usd=0.0,
                             success=True,
                             cost_source="aggregate",
-                            user_id=cast(UUID | None, kwargs.get("user_id")),
+                            user_id=cast("UUID | None", kwargs.get("user_id")),
                         ),
                     )
                 return resp  # type: ignore[no-any-return]

@@ -302,8 +302,17 @@ class DeepInfraCompletionAdapter:
         temperature: float = 0.2,
         thread_id: UUID | None = None,
         user_id: UUID | None = None,
+        model: str | None = None,
     ) -> LLMToolResponse:
         """Non-streaming structured call — returns text OR tool_calls.
+
+        DEF-036 (2026-07-04): ``model`` optionally overrides the adapter's
+        configured ``self._model`` for THIS call only — used by the chat
+        tool-loop PLANNING turn to run a fast parallel-tool-calling model
+        (Qwen3-235B) while synthesis keeps gpt-oss-120b. ``None`` (the default)
+        preserves the configured model so existing callers (brief agentic loop,
+        etc.) are byte-for-byte unchanged. The same-provider retriable-error
+        fallback and cost/metric attribution all key off the resolved model.
 
         BP-025: entire HTTP call wrapped in asyncio.wait_for to honour self._timeout.
         WHY stream=False: tool_call deltas in streaming mode require reassembling
@@ -383,13 +392,17 @@ class DeepInfraCompletionAdapter:
         # Wrap the call so we record one Prometheus sample per attempt — both
         # the primary-model attempt and the fallback-model attempt (if any) are
         # counted independently with the proper ``model_id`` label.
+        # DEF-036: resolve the per-call model override (planning turn) once so the
+        # request, metric label, fallback guard and cost row all agree on which
+        # model actually served the call. ``None`` → configured ``self._model``.
+        primary_model = model or self._model
         start = time.perf_counter()
         try:
-            result = await _call(self._model)
+            result = await _call(primary_model)
         except Exception as exc:
-            self._record_ml_call("chat_with_tools", "error", time.perf_counter() - start, model=self._model)
+            self._record_ml_call("chat_with_tools", "error", time.perf_counter() - start, model=primary_model)
             fallback_model = self._stream_chat_fallback_model
-            if not fallback_model or fallback_model == self._model or not _is_retriable_chat_failure(exc):
+            if not fallback_model or fallback_model == primary_model or not _is_retriable_chat_failure(exc):
                 raise
             log.warning(  # type: ignore[no-any-return]
                 "deepinfra_chat_with_tools_model_fallback",
@@ -418,11 +431,11 @@ class DeepInfraCompletionAdapter:
                 user_id=user_id,
             )
             return fb_result
-        self._record_ml_call("chat_with_tools", "success", time.perf_counter() - start, model=self._model)
+        self._record_ml_call("chat_with_tools", "success", time.perf_counter() - start, model=primary_model)
         # PLAN-0107 Agent-B: capture cost on the primary model success path.
         await self._record_cost(
             thread_id=thread_id,
-            model_id=self._model,
+            model_id=primary_model,
             usage=result.usage,
             call_site="tool_loop_iter",
             user_id=user_id,

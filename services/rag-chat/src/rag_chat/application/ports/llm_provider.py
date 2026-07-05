@@ -52,11 +52,17 @@ class LlmChatProvider(Protocol):
         *,
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        model: str | None = None,
     ) -> LLMToolResponse:
         """Non-streaming structured call.
 
         Returns LLMToolResponse with either .text (finish_reason=="stop") or
         .tool_calls (finish_reason=="tool_calls") populated.
+
+        DEF-036: ``model`` optionally overrides the provider's configured model
+        for THIS call only (used by the chat tool-loop planning turn to run a
+        fast parallel-tool-calling planner). ``None`` — the default — keeps the
+        configured model so existing callers are unaffected.
         """
         ...
 
