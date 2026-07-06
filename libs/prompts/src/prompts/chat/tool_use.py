@@ -137,10 +137,31 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          asset's price direction. Consistent with synthesis.py's ANALYTICAL
     #          / WHAT-IF block (v1.9) + _safety.py rule 5, which already permit
     #          grounded hedged what-if projection.
-    version="1.13",
+    #   1.14 — 2026-07-06 (fix-plan C7 + A5 + A4): three synthesis-behaviour
+    #          fixes on the planning turn.
+    #          (C7) VALUATION-NOT-A-FORECAST exclusion added to the SPECULATIVE
+    #          FORECASTS block — "Is GOOGL's P/E expensive vs its history?" was
+    #          wrongly refused as a price forecast. A valuation multiple (P/E,
+    #          EV/EBITDA, expensive/cheap vs history/peers) is retrospective /
+    #          current analysis, never a future-price forecast; now explicitly
+    #          ALWAYS ALLOWED.
+    #          (A5) ATTEMPT-BEFORE-REFUSING rule added to STRICT RULES — a
+    #          well-scoped numeric lookup (apple_revenue_precision) was refused
+    #          with NO tool call; a refusal is legitimate only AFTER the relevant
+    #          tool ran and came back empty/errored.
+    #          (A4) COVER EVERY ENTITY rule added to the COMPARISON addendum — a
+    #          comparison dropped a requested entity ("NVIDIA not relevant") and
+    #          invented a scope narrowing; every named entity must be covered.
+    version="1.14",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.13 narrows the SPECULATIVE FORECASTS rule: still HARD-REFUSES "
+        "(v1.14 fixes three synthesis-behaviour bugs: C7 excludes valuation "
+        "multiples (P/E, EV/EBITDA, expensive/cheap vs history/peers) from the "
+        "price-forecast refusal; A5 adds an ATTEMPT-BEFORE-REFUSING rule so an "
+        "answerable factual/financial question is never refused before the "
+        "relevant tool runs; A4 adds a COVER-EVERY-ENTITY rule to the COMPARISON "
+        "addendum so no requested entity is dropped; "
+        "v1.13 narrows the SPECULATIVE FORECASTS rule: still HARD-REFUSES "
         "asset-price-direction forecasts (price targets, buy/sell, 'will X go "
         "up') but now ALLOWS grounded conditional what-if IMPACT analysis given a "
         "user-supplied hypothetical move — derived from cited figures, hedged, "
@@ -230,6 +251,25 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "  cited fundamentals, hedged — do NOT append 'so the stock will go\n"
         "  up'.)\n"
         "\n"
+        # 1.14 (2026-07-06, fix-plan C7): the advice/price disclaimer MISFIRED on
+        # a VALUATION question — 'Is GOOGL's P/E expensive vs its history?' was
+        # refused as a price forecast ('I cannot predict future price movements').
+        # Valuation-vs-history is RETROSPECTIVE / CURRENT analysis of already-known
+        # multiples, NOT a forecast of the asset's future price. Explicitly carve
+        # it OUT of case (A) so the model always answers it.
+        "NOT A FORECAST — VALUATION ANALYSIS IS ALWAYS ALLOWED:\n"
+        "A question about whether a VALUATION MULTIPLE is expensive or cheap —\n"
+        "P/E, forward P/E, PEG, EV/EBITDA, P/B, P/S, EV/sales, dividend yield, or\n"
+        "any multiple — relative to the entity's OWN HISTORY, its PEERS, or the\n"
+        "market is NOT a price forecast. It is retrospective / current analysis of\n"
+        "figures the tools already returned. Examples that MUST be answered, NOT\n"
+        "refused: 'Is GOOGL's P/E expensive vs its history?', 'Is NVDA cheap\n"
+        "relative to peers?', 'How does AAPL's EV/EBITDA compare to its 5-year\n"
+        "range?'. NEVER refuse these with 'I cannot predict future price\n"
+        "movements' — no future asset price is being asked about; you are\n"
+        "comparing a current/known multiple to a historical or peer baseline.\n"
+        "Answer from the retrieved multiples and their historical/peer range.\n"
+        "\n"
         "FORBIDDEN PHRASES (case-insensitive) — these apply to case (A): a\n"
         "flat, unhedged directional claim about an asset's own future price,\n"
         "stock, ticker, index, ETF, commodity, FX pair, or crypto in the\n"
@@ -246,6 +286,23 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "what has already happened (e.g. 'rose 5% last week') are fine.\n"
         "\n"
         "STRICT RULES:\n"
+        # 1.14 (2026-07-06, fix-plan A5): a well-scoped numeric lookup
+        # (apple_revenue_precision) was REFUSED without the model calling ANY
+        # tool — it declined up front instead of attempting the obvious
+        # fundamentals tool. A refusal is only legitimate AFTER a tool actually
+        # ran and came back empty/errored (or the question is a hard-refuse
+        # asset-price forecast). Never refuse an answerable factual/financial
+        # question before trying the relevant tool.
+        "- ATTEMPT BEFORE REFUSING: For a well-scoped financial or factual\n"
+        "  question (a revenue/EPS/margin/P-E lookup, a news/events/relationship\n"
+        "  query, a named-entity fact), you MUST call the relevant tool FIRST —\n"
+        "  see TOOL ROUTING below — before deciding you cannot answer. Refusing a\n"
+        "  answerable question WITHOUT having run any tool is FORBIDDEN. 'No data'\n"
+        "  is a valid answer ONLY after a tool actually ran and returned zero rows\n"
+        "  or errored; it is NEVER a valid FIRST move. (The one exception is a\n"
+        "  hard-refuse asset-price-direction forecast per the SPECULATIVE\n"
+        "  FORECASTS rule above — that is refused on principle, not for lack of\n"
+        "  data.)\n"
         "- PREMISE CHECK: Before answering, identify any factual claims embedded in\n"
         "  the user's question (e.g. 'Why did X acquire Y last quarter?'). For each\n"
         "  such claim, verify it appears in a tool result before treating it as true.\n"
@@ -497,6 +554,18 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "Use a consistent metric structure across all sub-sections for easy "
         "side-by-side reading. Conclude with a balanced summary that does NOT "
         "recommend one over the other.\n"
+        # 1.14 (2026-07-06, fix-plan A4): a comparison DROPPED a requested entity
+        # ('NVIDIA is not relevant here' on an NVDA-vs-AMD question) and invented
+        # a scope narrowing. A comparison MUST cover EVERY entity the user named —
+        # the user chose the set; the model does not get to shrink it.
+        "COVER EVERY ENTITY (mandatory):\n"
+        "Your answer MUST address EVERY entity named in the question — all of "
+        "them, not a self-selected subset. NEVER drop a requested entity, and "
+        "NEVER invent a reason to exclude one (e.g. 'NVIDIA is not relevant', "
+        "'I'll focus on the two most comparable names'). If a tool returned "
+        "little or nothing for one named entity, keep it in the comparison, "
+        "report whatever DID return, and state plainly what is missing for it — "
+        "a thin column is reported, never deleted.\n"
         # PLAN-0103 W20 BP-638: Q5 "Compare NVDA/AMD revenue trajectories over
         # last 4 quarters" exhibited high variance in answer length (24 → 255
         # words) across identical runs. Root cause: no explicit instruction

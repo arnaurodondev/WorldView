@@ -59,9 +59,9 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.11 (data-coverage-boundary honesty) added the DATA-COVERAGE BOUNDARY block
-    # on top of v1.10's deep-question reasoning-rigor and v1.9's what-if permission.
-    assert ident.startswith("chat_synthesis_system@1.11#")
+    # v1.12 (synthesis-behavior fix-plan A1 + C7 + A4) on top of v1.11's
+    # data-coverage-boundary, v1.10's reasoning-rigor and v1.9's what-if permission.
+    assert ident.startswith("chat_synthesis_system@1.12#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -288,3 +288,67 @@ def test_synthesis_prompt_forbids_refusing_present_data() -> None:
     assert "unavailable" in rendered  # forbid false "value unavailable"
     assert "create_alert" in rendered  # forbid denying a completed action
     assert "factual lookup" in rendered.lower() or "factual question" in rendered.lower()
+
+
+def test_synthesis_prompt_gates_canned_no_data_refusal() -> None:
+    """A1 (fix-plan, 2026-07-06): the SYNTHESIS turn emitted the canned
+    "I couldn't retrieve any data" refusal despite a status=ok tool result above
+    it (create_alert succeeded / a relations search returned rows). The prior
+    defeatist-patch only covered the grounding-REWRITE path; this SYNTHESIS path
+    was uncovered. The prompt must now (a) name the canned no-data phrasings and
+    GATE them to the all-tools-empty/errored case, (b) forbid emitting them while
+    ANY status=ok / non-empty result is present, and (c) require the model to
+    report the result or confirm the action instead.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # (a) the canned phrasing is named and gated.
+    assert "I couldn't retrieve any data" in rendered
+    assert "GATED" in rendered or "RESERVED for the case where EVERY tool" in rendered
+    # (b) forbidden while a status=ok result is present.
+    assert "status=ok" in rendered
+    assert "hard failure" in rendered
+    # (c) must use the result — report rows or confirm the action.
+    assert "confirm the\n  action succeeded" in rendered or "confirm the action succeeded" in rendered.replace(
+        "\n", " "
+    )
+    # GUARDRAIL: the existing trust-your-tool-results + create_alert confirmation
+    # rule is still present (additive, not a replacement).
+    assert "TRUST YOUR TOOL RESULTS" in rendered
+    assert "create_alert" in rendered
+
+
+def test_synthesis_prompt_valuation_not_a_forecast() -> None:
+    """C7 (fix-plan, 2026-07-06): the advice/price disclaimer MISFIRED on a
+    valuation question ("Is GOOGL's P/E expensive vs its history?") — refused as a
+    price forecast. Valuation-vs-history is retrospective / current analysis, not a
+    forecast. The prompt must explicitly EXCLUDE valuation multiples from the
+    price-forecast refusal.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # The valuation carve-out names the multiples and the anti-refusal.
+    assert "VALUATION-VS-HISTORY" in rendered or "valuation-vs-history" in rendered.lower()
+    assert "P/E" in rendered and "EV/EBITDA" in rendered
+    assert "expensive / cheap" in rendered or "expensive/cheap" in rendered
+    # It must say this is NOT a price forecast and forbid the misfired refusal.
+    assert "NOT a price forecast" in rendered
+    assert "I cannot predict future price\n  movements" in rendered or (
+        "I cannot predict future price movements" in rendered.replace("\n  ", " ")
+    )
+
+
+def test_synthesis_prompt_comparison_covers_every_entity() -> None:
+    """A4 (fix-plan, 2026-07-06): a comparison DROPPED a requested entity
+    ("NVIDIA is not relevant") and invented a scope narrowing. The prompt must add
+    a COMPARISON / MULTI-ENTITY block requiring EVERY named entity to be covered,
+    forbidding a self-authored exclusion, and reporting (not dropping) an entity
+    with thin data.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    assert "COMPARISON / MULTI-ENTITY — COVER EVERY ENTITY NAMED" in rendered
+    assert "address EVERY entity the user named" in rendered
+    # The exact invented-exclusion patterns must be named + forbidden.
+    assert "NEVER invent a reason to exclude" in rendered
+    assert "not relevant here" in rendered
+    # Thin data is reported, not deleted.
+    assert "never silently drop it" in rendered
+    assert "not grounds to delete" in rendered

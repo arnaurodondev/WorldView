@@ -40,9 +40,13 @@ from chat_quality_judge import (  # — sys.path mutation must precede the impor
     JudgeInput,
     Rubric,
     _build_user_prompt,
+    _field_value_matches,
     _is_appropriate_refusal,
     _is_transient_llm_error,
+    _parse_judge_response,
     _with_retry,
+    cross_check_grounding,
+    detect_data_gap_nonanswer,
     detect_degenerate_answer,
     detect_phantom_citation,
     detect_tool_failure_nonanswer,
@@ -205,13 +209,28 @@ _DIGIT_DROP_ANSWER = (
 
 
 def _veto_input() -> JudgeInput:
-    """A normal (non-degenerate) answer so the LLM judge actually runs."""
+    """A normal (non-degenerate) answer so the LLM judge actually runs.
+
+    Carries a real ``grounding_sample`` so the numeric cross-check runs in
+    ``verified`` mode — the mode in which the soft grounding-floor veto is VALID
+    (B3, 2026-07-06: the floor veto is suppressed in ``presumed`` mode where the
+    grounding sub-score is only a guess). The sampled ``pe_ratio`` matches the
+    claimed ``37.73x`` so no numeric contradiction fires — the veto under test is
+    purely the low soft grounding sub-score against real evidence.
+    """
     return JudgeInput(
         prompt="What is the P/E ratio of AAPL?",
         rubric=Rubric(expected_tools=["query_fundamentals"], expected_depth="shallow"),
         answer_text="AAPL P/E is 37.73x as of 2026-06-01 [query_fundamentals row 0].",
         tool_calls=[{"name": "query_fundamentals", "arguments": {"symbol": "AAPL"}}],
-        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+        tool_results=[
+            {
+                "tool": "query_fundamentals",
+                "status": "ok",
+                "item_count": 1,
+                "grounding_sample": {"fields": {"pe_ratio": "37.73", "ticker": "AAPL"}},
+            }
+        ],
     )
 
 
@@ -268,6 +287,64 @@ def test_no_veto_field_on_clean_pass() -> None:
     out = judge_answer(_veto_input(), llm=_llm)
     assert out["verdict"] == "PASS"
     assert out["veto"] is None
+
+
+def _presumed_input() -> JudgeInput:
+    """A normal answer with NO grounding sample → the cross-check runs presumed."""
+    return JudgeInput(
+        prompt="What is META's latest EPS?",
+        rubric=Rubric(expected_tools=["query_fundamentals"], expected_depth="shallow"),
+        answer_text="META's latest EPS is $6.20 [query_fundamentals row 0].",
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"symbol": "META"}}],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+
+def test_grounding_veto_suppressed_in_presumed_mode() -> None:
+    """B3 (2026-07-06): in PRESUMED mode a low GUESSED grounding sub-score must NOT
+    veto. No grounding sample = no basis to claim fabrication — the additive band
+    decides. This fixes the proven identical-answer PASS/FAIL/PASS flip."""
+
+    def _fabricating_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "feedback": "right tool"},
+                "grounding": {"score": 10, "feedback": "guessed — no sample to verify"},
+                "framing": {"score": 25, "feedback": "good"},
+                "refusal_judgment": {"score": 25, "feedback": "N/A"},
+                "reviewer_summary": "looks fine",
+            }
+        )
+
+    out = judge_answer(_presumed_input(), llm=_fabricating_llm)
+    assert out["score"] == 85
+    assert out["verdict"] == "PASS"  # would have been a FAIL under the old presumed veto
+    assert out["veto"] is None
+
+
+def test_data_gap_nonanswer_bucketed_separately() -> None:
+    """Benchmark-validity fix (2026-07-06): an honest 'data not available' non-answer
+    against an empty tool result is bucketed DATA_GAP (excluded from the average),
+    NOT awarded a high PASS."""
+    inp = JudgeInput(
+        prompt="What is AAPL's forward P/E?",
+        rubric=Rubric(expected_tools=["query_fundamentals"], expected_depth="shallow", appropriate_refusal_ok=True),
+        answer_text="Forward P/E is not currently available in our data sources.",
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "AAPL"}}],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 0}],
+    )
+
+    def _high_llm(*, system: str, user: str) -> str:
+        return json.dumps({k: {"score": 25, "feedback": "honest decline"} for k in DIMENSION_KEYS})
+
+    out = judge_answer(inp, llm=_high_llm)
+    assert out["verdict"] == "DATA_GAP"
+    # A grounded answer that DELIVERS data is never DATA_GAP even if it hedges.
+    assert not detect_data_gap_nonanswer(
+        "AAPL forward P/E is 28.4x [query_fundamentals row 0]; the 5-yr average is not available.",
+        Rubric(expected_tools=["query_fundamentals"]),
+        [{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
 
 
 # ── F3: degenerate-answer pre-check (pure function) ─────────────────────────
@@ -696,6 +773,29 @@ def test_phantom_citation_comma_row_form_detected() -> None:
     )
 
 
+def test_phantom_citation_ignores_cypher_edge_labels() -> None:
+    """B4 (2026-07-06): a Cypher / AGE relationship pattern renders an EDGE LABEL in
+    square brackets — ``-[supplier_of]->`` / ``--[supplier_of]-->`` / ``<-[owns]-`` —
+    which is NOT an invented tool citation. It must never trip the phantom gate,
+    even when NO tools were called (a grounded graph answer)."""
+    # The exact regression: a supplier edge label in a correct grounded answer.
+    assert (
+        detect_phantom_citation(
+            "Apple --[supplier_of]--> TSMC in the knowledge graph.",
+            [{"name": "traverse_graph", "arguments": {}}],
+        )
+        is None
+    )
+    # Single-dash arrow form + a different edge label, no tools called.
+    assert detect_phantom_citation("(Apple)-[supplier_of]->(TSMC) and (X)<-[owns]-(Y).", []) is None
+    # The edge-label exclusion must NOT mask a genuine phantom tool citation that is
+    # a real prose provenance tag (not wrapped in relationship arrows).
+    assert (
+        detect_phantom_citation("Net income $10B [query_fundamentals row 0].", [{"name": "get_quote"}])
+        == "phantom_citation:query_fundamentals"
+    )
+
+
 def test_phantom_citation_hard_fails_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     """End-to-end (no API key): a phantom-cited answer is verdict=FAIL with the
     PHANTOM_CITATION fail_reason, BEFORE any LLM call (offline/CI mode)."""
@@ -916,3 +1016,125 @@ def test_summarise_excludes_error_rows_from_quality_aggregates() -> None:
     assert agg["verdict_counts"]["FAIL"] == 1
     assert agg["score_avg"] == 65.0  # mean over the two scored rows (90, 40)
     assert agg["n_records"] == 3
+
+
+# ── B1: tolerant judge-response parser (2026-07-06) ─────────────────────────
+#
+# The parser used to strip ONE leading/trailing fence and `json.loads`; any
+# failure returned {} → all-zero dimensions → a fabricated grounding-veto FAIL.
+# 7 answers in run_20260706T155740Z carried valid non-zero grades in a truncated
+# or duplicate-fenced raw_response (one a true 92 PASS). These pin the recovery.
+
+_RUN_DIR = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "tests",
+        "validation",
+        "chat_quality_benchmark",
+        "runs",
+        "run_20260706T155740Z",
+    )
+)
+
+
+def _raw_from_artifact(slug: str) -> str:
+    with open(os.path.join(_RUN_DIR, f"{slug}.json"), encoding="utf-8") as fh:
+        return json.load(fh)["judge"]["raw_response"]
+
+
+def test_parser_recovers_truncated_json_object() -> None:
+    """The 540-char q_iter3_tesla_revenue_since_2023_run1 sample is a single object
+    truncated before its closing brace. The old parser zeroed it; the tolerant
+    parser recovers the real dimension grades (tool_use=25, grounding=10)."""
+    raw = _raw_from_artifact("q_iter3_tesla_revenue_since_2023_run1")
+    parsed = _parse_judge_response(raw)
+    assert parsed is not None
+    assert parsed["tool_use"]["score"] == 25
+    assert parsed["grounding"]["score"] == 10
+
+
+def test_parser_recovers_duplicate_fenced_block() -> None:
+    """q_agg_a10_apple_anthropic_premise_run1 has a (truncated) first object then a
+    duplicate ```json fence with a second truncated block. The parser recovers the
+    most-complete object (all four dimensions present)."""
+    raw = _raw_from_artifact("q_agg_a10_apple_anthropic_premise_run1")
+    parsed = _parse_judge_response(raw)
+    assert parsed is not None
+    # The more-complete block carries all four scoring dimensions.
+    assert all(k in parsed for k in DIMENSION_KEYS)
+    assert parsed["framing"]["score"] == 25
+
+
+def test_parser_recovers_all_seven_run_failures_nonzero() -> None:
+    """Every one of the 7 previously-zeroed FAIL artefacts now recovers at least one
+    non-zero grade instead of being silently defaulted to all-zeros."""
+    slugs = [
+        "q_agg_a10_apple_anthropic_premise_run1",
+        "q_iter3_tesla_revenue_since_2023_run1",
+        "q_iter3_top5_tech_marketcap_run3",
+        "q_ru_googl_pe_vs_history_run1",
+        "q_ru_nvda_amd_revenue_4q_run3",
+        "q_tc_batch_fundamentals_mag5_run2",
+        "q_tc_create_alert_nvda_below_run1",
+    ]
+    for slug in slugs:
+        parsed = _parse_judge_response(_raw_from_artifact(slug))
+        assert parsed is not None, slug
+        recovered = [parsed[k].get("score") for k in DIMENSION_KEYS if isinstance(parsed.get(k), dict)]
+        assert any(isinstance(s, int) and s > 0 for s in recovered), slug
+
+
+def test_parser_returns_empty_on_unrecoverable_junk() -> None:
+    """Genuinely non-JSON output → no gradable dimension recovered. The parser keeps
+    its back-compat ``{}`` return (a sibling judge relies on it); ``judge_answer``
+    turns "no gradable dimension" into the distinct JUDGE_PARSE_ERROR outcome."""
+    assert not any(k in _parse_judge_response("this is not json at all") for k in DIMENSION_KEYS)
+    assert not any(k in _parse_judge_response("") for k in DIMENSION_KEYS)
+    # A valid JSON object with none of our scoring dimensions cannot be graded.
+    assert not any(k in _parse_judge_response('{"unrelated": 1}') for k in DIMENSION_KEYS)
+    # End-to-end: unparseable output → JUDGE_PARSE_ERROR (never an all-zero FAIL).
+    assert judge_answer(_make_input(), llm=lambda *, system, user: "not json")["verdict"] == "JUDGE_PARSE_ERROR"
+
+
+def test_parser_prefers_last_valid_fenced_json() -> None:
+    """A model that emits prose then a single fenced JSON block is parsed from the
+    fenced block (LAST/valid fenced JSON)."""
+    raw = 'Here is my grade:\n```json\n{"tool_use": {"score": 20}, "grounding": {"score": 22}}\n```'
+    parsed = _parse_judge_response(raw)
+    assert parsed is not None
+    assert parsed["grounding"]["score"] == 22
+
+
+# ── C2: fraction↔percent matcher (2026-07-06) ───────────────────────────────
+
+
+def test_field_value_matches_normalises_fraction_percent() -> None:
+    """gross_margin sampled as a fraction (0.1724) must match a percent claim
+    (17.24) in BOTH directions, for every percentage-kind field."""
+    assert _field_value_matches("gross_margin", 17.24, 0.1724) is True
+    assert _field_value_matches("gross_margin", 0.1724, 17.24) is True
+    # generalised beyond the old 3-field allow-list:
+    assert _field_value_matches("dividend_yield", 2.5, 0.025) is True
+    # period-suffixed field name still resolves to the percentage kind:
+    assert _field_value_matches("gross_margin_4", 17.24, 0.17238620199146515) is True
+    # an ABSOLUTE field must NEVER be x100-normalised (no false match):
+    assert _field_value_matches("revenue", 46.7, 4670.0) is False
+
+
+def test_cross_check_matches_margin_percent_vs_fraction_sample() -> None:
+    """End-to-end: a compact margin answer stated in percent matches a fraction
+    grounding sample (the C2 ru_tsla_margin_trend representation gap)."""
+    answer = "Tesla gross margin was 17.24 % and rose to 21.08 % [1]."
+    tool_results = [
+        {
+            "tool": "get_fundamentals_history",
+            "status": "ok",
+            "grounding_sample": {"fields": {"gross_margin": "0.17238620199146515", "gross_margin_2": "0.21083664"}},
+        }
+    ]
+    check = cross_check_grounding(answer, tool_results)
+    assert check.evidence_mode == "verified"
+    assert check.matched >= 1
+    assert check.contradicted == 0

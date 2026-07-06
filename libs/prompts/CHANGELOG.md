@@ -245,6 +245,35 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.14 — 2026-07-06 (synthesis-behavior fixes — valuation-not-a-forecast, attempt-before-refuse, cover-every-entity)
+
+- **C7 — valuation analysis is not a price forecast.** The advice/price-forecast
+  disclaimer MISFIRED on a valuation question — "Is GOOGL's P/E expensive vs its
+  history?" was refused with "I cannot predict future price movements".
+  Valuation-vs-history is retrospective / current analysis of already-known
+  multiples, not a forecast of a future asset price. v1.14 adds a
+  `NOT A FORECAST — VALUATION ANALYSIS IS ALWAYS ALLOWED` carve-out inside the
+  SPECULATIVE FORECASTS block: any multiple (P/E, forward P/E, PEG, EV/EBITDA,
+  P/B, P/S, EV/sales, dividend yield) judged expensive/cheap vs the entity's own
+  history, its peers, or the market MUST be answered, never refused. The hard-
+  refuse asset-price-direction case (A) is unchanged.
+- **A5 — attempt before refusing.** A well-scoped numeric lookup
+  (`apple_revenue_precision`) was REFUSED without the model calling ANY tool.
+  v1.14 adds an `ATTEMPT BEFORE REFUSING` rule to STRICT RULES: for a well-scoped
+  financial/factual question the model MUST call the relevant tool FIRST (per the
+  TOOL ROUTING table); "no data" is a valid answer only AFTER a tool actually ran
+  and returned zero rows or errored — never as a first move. The one exception is
+  a hard-refuse asset-price-direction forecast.
+- **A4 — a comparison covers every named entity.** A comparison DROPPED a
+  requested entity ("NVIDIA is not relevant here" on an NVDA-vs-AMD question) and
+  invented a scope narrowing. v1.14 adds a `COVER EVERY ENTITY (mandatory)` rule
+  to the COMPARISON addendum: every entity the user named must be addressed, a
+  self-authored exclusion is forbidden, and an entity with thin data is reported
+  (with the gap stated), never deleted.
+- **Impact.** Flips the content hash. Additive; no grounding / anti-fabrication /
+  citation rule is relaxed. Consistent with chat_synthesis_system v1.12 (same
+  three fixes on the synthesis turn).
+
 ### 1.13 — 2026-07-05 (narrow the price-forecast refusal — allow grounded conditional what-if impact)
 
 - **Root cause.** The `SPECULATIVE FORECASTS — MUST REFUSE` rule (added by
@@ -350,6 +379,38 @@ is unchanged.
 - All prior strict-no-hallucination rules are **unchanged**.
 
 ## chat_synthesis_system
+
+> Note: CHANGELOG entries for v1.8–v1.11 were not recorded here at the time; the
+> full rationale for each lives in the version-log comments in
+> `src/prompts/chat/synthesis.py`. v1.12 below resumes the CHANGELOG.
+
+### 1.12 — 2026-07-06 (synthesis-behavior fixes — trust ok results, valuation-not-a-forecast, cover-every-entity)
+
+- **A1 — trust a status=ok tool result; gate the canned no-data refusal.** The
+  SYNTHESIS turn emitted "I couldn't retrieve any data" despite a status=ok tool
+  result above it — `create_alert` SUCCEEDED (alert created) / a relations search
+  RETURNED rows, but synthesis discarded them and refused. The earlier defeatist-
+  patch (520f130ba) only covered the grounding-REWRITE path, leaving this
+  SYNTHESIS path uncovered. v1.12 strengthens the TRUST YOUR TOOL RESULTS block:
+  the canned no-data phrasings ("I couldn't retrieve any data", "no data is
+  available", …) are now EXPLICITLY GATED to the case where EVERY tool returned
+  empty/errored — forbidden while ANY status=ok / non-empty result is present.
+  The model must report the returned rows/values, or, for an action tool, confirm
+  the action succeeded.
+- **C7 — valuation analysis is not a price forecast.** A valuation question ("Is
+  GOOGL's P/E expensive vs its history?") was refused as a price forecast. v1.12
+  extends the factual-lookup-not-a-prediction bullet to EXCLUDE valuation
+  multiples (P/E, EV/EBITDA, expensive/cheap vs history/peers) from the
+  price-forecast refusal — they are retrospective / current analysis of
+  already-known numbers, always allowed. Mirrors `tool_use_system` v1.14.
+- **A4 — a comparison covers every named entity.** A comparison dropped a
+  requested entity ("NVIDIA is not relevant") and invented a scope narrowing.
+  v1.12 adds the `COMPARISON / MULTI-ENTITY — COVER EVERY ENTITY NAMED` block:
+  every named entity must be addressed, a self-authored exclusion is forbidden,
+  and thin data is reported (with the gap stated) rather than dropped.
+- **Impact.** Flips the content hash. Additive; the v1.9 what-if permission,
+  v1.10 reasoning-rigor, v1.11 data-coverage boundary, and all no-fabrication /
+  grounding / projection rules are unchanged.
 
 ### 1.7 — 2026-07-01 (prediction-market citation-refusal — real-tool-name-only labels)
 

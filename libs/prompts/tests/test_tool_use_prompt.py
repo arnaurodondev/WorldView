@@ -280,6 +280,74 @@ class TestToolUsePromptContract:
         _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
         assert _ver >= (1, 13), f"expected version >= 1.13 for what-if narrowing, got {_ver}"
 
+    def test_prompt_template_version_bumped_for_synthesis_behavior_fixes(self) -> None:
+        """v1.14 adds C7 (valuation-not-a-forecast) + A5 (attempt-before-refuse)
+        + A4 (cover-every-entity) — all edit the template body (flipping the
+        content hash), so the semver version MUST advance to >= 1.14. Pinning the
+        floor catches an accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 14), f"expected version >= 1.14 for synthesis-behavior fixes, got {_ver}"
+
+    def test_valuation_analysis_excluded_from_forecast_refusal(self) -> None:
+        """C7 (fix-plan, 2026-07-06): the advice/price disclaimer MISFIRED on a
+        valuation question ("Is GOOGL's P/E expensive vs its history?") — refused
+        as a price forecast. Valuation-vs-history is retrospective / current
+        analysis of already-known multiples, NOT a forecast of the asset's future
+        price. The SPECULATIVE FORECASTS block must carry an explicit carve-out
+        that names the multiples, says it is NOT a forecast, and forbids the
+        misfired refusal.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "REASONING"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-06")
+            assert (
+                "NOT A FORECAST — VALUATION ANALYSIS IS ALWAYS ALLOWED" in prompt
+            ), f"intent={intent}: missing carve-out"
+            # Names the multiples.
+            assert "P/E" in prompt and "EV/EBITDA" in prompt
+            assert "expensive or cheap" in prompt
+            # Says it is not a forecast + forbids the misfired refusal.
+            assert "NOT a price forecast" in prompt
+            assert "Is GOOGL's P/E expensive vs its history?" in prompt
+            assert "NEVER refuse these with 'I cannot predict future price" in prompt.replace("\n", " ")
+            # GUARDRAIL: the hard-refuse asset-price-direction case is still present.
+            assert "HARD-REFUSE" in prompt
+
+    def test_attempt_before_refusing_rule_present(self) -> None:
+        """A5 (fix-plan, 2026-07-06): a well-scoped numeric lookup
+        (apple_revenue_precision) was REFUSED without the model calling ANY tool.
+        The STRICT RULES must add an ATTEMPT-BEFORE-REFUSING rule: for a
+        well-scoped financial/factual question the model MUST call the relevant
+        tool FIRST; "no data" is valid only AFTER a tool ran and came back
+        empty/errored.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "FACTUAL_LOOKUP"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-06")
+            assert "ATTEMPT BEFORE REFUSING" in prompt, f"intent={intent}: missing rule"
+            assert "must call the relevant tool" in prompt.lower()
+            assert "WITHOUT having run any tool is FORBIDDEN" in prompt
+            # "no data" is valid only after a tool actually ran.
+            assert "ONLY after a tool actually ran" in prompt
+            # GUARDRAIL: the hard-refuse asset-price forecast exception is named so
+            # the rule does not force a tool call on a forecast question.
+            assert "hard-refuse asset-price" in prompt.lower()
+
+    def test_comparison_addendum_covers_every_entity(self) -> None:
+        """A4 (fix-plan, 2026-07-06): a comparison DROPPED a requested entity
+        ("NVIDIA is not relevant here") and invented a scope narrowing. The
+        COMPARISON addendum must require covering EVERY named entity, forbid a
+        self-authored exclusion, and keep (not delete) an entity with thin data.
+        """
+        prompt = get_tool_use_system_prompt(intent="COMPARISON", today_iso="2026-07-06")
+        assert "COVER EVERY ENTITY (mandatory):" in prompt
+        assert "MUST address EVERY entity named in the question" in prompt
+        assert "NEVER invent a reason to exclude one" in prompt
+        assert "NVIDIA is not relevant" in prompt
+        assert "keep it in the comparison" in prompt
+        # The rule must NOT appear for a non-comparison intent (addendum-scoped).
+        other = get_tool_use_system_prompt(intent="FINANCIAL_DATA", today_iso="2026-07-06")
+        assert "COVER EVERY ENTITY (mandatory):" not in other
+
     def test_core_contains_parallel_research_loop_directive(self) -> None:
         """Point 1 — general parallel tool batching in ROUND 1.
 

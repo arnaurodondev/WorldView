@@ -158,6 +158,17 @@ _GROUNDING_PERIOD_METRIC_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("gross_margin", ("gross_margin",)),
     ("operating_margin", ("operating_margin",)),
     ("net_margin", ("net_margin",)),
+    # C1 (2026-07-06): the most-asked VALUATION metrics were absent from the
+    # grounding allow-list, so a pe/ps/growth answer emitted only ``{ticker}`` —
+    # the judge could never verify the number and defaulted to a blind PASS
+    # ("presumed" mode). Add them here (per-period form, where a row carries
+    # them) AND to the snapshot list below (the TTM/current form). ``price_to_
+    # sales_ttm`` is inherently TTM (snapshot), but some upstream rows attach a
+    # per-period P/S — we accept either. ``quarterly_revenue_growth_yoy`` is a
+    # per-period derived growth figure. Multiple synonyms cover the market-data
+    # normalised name plus common EODHD-cased variants; first non-None wins.
+    ("price_to_sales_ttm", ("price_to_sales_ttm", "price_to_sales", "ps_ratio")),
+    ("quarterly_revenue_growth_yoy", ("quarterly_revenue_growth_yoy", "revenue_growth_yoy")),
 )
 
 # Snapshot scalars we lift in addition to the latest period row. The snapshot
@@ -168,6 +179,16 @@ _GROUNDING_SNAPSHOT_METRIC_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("market_cap", ("market_cap_usd", "market_cap")),
     ("ebitda", ("ebitda",)),
     ("free_cash_flow", ("free_cash_flow", "fcf")),
+    # C1 (2026-07-06): valuation scalars that live ONLY on the highlights/TTM
+    # snapshot for a snapshot-oriented query (e.g. "what's META's P/E and EPS?").
+    # ``eps`` is added here (in addition to the per-period flow key above) so a
+    # SINGLE-metric EPS query whose value is carried on the TTM snapshot — not a
+    # per-period row — still emits the VALUE, matching the multi-metric batch
+    # path (which already surfaces per-period eps). Without this an EPS-only
+    # query fell through to ``{ticker}`` only.
+    ("eps", ("eps", "eps_ttm", "diluted_eps_ttm", "earnings_share")),
+    ("price_to_sales_ttm", ("price_to_sales_ttm", "price_to_sales", "ps_ratio")),
+    ("quarterly_revenue_growth_yoy", ("quarterly_revenue_growth_yoy", "revenue_growth_yoy")),
 )
 
 
@@ -347,6 +368,22 @@ def _grounding_fields_from_rows(
     before.
     """
     if not rows:
+        # C1 (2026-07-06): a SNAPSHOT-ORIENTED query (valuation metrics like
+        # pe_ratio / forward_pe / ebitda / price_to_sales_ttm / eps-TTM) can come
+        # back with an EMPTY ``metrics_by_period`` list but a populated snapshot —
+        # those scalars are TTM/current, not per-period. Previously we returned
+        # ``()`` (no ticker, no value), so the answer's valuation numbers were
+        # unverifiable and the judge stayed in blind "presumed" mode. Emit the
+        # snapshot scalars (ticker first) so their VALUES reach the grounding
+        # sample. ``allowed_canonicals`` is honoured so an uncovered metric never
+        # enters as a phantom number.
+        if snapshot:
+            return _grounding_fields_from_row(
+                {},
+                snapshot,
+                ticker=ticker,
+                allowed_canonicals=allowed_canonicals,
+            )
         return ()
     # Newest period first, capped. ``rows`` is ASC so reversed() is newest -> oldest.
     newest_first = list(reversed(rows))[:max_periods]
@@ -1094,9 +1131,18 @@ class MarketHandler(ToolHandler):
         # independently in its answer. The id namespace ``tool:fundamentals_batch:<ticker>``
         # avoids colliding with singular ``tool:fundamentals:<ticker>`` items
         # if both tools run in the same turn (unlikely but defensible).
+        # C6 (2026-07-06): build a CASE-INSENSITIVE view of the upstream results
+        # so a ticker whose upstream key differs in case (e.g. the batch endpoint
+        # echoes "nvda" while we requested "NVDA") is NOT silently dropped from
+        # the output. A dropped ticker previously left the answer with no grounded
+        # row for that entity, which let synthesis cross-attribute another
+        # entity's figure to it (ru_nvda_amd_revenue_4q: NVDA's row vanished, its
+        # value surfaced under AMD). Every requested ticker MUST yield an item.
+        results_ci = {str(k).strip().upper(): v for k, v in results.items() if isinstance(v, dict)}
+
         out: list[RetrievedItem] = []
         for ticker in ticker_list:
-            entry = results.get(ticker) or {}
+            entry = results.get(ticker) or results_ci.get(ticker) or {}
             status = entry.get("status")
             grounding_fields: tuple[tuple[str, str], ...] = ()
             if status == "ok":

@@ -691,6 +691,13 @@ class SSEEmitter:
             "gross_margin",
             "operating_margin",
             "net_margin",
+            # C1 (2026-07-06): valuation metrics the fundamentals handlers now
+            # emit on ``grounding_fields``. Absent from this allow-list they were
+            # dropped before the judge, so pe/ps/growth answers stayed "presumed"
+            # (blind PASS). ``_\d+$``-suffixed period variants are admitted via the
+            # base-name match below, so one entry covers every period.
+            "price_to_sales_ttm",
+            "quarterly_revenue_growth_yoy",
         ),
         "get_fundamentals_history_batch": (
             "ticker",
@@ -707,6 +714,13 @@ class SSEEmitter:
             "gross_margin",
             "operating_margin",
             "net_margin",
+            # C1 (2026-07-06): valuation metrics the fundamentals handlers now
+            # emit on ``grounding_fields``. Absent from this allow-list they were
+            # dropped before the judge, so pe/ps/growth answers stayed "presumed"
+            # (blind PASS). ``_\d+$``-suffixed period variants are admitted via the
+            # base-name match below, so one entry covers every period.
+            "price_to_sales_ttm",
+            "quarterly_revenue_growth_yoy",
         ),
         # query_fundamentals (2026-06-26 STEP A): the confirmed routed-but-silent
         # gap — its handler populates ``grounding_fields`` (raw numbers + covered
@@ -728,6 +742,13 @@ class SSEEmitter:
             "gross_margin",
             "operating_margin",
             "net_margin",
+            # C1 (2026-07-06): valuation metrics the fundamentals handlers now
+            # emit on ``grounding_fields``. Absent from this allow-list they were
+            # dropped before the judge, so pe/ps/growth answers stayed "presumed"
+            # (blind PASS). ``_\d+$``-suffixed period variants are admitted via the
+            # base-name match below, so one entry covers every period.
+            "price_to_sales_ttm",
+            "quarterly_revenue_growth_yoy",
         ),
         "compare_entities": (
             "ticker",
@@ -744,6 +765,13 @@ class SSEEmitter:
             "gross_margin",
             "operating_margin",
             "net_margin",
+            # C1 (2026-07-06): valuation metrics the fundamentals handlers now
+            # emit on ``grounding_fields``. Absent from this allow-list they were
+            # dropped before the judge, so pe/ps/growth answers stayed "presumed"
+            # (blind PASS). ``_\d+$``-suffixed period variants are admitted via the
+            # base-name match below, so one entry covers every period.
+            "price_to_sales_ttm",
+            "quarterly_revenue_growth_yoy",
         ),
         "get_price_history": ("ticker", "period", "open", "high", "low", "close", "volume"),
         "screen_universe": ("ticker", "pe_ratio", "market_cap", "revenue"),
@@ -874,7 +902,22 @@ class SSEEmitter:
                 # First occurrence keeps the bare field name; subsequent rows
                 # get a numeric suffix so distinct values from different rows
                 # are not silently overwritten.
-                key = field if field not in fields else f"{field}_{sampled_rows + 1}"
+                #
+                # C6 (2026-07-06): the naive ``f"{field}_{sampled_rows + 1}"`` key
+                # COLLIDED with a suffixed period key a PRIOR item already inserted
+                # via the gf-loop below (item 1 packs ``revenue_2`` for its own Q4;
+                # item 2's bare ``revenue`` then also resolves to ``revenue_2`` and
+                # OVERWROTE item 1's value). That silently dropped one entity's
+                # figure and cross-attributed it to the other (ru_nvda_amd_revenue_4q:
+                # NVDA's revenue clobbered by AMD). Probe upward until a FREE key so
+                # no value is ever overwritten — attribution stays 1:1 with a slot.
+                if field not in fields:
+                    key = field
+                else:
+                    n = sampled_rows + 1
+                    while f"{field}_{n}" in fields:
+                        n += 1
+                    key = f"{field}_{n}"
                 fields[key] = value
                 row_field_count += 1
                 row_contributed = True

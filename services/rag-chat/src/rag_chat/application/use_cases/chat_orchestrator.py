@@ -540,7 +540,7 @@ def _append_advice_disclaimer(text: str) -> str:
     return f"{text.rstrip()}\n\n{_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER}"
 
 
-def _sanitize_unverified_markers(text: str) -> str:
+def _sanitize_unverified_markers(text: str, *, append_disclaimer: bool = True) -> str:
     """Convert leaked ``[unverified]`` tags + banners into a clean disclaimer.
 
     C2 fix. Returns *text* unchanged when no marker/banner is present (the common
@@ -550,8 +550,20 @@ def _sanitize_unverified_markers(text: str) -> str:
     * each inline ``[unverified]`` token becomes ``(source unverified)`` so it no
       longer reads as a bracketed citation/provenance tag;
     * the one-or-more trailing ``⚠ Some … could not be verified`` banners are
-      removed and replaced by a SINGLE plain-prose disclaimer line appended at the
-      end, so the hedge survives but in a non-citation shape.
+      removed and — when *append_disclaimer* is True — replaced by a SINGLE
+      plain-prose disclaimer line appended at the end, so the hedge survives but
+      in a non-citation shape.
+
+    ``append_disclaimer`` (improvement #1, 2026-07-06): the trailing canonical
+    "some figures … could not be matched to a retrieved source" caveat was being
+    attached blanket whenever ANY banner/inline tag was present — including on
+    answers that GROUNDING ULTIMATELY PASSED (no material unsupported numbers
+    remained after the derivation/framing checks), where a stray banner had
+    leaked in. Callers now pass ``append_disclaimer=False`` for a fully-grounded
+    answer: the leaked banner/inline tags are STILL scrubbed (defense-in-depth),
+    but the needless caveat is NOT appended. The caveat is reserved for the case
+    where genuinely material unsupported numbers remain (``grounding_passed`` is
+    False). Default True preserves the legacy behaviour for existing callers.
     """
     if not text:
         return text
@@ -567,7 +579,11 @@ def _sanitize_unverified_markers(text: str) -> str:
     # Collapse any double spaces introduced before punctuation/markers.
     cleaned = re.sub(r" {2,}", " ", cleaned)
     cleaned = re.sub(r"\s+([.,;:])", r"\1", cleaned)
-    # 3. Re-attach a single canonical disclaimer.
+    # 3. Re-attach a single canonical disclaimer — ONLY when the caller says
+    #    material unsupported numbers actually remain. A fully-grounded answer
+    #    (append_disclaimer=False) gets the scrub but never the blanket caveat.
+    if not append_disclaimer:
+        return cleaned.rstrip()
     return f"{cleaned.rstrip()}\n\n{_CANONICAL_UNVERIFIED_DISCLAIMER}"
 
 
@@ -4556,7 +4572,14 @@ class ChatOrchestratorUseCase:
         # them into a single neutral disclaimer before the answer is finalised.
         if full_text:
             _pre_sanitize = full_text
-            full_text = _sanitize_unverified_markers(full_text)
+            # Improvement #1 (2026-07-06): suppress the blanket "some figures …
+            # could not be matched to a retrieved source" caveat on a GROUNDED
+            # answer. ``grounding_passed`` is the AND of numeric + entity
+            # grounding — it is True exactly when NO material unsupported numbers
+            # remain after the derivation/framing checks (a sibling tightened
+            # those caps in numeric_grounding.py). Only then do we withhold the
+            # caveat; a leaked banner/inline tag is still scrubbed either way.
+            full_text = _sanitize_unverified_markers(full_text, append_disclaimer=not grounding_passed)
             if full_text != _pre_sanitize:
                 log.info(  # type: ignore[no-any-return]
                     "unverified_markers_sanitized",
