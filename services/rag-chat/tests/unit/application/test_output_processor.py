@@ -432,3 +432,82 @@ def test_output_process_keeps_edgar_url_in_answer(processor: OutputProcessor) ->
     answer, _ = processor.process(raw, items)
     assert url in answer, f"EDGAR URL mangled by output pipeline: {answer!r}"
     assert "[REDACTED]" not in answer
+
+
+# ── NEW-4 (2026-07-06): PII redaction must NOT mask financial magnitudes ───────
+# Root cause: docs/audits/2026-07-06-r1-final-exhaustive-qa.md NEW-4. The phone
+# regex matched the 11-digit integer part of a screener market-cap float
+# (``10440000000.0`` -> ``[REDACTED].0``) and the credit-card regex matched
+# 13-16 digit caps (``3010000000000``). These are financial values, not PII.
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value",
+    [
+        "10440000000.0",  # the exact NEW-4 repro: 11-digit float integer part
+        "3010000000000.0",  # ~$3.01T market-cap raw float (13-digit integer part)
+        "$10.44 B",  # unit-suffixed cap
+        "$3.01T",  # unit-suffixed cap, no space
+        "10.44 billion",  # spelled-out unit suffix
+        "3,010,000,000,000",  # comma-grouped large integer
+        "$3,010,000,000,000",  # $-prefixed comma-grouped
+        "$391.02",  # share price
+        "up 42% to $150.25",  # price in prose
+        "revenue of 97,690,000,000",  # comma-grouped revenue
+    ],
+)
+def test_redact_pii_preserves_financial_values(value: str) -> None:
+    """Legitimate financial magnitudes pass through PII redaction unredacted."""
+    from rag_chat.application.pipeline.output_processor import _contains_pii, _redact_pii
+
+    text = f"Market data: {value}."
+    assert _redact_pii(text) == text, f"financial value redacted: {_redact_pii(text)!r}"
+    assert _contains_pii(text) is False, f"financial value tripped PII detector: {value!r}"
+
+
+@pytest.mark.unit
+def test_output_process_keeps_market_cap_raw_value(processor: OutputProcessor) -> None:
+    """End-to-end NEW-4: screener market-cap raw float survives the pipeline."""
+    items = [_item()]
+    raw = "JKHY market cap $10.44 B (raw: 10440000000.0) [1]."
+    answer, _ = processor.process(raw, items)
+    assert "[REDACTED]" not in answer, f"market cap redacted: {answer!r}"
+    assert "10440000000.0" in answer
+    assert "$10.44 B" in answer
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("text", "leaked"),
+    [
+        # R19: genuine PII must STILL be redacted — the fix must not weaken it.
+        ("Call investor relations at 415-555-0198 today.", "415-555-0198"),
+        ("Dotted phone 212.555.0147 here.", "212.555.0147"),
+        ("Spaced phone +1 415 555 0198 here.", "415 555 0198"),
+        ("Bare phone 4155550198 here.", "4155550198"),
+        ("SSN on file 123-45-6789 redact me.", "123-45-6789"),
+        ("Card number 4111 1111 1111 1111 charged.", "4111 1111 1111 1111"),
+        ("Reach me at jane.doe@example.com please.", "jane.doe@example.com"),
+    ],
+)
+def test_redact_pii_still_redacts_real_pii_after_financial_exemption(text: str, leaked: str) -> None:
+    """Real phone / SSN / card / email is still redacted (R19 — no weakening)."""
+    from rag_chat.application.pipeline.output_processor import _contains_pii, _redact_pii
+
+    assert _contains_pii(text) is True, f"PII no longer detected: {text!r}"
+    out = _redact_pii(text)
+    assert "[REDACTED]" in out
+    assert leaked not in out, f"PII leaked through: {out!r}"
+
+
+@pytest.mark.unit
+def test_redact_pii_mixed_financial_and_phone() -> None:
+    """A market cap survives while a real phone in the same sentence is redacted."""
+    from rag_chat.application.pipeline.output_processor import _redact_pii
+
+    text = "Cap $3.01T — call 415-555-0198 for the deck."
+    out = _redact_pii(text)
+    assert "$3.01T" in out
+    assert "415-555-0198" not in out
+    assert "[REDACTED]" in out
