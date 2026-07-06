@@ -2280,3 +2280,46 @@ class TestCombinedGroundingValidation:
         assert capture["n"] == 0, "phantom gate must refuse with no LLM call"
         assert passed is False
         assert text == _PHANTOM_CITATION_REFUSAL
+
+
+class TestStripTrailingFalsePositiveSentinel:
+    """The rewrite-model sentinel-strip guard (Qwen3-Next stray-token leak)."""
+
+    def test_strips_trailing_sentinel_from_real_rewrite(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _strip_trailing_false_positive_sentinel,
+        )
+
+        body = "NVIDIA revenue was $81.6B [1], up 48% YoY.\n\nFALSE_POSITIVE"
+        out = _strip_trailing_false_positive_sentinel(body)
+        assert out == "NVIDIA revenue was $81.6B [1], up 48% YoY."
+        assert "FALSE_POSITIVE" not in out
+
+    def test_bare_sentinel_left_intact_for_the_check(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _is_false_positive_sentinel,
+            _strip_trailing_false_positive_sentinel,
+        )
+
+        # A bare/near-bare sentinel must NOT be collapsed to empty here — it is
+        # still recognised downstream so the ORIGINAL answer is returned.
+        for bare in ("FALSE_POSITIVE", "  FALSE_POSITIVE.  ", "`FALSE_POSITIVE`"):
+            out = _strip_trailing_false_positive_sentinel(bare)
+            assert _is_false_positive_sentinel(out)
+
+    def test_body_without_sentinel_unchanged(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _strip_trailing_false_positive_sentinel,
+        )
+
+        body = "NVIDIA revenue was $81.6B [1]."
+        assert _strip_trailing_false_positive_sentinel(body) == body
+
+    def test_mid_body_mention_not_stripped(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _strip_trailing_false_positive_sentinel,
+        )
+
+        # Only a TRAILING token is removed; a mention mid-body is preserved.
+        body = "The check returned FALSE_POSITIVE, so the figures are fine [1]."
+        assert _strip_trailing_false_positive_sentinel(body) == body

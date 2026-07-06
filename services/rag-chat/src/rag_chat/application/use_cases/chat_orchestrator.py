@@ -1145,6 +1145,34 @@ def _is_false_positive_sentinel(text: str) -> bool:
     return stripped.upper() == _FALSE_POSITIVE_SENTINEL
 
 
+def _strip_trailing_false_positive_sentinel(text: str) -> str:
+    """Strip a stray trailing ``FALSE_POSITIVE`` token from a genuine rewrite body.
+
+    Some rewrite models (notably Qwen3-Next, adopted for the grounding rewrite)
+    occasionally append the self-check sentinel AFTER a real rewrite. Left in
+    place it leaks the literal token into the delivered answer. We remove ONLY a
+    trailing occurrence (with light surrounding punctuation/whitespace); a
+    bare/near-bare sentinel is left untouched so ``_is_false_positive_sentinel``
+    still recognises it and the ORIGINAL answer is returned instead.
+    """
+    if not text:
+        return text
+    stripped = text.rstrip()
+    # Bare/near-bare sentinel → leave for _is_false_positive_sentinel to handle.
+    if len(stripped) <= len(_FALSE_POSITIVE_SENTINEL) + 3:
+        return text
+    # Leading class is whitespace + light wrapping only (NOT sentence
+    # punctuation like ``.``/``:``) so a real body's terminal period survives.
+    m = re.search(
+        r"[\s\-*`\"']*" + _FALSE_POSITIVE_SENTINEL + r"[\s.!*`\"']*\Z",
+        stripped,
+        re.IGNORECASE,
+    )
+    if m:
+        return stripped[: m.start()].rstrip()
+    return text
+
+
 # Theme D: fallback when the synthesis turn produced only a plan and the
 # single re-prompt failed to yield a substantive answer.
 _PLAN_ONLY_REFUSAL = (
@@ -5188,6 +5216,11 @@ class ChatOrchestratorUseCase:
             log.warning("combined_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # Strip a stray trailing FALSE_POSITIVE token some rewrite models append
+        # to a genuine rewrite body (Qwen3-Next), so it can't leak into the
+        # answer. A bare/near-bare sentinel is preserved for the check below.
+        rewritten = _strip_trailing_false_positive_sentinel(rewritten)
 
         # ── Point 2 Stage 2: false-positive self-check sentinel ───────────────
         # The rewrite model judged the flagged numbers/names to be legitimate
