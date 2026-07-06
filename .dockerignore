@@ -47,6 +47,15 @@
 !pnpm-workspace.yaml
 !pnpm-lock.yaml
 !apps/worldview-web/
+# Re-exclude local build artifacts that the whitelist above would otherwise pull
+# in: apps/worldview-web/.next is ~1.7 GB of local dev-build output. Shipping it
+# bloated the context ~40x AND let the Docker build reuse STALE compiled chunks
+# (a fresh source edit didn't appear in the image). The Dockerfile runs its own
+# pnpm install + next build, so neither is needed from the context.
+apps/worldview-web/.next/
+apps/worldview-web/.next
+apps/worldview-web/node_modules/
+apps/worldview-web/node_modules
 
 # ── Re-exclude dev artifacts that snuck through the above globs ──────────────
 **/.mypy_cache
