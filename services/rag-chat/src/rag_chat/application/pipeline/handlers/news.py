@@ -45,7 +45,7 @@ _TOOL_RESULT_MAX_CHARS = 4000
 # figures. The three knobs below (env-tunable, RAG_CHAT_FILING_*) control how much
 # of a filing reaches the LLM: how many chunks per filing, the per-chunk body cap,
 # and the per-filing total-text ceiling (token-budget bound).
-def _load_filing_settings() -> tuple[int, int, int]:
+def _load_filing_settings() -> tuple[int, int, int, int]:
     """Load get_filings retrieval-depth knobs from ``rag_chat.config.Settings``.
 
     Lazy + best-effort (mirrors ``intelligence._load_resolver_settings``): when
@@ -53,7 +53,8 @@ def _load_filing_settings() -> tuple[int, int, int]:
     fall back to hard-coded defaults that mirror the Settings field defaults so
     the tuning surface is identical across both code paths.
 
-    Returns ``(chunks_per_filing, snippet_max_chars, result_max_chars)``.
+    Returns ``(chunks_per_filing, snippet_max_chars, result_max_chars,
+    filer_header_chars)``.
     """
     try:
         from rag_chat.config import Settings  # local import to keep test imports cheap
@@ -63,14 +64,20 @@ def _load_filing_settings() -> tuple[int, int, int]:
             int(s.filing_chunks_per_filing),
             int(s.filing_snippet_max_chars),
             int(s.filing_result_max_chars),
+            int(s.filing_filer_header_chars),
         )
     except Exception:  # pragma: no cover — defensive fallback (mirrors field defaults)
-        return 3, 1200, 6000
+        return 3, 1200, 6000, 400
 
 
 # Module-level cache (computed once on import). Tests / callers override via the
 # NewsHandler constructor kwargs, which fall back to these when not supplied.
-_FILING_CHUNKS_PER_FILING, _FILING_SNIPPET_MAX_CHARS, _FILING_RESULT_MAX_CHARS = _load_filing_settings()
+(
+    _FILING_CHUNKS_PER_FILING,
+    _FILING_SNIPPET_MAX_CHARS,
+    _FILING_RESULT_MAX_CHARS,
+    _FILING_FILER_HEADER_CHARS,
+) = _load_filing_settings()
 
 # Currency / number tokens ("$391,035", "1,234.5", "27.6") — a proxy for a
 # financial-statement chunk. The income-statement / segment-revenue chunk of a
@@ -89,6 +96,17 @@ _RE_FILING_FORM = re.compile(
     r"\b(10-K(?:/A)?|10-Q(?:/A)?|8-K(?:/A)?|DEF\s*14A|DEFA?14A|S-1(?:/A)?|" r"20-F|6-K|424B[0-9]?|13[DFG])\b",
     re.IGNORECASE,
 )
+
+# NEW-1 refinement (2026-07-06, docs/audits/2026-07-06-r1-final-exhaustive-qa.md):
+# SEC filing FILER identity lives on the cover page — the registrant name sits
+# immediately BEFORE "(Exact name of registrant as specified in its charter)"
+# and appears in the EDGAR-provided title. A competitor mention ("we compete with
+# NVIDIA") lives deep in the body. The old body-substring filer match let an AMD
+# 10-Q (41 chunks name "nvidia") corroborate an NVIDIA query and win the date
+# sort. These two markers let us restrict corroboration to the AUTHORITATIVE
+# cover/registrant region instead of an arbitrary body mention.
+_RE_FILING_REGISTRANT = re.compile(r"exact\s+name\s+of\s+(?:the\s+)?registrant", re.IGNORECASE)
+_RE_SEC_COVER = re.compile(r"securities\s+and\s+exchange\s+commission|commission\s+file\s+number", re.IGNORECASE)
 
 # Stored source_type for every SEC EDGAR filing document (content-ingestion's
 # ``sec_edgar`` Source row → content-store → document_source_metadata.source_type).
@@ -117,6 +135,7 @@ class NewsHandler(ToolHandler):
         filing_chunks_per_filing: int | None = None,
         filing_snippet_max_chars: int | None = None,
         filing_result_max_chars: int | None = None,
+        filing_filer_header_chars: int | None = None,
     ) -> None:
         self._s6 = s6
         self._brief_archive = brief_archive
@@ -135,6 +154,11 @@ class NewsHandler(ToolHandler):
         )
         self._filing_result_max_chars = (
             filing_result_max_chars if filing_result_max_chars is not None else _FILING_RESULT_MAX_CHARS
+        )
+        # NEW-1 refinement: cover/header window used by ``_filing_names_company``
+        # to corroborate the FILER (not a body competitor mention).
+        self._filing_filer_header_chars = (
+            filing_filer_header_chars if filing_filer_header_chars is not None else _FILING_FILER_HEADER_CHARS
         )
 
     def can_handle(self, tool_name: str) -> bool:
@@ -565,42 +589,96 @@ class NewsHandler(ToolHandler):
         return None
 
     @staticmethod
-    def _filing_names_company(
-        text: str | None,
-        title: str | None,
+    def _region_names_company(
+        region: str | None,
         company_name: str | None,
         ticker: str | None,
     ) -> bool:
-        """True when a filing row actually names the QUERIED company.
+        """True when ``region`` names the queried company (full name / lead token / ticker).
 
-        Fix ③ (2026-07-04): sec_edgar chunks are NOT entity-mention-linked, so
-        retrieval anchored only by query text can return filings for the WRONG
-        company (an Apple query surfacing an ADIAL 8-K). We must therefore NOT
-        stamp the queried ticker as the filing's ``entity_name`` unless the
-        filing text/title actually names the company — otherwise a non-matching
-        filer is mislabelled as the queried ticker (the model then can't tell an
-        ADIAL filing apart from an Apple one, and grounding trusts a false ref).
-
-        Match (case-insensitive) is corroborated when the filing body/title
-        contains EITHER the resolved legal company name — the strongest signal,
-        since filings render the full name ("NVIDIA Corporation") — or its
-        distinctive leading token ("nvidia"), to tolerate suffix variance
-        (Inc./Corp./…), OR the ticker as a standalone token.
+        The match is deliberately restricted to a caller-chosen AUTHORITATIVE
+        region (an EDGAR title, a registrant-charter window, or a cover/header
+        slice) — never the whole body — so a competitor mention cannot corroborate
+        the filer. Matches (case-insensitive):
+          * the resolved legal company name as a substring ("apple inc."), OR
+          * its distinctive leading token as a whole word ("nvidia" ≥4 chars —
+            word-boundary, so "nvidia" does not match "nvidias"), OR
+          * the ticker as a standalone token ("nvda").
         """
-        haystack = f"{title or ''}\n{text or ''}".lower()
-        if not haystack.strip():
+        if not region:
+            return False
+        hay = region.lower()
+        if not hay.strip():
             return False
         if company_name:
             cn = company_name.strip().lower()
-            if cn and cn in haystack:
+            if cn and cn in hay:
                 return True
-            # Distinctive leading token (≥4 chars avoids generic short words).
+            # Distinctive leading token (≥4 chars avoids generic short words),
+            # anchored on word boundaries so it is a NAME, not a fragment.
             lead = cn.split()[0] if cn.split() else ""
-            if len(lead) >= 4 and lead in haystack:
+            if len(lead) >= 4 and re.search(rf"\b{re.escape(lead)}\b", hay):
                 return True
         if ticker:
             tk = ticker.strip().lower()
-            if tk and re.search(rf"\b{re.escape(tk)}\b", haystack):
+            if tk and re.search(rf"\b{re.escape(tk)}\b", hay):
+                return True
+        return False
+
+    @staticmethod
+    def _filing_names_company(
+        doc_chunks: list[Any],
+        primary_title: str | None,
+        company_name: str | None,
+        ticker: str | None,
+        header_chars: int,
+    ) -> bool:
+        """True only when the QUERIED company is the actual FILER of this filing.
+
+        Fix ③ (2026-07-04) first added a filer check, but it matched the queried
+        name ANYWHERE in the chunk body. NEW-1 refinement (2026-07-06): that is a
+        false-positive machine — 41 AMD chunks mention "nvidia" as a competitor,
+        so an AMD 10-Q corroborated an NVIDIA query and, being newer + numeric-
+        dense, won the date sort (wrong-company citation). We now corroborate the
+        filer ONLY via an AUTHORITATIVE region where the FILER identity lives —
+        never an arbitrary body mention:
+
+          1. the EDGAR-provided title (``primary_title``) — when EDGAR titles a
+             filing it is with the filer's own name;
+          2. a registrant-charter declaration — the legal filer name sits just
+             BEFORE "(Exact name of registrant as specified in its charter)";
+          3. a cover/header slice — the first ``header_chars`` of a chunk that
+             reads like a filing cover (a form-type token or SEC cover boilerplate
+             present in that slice), where the registrant name leads the page.
+
+        A competitor mention lives in a mid-body chunk with no cover markers and
+        past the header window, so it never corroborates. When none of the three
+        authoritative regions name the company we return False — the caller then
+        treats the filing as NOT this company's (honest miss over wrong company).
+        """
+        if not (company_name or ticker):
+            return False
+        # 1. EDGAR-provided title — authoritative filer identity when present.
+        if NewsHandler._region_names_company(primary_title, company_name, ticker):
+            return True
+        for c in doc_chunks:
+            text = getattr(c, "text", None) or ""
+            if not text:
+                continue
+            low = text.lower()
+            # 2. Registrant-charter declaration: check the window ENDING at the
+            #    "(exact name of registrant …)" phrase (the legal name precedes it).
+            for m in _RE_FILING_REGISTRANT.finditer(low):
+                start = max(0, m.start() - header_chars)
+                if NewsHandler._region_names_company(text[start : m.start()], company_name, ticker):
+                    return True
+            # 3. Cover/header slice: only counts when the slice reads like a filing
+            #    cover (a form-type token or SEC cover boilerplate) — a GPU-
+            #    competition body chunk has neither, so its "nvidia" cannot match.
+            head = text[:header_chars]
+            if (_RE_FILING_FORM.search(head) or _RE_SEC_COVER.search(head)) and NewsHandler._region_names_company(
+                head, company_name, ticker
+            ):
                 return True
         return False
 
@@ -852,12 +930,14 @@ class NewsHandler(ToolHandler):
             # Compose a human title: "10-K filing — 2026-01-31" when we know both.
             date_label = primary.published_at.date().isoformat() if primary.published_at else "date unknown"
 
-            # Fix ③ (2026-07-04): does THIS filing actually name the queried
-            # company? (sec_edgar retrieval can surface the wrong company.) Check
-            # across ALL selected chunk texts — the filer name may appear in any
-            # of them, not just the primary header chunk.
-            combined_text = "\n".join(c.text for c in selected if c.text)
-            names_company = self._filing_names_company(combined_text, primary.title, company_name, ticker_upper)
+            # Fix ③ (2026-07-04) + NEW-1 refinement (2026-07-06): does THIS filing
+            # actually name the queried company as its FILER? We check ALL of the
+            # filing's retrieved chunks (not just the injected ones) but only in
+            # authoritative regions (title / registrant-charter / cover header) —
+            # a competitor mention deep in the body must NOT corroborate the filer.
+            names_company = self._filing_names_company(
+                doc_chunks, primary.title, company_name, ticker_upper, self._filing_filer_header_chars
+            )
 
             # Fold the filer/company identity into the title when we can confirm
             # it — "10-K filing — NVIDIA Corporation (2026-01-31)" — so the LLM
@@ -920,22 +1000,43 @@ class NewsHandler(ToolHandler):
             scored.append((names_company, form_ok, item))
 
         # ── NEW-1 company partition (the core fix) ────────────────────────────
-        # When the query targets a specific company AND at least one retrieved
-        # filing actually names it, keep ONLY those — a newer but unrelated filer
-        # (Meta/AMD/Intel) must never outrank the target's real 10-Q. We only
-        # fall back to non-matching filings when the target has NO corroborated
-        # filing at all (so the EDGAR link still lets the user verify something),
-        # exactly mirroring the graceful form-type fallback below.
-        if company_targeted and any(nc for nc, _f, _i in scored):
-            _dropped = [it for nc, _f, it in scored if not nc]
-            if _dropped:
+        # When the query targets a specific company:
+        #   * if ≥1 retrieved filing is FILER-corroborated (title/registrant/cover),
+        #     keep ONLY those — a newer but unrelated filer (Meta/AMD/Intel) must
+        #     never outrank the target's real 10-Q;
+        #   * if NONE corroborate the filer, return an HONEST MISS (empty) rather
+        #     than a different company's filing. NEW-1 refinement (2026-07-06): the
+        #     old graceful fallback returned the wrong-company filing unlabelled,
+        #     but the model still cited it (NVIDIA→AMD). A wrong-company answer is
+        #     worse than "no filings found for X", so we drop everything and let
+        #     the caller/model report the miss.
+        if company_targeted:
+            _matched: list[tuple[bool, bool, RetrievedItem]] = [(nc, fo, it) for nc, fo, it in scored if nc]
+            if _matched:
+                _dropped = len(scored) - len(_matched)
+                if _dropped:
+                    log.info(
+                        "filings_company_filter_applied",
+                        tool="get_filings",
+                        kept=len(_matched),
+                        dropped=_dropped,
+                    )
+                scored = _matched
+            elif company_name:
+                # We had a resolved company NAME to corroborate against and NOT ONE
+                # retrieved filing named it as its filer (only body/competitor
+                # mentions). Return an HONEST MISS rather than a wrong-company
+                # filing. (Live queries always resolve a name, so this is the path
+                # that kills NVIDIA→AMD.) A bare ticker with no resolved name is a
+                # weaker signal — we keep the graceful fallback below for it.
                 log.info(
-                    "filings_company_filter_applied",
+                    "filings_no_corroborated_filer",
                     tool="get_filings",
-                    kept=sum(1 for nc, _f, _i in scored if nc),
-                    dropped=len(_dropped),
+                    company=company_name,
+                    ticker=ticker_upper,
+                    candidates=len(scored),
                 )
-            scored = [(nc, fo, it) for nc, fo, it in scored if nc]
+                scored = []
 
         # ── Form partition (existing behaviour, now over the company-filtered set) ─
         form_matched: list[tuple[bool, bool, RetrievedItem]] = [(nc, fo, it) for nc, fo, it in scored if fo]

@@ -800,6 +800,100 @@ def _renumber_citations_dense(text: str, citations: list[Any]) -> tuple[str, lis
     return new_text, new_citations
 
 
+# ── NEW-3 refinement (2026-07-06) — deterministic filing-citation backfill ────
+# Citation assembly is MARKER-driven: ``process_output`` builds a citation only
+# for a retrieved item the model referenced with a ``[N]`` (or, after
+# ``normalize_tool_row_citations``, a ``[tool row N]``) marker. For short filing
+# answers the model quotes the real 10-Q figures but intermittently omits the
+# marker, so the SAME correct Apple figures shipped 1 citation on one run and 0
+# on the next (NEW-3, docs/audits/2026-07-06-r1-final-exhaustive-qa.md). This
+# backfill makes filing citations DETERMINISTIC: when a retrieved sec_edgar
+# filing's material figure appears VERBATIM in the answer and that filing is not
+# already cited, we append its positional marker + citation. It only PROMOTES a
+# source the answer demonstrably used — it never invents one.
+#
+# "Material figure" = a thousands-separated token ("124,300") or a bare integer
+# of ≥5 digits, so years (2026), small counts, and single quarters can never
+# trigger a spurious backfill. Only sec_edgar filing items are eligible.
+_FILING_MATERIAL_FIGURE_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{5,}(?:\.\d+)?")
+
+
+def _material_figure_keys(text: str) -> set[str]:
+    """Return normalised digit-strings of material figures in ``text``.
+
+    Commas and a fractional tail are stripped so "$124,300" and "124300"
+    compare equal. Keys shorter than 5 digits are dropped (years / small
+    counts are not financial-statement figures).
+    """
+    out: set[str] = set()
+    for m in _FILING_MATERIAL_FIGURE_RE.finditer(text or ""):
+        digits = m.group(0).replace(",", "").split(".")[0]
+        if len(digits) >= 5:
+            out.add(digits)
+    return out
+
+
+def _backfill_filing_citations(
+    answer: str,
+    citations: list[Any],
+    prompt_items: list[Any],
+) -> tuple[str, list[Any]]:
+    """Deterministically emit a citation for any USED-but-uncited filing item.
+
+    A filing item (``source_type == 'sec_edgar'`` / ``item_id`` ``tool:filing:*``)
+    is considered USED when one of its material figures appears verbatim in the
+    answer. For each such item not already carrying a citation we append a
+    positional ``[pos]`` marker to the answer and a matching ``Citation`` — the
+    downstream dense renumber then relabels marker+citation together. Runs AFTER
+    ``process_output`` (so genuine model markers win first) and BEFORE the dense
+    renumber. No-op when disabled, when the answer has no material figures, or
+    when every used filing is already cited.
+    """
+    if not answer or not prompt_items:
+        return answer, citations
+    answer_keys = _material_figure_keys(answer)
+    if not answer_keys:
+        return answer, citations
+
+    from rag_chat.domain.entities.conversation import Citation
+
+    cited_refs = {int(getattr(c, "ref", 0)) for c in citations}
+    new_citations = list(citations)
+    appended: list[int] = []
+    for pos, item in enumerate(prompt_items, start=1):
+        if pos in cited_refs:
+            continue
+        source_type = str(getattr(item, "source_type", "") or "")
+        item_id = str(getattr(item, "item_id", "") or "")
+        if source_type != "sec_edgar" and not item_id.startswith("tool:filing:"):
+            continue
+        if not (answer_keys & _material_figure_keys(getattr(item, "text", "") or "")):
+            continue
+        meta = getattr(item, "citation_meta", None)
+        new_citations.append(
+            Citation(
+                ref=pos,
+                item_type=item.item_type.value,
+                id=item_id,
+                title=(getattr(meta, "title", None) or None) if meta else None,
+                url=(getattr(meta, "url", None) or None) if meta else None,
+                source_name=(getattr(meta, "source_name", None) or None) if meta else None,
+                published_at=getattr(meta, "published_at", None) if meta else None,
+                entity_name=(getattr(meta, "entity_name", None) or None) if meta else None,
+                confidence=getattr(item, "score", None),
+                text=getattr(item, "text", None),
+            )
+        )
+        cited_refs.add(pos)
+        appended.append(pos)
+    if appended:
+        # Anchor the backfilled markers at the end of the answer so the frontend
+        # renders the source link. Dense renumber (next step) tidies the labels.
+        answer = answer.rstrip() + " " + " ".join(f"[{p}]" for p in appended)
+        log.info("filing_citations_backfilled", count=len(appended), positions=appended)  # type: ignore[no-any-return]
+    return answer, new_citations
+
+
 def _scrub_unseen_refs(text: str, seen_ids: set[str]) -> tuple[str, int]:
     """Replace entity/article refs not in seen_ids with [ref:redacted].
 
@@ -4582,6 +4676,17 @@ class ChatOrchestratorUseCase:
                 )
                 for _tag in _oor_tags:
                     answer = answer.replace(_tag, "")
+
+        # ── NEW-3 refinement: deterministic filing-citation backfill ──────────
+        # When a retrieved sec_edgar filing's material figure is quoted verbatim
+        # but the model omitted the provenance marker, emit its citation anyway
+        # (was flaky 1-vs-0 run-to-run). Runs AFTER the marker-driven assembly so
+        # genuine model markers win, and BEFORE the orphan-scrub + dense renumber
+        # so the appended [pos] marker is validated and relabelled with the rest.
+        # Hot-toggle via RAG_CHAT_FILING_CITATION_BACKFILL (per-call env read,
+        # same pattern as RAG_COMPLETION_CACHE_DISABLED / suggestions).
+        if prompt_items and os.environ.get("RAG_CHAT_FILING_CITATION_BACKFILL", "true").strip().lower() != "false":
+            answer, citations = _backfill_filing_citations(answer, citations, prompt_items)
 
         # PLAN-0093 E-5 T-E-5-01: strip orphan [N\d+] citation markers that
         # point past the retrieved-item count. The LLM occasionally emits

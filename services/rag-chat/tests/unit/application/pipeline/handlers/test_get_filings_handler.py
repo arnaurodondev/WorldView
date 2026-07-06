@@ -383,12 +383,14 @@ class TestGetFilingsFilerIdentity:
         assert "ADIAL PHARMACEUTICALS" in items[0].text
 
     @pytest.mark.asyncio
-    async def test_entity_name_not_stamped_for_non_matching_filer(self) -> None:
-        """A filing whose filer ≠ queried company is NOT labelled with the ticker.
+    async def test_honest_miss_when_only_wrong_filer_and_name_resolved(self) -> None:
+        """NEW-1 refinement (2026-07-06): Apple query + ONLY an ADIAL 8-K → empty.
 
-        Apple is queried but retrieval returns an ADIAL 8-K (wrong company). The
-        row must NOT carry ``entity_name='AAPL'`` and must NOT falsely attribute
-        the filing to Apple in its title.
+        Previously the wrong-company filing was returned unlabelled (graceful
+        fallback), but the model still cited it. With a resolved company NAME to
+        corroborate against and NO filing naming Apple as its filer, we now return
+        an HONEST MISS — a wrong-company answer is worse than "no filings found".
+        R19: this asserts the corrected spec (fails against the old fallback).
         """
         chunks = [
             _chunk(
@@ -407,14 +409,8 @@ class TestGetFilingsFilerIdentity:
 
         items = await handler._handle_get_filings(ticker="AAPL")
 
-        assert len(items) == 1
-        item = items[0]
-        # entity_name is NO LONGER force-stamped to the query ticker.
-        assert item.citation_meta.entity_name is None
-        # Title is not falsely attributed to Apple.
-        assert "Apple" not in (item.citation_meta.title or "")
-        # But the true filer is still visible in the prompt text.
-        assert "ADIAL PHARMACEUTICALS" in item.text
+        # No Apple-filer-corroborated filing exists → honest miss, not ADIAL.
+        assert items == []
 
     @pytest.mark.asyncio
     async def test_entity_name_stamped_when_ticker_token_in_body(self) -> None:
@@ -663,9 +659,14 @@ class TestGetFilingsCompanyPartition:
         assert all("Intel" not in (i.citation_meta.title or "") for i in items)
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_nonmatching_when_no_target_filing(self) -> None:
-        """If the target has NO corroborated filing, we still return SOMETHING
-        (the EDGAR link lets the user verify) rather than an empty hand."""
+    async def test_honest_miss_when_no_target_filing(self) -> None:
+        """NEW-1 refinement: target has NO filer-corroborated filing → empty.
+
+        Previously we returned the non-matching Intel filing unlabelled; the model
+        then cited Intel as if it were Apple's filing (the NVIDIA→AMD class). With
+        a resolved company name and no corroborating filer, the honest answer is
+        "no filings found for Apple" — so the handler returns []. R19 regression.
+        """
         chunks = [
             _chunk(
                 doc_id="d-intc",
@@ -680,10 +681,8 @@ class TestGetFilingsCompanyPartition:
 
         items = await handler._handle_get_filings(ticker="AAPL")
 
-        # Graceful degradation: the non-matching filing is returned but NOT
-        # mislabelled as Apple (entity_name stays unset).
-        assert len(items) == 1
-        assert items[0].citation_meta.entity_name is None
+        # No wrong-company fallback: the Intel filing is NOT returned under Apple.
+        assert items == []
 
     @pytest.mark.asyncio
     async def test_untargeted_query_keeps_all_filings_by_date(self) -> None:
@@ -700,3 +699,112 @@ class TestGetFilingsCompanyPartition:
 
         # Both kept, newest first.
         assert [i.citation_meta.url for i in items] == [_EDGAR_URL_INTEL, _EDGAR_URL_10K]
+
+
+class TestGetFilingsAuthoritativeFilerMatch:
+    """NEW-1 refinement (2026-07-06, docs/audits/2026-07-06-r1-final-exhaustive-qa.md).
+
+    The filer match must be AUTHORITATIVE (title / registrant / cover header),
+    NOT a body substring. Concrete live failure: 41 AMD chunks mention "nvidia"
+    as a competitor, so an AMD 10-Q passed the "names NVIDIA" partition and — being
+    newer + numeric-dense — was cited as NVIDIA's 10-Q. These tests pin the
+    corrected discrimination (they FAIL against the body-substring match).
+    """
+
+    @pytest.mark.asyncio
+    async def test_competitor_body_mention_does_not_corroborate_filer(self) -> None:
+        """NVIDIA query + an AMD 10-Q that mentions "NVIDIA" as a competitor deep in
+        the body → the AMD filing is NOT selected/cited; the answer is an honest
+        miss (NVIDIA has no real filing here). R19 regression for the false positive."""
+        # AMD's filing: cover/header names AMD; "NVIDIA" appears ONLY far into the
+        # body as a competitor, past the header window and with no cover markers.
+        amd_body = (
+            "Advanced Micro Devices, Inc. FORM 10-Q. "
+            + "Net revenue $5,800 million. Cost of sales $3,000 million. " * 20
+            + "Competition: our data-center GPUs compete with NVIDIA Corporation products."
+        )
+        chunks = [
+            _chunk(doc_id="d-amd", chunk_id="a1", text=amd_body, url=_EDGAR_URL_INTEL, days_ago=1),
+        ]
+        _nvda_id = UUID("018f0000-0000-7000-8000-000000aaaa02")
+        s6 = _make_s6(
+            chunks,
+            ticker_map={"NVDA": _nvda_id},
+            name_map={"NVDA": "NVIDIA Corporation"},
+        )
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="NVDA")
+
+        # The competitor mention must NOT make AMD's filing count as NVIDIA's.
+        assert items == []
+
+    @pytest.mark.asyncio
+    async def test_target_wins_over_competitor_mentioning_filing(self) -> None:
+        """When BOTH NVIDIA's real 10-Q and a newer AMD filing (that name-drops
+        NVIDIA) are retrieved, only NVIDIA's own filing survives + is cited."""
+        amd_body = (
+            "Advanced Micro Devices, Inc. FORM 10-Q. " + "Revenue $5,800 million. " * 30 + "We compete with NVIDIA."
+        )
+        chunks = [
+            # NVIDIA's real (older) 10-Q — cover names the filer.
+            _chunk(
+                doc_id="d-nvda",
+                chunk_id="n1",
+                text="NVIDIA Corporation FORM 10-Q. Revenue $26,000 million; data center $22,000 million.",
+                url=_EDGAR_URL_10K,
+                days_ago=20,
+            ),
+            # AMD's newer filing that merely mentions NVIDIA in the body.
+            _chunk(doc_id="d-amd", chunk_id="a1", text=amd_body, url=_EDGAR_URL_INTEL, days_ago=1),
+        ]
+        _nvda_id = UUID("018f0000-0000-7000-8000-000000aaaa02")
+        s6 = _make_s6(chunks, ticker_map={"NVDA": _nvda_id}, name_map={"NVDA": "NVIDIA Corporation"})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="NVDA")
+
+        assert len(items) == 1
+        assert items[0].citation_meta.url == _EDGAR_URL_10K
+        assert items[0].citation_meta.entity_name == "NVDA"
+
+    @pytest.mark.asyncio
+    async def test_registrant_charter_declaration_corroborates_filer(self) -> None:
+        """The registrant name before "(Exact name of registrant …)" is authoritative
+        even when the company name is not near the chunk's very start."""
+        text = (
+            "UNITED STATES SECURITIES AND EXCHANGE COMMISSION Washington, D.C. 20549 "
+            "FORM 10-Q QUARTERLY REPORT. Commission File Number 0-23985. "
+            "NVIDIA Corporation (Exact name of registrant as specified in its charter) "
+            "Delaware. Revenue $26,000 million."
+        )
+        chunks = [_chunk(doc_id="d-nvda", chunk_id="n1", text=text, url=_EDGAR_URL_10K)]
+        _nvda_id = UUID("018f0000-0000-7000-8000-000000aaaa02")
+        s6 = _make_s6(chunks, ticker_map={"NVDA": _nvda_id}, name_map={"NVDA": "NVIDIA Corporation"})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="NVDA")
+
+        assert len(items) == 1
+        assert items[0].citation_meta.entity_name == "NVDA"
+
+    @pytest.mark.asyncio
+    async def test_edgar_title_corroborates_filer_when_body_lacks_name(self) -> None:
+        """An EDGAR-provided title naming the company corroborates the filer even
+        when the injected body chunk is a bare numeric table without the name."""
+        chunks = [
+            _chunk(
+                doc_id="d-aapl",
+                chunk_id="a1",
+                text="CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS. Total net sales $124,300 million.",
+                url=_EDGAR_URL_10K,
+                title="Apple Inc. 10-Q (Q1 FY25)",
+            ),
+        ]
+        s6 = _make_s6(chunks, ticker_map={"AAPL": _AAPL_ID}, name_map={"AAPL": "Apple Inc."})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="AAPL")
+
+        assert len(items) == 1
+        assert items[0].citation_meta.entity_name == "AAPL"

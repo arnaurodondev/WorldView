@@ -317,6 +317,20 @@ class Settings(BaseSettings):
     #   SINGLE filing row (title + all chunk snippets). Bounds the token budget
     #   when multiple chunks are concatenated. RAG_CHAT_FILING_RESULT_MAX_CHARS.
     filing_result_max_chars: int = Field(default=6000, ge=1000, le=16000)  # RAG_CHAT_FILING_RESULT_MAX_CHARS
+    # ``filing_filer_header_chars``: NEW-1 refinement (2026-07-06) — size of the
+    #   cover/header window (from a chunk's START, and BEFORE a registrant-charter
+    #   declaration) inside which the queried company must be named for a filing to
+    #   count as THAT company's filing. The filer identity lives on the cover page;
+    #   a competitor mention deep in the body (41 AMD chunks name "nvidia") must NOT
+    #   corroborate the filer. Larger = more tolerant of long SEC cover boilerplate
+    #   before the registrant line; smaller = stricter. RAG_CHAT_FILING_FILER_HEADER_CHARS.
+    filing_filer_header_chars: int = Field(default=400, ge=80, le=2000)  # RAG_CHAT_FILING_FILER_HEADER_CHARS
+    # ``filing_citation_backfill``: NEW-3 refinement (2026-07-06) — when a retrieved
+    #   sec_edgar filing's material figure appears verbatim in the answer but the
+    #   model omitted the provenance marker, deterministically append that filing's
+    #   citation (was flaky 1-vs-0 run-to-run). Hot-toggle via the SAME env var,
+    #   read per-call in the orchestrator. RAG_CHAT_FILING_CITATION_BACKFILL.
+    filing_citation_backfill: bool = True  # RAG_CHAT_FILING_CITATION_BACKFILL
 
     # ── Trust scoring weights (PLAN-0079 Wave C) ─────────────────────────────
     # The TrustScorer formula is additive:
