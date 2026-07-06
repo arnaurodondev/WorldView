@@ -258,12 +258,23 @@ def get_chunk_search_use_case(
         bool(getattr(settings, "chunk_ann_exact_when_filtered", True)) if settings is not None else True
     )
     exact_max_rows = int(getattr(settings, "chunk_ann_exact_max_rows", 100_000)) if settings is not None else 100_000
+    # S6 chunk-search latency fix: a single indexed source_type (partial HNSW
+    # index idx_chunk_emb_hnsw_<src>, migration 0024) skips the O(bucket) exact
+    # sort. Parse the comma-separated allow-list from settings; the accel ef is
+    # slightly wider than the general ef so a date post-filter still yields top_k.
+    _raw_indexed = (
+        str(getattr(settings, "chunk_ann_indexed_source_types", "sec_edgar")) if settings is not None else "sec_edgar"
+    )
+    indexed_source_types = frozenset(s.strip() for s in _raw_indexed.split(",") if s.strip())
+    accel_ef_search = int(getattr(settings, "chunk_ann_accel_ef_search", 400)) if settings is not None else 400
     return EnhancedChunkSearchUseCase(
         chunk_ann_repo=ChunkANNRepository(
             nlp_session,
             ef_search=ef_search,
             exact_when_filtered=exact_when_filtered,
             exact_max_rows=exact_max_rows,
+            indexed_source_types=indexed_source_types,
+            accel_ef_search=accel_ef_search,
         ),
         source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
         canonical_entity_repo=CanonicalEntityRepository(intel_session),

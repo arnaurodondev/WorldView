@@ -78,6 +78,28 @@ class Settings(BaseSettings):
     # only if a future, much larger corpus makes exact scans of big buckets slow.
     chunk_ann_exact_max_rows: int = 100_000
 
+    # ── Partial-index accelerated ANN path (S6 chunk-search latency fix) ───────
+    # The exact-when-filtered path above exact-sorts the ENTIRE filtered bucket.
+    # That was sub-second when a bucket held a few thousand rows, but the R1
+    # filings backfill grew ``sec_edgar`` to ~30.5k of ~110k ready embeddings, so
+    # the exact sort now takes ~19 s — past rag-chat's 10 s client timeout, so
+    # ``get_filings`` gets 0 items. Migration 0024 denormalizes ``source_type``
+    # onto chunk_embeddings/section_embeddings and adds a PARTIAL HNSW index per
+    # bucket listed here (``idx_chunk_emb_hnsw_<src>``). For a SINGLE source_type
+    # in this set (and no entity filter) the repository emits a validated LITERAL
+    # ``source_type='<src>'`` predicate so the partial index serves the ANN in
+    # ~20 ms with 24-25/25 recall@25 vs exact. Comma-separated; MUST stay in
+    # lock-step with the partial indexes created in migration 0024 (adding a value
+    # here without the matching index just silently falls back to the exact path).
+    chunk_ann_indexed_source_types: str = "sec_edgar"
+
+    # ef_search used specifically on the partial-index accelerated path. Slightly
+    # higher than the general chunk_ann_ef_search (200) to keep recall high when a
+    # date post-filter co-occurs with the source filter (the date predicate is
+    # applied AFTER the HNSW candidate fetch). The partial index only covers one
+    # bucket (~30k rows), so even 400 is a few tens of ms.
+    chunk_ann_accel_ef_search: int = 400
+
     # ── FTS planner override (HIGH-1 / feat/fix-s6-search-quality) ────────────
     # The document-search FTS query (document_search.py) has a broad ``tsv_english
     # @@ tsquery`` predicate. For common terms the planner MIS-COSTS a Seq Scan

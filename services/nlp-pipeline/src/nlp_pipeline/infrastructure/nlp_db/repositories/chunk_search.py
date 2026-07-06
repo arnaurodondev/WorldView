@@ -17,6 +17,7 @@ and ``entity_types`` parameters filter via the GIN-indexed
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -26,6 +27,15 @@ from nlp_pipeline.application.ports.chunk_search import ChunkSearchPort
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+# A source_type is only eligible for the partial-index accelerated path if it is
+# a safe SQL identifier fragment — the accelerated query inlines it as a LITERAL
+# (Postgres ``predicate_implied_by`` only matches a partial-index predicate for a
+# literal / single-element array, NOT a bind parameter). Membership in the
+# repo's indexed-source allow-list already bounds the value to operator config,
+# but this regex is the hard injection gate: anything that is not lowercase
+# alnum/underscore is rejected and simply falls back to the exact path.
+_SAFE_SOURCE_TYPE = re.compile(r"^[a-z0-9_]+$")
 
 # ── Public-tenant sentinel (BUG-3 / feat/fix-s6-search-quality) ───────────────
 # The article consumer stamps public (non-tenant) content with the nil-UUID
@@ -98,6 +108,8 @@ class ChunkANNRepository(ChunkSearchPort):
         *,
         exact_when_filtered: bool = True,
         exact_max_rows: int = 100_000,
+        indexed_source_types: frozenset[str] | None = None,
+        accel_ef_search: int = 400,
     ) -> None:
         self._session = session
         # BUG-3: pgvector post-filters the HNSW candidate set, so the default
@@ -108,14 +120,28 @@ class ChunkANNRepository(ChunkSearchPort):
         # BUG-3 finish: when a selective filter (source_types / entity_ids /
         # entity_types) is present, filter FIRST and run an EXACT KNN over the
         # small filtered subset instead of HNSW-then-post-filter. This GUARANTEES
-        # the true nearest filtered chunks are returned even for a ~2%-density
-        # source (sec_edgar) that ef_search=200 could never surface.
+        # the true nearest filtered chunks are returned even for a rare source
+        # (sec_edgar) that ef_search=200 could never surface. It is CORRECT but
+        # O(bucket-size): the R1 backfill grew sec_edgar to ~30.5k rows, so the
+        # exact sort now takes ~19 s — past rag-chat's 10 s client timeout.
         self._exact_when_filtered = exact_when_filtered
         # Safety bound: if the filtered set is larger than this, the filter is not
         # selective, so HNSW recall is fine and cheaper — fall back to the ANN path.
         self._exact_max_rows = exact_max_rows
+        # ── Partial-index accelerated ANN path (S6 chunk-search latency fix) ───
+        # For a SINGLE source_type in this allow-list (and no entity filter),
+        # migration 0024 provides a PARTIAL HNSW index (idx_chunk_emb_hnsw_<src>)
+        # keyed on the denormalized ``chunk_embeddings.source_type`` column. We
+        # emit a LITERAL ``ce.source_type='<src>'`` predicate so the planner uses
+        # that index — ~20 ms with 24-25/25 recall@25 vs the exact path's ~19 s.
+        # Any other filter shape (multi-source, entity filters, un-indexed source)
+        # still takes the correct exact path, so recall is preserved everywhere.
+        self._indexed_source_types = indexed_source_types or frozenset({"sec_edgar"})
+        # Slightly higher ef than the general path so recall stays high when a date
+        # post-filter co-occurs with the source filter.
+        self._accel_ef_search = accel_ef_search
 
-    async def _apply_ef_search(self) -> None:
+    async def _apply_ef_search(self, ef_search: int | None = None) -> None:
         """Raise ``hnsw.ef_search`` for the current transaction (BUG-3).
 
         ``set_config(name, value, is_local=true)`` scopes the GUC to the current
@@ -123,12 +149,43 @@ class ChunkANNRepository(ChunkSearchPort):
         the pooled connection.  The read session runs statements inside an
         implicit transaction (SQLAlchemy autobegin), so this applies to the ANN
         query that follows on the same connection.  No-op when ef_search <= 0.
+
+        *ef_search* overrides the instance default (used by the accelerated
+        partial-index path, which wants a slightly wider pool than the general
+        HNSW path so a co-occurring date post-filter still yields top_k rows).
         """
-        if self._ef_search and self._ef_search > 0:
+        ef = self._ef_search if ef_search is None else ef_search
+        if ef and ef > 0:
             await self._session.execute(
                 text("SELECT set_config('hnsw.ef_search', :ef, true)"),
-                {"ef": str(self._ef_search)},
+                {"ef": str(ef)},
             )
+
+    def _accel_source_type(
+        self,
+        source_types: list[str],
+        entity_ids: list[UUID] | None,
+        entity_types: list[str] | None,
+    ) -> str | None:
+        """Return the single indexed source_type eligible for the partial-index path.
+
+        The accelerated path applies only when the filter is EXACTLY one
+        allow-listed source_type with no entity filter — that is the shape a
+        dedicated partial HNSW index (idx_chunk_emb_hnsw_<src>) can serve. The
+        returned value is guaranteed to be a safe SQL identifier fragment
+        (``_SAFE_SOURCE_TYPE``) so the caller can inline it as a literal. Returns
+        ``None`` (→ fall back to the exact/HNSW path) for any other filter shape.
+        """
+        if entity_ids or entity_types:
+            return None
+        if len(source_types) != 1:
+            return None
+        src = source_types[0]
+        if src not in self._indexed_source_types:
+            return None
+        if not _SAFE_SOURCE_TYPE.match(src):
+            return None
+        return src
 
     async def ann_search(
         self,
@@ -201,6 +258,24 @@ class ChunkANNRepository(ChunkSearchPort):
         tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
+
+        # ── Partial-index accelerated path (S6 chunk-search latency fix) ───────
+        # A single indexed source_type with no entity filter is served by the
+        # partial HNSW index idx_chunk_emb_hnsw_<src> via a LITERAL predicate on
+        # the denormalized ``chunk_embeddings.source_type`` column — ~20 ms vs the
+        # exact path's ~19 s on the grown sec_edgar bucket. Every other filter
+        # shape falls through to the correct exact/HNSW path below.
+        accel_src = self._accel_source_type(source_types, entity_ids, entity_types)
+        if accel_src is not None:
+            return await self._accel_chunk_knn(
+                vec_str=vec_str,
+                source_type=accel_src,
+                top_k=top_k,
+                min_score=min_score,
+                date_from=date_from,
+                date_to=date_to,
+                tenant_id=tenant_id,
+            )
 
         # Build WHERE clauses for optional filters
         where_clauses = ["ce.embedding_status = 'ready'"]
@@ -379,6 +454,93 @@ class ChunkANNRepository(ChunkSearchPort):
         rows = result.all()
         return [self._chunk_row_to_dict(row) for row in rows], filtered_count
 
+    async def _accel_chunk_knn(
+        self,
+        *,
+        vec_str: str,
+        source_type: str,
+        top_k: int,
+        min_score: float,
+        date_from: Any | None,
+        date_to: Any | None,
+        tenant_id: str | None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """HNSW ANN served by the per-source PARTIAL index (S6 latency fix).
+
+        *source_type* MUST already be validated by ``_accel_source_type`` (a member
+        of the indexed allow-list AND a safe identifier) — it is inlined as a SQL
+        LITERAL because Postgres only matches a partial-index predicate against a
+        literal / single-element array, never a bind parameter. All OTHER values
+        (vector, dates, tenant) stay parameterised.
+
+        The literal ``ce.source_type = '<src>'`` + ``embedding_status = 'ready'``
+        predicate lets the planner use ``idx_chunk_emb_hnsw_<src>`` so the ORDER BY
+        distance is answered from the index instead of an exact sort over the
+        whole bucket. Recall@25 vs the exact path is 24-25/25 at ef_search=400.
+        """
+        # Injection gate mirrors _accel_source_type — belt-and-braces before we
+        # inline the value into SQL text (this method must never be reached with
+        # an unvalidated source_type, but assert the invariant defensively).
+        if not _SAFE_SOURCE_TYPE.match(source_type):
+            raise ValueError(f"unsafe source_type for accelerated path: {source_type!r}")
+
+        params: dict[str, Any] = {"vec": vec_str, "top_k": top_k, "min_score": min_score}
+        where_clauses = [
+            "ce.embedding_status = 'ready'",
+            # Literal predicate → partial-index match (validated identifier above).
+            f"ce.source_type = '{source_type}'",
+        ]
+        if date_from is not None:
+            where_clauses.append("dsm.published_at >= :date_from")
+            params["date_from"] = date_from
+        if date_to is not None:
+            where_clauses.append("dsm.published_at <= :date_to")
+            params["date_to"] = date_to
+        # Tenant security boundary — identical semantics to the exact/HNSW paths.
+        where_clauses.append(_tenant_predicate(params, "c.tenant_id", tenant_id))
+        where_sql = " AND ".join(where_clauses)
+
+        query = text(
+            f"""
+            SELECT
+                c.chunk_id,
+                c.doc_id,
+                c.section_id,
+                c.heading_path,
+                c.chunk_text_key,
+                c.document_title,
+                s.section_type,
+                ce.source_type,
+                1 - (ce.embedding <=> cast(:vec AS vector)) AS score
+            FROM chunk_embeddings ce
+            JOIN chunks c ON c.chunk_id = ce.chunk_id
+            JOIN sections s ON s.section_id = c.section_id
+            LEFT JOIN document_source_metadata dsm ON dsm.doc_id = c.doc_id
+            WHERE {where_sql}
+              AND 1 - (ce.embedding <=> cast(:vec AS vector)) >= :min_score
+            ORDER BY ce.embedding <=> cast(:vec AS vector)
+            LIMIT :top_k
+            """,
+        ).bindparams(**params)
+
+        # Wider candidate pool than the general path so a date post-filter still
+        # yields top_k rows (the partial index covers a single bucket, so this is
+        # still only a few tens of ms).
+        await self._apply_ef_search(self._accel_ef_search)
+        result = await self._session.execute(query)
+        rows = result.all()
+        chunk_results = [self._chunk_row_to_dict(row) for row in rows]
+
+        # total_searched = size of the indexed bucket (matches the partial index).
+        count_result = await self._session.execute(
+            text(
+                "SELECT COUNT(*) FROM chunk_embeddings "
+                f"WHERE embedding_status = 'ready' AND source_type = '{source_type}'"
+            ),
+        )
+        total = int(count_result.scalar_one())
+        return chunk_results, total
+
     async def _search_sections(
         self,
         embedding: list[float],
@@ -390,6 +552,21 @@ class ChunkANNRepository(ChunkSearchPort):
         tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
+
+        # ── Partial-index accelerated path (mirrors _search_chunks) ───────────
+        # Sections carry no entity filter, so a single indexed source_type is
+        # served by idx_section_emb_hnsw_<src> via a literal predicate.
+        accel_src = self._accel_source_type(source_types, entity_ids=None, entity_types=None)
+        if accel_src is not None:
+            return await self._accel_section_knn(
+                vec_str=vec_str,
+                source_type=accel_src,
+                top_k=top_k,
+                min_score=min_score,
+                date_from=date_from,
+                date_to=date_to,
+                tenant_id=tenant_id,
+            )
 
         where_clauses: list[str] = []
         params: dict[str, Any] = {"vec": vec_str, "top_k": top_k, "min_score": min_score}
@@ -533,6 +710,68 @@ class ChunkANNRepository(ChunkSearchPort):
         result = await self._session.execute(text(exact_sql), params)
         rows = result.all()
         return [self._section_row_to_dict(row) for row in rows], filtered_count
+
+    async def _accel_section_knn(
+        self,
+        *,
+        vec_str: str,
+        source_type: str,
+        top_k: int,
+        min_score: float,
+        date_from: Any | None,
+        date_to: Any | None,
+        tenant_id: str | None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Section ANN served by the per-source PARTIAL index idx_section_emb_hnsw_<src>.
+
+        Mirrors ``_accel_chunk_knn``; *source_type* is a validated identifier
+        (from ``_accel_source_type``) inlined as a SQL literal so the planner
+        matches the partial-index predicate. All other values are parameterised.
+        """
+        if not _SAFE_SOURCE_TYPE.match(source_type):
+            raise ValueError(f"unsafe source_type for accelerated path: {source_type!r}")
+
+        params: dict[str, Any] = {"vec": vec_str, "top_k": top_k, "min_score": min_score}
+        where_clauses = [f"se.source_type = '{source_type}'"]
+        if date_from is not None:
+            where_clauses.append("dsm.published_at >= :date_from")
+            params["date_from"] = date_from
+        if date_to is not None:
+            where_clauses.append("dsm.published_at <= :date_to")
+            params["date_to"] = date_to
+        where_clauses.append(_tenant_predicate(params, "s.tenant_id", tenant_id))
+        where_sql = " AND ".join(where_clauses)
+
+        query = text(
+            f"""
+            SELECT
+                se.section_id      AS chunk_id,
+                s.doc_id,
+                se.section_id,
+                s.title            AS heading_path,
+                s.section_type,
+                dsm.title          AS document_title,
+                1 - (se.embedding <=> cast(:vec AS vector)) AS score
+            FROM section_embeddings se
+            JOIN sections s ON s.section_id = se.section_id
+            LEFT JOIN document_source_metadata dsm ON dsm.doc_id = s.doc_id
+            WHERE {where_sql}
+              AND 1 - (se.embedding <=> cast(:vec AS vector)) >= :min_score
+            ORDER BY se.embedding <=> cast(:vec AS vector)
+            LIMIT :top_k
+            """,
+        ).bindparams(**params)
+
+        await self._apply_ef_search(self._accel_ef_search)
+        result = await self._session.execute(query)
+        rows = result.all()
+        section_results = [self._section_row_to_dict(row) for row in rows]
+
+        count_result = await self._session.execute(
+            text("SELECT COUNT(*) FROM section_embeddings " f"WHERE source_type = '{source_type}'"),
+        )
+        total = int(count_result.scalar_one())
+        return section_results, total
 
     async def lexical_search(
         self,

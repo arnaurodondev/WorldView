@@ -368,6 +368,13 @@ class TestChunkANNRepositoryExactWhenFiltered:
     run an EXACT ``ORDER BY embedding <=> query`` over the small filtered subset
     via a ``MATERIALIZED`` CTE (no HNSW dependence), guaranteeing the true nearest
     filtered rows.
+
+    NOTE (S6 chunk-search latency fix / migration 0024): an INDEXED source_type
+    (e.g. ``sec_edgar``) now takes the faster partial-index accelerated path
+    instead of this exact CTE — covered by
+    ``test_chunk_search_accel_partial_index.py``. These exact-path tests therefore
+    use a NON-indexed source (``eodhd_news``) so they keep exercising the exact
+    fallback, which is still the correct path for un-indexed / multi-source filters.
     """
 
     @staticmethod
@@ -405,7 +412,7 @@ class TestChunkANNRepositoryExactWhenFiltered:
             embedding=[0.1] * 1024,
             granularity="chunk",
             top_k=5,
-            source_types=["sec_edgar"],
+            source_types=["eodhd_news"],
             tenant_id=None,
         )
 
@@ -435,7 +442,7 @@ class TestChunkANNRepositoryExactWhenFiltered:
             embedding=[0.1] * 1024,
             granularity="chunk",
             top_k=5,
-            source_types=["sec_edgar"],
+            source_types=["eodhd_news"],
             tenant_id=None,
         )
 
@@ -455,7 +462,7 @@ class TestChunkANNRepositoryExactWhenFiltered:
             embedding=[0.1] * 1024,
             granularity="chunk",
             top_k=5,
-            source_types=["sec_edgar"],
+            source_types=["eodhd_news"],
             tenant_id=str(uuid.uuid4()),
         )
 
@@ -579,7 +586,7 @@ class TestChunkANNRepositoryExactWhenFiltered:
             embedding=[0.1] * 1024,
             granularity="section",
             top_k=5,
-            source_types=["sec_edgar"],
+            source_types=["eodhd_news"],
             tenant_id=None,
         )
 
