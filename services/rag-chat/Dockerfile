@@ -6,6 +6,15 @@ WORKDIR /build
 
 RUN pip install --no-cache-dir uv==0.4.29
 
+# Cache-bust for the shared-lib COPY layers below — defeats the BuildKit
+# metadata-match stale-snapshot bug where an edited libs/<x>/src file (notably
+# libs/prompts prompt VERSIONS) silently ships OLD code. Changing CACHE_BUST
+# forces this RUN + every COPY below to re-run. This was wrongly removed during
+# the build-opt pass (the .next fix does NOT cover libs/prompts). See
+# docs/ops/docker-build-hygiene.md.
+ARG CACHE_BUST=unset
+RUN echo "cache-bust=${CACHE_BUST}"
+
 # Copy only pyproject.toml + src from each lib (no tests, caches, venvs)
 COPY libs/common/pyproject.toml /build/libs/common/pyproject.toml
 COPY libs/common/src /build/libs/common/src
