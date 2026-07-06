@@ -110,6 +110,9 @@ class GatedEntity:
 REASON_STOP_WORD_STRIP = "stop_word_strip"
 REASON_LOW_TOP_SIMILARITY = "low_top_similarity"
 REASON_DELTA_BELOW_THRESHOLD = "delta_below_threshold"
+# SEC-FORM-001: candidate ticker is a bare fragment of a SEC-form designator
+# present in the query ("10-K" → "K" → Kellanova) with no standalone mention.
+REASON_SEC_FORM_FRAGMENT = "sec_form_fragment"
 
 # Acceptance reason label for tiebreak-admitted candidates (BP-661).
 ACCEPTED_QUERY_TICKER_MATCH = "query_ticker_exact_match"
@@ -218,6 +221,94 @@ _FINANCIAL_ACRONYM_BLOCKLIST: frozenset[str] = frozenset(
     }
 )  # fmt: skip
 
+# ── SEC-form designator guard (SEC-FORM-001) ──────────────────────────────────
+# SEC filing form designators ("10-K", "10-Q", "8-K", "S-1", "20-F", "6-K", …)
+# are NOT tickers/entities — but they decompose into short all-caps fragments
+# ("K", "Q", "F", "S") that collide with real single-letter tickers. The live
+# failure: "what's in Apple's latest 10-K" resolved the "K" fragment to
+# Kellanova (ticker "K"), routing the whole turn to the wrong company. This is
+# the same class as the R1 extraction "ticker class-blind" family — a short
+# all-caps token matched as a ticker without checking its surrounding context.
+#
+# Guard strategy (scoped to form context, mirrors the extraction denylist
+# pattern): when the query contains a SEC-form designator, the bare fragment
+# letters that form decomposes into ("10-K" → "K") are removed from ticker
+# evidence AND any resolved candidate whose ticker IS that fragment is rejected
+# — UNLESS the same fragment also appears standalone elsewhere in the query
+# (outside the form), in which case the user plausibly means the real ticker
+# ("how is K doing after its 10-K?") and it still resolves.
+#
+# ``_SEC_FORM_RE`` matches whole-token form designators case-insensitively. The
+# hyphen forms are matched with an optional hyphen so "10K"/"10-K" both hit;
+# a leading/trailing alphanumeric boundary prevents matching inside longer
+# tokens ("A10-KB" is not a form).
+_SEC_FORM_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"10-?[KQ](?:/A)?"  # 10-K, 10-Q, 10-K/A, 10-Q/A
+    r"|8-?K(?:/A)?"  # 8-K, 8-K/A
+    r"|6-?K|11-?K"  # 6-K, 11-K
+    r"|20-?F|40-?F"  # 20-F, 40-F
+    r"|S-?(?:1|3|4|8|11)(?:/A)?"  # S-1, S-3, S-4, S-8, S-11
+    r"|F-?(?:1|3|4|6|10)(?:/A)?"  # F-1, F-3, F-6, F-10
+    r"|DEF\s?14A|DEFA14A|DEFM14A|DEFR14A|PREM?\s?14A"  # proxy statements
+    r"|424B[0-9]"  # 424B1..424B8 prospectus
+    r"|13[FDG](?:-HR)?"  # 13F, 13D, 13G, 13F-HR
+    r"|SC\s?13[DG](?:/A)?"  # SC 13D, SC 13G, SC 13D/A
+    r"|N-?(?:1A|CSR|Q|PORT|MFP)"  # fund forms
+    r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def is_sec_form_designator(token: str) -> bool:
+    """True when ``token`` is exactly a SEC filing form designator.
+
+    Used by the tool-argument resolver paths (IntelligenceHandler /
+    NarrativeHandler) to refuse resolving a literal form name the LLM
+    mistakenly passed as an ``entity_name``/``entity_id`` (e.g. the LLM echoes
+    "10-K" into a tool argument). Matches the whole string only.
+    """
+    t = token.strip()
+    if not t:
+        return False
+    m = _SEC_FORM_RE.match(t)
+    return m is not None and m.end() == len(t)
+
+
+def _sec_form_reject_tickers(query_text: str | None) -> frozenset[str]:
+    """Uppercase fragment tickers that appear ONLY inside SEC-form designators.
+
+    For each SEC-form designator found in the query, derive its short all-caps
+    alpha fragments ("10-K" → {"K"}, "S-1" → {"S"}, "20-F" → {"F"}, "SC 13D" →
+    {"SC"}). A fragment is returned ONLY when it does NOT also appear as a
+    standalone token elsewhere in the query (the form spans removed) — so a
+    query that BOTH names the form AND the real ticker ("how is K after the
+    10-K?") does not suppress the genuine ticker.
+
+    Returns an empty set when the query carries no SEC-form context, so the
+    guard is a no-op for ordinary ticker queries.
+    """
+    if not query_text:
+        return frozenset()
+    text = strip_query_wrapper(query_text)
+    frags: set[str] = set()
+    for m in _SEC_FORM_RE.finditer(text):
+        span = m.group(0).upper()
+        for piece in re.split(r"[^A-Z0-9]+", span):
+            # Short pure-alpha fragments are the ones that collide with real
+            # single/two-letter tickers ("K", "F", "SC"). Longer alpha pieces
+            # ("DEF") are form keywords, not ticker-shaped fragments we worry
+            # about here; numeric pieces ("10", "424B3") never resolve.
+            if piece.isalpha() and 1 <= len(piece) <= 2:
+                frags.add(piece)
+    if not frags:
+        return frozenset()
+    # Standalone occurrences: strip the form spans, then collect bare tokens.
+    without_forms = _SEC_FORM_RE.sub(" ", text)
+    standalone = {tok.strip(".,!?:;'\"()[]").upper() for tok in without_forms.split()}
+    return frozenset(f for f in frags if f not in standalone)
+
+
 # A standalone single UPPERCASE letter is almost never strong ticker evidence
 # in prose ("AAPL's P/E", "earnings per share, or E"). Real single-letter
 # tickers (Ford "F", AT&T "T", Sprint "S") DO exist but a one-letter token in
@@ -261,12 +352,19 @@ def _query_ticker_tokens(query_text: str) -> set[str]:
     lowercase downstream).
     """
     unwrapped = strip_query_wrapper(query_text)
+    # SEC-FORM-001: fragments contributed only by SEC-form designators
+    # ("10-K" → "K", "SC 13D" → "SC") are never ticker evidence. Single-letter
+    # fragments are already dropped by _MIN_TICKER_EVIDENCE_LEN below; this also
+    # covers the two-letter case ("SC") that would otherwise pass.
+    _form_frags = {f.lower() for f in _sec_form_reject_tickers(query_text)}
     tokens: set[str] = set()
     for raw in _QUERY_TOKEN_SPLIT_RE.split(unwrapped):
         tok = raw.strip(".,!?:;'\"()[]")
         if not tok:
             continue
         lowered = tok.lower()
+        if lowered in _form_frags:
+            continue
         # BP-661 P/E→Pandora: drop single-letter fragments + financial acronyms
         # before EITHER acceptance tier, so even an UPPERCASE "P" (split out of
         # "P/E") never counts as ticker evidence.
@@ -453,6 +551,35 @@ def filter_resolver_candidates(
     accepted: list[GatedEntity] = []
     rejected: list[GatedEntity] = []
 
+    # ── SEC-FORM-001 pass: drop candidates that are bare SEC-form fragments ──
+    # "Apple's latest 10-K" must not resolve the "K" fragment to Kellanova
+    # (ticker "K"). Runs BEFORE the floor pass because such a candidate can sit
+    # well above the 0.75 floor (S6 returns it as a high-confidence ticker hit).
+    # Scoped to form context: ``_sec_form_reject_tickers`` only returns
+    # fragments that appear SOLELY inside a form designator, so a genuine
+    # standalone "K" ("how is K after its 10-K?") still resolves.
+    _form_reject = _sec_form_reject_tickers(query_text)
+    if _form_reject:
+        surviving: list[GatedEntity] = []
+        for c in candidates:
+            c_ticker = (c.ticker or "").strip().upper()
+            if c_ticker and c_ticker in _form_reject:
+                rejected.append(
+                    GatedEntity(
+                        entity_id=c.entity_id,
+                        canonical_name=c.canonical_name,
+                        similarity=c.similarity,
+                        payload=c.payload,
+                        rejection_reason=REASON_SEC_FORM_FRAGMENT,
+                        ticker=c.ticker,
+                    )
+                )
+            else:
+                surviving.append(c)
+        candidates = surviving
+        if not candidates:
+            return [], rejected
+
     # ── Floor pass: drop any candidate below the absolute threshold ──
     for c in candidates:
         if c.similarity < config.top_similarity_min:
@@ -540,11 +667,13 @@ __all__ = [
     "ACCEPTED_QUERY_TICKER_MATCH",
     "REASON_DELTA_BELOW_THRESHOLD",
     "REASON_LOW_TOP_SIMILARITY",
+    "REASON_SEC_FORM_FRAGMENT",
     "REASON_STOP_WORD_STRIP",
     "TICKER_SHAPE_RE",
     "GatedEntity",
     "ResolverGateConfig",
     "filter_resolver_candidates",
+    "is_sec_form_designator",
     "strip_query_wrapper",
     "strip_stop_words",
 ]

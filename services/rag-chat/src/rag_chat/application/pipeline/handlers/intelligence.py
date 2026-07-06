@@ -23,6 +23,7 @@ from uuid import UUID
 import structlog
 
 from rag_chat.application.services.resolver_gates import TICKER_SHAPE_RE as _TICKER_SHAPE_RE
+from rag_chat.application.services.resolver_gates import is_sec_form_designator
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
@@ -285,6 +286,15 @@ class IntelligenceHandler(ToolHandler):
         Returns None and logs a warning when resolution fails.
         """
         assert self._s7 is not None  # callers must check self._s7 is not None first
+        # ── SEC-FORM-001: refuse literal SEC-form designators ─────────────────
+        # The LLM sometimes echoes a filing form name ("10-K", "8-K", "S-1")
+        # into a tool ``entity_name``/``entity_id`` argument. A form is not an
+        # entity; without this guard "S-1"/"10-K" would fall through to the
+        # S6 ticker path (the "K" fragment → Kellanova class) or a noisy alias
+        # hit. Refuse outright so the caller degrades gracefully.
+        if is_sec_form_designator(entity_name):
+            log.info("tool_entity_sec_form_skipped", tool=tool_name, entity_name=entity_name)
+            return None
         ctx_name_lower = self._entity_context.name.lower() if self._entity_context else ""
         name_lower = entity_name.lower()
         use_context = self._entity_context is not None and (
