@@ -411,10 +411,15 @@ def test_earnings_trend_not_in_catalog() -> None:
     assert rows == []
 
 
-def test_splits_dividends_not_in_catalog() -> None:
-    """splits_dividends is not in the metric catalog → empty list."""
-    rows = _call(FundamentalsSection.SPLITS_DIVIDENDS, {"dividendYield": 0.02})
-    assert rows == []
+def test_splits_dividends_now_in_catalog() -> None:
+    """splits_dividends IS catalogued (2026-07-05) — forward dividend fields are
+    promoted to fundamental_metrics.  WHY updated (not deleted): R19 — fix
+    implementation, never delete tests.  Previously SPLITS_DIVIDENDS was
+    uncatalogued and returned []; after adding the forward/payout/date metrics it
+    produces rows.  A payload key we do NOT map (trailing ``dividendYield``, which
+    lives in HIGHLIGHTS) still yields no metric row for this section."""
+    rows = _call(FundamentalsSection.SPLITS_DIVIDENDS, {"ForwardAnnualDividendYield": 0.0041})
+    assert {r.metric for r in rows} == {"forward_annual_dividend_yield"}
 
 
 # ── Result shape and field population ─────────────────────────────────────────
@@ -754,3 +759,220 @@ def test_balance_sheet_unknown_key_still_warns(monkeypatch: pytest.MonkeyPatch) 
     assert "someBrandNewEodhdField" in sample
     assert "otherAssets" not in sample
     assert captured.get("unmapped_keys_count") == 1
+
+
+# ── New Technicals fields: 52-week levels, moving averages, short interest ─────
+# (2026-07-05) These live in the EODHD Technicals section and were stored in the
+# technicals_snapshot JSONB but never promoted to the queryable
+# fundamental_metrics tier.  They unlock "near 52-week low", golden-cross, and
+# short-squeeze screens.
+
+
+def test_technicals_52_week_levels_and_moving_averages() -> None:
+    """52WeekHigh/Low + 50/200DayMA promote to price-level metrics (currency passthrough)."""
+    rows = _call(
+        FundamentalsSection.TECHNICALS_SNAPSHOT,
+        {
+            "52WeekHigh": 288.3502,
+            "52WeekLow": 168.4757,
+            "50DayMA": 267.4752,
+            "200DayMA": 240.0591,
+        },
+    )
+    m = _metrics(rows)
+    assert m["week_52_high"].value_numeric == Decimal("288.3502")
+    assert m["week_52_low"].value_numeric == Decimal("168.4757")
+    assert m["moving_avg_50d"].value_numeric == Decimal("267.4752")
+    assert m["moving_avg_200d"].value_numeric == Decimal("240.0591")
+    # Section is stamped on every row.
+    assert m["week_52_high"].section == "technicals_snapshot"
+
+
+def test_technicals_short_interest_fields() -> None:
+    """SharesShort/ShortRatio/ShortPercent promote to short-interest metrics.
+
+    Technicals uses the ``ShortPercent`` key; it is aliased to the canonical
+    ``short_percent_of_float`` metric (a decimal fraction, passthrough).
+    """
+    rows = _call(
+        FundamentalsSection.TECHNICALS_SNAPSHOT,
+        {
+            "SharesShort": 116854414,
+            "SharesShortPriorMonth": 120000000,
+            "ShortRatio": 2.36,
+            "ShortPercent": 0.008,
+        },
+    )
+    m = _metrics(rows)
+    assert m["shares_short"].value_numeric == Decimal("116854414")
+    assert m["shares_short_prior_month"].value_numeric == Decimal("120000000")
+    assert m["short_ratio"].value_numeric == Decimal("2.36")
+    assert m["short_percent_of_float"].value_numeric == Decimal("0.008")
+
+
+def test_technicals_short_percent_of_float_alias() -> None:
+    """The SharesStats-style ``ShortPercentOfFloat`` key also maps to short_percent_of_float."""
+    rows = _call(FundamentalsSection.TECHNICALS_SNAPSHOT, {"ShortPercentOfFloat": 0.012})
+    assert _metrics(rows)["short_percent_of_float"].value_numeric == Decimal("0.012")
+
+
+# ── New SharesStats fields: float + ownership composition (2026-07-05) ─────────
+
+
+def test_share_statistics_float_and_ownership() -> None:
+    """SharesOutstanding/SharesFloat/PercentInsiders/PercentInstitutions promote.
+
+    Values are stored raw (EODHD returns PercentInsiders as a fraction and
+    PercentInstitutions as a whole-percent in the same payload — we do not
+    normalise at the extractor tier).
+    """
+    rows = _call(
+        FundamentalsSection.SHARE_STATISTICS,
+        {
+            "SharesOutstanding": 15700000000,
+            "SharesFloat": 15650000000,
+            "PercentInsiders": 0.07,
+            "PercentInstitutions": 60.5,
+        },
+    )
+    m = _metrics(rows)
+    assert m["shares_outstanding"].value_numeric == Decimal("15700000000")
+    assert m["shares_float"].value_numeric == Decimal("15650000000")
+    assert m["percent_insiders"].value_numeric == Decimal("0.07")
+    assert m["percent_institutions"].value_numeric == Decimal("60.5")
+    assert m["shares_outstanding"].section == "share_statistics"
+
+
+def test_share_statistics_short_fields_not_duplicated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Short-interest keys in SharesStats are NOT promoted here (canonical under
+    TECHNICALS_SNAPSHOT) and do NOT surface in the unmapped_keys warning.
+
+    WHY: the fundamental_metrics unique key is (instrument_id, as_of_date,
+    metric, period_type) WITHOUT section — mapping the short fields in both
+    sections would collide on upsert.  They are canonical under Technicals and
+    listed in _IGNORED_KEYS for SharesStats.
+    """
+    captured = _capture_unmapped_log(monkeypatch)
+
+    rows = _call(
+        FundamentalsSection.SHARE_STATISTICS,
+        {
+            # Promoted ownership metric — matched.
+            "SharesFloat": 15650000000,
+            # Short fields — deliberately NOT promoted from this section.
+            "SharesShort": 120000000,
+            "ShortRatio": 1.5,
+            "ShortPercentOfFloat": 0.008,
+        },
+    )
+    produced = {r.metric for r in rows}
+    assert produced == {"shares_float"}
+    # No short metric rows were emitted from this section.
+    assert not any(r.metric in {"shares_short", "short_ratio", "short_percent_of_float"} for r in rows)
+    # And the ignored short keys did not trigger an unmapped-keys log.
+    assert captured == {}
+
+
+# ── New SplitsDividends fields: forward yield, payout, dates (2026-07-05) ──────
+
+
+def test_splits_dividends_forward_and_payout_metrics() -> None:
+    """ForwardAnnualDividendRate/Yield + PayoutRatio promote as numeric metrics."""
+    rows = _call(
+        FundamentalsSection.SPLITS_DIVIDENDS,
+        {
+            "ForwardAnnualDividendRate": 1.04,
+            "ForwardAnnualDividendYield": 0.0041,
+            "PayoutRatio": 0.1315,
+        },
+    )
+    m = _metrics(rows)
+    assert m["forward_annual_dividend_rate"].value_numeric == Decimal("1.04")
+    assert m["forward_annual_dividend_yield"].value_numeric == Decimal("0.0041")
+    assert m["payout_ratio"].value_numeric == Decimal("0.1315")
+    assert m["payout_ratio"].section == "splits_dividends"
+
+
+def test_splits_dividends_dates_stored_as_text() -> None:
+    """DividendDate/ExDividendDate are ISO date strings stored in value_text.
+
+    They are not numerically coercible, so value_numeric is None while
+    value_text carries the date — this is what lets date-based dividend screens
+    (upcoming ex-date) read them.
+    """
+    rows = _call(
+        FundamentalsSection.SPLITS_DIVIDENDS,
+        {"DividendDate": "2026-02-12", "ExDividendDate": "2026-02-09"},
+    )
+    m = _metrics(rows)
+    assert m["dividend_date"].value_text == "2026-02-12"
+    assert m["dividend_date"].value_numeric is None
+    assert m["ex_dividend_date"].value_text == "2026-02-09"
+    assert m["ex_dividend_date"].value_numeric is None
+
+
+def test_splits_dividends_trailing_and_split_keys_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Trailing dividend fields (already in HIGHLIGHTS) and split minutiae are
+    ignored — they must not duplicate metrics nor pollute the unmapped log."""
+    captured = _capture_unmapped_log(monkeypatch)
+
+    rows = _call(
+        FundamentalsSection.SPLITS_DIVIDENDS,
+        {
+            "PayoutRatio": 0.1315,
+            # Already promoted from HIGHLIGHTS — must not be re-promoted here.
+            "DividendShare": 0.96,
+            "DividendYield": 0.0044,
+            # Split-history minutiae — no screener value.
+            "LastSplitFactor": "4:1",
+            "LastSplitDate": "2020-08-31",
+        },
+    )
+    assert {r.metric for r in rows} == {"payout_ratio"}
+    assert captured == {}
+
+
+# ── Catalog integrity: no duplicate metric keys across the whole catalog ───────
+
+
+def test_no_duplicate_metric_keys_across_catalog() -> None:
+    """No metric name may appear in more than one section.
+
+    The fundamental_metrics unique constraint excludes ``section``, so the same
+    metric name emitted from two sections for the same instrument/date/period
+    would collide on upsert (last-write-wins, flapping the ``section`` column).
+    This guard fails loudly if a future edit maps the same metric in two
+    sections (e.g. re-adding shares_short to SHARE_STATISTICS).
+    """
+    from market_data.infrastructure.db.metric_extractor import _METRIC_CATALOG
+
+    # ``pe_ratio`` is a KNOWN, pre-existing dual-source: EODHD exposes it in both
+    # the VALUATION_RATIOS (TrailingPE) and HIGHLIGHTS (PERatio) sections, and the
+    # catalog has mapped it from both since before this change.  It is allow-listed
+    # here so this guard stays green for the accepted case while still catching any
+    # NEW accidental cross-section duplicate (e.g. re-adding short fields to
+    # SHARE_STATISTICS).
+    _ACCEPTED_CROSS_SECTION_DUPES: frozenset[str] = frozenset({"pe_ratio"})
+
+    seen: dict[str, FundamentalsSection] = {}
+    duplicates: list[tuple[str, FundamentalsSection, FundamentalsSection]] = []
+    for section, defs in _METRIC_CATALOG.items():
+        for md in defs:
+            if md.metric_name in seen:
+                if md.metric_name not in _ACCEPTED_CROSS_SECTION_DUPES:
+                    duplicates.append((md.metric_name, seen[md.metric_name], section))
+            else:
+                seen[md.metric_name] = section
+    assert duplicates == [], f"metric names mapped in multiple sections: {duplicates}"
+
+
+def test_no_duplicate_aliases_within_a_metric_def() -> None:
+    """Each _MetricDef's alias tuple has no repeated keys (typo / copy-paste guard)."""
+    from market_data.infrastructure.db.metric_extractor import _METRIC_CATALOG
+
+    offenders: list[str] = []
+    for defs in _METRIC_CATALOG.values():
+        for md in defs:
+            if len(md.json_keys) != len(set(md.json_keys)):
+                offenders.append(md.metric_name)
+    assert offenders == [], f"metric defs with duplicate aliases: {offenders}"

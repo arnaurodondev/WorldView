@@ -548,3 +548,202 @@ def test_framing_analytical_intent_relaxes_full_sentence_hedge() -> None:
     # … but with an analytical/what-if question the full-sentence hedge relaxes it.
     assert material_unsupported_numbers(result, analytical_intent=True) == ()
     assert numeric_grounding_effectively_passed(result, analytical_intent=True) is True
+
+
+# ── Point 3 (2026-07-05): grounded-BY-DERIVATION recognition ──────────────────
+#
+# Deep answers legitimately DERIVE numbers from cited figures (FY = Σ quarters,
+# YoY growth %, a P/E from cited price & EPS). Those derived results appear
+# verbatim in no tool value, so the pre-existing direct-match + citation
+# fast-path flagged them → the over-eager "unmatched source" caveat fired on
+# nearly every good deep answer. These tests pin the derivation fast-path AND
+# prove the fabrication guarantee survives (a truly invented figure with no
+# grounded basis still fails).
+
+
+def test_derivation_sum_of_cited_quarters_grounded() -> None:
+    """FY revenue = SUM of four cited quarterly revenues → grounded, no caveat."""
+    validator = NumericGroundingValidator()
+    tool = _tool("Q1 revenue 20B. Q2 revenue 21B. Q3 revenue 22B. Q4 revenue 23B.")
+    answer = "For nvda, full-year revenue totalled $86B."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    # 20+21+22+23 = 86 → derivable from the grounded pool → not material.
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_derivation_yoy_growth_percent_grounded() -> None:
+    """A YoY growth % derived from two cited revenues → grounded, no caveat."""
+    validator = NumericGroundingValidator()
+    tool = _tool("nvda Q1 2026 revenue was 20B. nvda Q1 2025 revenue was 18.5B.")
+    answer = "nvda revenue grew 8.1% year-over-year."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    # (20 - 18.5) / 18.5 ≈ 0.0811 → the 8.1% is grounded by derivation.
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_formatting_variant_of_cited_number_grounded() -> None:
+    """A formatting variant ($81.61B) of a cited raw number → grounded, no caveat."""
+    validator = NumericGroundingValidator()
+    tool = _tool("nvda revenue was 81,615,000,000 for the quarter.")
+    answer = "nvda revenue was $81.61B."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    # $81.61B ≈ 81,615,000,000 after scale/notation normalisation → matches directly.
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_derivation_does_not_ground_fabricated_pe() -> None:
+    """A fabricated P/E with NO cited price/EPS basis STILL fails (fabrication guard)."""
+    validator = NumericGroundingValidator()
+    # Pool has only revenue + net income; no pair derives 32.5 (ratios ≈ 4 / 0.25).
+    tool = _tool("nvda revenue was 100B. nvda net income 25B.")
+    answer = "nvda's P/E ratio is 32.5x."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    assert any(u.field_kind == FieldKind.RATIO for u in material_unsupported_numbers(result))
+    assert numeric_grounding_effectively_passed(result) is False
+
+
+def test_derivation_does_not_ground_fabricated_revenue() -> None:
+    """An invented revenue with no derivable grounded basis STILL fails."""
+    validator = NumericGroundingValidator()
+    tool = _tool("nvda total revenue 100B. nvda net income 25B.")
+    answer = "nvda cloud revenue was $47.3B."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    # No subset sum / ratio / growth of {100B, 25B} lands on 47.3B → stays material.
+    assert len(material_unsupported_numbers(result)) >= 1
+    assert numeric_grounding_effectively_passed(result) is False
+
+
+def test_is_derivable_from_grounded_unit() -> None:
+    """Direct unit coverage of the derivation helper's shapes + negatives."""
+    from rag_chat.application.services.numeric_grounding import _is_derivable_from_grounded
+
+    pool = [20e9, 21e9, 22e9, 23e9]
+    assert _is_derivable_from_grounded(86e9, pool) is True  # sum of all four
+    assert _is_derivable_from_grounded(41e9, pool) is True  # 20 + 21
+    # YoY growth fraction + percent forms.
+    assert _is_derivable_from_grounded(0.081081, [20e9, 18.5e9]) is True
+    assert _is_derivable_from_grounded(8.1081, [20e9, 18.5e9]) is True
+    # Ratio (P/E) from grounded price & EPS.
+    assert _is_derivable_from_grounded(30.0, [150.0, 5.0]) is True
+    # Negatives: no grounded basis.
+    assert _is_derivable_from_grounded(32.5, [100e9, 25e9]) is False
+    assert _is_derivable_from_grounded(47.3e9, [100e9, 25e9]) is False
+    assert _is_derivable_from_grounded(5.0, []) is False
+    assert _is_derivable_from_grounded(0.0, [1.0, 2.0]) is False
+
+
+# ── Point 3 fast-follow (2026-07-05): raised derivation caps for deep answers ──
+
+
+def test_derivation_sum_of_eight_quarters_in_large_pool() -> None:
+    """(a) A derived figure — SUM of 8 cited quarterly revenues — is recognised as
+    grounded even when the operand pool is LARGE (>12 operands), which the old
+    caps (_MAX_DERIVATION_POOL=12, _MAX_SUM_TERMS=4) rejected outright."""
+    from rag_chat.application.services.numeric_grounding import (
+        _MAX_DERIVATION_POOL,
+        _MAX_SUM_TERMS,
+        _is_derivable_from_grounded,
+    )
+
+    # Caps must have been raised for a deep multi-quarter/segment answer.
+    assert _MAX_DERIVATION_POOL >= 40
+    assert _MAX_SUM_TERMS >= 8
+
+    # Eight quarterly revenues we want to sum to a trailing-two-year total …
+    quarters = [20e9, 21e9, 22e9, 23e9, 24e9, 25e9, 26e9, 27e9]
+    trailing_total = sum(quarters)  # 188e9, an 8-term sum
+    # … plus a spread of OTHER grounded segment/margin figures so the pool is >12
+    # (and >12 non-zero uniques), exercising the raised pool cap + pruned walk.
+    filler = [5e9, 6e9, 7e9, 8e9, 9e9, 11e9, 12e9, 13e9, 14e9, 150.0, 5.0, 42.5]
+    pool = quarters + filler
+    assert len({round(p, 6) for p in pool}) > 12  # genuinely a large pool
+    assert _is_derivable_from_grounded(trailing_total, pool) is True
+    # A 4-quarter FY sum inside the same large pool is also recognised.
+    assert _is_derivable_from_grounded(sum(quarters[:4]), pool) is True
+
+
+def test_derivation_percent_change_in_large_pool() -> None:
+    """(a) A YoY %-change derived from two cited revenues is recognised even when
+    the pool is large."""
+    from rag_chat.application.services.numeric_grounding import _is_derivable_from_grounded
+
+    pool = [float(v) * 1e9 for v in range(20, 41)]  # 21 grounded operands, >12
+    # (30 - 20) / 20 = 0.5 → 50% growth; both fraction and percent forms.
+    assert _is_derivable_from_grounded(0.5, pool) is True
+    assert _is_derivable_from_grounded(50.0, pool) is True
+
+
+def test_derivation_two_step_product_margin_times_revenue() -> None:
+    """Two-step product form: a cited margin applied to a cited revenue.
+
+    74.9% margin x $81.61B revenue ≈ $61.13B (gross profit). Gated: the margin
+    operand is small (≤ 100), so the product path fires."""
+    from rag_chat.application.services.numeric_grounding import _is_derivable_from_grounded
+
+    # Margin stored as a percent (74.9) and revenue in base units.
+    assert _is_derivable_from_grounded(74.9 / 100.0 * 81.61e9, [74.9, 81.61e9]) is True
+    # Margin stored as a fraction (0.749).
+    assert _is_derivable_from_grounded(0.749 * 81.61e9, [0.749, 81.61e9]) is True
+
+
+def test_derivation_product_gate_rejects_two_large_figures() -> None:
+    """The product gate forbids multiplying two large figures — neither operand is
+    a small multiplier, so a fabricated giant cannot be grounded by a*b."""
+    from rag_chat.application.services.numeric_grounding import _is_derivable_from_grounded
+
+    # 100e9 * 25e9 = 2.5e21; assert that giant product is NOT accepted as a basis.
+    assert _is_derivable_from_grounded(100e9 * 25e9, [100e9, 25e9]) is False
+
+
+def test_fabrication_still_flagged_in_large_pool() -> None:
+    """(b) A genuinely fabricated figure with NO grounded derivation basis is STILL
+    flagged even against a LARGE operand pool (the raised caps must not create
+    false grounding). Uses a target BEYOND the reachable subset-sum range and
+    with no ratio/percent/product basis — a fabricated giant.
+
+    Brute-force-confirmed non-derivable so the fixture cannot silently rot."""
+    import itertools as _it
+
+    from rag_chat.application.services.numeric_grounding import _is_derivable_from_grounded
+
+    # 21 distinct grounded revenues (20e9..40e9, offset so sums are not round).
+    pool = [float(v) * 1e9 + 3.7e8 for v in range(20, 41)]
+    # Larger than the total of the whole pool → no subset (any size) can reach it.
+    fabricated = sum(pool) * 3.0 + 1.7e9
+    # Guard: no ≤8-term subset sums within tolerance (range-prune territory, so the
+    # loop is a cheap belt-and-braces on the fixture, not the hot path).
+    assert not any(
+        abs(sum(combo) - fabricated) / fabricated <= 0.01
+        for r in range(2, 9)
+        for combo in _it.combinations(pool[:12], r)
+    )
+    assert _is_derivable_from_grounded(fabricated, pool) is False
+
+
+def test_derivation_performance_bounded_on_max_pool() -> None:
+    """(d) Perf sanity: derivation over a full-size pool with an 8-term target
+    completes fast even in the WORST case (target not found → full pruned walk +
+    node budget). Guards against the old C(N, r) brute-force blow-up."""
+    import time
+
+    from rag_chat.application.services.numeric_grounding import (
+        _MAX_DERIVATION_POOL,
+        _is_derivable_from_grounded,
+    )
+
+    # A pathological, tightly-clustered pool maximises the pruned walk's branching
+    # (all values ≈1e9, so k-term subset sums cluster near k·1e9). The target sits
+    # BETWEEN clusters (7.5e9 is ~0.5e9 from the 7- and 8-term clusters, far
+    # outside the 1% band) so no subset matches — the walk cannot early-exit and
+    # runs until the node budget, exercising the slowest path.
+    pool = [1e9 + i * 1.0 for i in range(_MAX_DERIVATION_POOL)]
+    target = 7.5e9  # between the 7-term and 8-term sum clusters → unreachable
+    start = time.perf_counter()
+    assert _is_derivable_from_grounded(target, pool) is False
+    elapsed = time.perf_counter() - start
+    # Generous ceiling: the node budget bounds this to well under a second; the
+    # old brute force at these caps would be minutes.
+    assert elapsed < 0.5, f"derivation too slow: {elapsed:.3f}s"

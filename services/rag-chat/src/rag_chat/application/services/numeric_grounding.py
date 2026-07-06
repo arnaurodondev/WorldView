@@ -1821,6 +1821,19 @@ class NumericGroundingValidator:
         # any-kind pool — but the legacy fall-back is exact-match only
         # (tol=0) so we don't silently accept cross-entity collisions.
         total_numbers = len(response_numbers)
+        # Point 3 (2026-07-05): the derivation fast-path (below) draws only on
+        # MEANINGFUL financial operands — a tool value that is itself a material
+        # kind (revenue/EPS/price/…) or a large unclassified magnitude. Incidental
+        # tool numbers (a quarter digit "2" from "Q2", a calendar year, a small
+        # count) must NEVER seed a derivation: dividing a real revenue by a stray
+        # "2" would coincidentally "ground" a fabricated half-sized figure and
+        # weaken the guard. Precomputed once so the per-number loop stays cheap.
+        _operand_tool_values = [
+            tv
+            for tv in tool_values
+            if tv.field_kind in _MATERIAL_NUMERIC_KINDS
+            or (tv.field_kind == FieldKind.UNKNOWN and abs(tv.value) >= _MATERIAL_UNKNOWN_MIN)
+        ]
         for value, raw_tok, ctx, span_start, span_end in response_numbers_with_spans:
             kind = classify_number(value, raw_tok, ctx)
             if kind in self._skip_kinds:
@@ -1874,6 +1887,30 @@ class NumericGroundingValidator:
                 ):
                     per_kind_passed[kind] += 1
                     continue
+                # Point 3 (2026-07-05): grounded-by-DERIVATION fast-path. A
+                # material number the model DERIVED from grounded figures — a
+                # full-year SUM of cited quarters, a YoY growth %, a P/E from a
+                # cited price & EPS — has a real grounded basis even though the
+                # derived result appears verbatim in no tool value. Recognise it
+                # so the over-eager "unmatched source" caveat no longer fires on
+                # legitimate deep answers (consistent with synthesis v1.9/v1.10's
+                # hedged/derived permission). Only MATERIAL numbers take this path
+                # (incidental years/counts are non-material anyway), and every
+                # derivation input is itself grounded, so a truly invented figure
+                # with no grounded basis matches nothing and stays flagged.
+                _is_material_here = kind in _MATERIAL_NUMERIC_KINDS or (
+                    kind == FieldKind.UNKNOWN and abs(value) >= _MATERIAL_UNKNOWN_MIN
+                )
+                if _is_material_here:
+                    if entity_tag:
+                        _deriv_pool = [
+                            tv.value for tv in _operand_tool_values if tv.entity_tag and entity_tag in tv.entity_tag
+                        ]
+                    else:
+                        _deriv_pool = [tv.value for tv in _operand_tool_values]
+                    if _is_derivable_from_grounded(value, _deriv_pool):
+                        per_kind_passed[kind] += 1
+                        continue
                 per_kind_failed[kind] += 1
                 # Point 2 Stage 1: capture the number's SENTENCE framing so the
                 # material gate can downgrade a reasoned projection / derived
@@ -1967,6 +2004,233 @@ def _matches_any(
         if abs(value - cand) / denom <= tolerance:
             return True, closest
     return False, closest
+
+
+# ── Point 3 (2026-07-05) — grounded-by-DERIVATION recognition ──────────────────
+#
+# WHY (root cause of the over-eager "unmatched source" caveat): deep answers
+# legitimately DERIVE numbers from cited figures — a full-year revenue is the SUM
+# of the four cited quarters, a YoY growth % is ``(this - prior) / prior`` of two
+# cited revenues, a P/E is ``price / EPS`` of two cited values. None of those
+# derived results appears VERBATIM in any tool value, so the direct
+# :func:`_matches_any` check fails, the ±50-char citation fast-path fails, and the
+# number is flagged as "unsupported" → the validator emits the
+# ``⚠ Some numbers could not be verified`` banner (collapsed to the canonical
+# "…could not be matched to a retrieved source" disclaimer by the orchestrator).
+# The pre-existing framing gate (:func:`_framing_allows`) only rescues these when
+# the sentence carries an explicit hedge/derivation VERB — but good answers state
+# the derived figure plainly ("Full-year revenue totalled $86B"), so the caveat
+# fired on nearly every deep answer. This is in direct tension with synthesis
+# v1.9/v1.10 which deliberately PERMIT hedged/derived numbers.
+#
+# FIX: before flagging a MATERIAL number as unsupported, test whether it is
+# arithmetically DERIVABLE from the entity-scoped pool of GROUNDED tool values.
+# A match means the number has a real grounded basis — it is derived, not
+# fabricated — so it is treated as grounded.
+#
+# FABRICATION GUARANTEE (preserved): every input to the derivation is itself a
+# grounded tool value, so a number with NO grounded basis (a truly invented P/E
+# with no cited price/EPS, an invented revenue with no cited components) matches
+# no combination and STAYS flagged. The pool is entity-scoped and bounded, and
+# the derivation tolerance is tight (rounding-only), so the path cannot silently
+# ground a materially-off figure.
+#
+# Tolerance: a derived value should equal its computed result up to display
+# rounding only. 1% is looser than the tight direct-match field tolerances on
+# purpose — the answer rounds ("$86B" for 86.0000…, "8.1%" for 0.081081) — but far
+# tighter than any material claim gap.
+_DERIVATION_TOLERANCE = 0.01
+# Cap the combinatorial work (and the coincidence surface): only attempt
+# derivation when the entity-scoped pool is bounded. A DEEP answer legitimately
+# draws on many cited figures — several quarters x several segments, plus totals
+# and margins — so 12 was too small and caused good answers to be flagged. Raised
+# to 40, which comfortably covers a multi-quarter/multi-segment deep answer while
+# staying bounded (the subset-sum below is a PRUNED DFS with a hard node budget,
+# NOT the old brute-force ``itertools.combinations`` — see ``_subset_sum_within``;
+# C(40, 8) ≈ 76M would have been prohibitive, the pruned walk is not).
+_MAX_DERIVATION_POOL = 40
+# Maximum number of terms summed together. A FY total is 4 quarters; a two-year
+# trailing sum is 8, and a combined multi-segment total can reach a similar count.
+# Raised 4 → 8. Enumeration stays bounded because the subset walk is pruned by
+# reachable-range bounds and a node budget, not by term-count alone.
+_MAX_SUM_TERMS = 8
+# Hard ceiling on subset-sum DFS node expansions. The pruned walk visits far fewer
+# nodes than this on real (large, positive) financial pools; the budget is a
+# safety valve that guarantees bounded runtime even on a pathological pool. On
+# exhaustion the SUM shape returns "not derivable" — the CONSERVATIVE direction
+# (the figure stays flagged), so the fabrication guarantee is never weakened by
+# the cutoff, only the over-eager-caveat relief is (rarely) forgone.
+_DERIVATION_NODE_BUDGET = 60_000
+# Upper bound on the "multiplier" operand in the two-step product form. A real
+# margin/ratio applied to a figure is ≤ ~100 (a fraction like 0.749 or a percent
+# like 74.9). Requiring one operand to be this small forbids multiplying two
+# billion-scale figures together, which could otherwise coincidentally land on a
+# fabricated large number.
+_PRODUCT_MULTIPLIER_MAX = 100.0
+
+
+def _approx_eq(a: float, b: float, tol: float) -> bool:
+    """Relative-tolerance equality; ``b == 0`` falls back to absolute ``tol``."""
+    if b == 0:
+        return abs(a) <= tol
+    return abs(a - b) / abs(b) <= tol
+
+
+def _subset_sum_within(
+    value: float,
+    operands: list[float],
+    *,
+    max_terms: int,
+    tol: float,
+) -> bool:
+    """True when some 2..``max_terms``-element subset of *operands* sums to *value*.
+
+    Replaces the old ``itertools.combinations`` brute force (which was
+    ``Σ_{r=2..max_terms} C(N, r)`` — e.g. C(40, 8) ≈ 76M subsets — and became
+    unusable once the caps were raised) with a **pruned depth-first walk**:
+
+      * operands are sorted ascending so the include/skip recursion can bound the
+        still-reachable sum range at every node using precomputed suffix sums of
+        the remaining positive / negative operands;
+      * a branch is abandoned as soon as *value* falls outside
+        ``[current + reachable_negative, current + reachable_positive]`` widened by
+        the match tolerance — for the common all-positive financial pool this
+        prunes the walk to a small fraction of the full subset lattice;
+      * a hard ``_DERIVATION_NODE_BUDGET`` on node expansions guarantees bounded
+        runtime; on exhaustion we return ``False`` (conservative: the figure stays
+        flagged, so the fabrication guarantee is never weakened by the cutoff).
+
+    Only subsets of size ≥ 2 count as a derivation — a single value is a direct
+    match handled elsewhere, and admitting it here would broaden the coincidence
+    surface.
+    """
+    n = len(operands)
+    if n < 2:
+        return False
+    # DESCENDING sort so the include-first walk tries the LARGEST operands first.
+    # A real total (FY = Σ quarters, trailing sum) is the sum of the largest,
+    # comparable-magnitude figures, so this reaches it within a handful of node
+    # expansions — well inside the budget — instead of churning through tiny
+    # filler values first.
+    ops = sorted(operands, reverse=True)
+    # Suffix bounds: suf_pos[i] / suf_neg[i] = sum of the positive / negative
+    # operands in ops[i:]. current + suf_neg[i] .. current + suf_pos[i] is the
+    # widest sum still reachable from position i (ignoring the term cap, which
+    # only makes the true reachable set SMALLER — a safe over-approximation, so
+    # pruning never discards a genuinely reachable target).
+    suf_pos = [0.0] * (n + 1)
+    suf_neg = [0.0] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        suf_pos[i] = suf_pos[i + 1] + (ops[i] if ops[i] > 0 else 0.0)
+        suf_neg[i] = suf_neg[i + 1] + (ops[i] if ops[i] < 0 else 0.0)
+    band = tol * abs(value) + 1e-9
+    budget = _DERIVATION_NODE_BUDGET
+    # Explicit stack: (index, running_sum, terms_used). Recursion depth would be
+    # bounded by n anyway, but the stack keeps the node-budget accounting simple.
+    stack: list[tuple[int, float, int]] = [(0, 0.0, 0)]
+    while stack:
+        i, current, terms = stack.pop()
+        budget -= 1
+        if budget < 0:
+            return False
+        if terms >= 2 and _approx_eq(value, current, tol):
+            return True
+        if i >= n or terms >= max_terms:
+            continue
+        # Reachability prune: if the target cannot be hit from here even using all
+        # remaining positive/negative mass, abandon this branch.
+        if value > current + suf_pos[i] + band:
+            continue
+        if value < current + suf_neg[i] - band:
+            continue
+        # Branch: skip ops[i], or include it.
+        stack.append((i + 1, current, terms))
+        stack.append((i + 1, current + ops[i], terms + 1))
+    return False
+
+
+def _is_derivable_from_grounded(
+    value: float,
+    candidates: list[float],
+    *,
+    tol: float = _DERIVATION_TOLERANCE,
+) -> bool:
+    """True when ``value`` is arithmetically derivable from grounded tool values.
+
+    Recognises the derivation shapes deep answers legitimately produce from cited
+    figures (consistent with synthesis v1.9/v1.10 which PERMIT hedged/derived
+    numbers), using ONLY grounded ``candidates``:
+
+      * SUM of 2..``_MAX_SUM_TERMS`` grounded values — FY revenue = Σ quarters,
+        multi-year trailing sums, combined-segment totals;
+      * PERCENT-CHANGE / growth of an ordered pair — ``(a - b) / b`` in both the
+        fraction form (``0.081``) and the whole-number form (``8.1``); this is the
+        YoY-growth case;
+      * RATIO of an ordered pair — ``a / b`` (a P/E from grounded price & EPS, a
+        margin from grounded profit & revenue), in both the fraction and the
+        ``x100`` percent form;
+      * PRODUCT of an ordered pair where one operand is a ratio/percent-scale
+        multiplier — ``margin x revenue`` (the two-step "apply a cited margin to a
+        cited revenue" case). Gated tightly: at least one operand must be small
+        (|op| ≤ ``_PRODUCT_MULTIPLIER_MAX``, i.e. a fraction or a percent), so two
+        large figures can NEVER be multiplied into a coincidental match.
+
+    Because every candidate is a GROUNDED tool value, a match means the number has
+    a genuine grounded basis — it is derived, not fabricated. A number with NO
+    grounded basis matches nothing and stays flagged, so the fabrication guarantee
+    is fully preserved. Plain single-value ``a`` and pairwise ``a - b`` differences
+    are DELIBERATELY excluded: they are broad enough that a fabricated large figure
+    could coincidentally equal one, which would weaken the guard.
+    """
+    if value == 0 or not candidates:
+        return False
+    # Deduplicate + drop zeros (a zero candidate makes ratios/percent-change
+    # undefined and adds nothing to a sum).
+    uniq: list[float] = []
+    seen: set[float] = set()
+    for c in candidates:
+        if c is None or c == 0:
+            continue
+        key = round(float(c), 6)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(float(c))
+    if not uniq or len(uniq) > _MAX_DERIVATION_POOL:
+        return False
+
+    # 1. SUM of subsets (2..``_MAX_SUM_TERMS`` terms) — FY = Σ quarters, trailing
+    #    multi-year sums, combined-segment totals. Uses the pruned, node-budgeted
+    #    subset-sum walk (NOT brute-force combinations) so it stays fast at the
+    #    raised caps.
+    if _subset_sum_within(value, uniq, max_terms=_MAX_SUM_TERMS, tol=tol):
+        return True
+
+    # 2. Pairwise ratio / percent-change / gated product (ordered pairs). O(N^2),
+    #    trivial at N ≤ _MAX_DERIVATION_POOL.
+    for a in uniq:
+        for b in uniq:
+            if a is b or b == 0:
+                continue
+            ratio = a / b
+            # P/E, EV/EBITDA multiple, margin fraction, or its x100 percent form.
+            if _approx_eq(value, ratio, tol) or _approx_eq(value, ratio * 100.0, tol):
+                return True
+            # YoY / period-over-period growth, fraction and whole-number forms.
+            pct = (a - b) / b
+            if _approx_eq(value, pct, tol) or _approx_eq(value, pct * 100.0, tol):
+                return True
+            # Two-step product: apply a cited margin/ratio to a cited figure
+            # (margin x revenue → segment/adjusted figure). Gated so at least one
+            # operand is a small multiplier (a fraction or percent) — two large
+            # figures can never be multiplied into a coincidental large match.
+            if abs(a) <= _PRODUCT_MULTIPLIER_MAX or abs(b) <= _PRODUCT_MULTIPLIER_MAX:
+                product = a * b
+                # margin as a fraction (a in 0..1) → a*b directly; margin as a
+                # percent (a in 0..100) → a*b/100.
+                if _approx_eq(value, product, tol) or _approx_eq(value, product / 100.0, tol):
+                    return True
+    return False
 
 
 # ── C1 #1: deterministic exact-value substitution (numeric pin) ───────────────

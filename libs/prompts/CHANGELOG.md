@@ -245,6 +245,40 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.13 — 2026-07-05 (narrow the price-forecast refusal — allow grounded conditional what-if impact)
+
+- **Root cause.** The `SPECULATIVE FORECASTS — MUST REFUSE` rule (added by
+  FIX-LIVE-Z after adversarial QA caught the agent answering "Will Tesla stock
+  go up?" with "will go up") refused ALL forward-looking directional statements.
+  Correct for bare price predictions, but it ALSO over-refused legitimate
+  CONDITIONAL what-if IMPACT analysis where a price/cost move is the USER'S
+  stated premise (e.g. "if wafer prices rise 10%, what's NVIDIA's gross-margin
+  impact?") — the owner's headline use case, which must be ANSWERED.
+- **Narrowed into two crisp cases.** v1.13 splits the rule along ONE boundary —
+  reason about IMPACT given a stated hypothetical move (ALLOWED) vs predict an
+  asset's OWN price movement (REFUSED):
+  - **(A) STILL HARD-REFUSE** — forecasting the direction of an ASSET's own
+    price/return/level: "will X go up/down", price targets, "where will it
+    trade", "is it going to rally/crash", buy/sell/hold recommendations
+    ("should I buy X"). The FORBIDDEN-PHRASE enumeration and canonical refusal
+    ("I cannot predict future price movements") are UNCHANGED for this case.
+  - **(B) NOW ALLOW** — grounded conditional what-if IMPACT analysis: reasoning
+    about the DOWNSTREAM fundamental impact (margin/revenue/EPS/cost) of a
+    hypothetical operational/cost/price move the USER supplies as a premise.
+    Requirements: (a) the move is the user's assumption, not a forecast the
+    model originates; (b) the impact is DERIVED from cited retrieved figures and
+    shown; (c) every projected value is hedged/scenario-labelled per the
+    numeric-grounding gate; (d) the answer must NOT then predict the asset's
+    stock-price direction.
+- **Consistency.** This mirrors `chat_synthesis_system` v1.9's `ANALYTICAL /
+  WHAT-IF` block and `_safety.py` SAFETY_FOOTER rule 5, which already permit a
+  grounded, hedged, explicitly-derived what-if projection. No blanket
+  forecast-ban remained in synthesis.py/_safety.py, so no change was needed
+  there — the over-refusal lived only in this planning-turn prompt.
+- **Scope.** NARROW + additive: only the SPECULATIVE FORECASTS section changed;
+  the REASONING RIGOR / ANTI-FABRICATION / grounding / citation rules are
+  untouched. Flips the content hash.
+
 ### 1.12 — 2026-07-03 (general parallel tool batching + deeper analyst reasoning)
 
 - **Point 1 — RESEARCH LOOP (general parallel batching).** The "single

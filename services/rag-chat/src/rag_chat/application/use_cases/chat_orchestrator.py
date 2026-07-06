@@ -511,6 +511,34 @@ _VERIFICATION_BANNER_RE = re.compile(
 )
 _CANONICAL_UNVERIFIED_DISCLAIMER = "Note: some figures or names above could not be matched to a retrieved source."
 
+# ── Point 2 (owner-requested) — canonical NOT-FINANCIAL-ADVICE disclaimer ──────
+# For liability coverage as we unlock what-if / projection / analytical answers,
+# a fixed, model-independent disclaimer is appended DETERMINISTICALLY at
+# finalisation (like the grounding banner — the model cannot omit it) to
+# ANALYTICAL / HYPOTHETICAL / PROJECTION turns only. It is a single canonical
+# constant, appended once (deduped — see :func:`_append_advice_disclaimer`), and
+# is NOT added to simple factual lookups (a P/E query does not need it). The stub
+# detector discounts it (see ``_discount_artifacts``) so it can never inflate a
+# leaked planning stub past the size gate.
+_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER = (
+    "This is analysis for informational purposes only, not financial advice or a recommendation."
+)
+
+
+def _append_advice_disclaimer(text: str) -> str:
+    """Append the canonical not-financial-advice disclaimer once, deduped.
+
+    No-op when *text* is empty or already carries the disclaimer (idempotent, so
+    a second finalisation pass or a re-entrant caller never doubles it). Placed on
+    its own trailing line so it reads cleanly after the answer and after any
+    grounding note.
+    """
+    if not text or not text.strip():
+        return text
+    if _CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER in text:
+        return text
+    return f"{text.rstrip()}\n\n{_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER}"
+
 
 def _sanitize_unverified_markers(text: str) -> str:
     """Convert leaked ``[unverified]`` tags + banners into a clean disclaimer.
@@ -639,6 +667,11 @@ def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> b
     def _discount_artifacts(s: str) -> str:
         s = _GROUNDING_BANNER_RE.sub("", s)
         s = s.replace(_CANONICAL_UNVERIFIED_DISCLAIMER, "")
+        # Point 2: the deterministic not-financial-advice disclaimer is also a
+        # finalisation artifact, not "real answer" content — discount it so a
+        # leaked planning stub cannot ride past the size gate on the back of it
+        # (same treatment as the canonical unverified disclaimer above).
+        s = s.replace(_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER, "")
         return s.strip()
 
     base = _discount_artifacts(text)
@@ -975,6 +1008,13 @@ def _content_anchors(text: str) -> set[str]:
 _RESYNTHESIS_MIN_REWRITE_CHARS = 600
 _RESYNTHESIS_MIN_ORIG_ANCHORS = 8
 
+# 2026-07-05 — combined-grounding defeatist guard (BP-648). A rewrite is treated
+# as a defeatist refusal only when it is refusal-prefixed AND below this
+# substantive-content floor: a bare "I cannot answer that." (~20 chars) is
+# rejected, but a content-rich correction that merely opens with a hedge while
+# retaining the grounded body is KEPT (Qwen3-Next patch-not-refuse behaviour).
+_DEFEATIST_REWRITE_MIN_SUBSTANTIVE_CHARS = 200
+
 
 def _rewrite_is_divergent_resynthesis(original: str, rewritten: str, *, min_retained: float = 0.5) -> bool:
     """Return True when *rewritten* is a fresh re-synthesis, not a correction.
@@ -1110,6 +1150,34 @@ def _is_false_positive_sentinel(text: str) -> bool:
     if len(stripped) > len(_FALSE_POSITIVE_SENTINEL) + 3:
         return False
     return stripped.upper() == _FALSE_POSITIVE_SENTINEL
+
+
+def _strip_trailing_false_positive_sentinel(text: str) -> str:
+    """Strip a stray trailing ``FALSE_POSITIVE`` token from a genuine rewrite body.
+
+    Some rewrite models (notably Qwen3-Next, adopted for the grounding rewrite)
+    occasionally append the self-check sentinel AFTER a real rewrite. Left in
+    place it leaks the literal token into the delivered answer. We remove ONLY a
+    trailing occurrence (with light surrounding punctuation/whitespace); a
+    bare/near-bare sentinel is left untouched so ``_is_false_positive_sentinel``
+    still recognises it and the ORIGINAL answer is returned instead.
+    """
+    if not text:
+        return text
+    stripped = text.rstrip()
+    # Bare/near-bare sentinel → leave for _is_false_positive_sentinel to handle.
+    if len(stripped) <= len(_FALSE_POSITIVE_SENTINEL) + 3:
+        return text
+    # Leading class is whitespace + light wrapping only (NOT sentence
+    # punctuation like ``.``/``:``) so a real body's terminal period survives.
+    m = re.search(
+        r"[\s\-*`\"']*" + _FALSE_POSITIVE_SENTINEL + r"[\s.!*`\"']*\Z",
+        stripped,
+        re.IGNORECASE,
+    )
+    if m:
+        return stripped[: m.start()].rstrip()
+    return text
 
 
 # Theme D: fallback when the synthesis turn produced only a plan and the
@@ -2377,6 +2445,20 @@ class ChatOrchestratorUseCase:
         # so the per-intent style addendum reflects what the LLM actually
         # asked the tools to fetch (E-1 T-E-1-02).
         intent = QueryIntent.GENERAL
+        # ── What-if / projection FRAMING (2026-07-05) ─────────────────────────
+        # The live agent-era ``infer_intent`` cannot emit REASONING and its
+        # CONTRADICTION regex never matches projection framing, so gating the
+        # disclaimer + numeric relaxation on the intent ENUM missed every
+        # what-if / projection question (they land GENERAL / FINANCIAL_DATA).
+        # We compute a deterministic question-side framing signal ONCE here (it
+        # is a pure property of the immutable user message) and use it at both
+        # gate sites below instead of the enum check.
+        from rag_chat.application.services.intent_inference import (
+            answer_has_projected_figure,
+            question_is_whatif,
+        )
+
+        _question_is_whatif = question_is_whatif(request.message)
         _tool_use_prompt = get_tool_use_system_prompt(
             intent=intent.value,
             today_iso=_today,
@@ -4272,13 +4354,17 @@ class ChatOrchestratorUseCase:
                     thread_id=request.thread_id,
                     user_id=request.user_id,
                     # Point 2 Stage 2 — relax the numeric gate for analytical /
-                    # hypothetical turns. CONTRADICTION (bear/bull case, "what
-                    # argues against X", counter-argument) and REASONING are the
-                    # analytical intents the classifier tags; on those the Stage 1
-                    # gate downgrades a FULLY-HEDGED-SENTENCE number (a projection /
-                    # estimate), never a bare factual assertion — the fabrication
-                    # guarantee is intact for factual lookups.
-                    analytical_intent=intent in (QueryIntent.CONTRADICTION, QueryIntent.REASONING),
+                    # hypothetical turns. Gated on the deterministic what-if
+                    # FRAMING signal (question_is_whatif), NOT the intent enum:
+                    # the live infer_intent cannot emit REASONING and its
+                    # CONTRADICTION regex never matches projection framing, so the
+                    # old enum check missed every projection. CONTRADICTION is kept
+                    # (cheap, and bear/bull-case turns are genuinely analytical).
+                    # On a relaxed turn the Stage-1 gate downgrades ONLY a
+                    # FULLY-HEDGED-SENTENCE number (a projection / estimate), never
+                    # a bare factual assertion — the fabrication guarantee is intact
+                    # for factual lookups.
+                    analytical_intent=_question_is_whatif or intent is QueryIntent.CONTRADICTION,
                 )
         elif not grounded:
             # BP-605: never cache a refusal answer — its content is a
@@ -4382,6 +4468,23 @@ class ChatOrchestratorUseCase:
                     "unverified_markers_sanitized",
                     request_id=str(getattr(audit, "turn_id", "") or ""),
                 )
+
+        # ── Point 2 (owner-requested): NOT-FINANCIAL-ADVICE disclaimer ────────
+        # Append the canonical, model-independent disclaimer to ANALYTICAL /
+        # HYPOTHETICAL / PROJECTION turns for liability coverage as we unlock
+        # what-if / projection analysis. Gated on the deterministic FRAMING
+        # signal — NOT the intent enum, which the live infer_intent cannot set to
+        # REASONING and whose CONTRADICTION regex never matches projection framing
+        # (so the old enum check missed every what-if). Fires when EITHER the
+        # QUESTION is a what-if / projection ("assuming X grows 25%, how might FY
+        # revenue evolve") OR the ANSWER states a hedged / projected figure
+        # ("could reach ~$X"). A simple factual lookup ("what is NVDA's P/E") is
+        # neither, so it never gets the disclaimer. Deterministic + deduped
+        # (``_append_advice_disclaimer`` is idempotent), placed after the answer
+        # and after any grounding note. The stub detector discounts it so it
+        # cannot inflate a leaked planning stub past the size gate.
+        if full_text and (_question_is_whatif or answer_has_projected_figure(full_text)):
+            full_text = _append_advice_disclaimer(full_text)
 
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
         # Scrub entity/article refs in the answer that were NOT grounded in any
@@ -5060,11 +5163,27 @@ class ChatOrchestratorUseCase:
                 "content": (
                     f"{self_check_preamble}"
                     f"{combined_instructions}\n\n"
-                    "Provide a fresh response that answers the question directly using only "
-                    "values and entities supported by the tool results above. Do NOT "
-                    "acknowledge a prior draft; the user only sees this response. Do NOT "
-                    'begin with phrases such as "You\'re right", "Let me re-examine", '
-                    '"I need to correct", or any apology.'
+                    # 2026-07-05 (Qwen3-Next defeatist fix): the rewrite is a PATCH,
+                    # not a re-answer. The prior wording ("Provide a fresh response
+                    # that answers the question directly using ONLY supported values")
+                    # invited Qwen3-Next to conclude it could not answer at all and
+                    # emit a bare "I cannot calculate this from the retrieved data"
+                    # refusal, which the defeatist guard then discarded — serving the
+                    # ungrounded original with a caveat. Instruct the model to KEEP
+                    # the grounded remainder and only drop/mark the flagged items, and
+                    # to NEVER return a bare refusal.
+                    "Return a CORRECTED version of your answer. KEEP every part that IS "
+                    "supported by the tool results above (including its citations); only "
+                    "REMOVE or explicitly mark the specific flagged figures/names that are "
+                    "not supported — drop them, or annotate them inline as [unverified] "
+                    "(e.g. '(not in retrieved data)'). Preserve the grounded content and "
+                    "answer with whatever the tool results DO support. NEVER replace the "
+                    'answer with a bare refusal such as "I cannot calculate this", "I\'m '
+                    'unable to…", or "the data does not allow…"; if a single value is '
+                    "unsupported, state the grounded facts you DO have and flag only that "
+                    "value. Do NOT acknowledge a prior draft; the user only sees this "
+                    'response. Do NOT begin with phrases such as "You\'re right", "Let me '
+                    're-examine", "I need to correct", or any apology.'
                 ),
             },
         ]
@@ -5121,6 +5240,11 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
+        # Strip a stray trailing FALSE_POSITIVE token some rewrite models append
+        # to a genuine rewrite body (Qwen3-Next), so it can't leak into the
+        # answer. A bare/near-bare sentinel is preserved for the check below.
+        rewritten = _strip_trailing_false_positive_sentinel(rewritten)
+
         # ── Point 2 Stage 2: false-positive self-check sentinel ───────────────
         # The rewrite model judged the flagged numbers/names to be legitimate
         # reasoning / projections / hedged estimates / derived values rather than
@@ -5152,9 +5276,35 @@ class ChatOrchestratorUseCase:
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
         # 2. Defeatist short rewrite (BP-648) — keep the original.
+        # BP-648's purpose: never let a rewrite REPLACE a good grounded answer
+        # with a bare "I cannot…" refusal. But with Qwen3-Next as the rewrite
+        # model, a LEGITIMATE correction (dropping / flagging a couple of
+        # ungrounded numbers while keeping the grounded remainder) can open with
+        # a hedge and still be shorter than the original — the old
+        # "refusal-prefixed AND shorter" test discarded those corrections too,
+        # then served the UNGROUNDED original with a blanket caveat (2026-07-05).
+        # Refinement: a rewrite is defeatist ONLY when it is refusal-prefixed AND
+        # NOT substantive — i.e. it dropped below a real-content floor. A bare
+        # "I cannot answer that." (~20 chars) is still rejected (BP-648 intact);
+        # a refusal-prefixed but content-rich correction flows on to
+        # re-validation (which grounds it or banners residual numbers).
         _r_strip = rewritten.lstrip()
-        _refusal_prefixes = ("I cannot", "I am unable", "I'm unable", "I can't")
-        if any(_r_strip.startswith(pref) for pref in _refusal_prefixes) and len(rewritten) < len(response):
+        _refusal_prefixes = (
+            "I cannot",
+            "I am unable",
+            "I'm unable",
+            "I can't",
+            "I could not",
+            "I couldn't",
+        )
+        # Substantive-content floor: a genuine defeatist refusal is short (a
+        # sentence or two of "I can't do this"); a real correction retains the
+        # grounded body. Keep BP-648 conservative — only reject when the rewrite
+        # is BOTH refusal-prefixed AND below the floor AND shorter than the
+        # original it would replace.
+        _is_refusal_prefixed = any(_r_strip.startswith(pref) for pref in _refusal_prefixes)
+        _is_substantive_correction = len(_r_strip) >= _DEFEATIST_REWRITE_MIN_SUBSTANTIVE_CHARS
+        if _is_refusal_prefixed and len(rewritten) < len(response) and not _is_substantive_correction:
             log.warning(  # type: ignore[no-any-return]
                 "combined_grounding_rewrite_rejected_defeatist",
                 rewrite_len=len(rewritten),

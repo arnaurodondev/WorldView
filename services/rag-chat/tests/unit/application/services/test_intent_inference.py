@@ -16,7 +16,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from rag_chat.application.services.intent_inference import infer_intent
+from rag_chat.application.services.intent_inference import (
+    answer_has_projected_figure,
+    infer_intent,
+    question_is_whatif,
+)
 from rag_chat.domain.enums import QueryIntent
 
 pytestmark = pytest.mark.unit
@@ -168,3 +172,76 @@ class TestInferIntentContradiction:
         """
         intent = infer_intent([_call("search_documents", query="x")])
         assert intent is QueryIntent.FACTUAL_LOOKUP
+
+
+class TestQuestionIsWhatif:
+    """Deterministic what-if / projection FRAMING detector (2026-07-05).
+
+    Re-gates the not-financial-advice disclaimer + the ``analytical_intent``
+    numeric relaxation on framing, not the intent enum (which the live
+    ``infer_intent`` cannot set to REASONING for projection questions).
+    """
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "Assuming X grows 25%, how might FY revenue evolve?",
+            "What if Nvidia's data-centre revenue doubles next year?",
+            "Suppose margins compress 200bps — what's the projected EPS?",
+            "How could Tesla's free cash flow evolve over the next few years?",
+            "Project AAPL revenue if it grows 12% annually.",
+            "Give me a bull scenario for AMD.",
+            "If revenue rises 30%, what happens to the P/E?",
+            "What's the projection for MSFT cloud next quarter?",
+        ],
+    )
+    def test_projection_questions_detected(self, question: str) -> None:
+        assert question_is_whatif(question) is True
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "What is NVDA's P/E?",
+            "What was Apple's revenue last quarter?",
+            "List Tesla's board members.",
+            "Compare AMD and Intel gross margins.",
+            "Who is the CEO of Microsoft?",
+        ],
+    )
+    def test_plain_factual_questions_not_detected(self, question: str) -> None:
+        assert question_is_whatif(question) is False
+
+    def test_empty_and_none_are_false(self) -> None:
+        assert question_is_whatif("") is False
+        assert question_is_whatif(None) is False
+
+
+class TestAnswerHasProjectedFigure:
+    """Answer-side projected-figure detector — reuses numeric_grounding._HEDGE_RE."""
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            "Under that assumption FY revenue could reach ~$120B.",
+            "This would add roughly 15% to next-quarter EPS.",
+            "Assuming the growth holds, the projected figure is about $2B.",
+            "The estimated market cap would be near $3.4T.",
+        ],
+    )
+    def test_hedged_figure_answers_detected(self, answer: str) -> None:
+        assert answer_has_projected_figure(answer) is True
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            "NVDA's P/E is 45.",  # bare factual figure, no hedge
+            "Revenue was $34.6B in Q2.",  # bare factual assertion
+            "This could vary depending on demand.",  # hedge but NO number
+            "",
+        ],
+    )
+    def test_bare_factual_or_numberless_not_detected(self, answer: str) -> None:
+        assert answer_has_projected_figure(answer) is False
+
+    def test_none_is_false(self) -> None:
+        assert answer_has_projected_figure(None) is False

@@ -42,8 +42,6 @@ def _make_pipeline(**overrides: Any) -> ChatPipeline:
         "cache": MagicMock(),
         "get_thread": MagicMock(),
         "s6_client": MagicMock(),
-        "classifier": MagicMock(),
-        "plan_builder": MagicMock(),
         "hyde": MagicMock(),
         "embedder": MagicMock(),
         "retrieval": MagicMock(),
@@ -273,57 +271,10 @@ class TestResolveEntities:
         assert result == []
 
 
-# ── Step 5: classify_and_plan ─────────────────────────────────────────────────
-
-
-class TestClassifyAndPlan:
-    @pytest.mark.asyncio
-    async def test_classify_and_plan(self) -> None:
-        """Returns (intent, sub_questions, rephrased, plan) from classifier + plan_builder."""
-        from rag_chat.domain.enums import QueryIntent
-
-        fake_intent = QueryIntent.FACTUAL_LOOKUP
-        fake_sub_questions = ["What is AAPL revenue?"]
-        fake_rephrased = "Apple revenue latest quarter"
-        fake_plan = MagicMock()
-
-        classifier = MagicMock()
-        classifier.classify = AsyncMock(return_value=(fake_intent, fake_sub_questions, fake_rephrased))
-
-        plan_builder = MagicMock()
-        plan_builder.build = MagicMock(return_value=fake_plan)
-
-        # Build fake entity with entity_id attribute
-        fake_entity = MagicMock()
-        fake_entity.entity_id = _FAKE_USER_ID
-
-        # Build fake history messages with role/content
-        fake_msg = MagicMock()
-        fake_msg.role = MagicMock()
-        fake_msg.role.value = "user"
-        fake_msg.content = "Prior question"
-
-        pipeline = _make_pipeline(classifier=classifier, plan_builder=plan_builder)
-
-        intent, sub_qs, rephrased, plan = await pipeline.classify_and_plan(
-            message="What is AAPL revenue?",
-            history=[fake_msg],
-            entities=[fake_entity],
-            date_range=None,
-        )
-
-        # Classifier receives history converted to dicts
-        classifier.classify.assert_called_once_with(
-            "What is AAPL revenue?",
-            [{"role": "user", "content": "Prior question"}],
-            [fake_entity],
-        )
-        plan_builder.build.assert_called_once_with(fake_intent, (fake_entity.entity_id,), None)
-
-        assert intent == fake_intent
-        assert sub_qs == fake_sub_questions
-        assert rephrased == fake_rephrased
-        assert plan == fake_plan
+# ── Step 5: intent classification RETIRED ─────────────────────────────────────
+# The pre-agent LLM intent classifier + RetrievalPlanBuilder (pipeline
+# ``classify_and_plan``) have been retired; the eval harness is now intent-free.
+# See tests/unit/api/test_internal_retrieve.py for the intent-free retrieval path.
 
 
 # ── Step 5bis-a: expand_query ─────────────────────────────────────────────────
@@ -692,14 +643,13 @@ class TestChatPipelineStructure:
             pipeline.validator = MagicMock()  # type: ignore[misc]
 
     def test_has_all_step_methods(self) -> None:
-        """All 15 step methods are present on ChatPipeline."""
+        """All step methods are present on ChatPipeline."""
         expected_methods = [
             "validate_input",
             "check_cache",
             "check_rate_limit",
             "load_history",
             "resolve_entities",
-            "classify_and_plan",
             "expand_query",
             "embed_query",
             "retrieve",

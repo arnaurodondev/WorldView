@@ -122,7 +122,7 @@ PLATFORM_MODEL_REGISTRY: tuple[ConfiguredModel, ...] = (
     ),
     ConfiguredModel("knowledge-graph", "description_gemini (adapter default)", "gemini-3.1-flash-lite", "gemini"),
     # ── S8 rag-chat ──────────────────────────────────────────────────────────
-    ConfiguredModel("rag-chat", "ollama_classification_model", "qwen3:0.6b", "ollama"),
+    # ollama_classification_model removed with the intent-classifier retirement.
     ConfiguredModel("rag-chat", "ollama_completion_model", "deepseek-r1:32b", "ollama"),
     ConfiguredModel("rag-chat", "ollama_reranker_model", "bge-reranker-v2-m3", "ollama"),
     ConfiguredModel("rag-chat", "deepinfra_classification_model", "Qwen/Qwen3.5-9B", "deepinfra"),

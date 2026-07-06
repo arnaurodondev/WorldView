@@ -182,6 +182,27 @@ Reason RIGOROUSLY over what was retrieved WITHOUT loosening grounding:
   SPECIFIC note of exactly what is unverified, or OMIT the caveat entirely when
   every figure is grounded.
 
+## DATA-COVERAGE BOUNDARY — NAME IT, DON'T IMPLY A RETRIEVAL MISS
+Some dimensions are simply NOT part of the platform's fundamentals coverage — most
+importantly revenue / financials broken down by BUSINESS SEGMENT, PRODUCT LINE, or
+GEOGRAPHY (e.g. Apple iPhone-vs-Services, NVIDIA data-center-vs-gaming, AWS-vs-retail,
+Qualcomm QCT/QTL, or any regional/geographic revenue split). Our fundamentals are
+COMPANY-LEVEL totals from the data provider; segment-level detail lives only in
+SEC-filing footnotes we do not ingest.
+
+- When the question needs such a breakdown and it is NOT in the retrieved fundamentals,
+  say plainly that THIS SPECIFIC BREAKDOWN is not part of the platform's fundamentals
+  coverage. Do NOT write "could not be calculated from the retrieved information" — or any
+  phrasing that implies a transient retrieval failure or a value that merely failed to
+  compute. This is a coverage boundary, not a miss: naming it honestly is the correct answer.
+- Be brief, honest, and non-defensive, then OFFER WHAT IS AVAILABLE: the company-level
+  revenue, growth, and margins the tools DID return (report them in full, with their
+  [tool_name row N] tags), plus any qualitative colour on the segment from retrieved news.
+- This applies ONLY to genuinely-uncovered dimensions (segment / business-line / product-
+  line / geographic splits). It is NEVER an excuse to refuse a question the tools CAN
+  answer: if a company-level figure the user asked for is present in a tool row, report it
+  in full. Do not widen this into a general refusal.
+
 ## ANTI-FABRICATION POLICY — REPORT WHAT IS THERE, INVENT NOTHING
 These three rules forbid fabrication. They are NOT a licence to withhold: report
 every value the tools DID return, in full, with its citation — refuse ONLY the
@@ -378,7 +399,25 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # projection permission and every no-fabrication / grounding / citation rule —
     # "reason qualitatively" is explicitly NOT a licence to invent the missing
     # number, so fabrication cannot increase.
-    version="1.10",
+    # 1.11 (data-coverage-boundary honesty, 2026-07-05): when a user asks for a
+    # data dimension the platform genuinely does not carry — verified: revenue /
+    # financials broken down by BUSINESS SEGMENT, PRODUCT LINE, or GEOGRAPHY are
+    # absent from EODHD standard fundamentals for ALL companies (Apple iPhone-vs-
+    # Services, NVDA data-center-vs-gaming, Qualcomm QCT/QTL, AWS-vs-retail, etc.)
+    # — the model answered with the generic "could not be calculated from the
+    # retrieved information", which reads as a TRANSIENT retrieval miss rather than
+    # a permanent capability boundary. Added the DATA-COVERAGE BOUNDARY block: when
+    # the needed breakdown is a segment / product-line / geographic split absent
+    # from the retrieved fundamentals, state plainly that THIS breakdown is not part
+    # of the platform's fundamentals coverage (company-level totals from the data
+    # provider; segment detail lives only in un-ingested SEC-filing footnotes) —
+    # never phrasing that implies a transient failure — then offer what IS available
+    # (company-level revenue/growth/margins, cited; qualitative news colour). NARROW
+    # + additive: it is scoped ONLY to genuinely-uncovered dimensions and explicitly
+    # must NOT widen into refusing questions the tools CAN answer; the v1.9 what-if
+    # projection permission, v1.10 reasoning-rigor, and all no-fabrication / grounding
+    # / projection rules are UNCHANGED.
+    version="1.11",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -422,7 +461,17 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "optimism; cite every figure used in a conclusion and flag period/unit "
         "mismatches, replacing the blanket unmatched-source caveat with a specific "
         "note or none. Additive; keeps the v1.9 what-if permission and all "
-        "no-fabrication / grounding rules."
+        "no-fabrication / grounding rules. "
+        "v1.11 adds the DATA-COVERAGE BOUNDARY block: when the user asks for a "
+        "dimension the platform genuinely does not carry — revenue / financials by "
+        "business segment, product line, or geography (absent from EODHD standard "
+        "fundamentals) — the model states plainly that this specific breakdown is not "
+        "part of the platform's fundamentals coverage (company-level totals only; "
+        "segment detail lives in un-ingested SEC-filing footnotes) instead of the "
+        "misleading 'could not be calculated from the retrieved information' that "
+        "implies a transient retrieval miss, then offers what IS available. Scoped "
+        "ONLY to genuinely-uncovered dimensions; must NOT cause refusals for "
+        "answerable questions."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

@@ -71,6 +71,98 @@ def _matches_contradiction(question_text: str | None) -> bool:
     return any(pat.search(question_text) for pat in _CONTRADICTION_PATTERNS)
 
 
+# ── What-if / projection FRAMING detector (2026-07-05) ────────────────────────
+#
+# WHY: the not-financial-advice disclaimer and the ``analytical_intent``
+# numeric-grounding relaxation were gated on ``intent in (REASONING,
+# CONTRADICTION)``. But the live chat path derives intent from ``infer_intent``,
+# which is STRUCTURALLY unable to emit ``REASONING`` (it maps tool calls, and no
+# tool implies "reasoning") and whose CONTRADICTION regex never matches
+# projection framing. So every what-if / projection question ("assuming X grows
+# 25%, how might FY revenue evolve") landed on GENERAL / FINANCIAL_DATA and MISSED
+# both the disclaimer and the numeric relaxation. Confirmed live.
+#
+# The fix re-gates on a DETERMINISTIC framing signal instead of the intent enum:
+#   * QUESTION-side — the user asked a hypothetical / projection / scenario
+#     question (this module's :func:`question_is_whatif`);
+#   * ANSWER-side — the final answer states a HEDGED / projected figure
+#     (:func:`answer_has_projected_figure`, which reuses ``numeric_grounding``'s
+#     ``_HEDGE_RE`` — the same hedge lexicon the Stage-1 grounding downgrade uses,
+#     so the disclaimer and the grounding relaxation agree on what "projected"
+#     means).
+#
+# Both are pure regex functions (no I/O, no LLM) so they run in microseconds on
+# every turn and are trivially unit-testable.
+#
+# Compiled once at import. Each alternation targets a distinct projection cue:
+#   1. ``assuming …``                    — explicit assumption framing
+#   2. ``if <subject> grows/rises/…``    — conditional forward movement
+#   3. ``what if …``                     — canonical hypothetical opener
+#   4. ``projected`` / ``projection``    — projection vocabulary
+#   5. ``scenario`` / ``hypothetical`` / ``suppose`` — scenario framing
+#   6. ``next quarter/year/…``           — forward-looking horizon
+#   7. ``how might/could/would …``       — modal projection question
+#   8. growth VERB + ``NN%``             — forward-looking growth-rate framing
+#   9. ``NN%`` + growth/CAGR/annually    — the same, reversed word order
+_WHATIF_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\bassuming\b",
+        r"\bif\s+\w+(?:\s+\w+){0,2}?\s+"
+        r"(?:grow|grows|growing|grew|rise|rises|rising|rose|fall|falls|falling|fell"
+        r"|increase|increases|increasing|increased|declin\w+|reach|reaches|reaching"
+        r"|reached|drop|drops|dropping|dropped|hit|hits|doubl\w+|halv\w+)\b",
+        r"\bwhat\s+if\b",
+        r"\bproject(?:ed|ion|ions)\b",
+        r"\b(?:scenario|hypothetical|hypothetically|suppose|supposing)\b",
+        r"\bnext\s+(?:quarter|year|fiscal|fy|month|decade|few\s+years)\b",
+        r"\bhow\s+(?:might|could|would)\b",
+        r"\b(?:grow|grows|grew|rise|rises|rose|increase|increases|increased|declin\w+"
+        r"|fall|falls|fell|drop|drops)\b[^.?!]{0,40}?\d+(?:\.\d+)?\s?%",
+        r"\d+(?:\.\d+)?\s?%[^.?!]{0,40}?\b(?:growth|cagr|annually|per\s+year|per\s+annum|a\s+year)\b",
+    )
+)
+
+# Cheap "the answer states a number" probe — a projected FIGURE requires an
+# actual digit, so a bare hedge word with no number ("this could vary") does not
+# spuriously trigger the disclaimer.
+_ANSWER_DIGIT_RE = re.compile(r"\d")
+
+
+def question_is_whatif(question_text: str | None) -> bool:
+    """Return True when ``question_text`` is a what-if / projection / scenario question.
+
+    Deterministic regex scan (see :data:`_WHATIF_PATTERNS`). Used in place of the
+    ``intent in (REASONING, CONTRADICTION)`` enum check for BOTH the
+    not-financial-advice disclaimer and the ``analytical_intent`` numeric-gate
+    relaxation — the live agent-era ``infer_intent`` cannot emit those intents for
+    projection framing, so the enum check silently missed every what-if.
+    """
+    if not question_text:
+        return False
+    return any(pat.search(question_text) for pat in _WHATIF_PATTERNS)
+
+
+def answer_has_projected_figure(answer_text: str | None) -> bool:
+    """Return True when the final answer states a HEDGED / projected numeric figure.
+
+    A projected figure = the answer contains a digit AND a hedge/projection marker
+    (``could`` / ``would`` / ``roughly`` / ``~`` / ``assuming`` / ``projected`` /
+    ``estimate`` / …). Reuses ``numeric_grounding._HEDGE_RE`` so this answer-side
+    signal and the Stage-1 grounding downgrade share one definition of "projected".
+
+    Requiring a digit keeps the disclaimer off answers that merely hedge in prose
+    with no figure at all.
+    """
+    if not answer_text:
+        return False
+    # Local import avoids a module-load coupling to the (sibling-mutated)
+    # numeric_grounding module and dodges any import-order edge cases.
+    from rag_chat.application.services.numeric_grounding import _HEDGE_RE
+
+    return bool(_ANSWER_DIGIT_RE.search(answer_text)) and bool(_HEDGE_RE.search(answer_text))
+
+
 # Tool name → intent mapping for the single-call rules (priorities 2-5).
 # We keep this as a dict (not if-chains) so adding a new rule is a one-line
 # change and the priority sort below stays explicit.
@@ -176,4 +268,4 @@ def infer_intent(tool_calls: Iterable[object], question_text: str | None = None)
     return QueryIntent.GENERAL
 
 
-__all__ = ["infer_intent"]
+__all__ = ["answer_has_projected_figure", "infer_intent", "question_is_whatif"]

@@ -267,6 +267,19 @@ class TestToolUsePromptContract:
         _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
         assert _ver >= (1, 12), f"expected version >= 1.12 for RESEARCH LOOP bump, got {_ver}"
 
+    def test_prompt_template_version_bumped_for_whatif_narrowing(self) -> None:
+        """v1.13 narrows the SPECULATIVE FORECASTS rule — bump the floor.
+
+        2026-07-05 narrowed the blanket price-forecast refusal so grounded
+        CONDITIONAL what-if IMPACT analysis (a user-supplied hypothetical
+        move -> derived, hedged fundamental impact) is ALLOWED while
+        asset-price-direction forecasts remain refused. That edits the
+        template body (flipping the content hash), so the semver version MUST
+        advance to >= 1.13. Pinning the floor catches an accidental revert.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 13), f"expected version >= 1.13 for what-if narrowing, got {_ver}"
+
     def test_core_contains_parallel_research_loop_directive(self) -> None:
         """Point 1 — general parallel tool batching in ROUND 1.
 
@@ -530,6 +543,53 @@ class TestToolUsePromptContract:
             # them.
             for forbidden in ("will go up", "will go down", "will rise", "will fall"):
                 assert forbidden in prompt, f"intent={intent}: forbidden phrase '{forbidden}' missing from enumeration"
+
+    def test_speculative_forecast_rule_narrowed_for_conditional_whatif(self) -> None:
+        """v1.13 — the price-forecast refusal must distinguish two cases.
+
+        The original rule refused ALL forward-looking directional statements,
+        which also over-refused grounded CONDITIONAL what-if IMPACT analysis
+        where the price/cost move is the USER'S stated premise (e.g. "if wafer
+        prices rise 10%, what's the margin impact?"). v1.13 narrows it so:
+
+          (A) it STILL hard-refuses forecasting an ASSET's own price direction
+              ("will X go up", price targets, "should I buy/sell"); AND
+          (B) it NOW permits reasoning about the DOWNSTREAM fundamental impact
+              GIVEN a user-supplied hypothetical move (derived from cited
+              figures, hedged, and NOT ending in an asset-price-direction call).
+
+        This test pins BOTH sides so a future edit cannot either (a) drop the
+        asset-price-direction protection or (b) silently swing back to the
+        blanket refusal that killed the conditional what-if use case.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "REASONING"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-05")
+
+            # (A) The hard-refuse case is still present and still names the
+            # additional asset-price-direction shapes (price targets, buy/sell).
+            assert "HARD-REFUSE" in prompt, f"intent={intent}: missing HARD-REFUSE case (A) anchor"
+            assert "I cannot predict future price movements" in prompt
+            assert "price target" in prompt, f"intent={intent}: price-target refusal shape missing"
+            assert (
+                "buy/sell" in prompt or "should I buy" in prompt
+            ), f"intent={intent}: buy/sell recommendation refusal missing"
+
+            # (B) The newly-allowed conditional what-if impact case is present
+            # and framed as a user-supplied PREMISE producing a DOWNSTREAM
+            # fundamental impact (NOT an asset-price forecast).
+            assert "ALLOWED" in prompt, f"intent={intent}: missing ALLOWED case (B) anchor"
+            assert (
+                "premise" in prompt.lower()
+            ), f"intent={intent}: allowed case must frame the move as the user's premise"
+            assert "downstream" in prompt.lower(), f"intent={intent}: allowed case must reference downstream impact"
+            # The allowed case must still forbid then predicting the asset's
+            # own price direction — the boundary must be explicit.
+            assert (
+                "must NOT then predict the asset's stock-price" in prompt or "must NOT then predict the asset" in prompt
+            ), f"intent={intent}: allowed case must still forbid an asset-price-direction call"
+            # The wafer-price margin example (the owner's headline use case)
+            # must be present as a concrete ALLOWED exemplar.
+            assert "wafer prices rise 10%" in prompt, f"intent={intent}: conditional what-if margin example missing"
 
     def test_financial_data_addendum_contains_fiscal_period_label_rule(self) -> None:
         """NEW-018 (PLAN-0093 iter-14b): verbatim fiscal-period label rule.

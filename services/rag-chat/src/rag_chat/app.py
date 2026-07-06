@@ -205,7 +205,6 @@ def _warn_unpriceable_models_at_startup(settings: RagChatSettings) -> None:
         (settings.openrouter_completion_model, "openrouter"),
         (settings.deepinfra_stream_chat_fallback_model, "deepinfra"),
         (settings.citation_judge_model, settings.citation_judge_provider),
-        (settings.ollama_classification_model, "ollama"),
         (settings.ollama_completion_model, "ollama"),
         (settings.ollama_reranker_model, "ollama"),
     ]
@@ -226,17 +225,12 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.application.caching.rate_limiter import RateLimiter
     from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
     from rag_chat.application.pipeline.hyde_expander import HydeExpander
-    from rag_chat.application.pipeline.intent_classifier import (
-        DeepInfraIntentClassifier,
-        OllamaIntentClassifier,
-    )
     from rag_chat.application.pipeline.reranker import (
         BGEReranker,
         CohereReranker,
         DeepInfraReranker,
     )
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
-    from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
     from rag_chat.application.security.input_validator import InputValidator
     from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
     from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
@@ -427,29 +421,12 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
 
         embedding_client = _S6EmbeddingAdapter(settings.s6_base_url)
 
-    # ── Intent classifier: DeepInfra GPU (primary) → Ollama (fallback) ─────────
-    # DeepInfraIntentClassifier is used when a deepinfra_api_key is configured.
-    # It uses a 3B model on DeepInfra GPU (~100-200ms) instead of qwen3:0.6b on
-    # CPU Ollama (2-20s, causes 100% fallback to keyword heuristic in practice).
-    # Both classifiers fall back to KeywordHeuristicClassifier on any error.
-    if _deepinfra_api_key:
-        classifier: Any = DeepInfraIntentClassifier(
-            api_key=_deepinfra_api_key,
-            model=settings.deepinfra_classification_model,
-            usage_logger=usage_logger,
-            # PLAN-0107 follow-up: per-call USD cost emit (call_site="intent_classifier").
-            cost_recorder=cost_recorder,
-        )
-    else:
-        classifier = OllamaIntentClassifier(
-            ollama_base_url=settings.ollama_base_url,
-            model=settings.ollama_classification_model,
-            usage_logger=usage_logger,
-            # PLAN-0107 follow-up: same recorder so the Grafana panel sees both
-            # providers under one metric name; per-row attribution in
-            # llm_usage_log via the call_site column.
-            cost_recorder=cost_recorder,
-        )
+    # ── Intent classifier: RETIRED ────────────────────────────────────────────
+    # The pre-agent LLM intent classifier (DeepInfra/Ollama) that fed the
+    # per-intent RetrievalPlanBuilder has been retired. Production chat uses the
+    # agentic tool-use loop; the eval harness (RetrieveOnlyUseCase) is now
+    # intent-free (retrieves from all sources). The Layer-2 LLM *injection-safety*
+    # classifier below is a DIFFERENT subsystem and remains wired.
 
     # ── Reranker selection (PLAN-0052 platform-QA round 5) ──────────────────
     # Priority order:
@@ -503,7 +480,6 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         cost_recorder=cost_recorder,
     )
 
-    _plan_builder = RetrievalPlanBuilder()
     _hyde = HydeExpander(
         llm_provider=providers[0],
         embedding_client=embedding_client,
@@ -689,8 +665,6 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     app.state.retrieve_only_uc = RetrieveOnlyUseCase(
         validator=_validator,
         s6_client=s6,
-        classifier=classifier,
-        plan_builder=_plan_builder,
         hyde=_hyde,
         embedder=embedding_client,
         retrieval=_retrieval,
