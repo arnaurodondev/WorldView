@@ -51,7 +51,9 @@ class Settings(BaseSettings):
 
     # ── Ollama (local LLM container) ──────────────────────────────────────────
     ollama_base_url: str = "http://localhost:11434"
-    ollama_classification_model: str = "qwen3:0.6b"
+    # NOTE: ``ollama_classification_model`` was removed alongside the retirement of
+    # the pre-agent LLM intent classifier (its only consumer). The Layer-2
+    # injection-safety classifier uses ``deepinfra_classification_model`` below.
     ollama_completion_model: str = "deepseek-r1:32b"  # emergency fallback only
     ollama_reranker_model: str = "bge-reranker-v2-m3"
 
@@ -59,11 +61,14 @@ class Settings(BaseSettings):
     deepinfra_api_key: SecretStr | None = None  # primary: configurable via completion_model (DEF-034)
     openrouter_api_key: SecretStr | None = None  # fallback: configurable via openrouter_completion_model (DEF-034)
 
-    # ── Intent classification (DeepInfra GPU) ─────────────────────────────────
+    # ── Classification model (DeepInfra GPU) ──────────────────────────────────
+    # Shared by the Layer-2 LLM injection-SAFETY classifier (LLMInjectionClassifier)
+    # and the default citation judge. The pre-agent intent classifier that also
+    # used this key has been retired; this field is retained because the safety
+    # classifier still depends on it — do NOT remove.
     # PLAN-0061 Wave D (2026-05-02): Llama-3.2-1B/3B are not available on this
     # DeepInfra account. Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo
-    # (~100-200ms GPU, 8B param, ~$0.02/M tokens — sufficient for a 1-token
-    # intent decision and the same model used for classification across S6/S8).
+    # (~100-200ms GPU, 8B param, ~$0.02/M tokens).
     deepinfra_classification_model: str = "Qwen/Qwen3.5-9B"
 
     # ── External reranker (Cohere — replaces bge-reranker-v2-m3 Ollama) ───────

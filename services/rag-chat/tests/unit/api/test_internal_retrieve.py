@@ -29,7 +29,7 @@ _INTERNAL_JWT = _jwt.encode(
 _AUTH_HEADERS = {"X-Internal-JWT": _INTERNAL_JWT}
 
 
-def _make_retrieve_result(n: int = 3, intent: str = "FACTUAL_LOOKUP"):
+def _make_retrieve_result(n: int = 3, intent: str = "intent_free"):
     """Build a fake RetrieveOnlyResult with n synthetic candidates."""
     from rag_chat.application.use_cases.retrieve_only import RetrieveOnlyResult
     from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
@@ -97,7 +97,8 @@ async def test_internal_retrieve_returns_200_with_candidates(app_with_uc) -> Non
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["intent"] == "FACTUAL_LOOKUP"
+    # Intent classification was retired — the harness is now intent-free.
+    assert body["intent"] == "intent_free"
     assert body["n_candidates"] == 3
     assert len(body["candidates"]) == 3
     # Rank starts at 1, scores monotonically descending (orchestrator sorted).
