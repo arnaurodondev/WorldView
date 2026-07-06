@@ -6,12 +6,16 @@ functions or thin wrappers over request state — no route registration here.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from contextlib import AsyncExitStack
+from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import Response
+import httpx
+from fastapi import HTTPException, Response
+from fastapi.responses import StreamingResponse
 
 if TYPE_CHECKING:
-    import httpx
+    from collections.abc import AsyncIterator, Callable
+
     from fastapi import Request
 
     from api_gateway.clients import ServiceClients
@@ -38,6 +42,162 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # Generic body returned to clients in place of any upstream 5xx body. JSON so the
 # frontend's error-handling (which expects {"detail": ...}) keeps working.
 _SANITIZED_UPSTREAM_BODY = b'{"detail":"upstream service error"}'
+
+# NEW-5 (2026-07-06 r1-final-exhaustive-qa, LOW resilience): the gateway must
+# convert *transport-level* failures to an upstream service (connection refused,
+# DNS "Name or service not known" during a container recreate, read/connect
+# timeout) into a graceful 503/504 — NOT an unhandled 500 that leaks a full
+# ``httpx.ConnectError`` traceback to the browser. This is distinct from BUG-7,
+# which sanitizes upstream *responses* (5xx bodies): here there is no upstream
+# response at all because the connection never completed.
+#
+# Mapping: ``httpx.TimeoutException`` → 504 Gateway Timeout (the upstream was
+# reachable but too slow); every other ``httpx.NetworkError`` (ConnectError,
+# ReadError, name-resolution failure) → 503 Service Unavailable (the upstream
+# was momentarily unreachable — the client should retry with backoff).
+
+# SSE frame emitted when the upstream connection drops *mid-stream*. Once a
+# StreamingResponse has begun, the 200 response-start is already committed and
+# the HTTP status can no longer be changed — so a clean ``event: error`` frame
+# (no traceback, stable machine code) is the only way to signal the drop.
+_SSE_UPSTREAM_DROP_FRAME = (
+    b"event: error\n"
+    b'data: {"code":"UPSTREAM_UNAVAILABLE",'
+    b'"message":"The chat service connection was interrupted. Please try again."}\n\n'
+)
+
+# Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat service so the
+# gateway middleware stack (Prometheus, RequestId) does not buffer the upstream
+# chunks. Without these, the frontend receives the entire answer in a single
+# chunk instead of token-by-token. Shared by every rag-chat SSE proxy route.
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
+
+
+def _transport_error_to_http(exc: Exception, service_name: str) -> HTTPException:
+    """Map a transport-level httpx error to a graceful ``HTTPException`` (NEW-5).
+
+    ``httpx.TimeoutException`` → 504 (upstream reachable but too slow); any other
+    ``httpx.NetworkError`` (ConnectError / name-resolution / ReadError) → 503
+    (upstream momentarily unreachable). The detail is a generic, caller-safe
+    string — the raw exception (which may contain internal hostnames / the DNS
+    error) is never surfaced to the client.
+    """
+    if isinstance(exc, httpx.TimeoutException):
+        return HTTPException(status_code=504, detail=f"{service_name} timed out")
+    return HTTPException(status_code=503, detail=f"{service_name} unavailable")
+
+
+async def rag_chat_request(
+    clients: ServiceClients,
+    method: str,
+    path: str,
+    *,
+    service_name: str = "rag-chat",
+    **kwargs: Any,
+) -> httpx.Response:
+    """Call an S8 rag-chat endpoint, mapping transport failures to 503/504 (NEW-5).
+
+    Thin wrapper over ``clients.rag_chat.<method>(path, **kwargs)`` that catches
+    connection/resolution/timeout errors and re-raises them as a graceful
+    ``HTTPException`` (503 unavailable / 504 timeout) instead of letting the raw
+    ``httpx.ConnectError`` propagate to FastAPI as an unhandled 500 with a leaked
+    traceback (NEW-5, 2026-07-06 QA).
+
+    Genuine 4xx/5xx *responses* from rag-chat are returned unchanged — the caller
+    still routes them through ``proxy_json_response`` (which applies the BUG-7 5xx
+    sanitisation), so error-passthrough semantics are preserved.
+
+    Args:
+        clients:      The request-scoped ``ServiceClients`` (from ``_clients``).
+        method:       httpx verb name: ``"get"``, ``"post"``, ``"delete"``,
+                      ``"patch"``.
+        path:         Absolute path on rag-chat (e.g. ``/api/v1/chat``).
+        service_name: Human-readable name used in the graceful error detail.
+        **kwargs:     Forwarded verbatim to the httpx method (``content``,
+                      ``headers``, ``params`` ...).
+    """
+    client_method = getattr(clients.rag_chat, method)
+    try:
+        return cast("httpx.Response", await client_method(path, **kwargs))
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise _transport_error_to_http(exc, service_name) from exc
+
+
+async def proxy_rag_chat_stream(
+    clients: ServiceClients,
+    path: str,
+    *,
+    content: bytes,
+    headers: dict[str, str],
+    rewrite: Callable[[bytes], bytes] | None = None,
+    service_name: str = "rag-chat",
+) -> StreamingResponse:
+    """Proxy an S8 rag-chat SSE endpoint with airtight transport-error handling.
+
+    NEW-5 root fix for ``routes/chat.py:79``: the previous streaming proxy opened
+    the upstream connection *inside* the ``StreamingResponse`` body generator.
+    Starlette commits the 200 response-start before the generator runs, so a
+    ``httpx.ConnectError`` raised on the first ``async with client.stream(...)``
+    (rag-chat momentarily unresolvable during a recreate) escaped as an unhandled
+    500 with a full traceback.
+
+    Here we **pre-open** the stream (send the request, receive the response
+    headers) *before* constructing the ``StreamingResponse``:
+
+    - Connect/resolve/timeout failure at open time → surfaces as a graceful 503
+      (unavailable) or 504 (timeout) ``HTTPException`` — the client gets a clean
+      JSON error, no traceback, the 200 is never sent.
+    - A drop *mid-stream* (after tokens have started) can no longer change the
+      status; we emit a single clean ``event: error`` SSE frame and stop.
+
+    Args:
+        clients:      Request-scoped ``ServiceClients``.
+        path:         Absolute rag-chat SSE path (e.g. ``/api/v1/chat/stream``).
+        content:      Raw request body bytes to forward.
+        headers:      Headers to forward (auth + Content-Type).
+        rewrite:      Optional per-chunk transform (e.g. the Theme-E injection
+                      block re-wording). ``None`` = pass chunks through verbatim.
+        service_name: Human-readable name used in the graceful error detail.
+
+    Returns:
+        A ``StreamingResponse`` (``text/event-stream``) once the upstream stream
+        is open.
+
+    Raises:
+        HTTPException(503|504): if the upstream connection cannot be established.
+    """
+    # AsyncExitStack lets us enter the stream context here (surfacing connect
+    # errors synchronously) yet hand ownership to the body generator, which
+    # closes it via ``async with stack`` when iteration finishes.
+    stack = AsyncExitStack()
+    try:
+        resp = await stack.enter_async_context(clients.rag_chat.stream("POST", path, content=content, headers=headers))
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        # Nothing was opened successfully — release the (empty) stack and map the
+        # transport error to a clean 503/504 BEFORE any StreamingResponse exists.
+        await stack.aclose()
+        raise _transport_error_to_http(exc, service_name) from exc
+
+    async def _body() -> AsyncIterator[bytes]:
+        async with stack:
+            try:
+                async for chunk in resp.aiter_bytes():
+                    yield rewrite(chunk) if rewrite is not None else chunk
+            except (httpx.TimeoutException, httpx.NetworkError):
+                # Mid-stream drop: the 200 is already committed so we cannot
+                # change the status. Emit a clean, traceback-free SSE error frame
+                # and stop iterating — the frontend surfaces "please try again".
+                yield _SSE_UPSTREAM_DROP_FRAME
+
+    return StreamingResponse(
+        _body(),
+        media_type="text/event-stream",
+        headers=dict(_SSE_HEADERS),
+    )
 
 
 def _infer_service_name(resp: httpx.Response) -> str:
@@ -240,4 +400,6 @@ __all__: list[str] = [
     "_portfolio_headers",
     "_system_headers",
     "proxy_json_response",
+    "proxy_rag_chat_stream",
+    "rag_chat_request",
 ]

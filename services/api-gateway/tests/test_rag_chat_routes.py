@@ -333,6 +333,131 @@ async def test_s9_chat_stream_clean_tokens_unaffected(authed_app, authed_mock_cl
     assert "input safety check" not in text.lower()
 
 
+# ── NEW-5: transport-failure resilience (rag-chat briefly unresolvable) ───────
+
+
+@pytest.mark.asyncio
+async def test_s9_chat_connect_error_returns_503_no_traceback(authed_app, authed_mock_clients) -> None:
+    """NEW-5: sync /v1/chat → rag-chat unresolvable (ConnectError) → graceful 503.
+
+    Regression for the QA finding where a ``httpx.ConnectError: Name or service
+    not known`` (rag-chat container recreate) escaped as an unhandled 500 with a
+    full traceback. The gateway must instead return a clean 503 whose body leaks
+    no internal detail (no "Traceback", no exception text, no hostname).
+    """
+    authed_mock_clients.rag_chat.post = AsyncMock(side_effect=httpx.ConnectError("Name or service not known"))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat",
+            json={"message": "What is Apple revenue?"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 503
+    body = resp.text
+    # No traceback / raw exception detail leaked to the client.
+    assert "Traceback" not in body
+    assert "Name or service not known" not in body
+    assert "ConnectError" not in body
+    # Clean JSON envelope the frontend can render.
+    assert resp.json()["detail"] == "rag-chat unavailable"
+
+
+@pytest.mark.asyncio
+async def test_s9_chat_timeout_returns_504(authed_app, authed_mock_clients) -> None:
+    """NEW-5: sync /v1/chat → rag-chat too slow (TimeoutException) → graceful 504."""
+    authed_mock_clients.rag_chat.post = AsyncMock(side_effect=httpx.ReadTimeout("LLM slow"))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat",
+            json={"message": "What is Apple revenue?"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 504
+    assert "Traceback" not in resp.text
+    assert resp.json()["detail"] == "rag-chat timed out"
+
+
+@pytest.mark.asyncio
+async def test_s9_chat_stream_connect_error_returns_503_no_traceback(authed_app, authed_mock_clients) -> None:
+    """NEW-5 root fix: SSE /v1/chat/stream → ConnectError at open → graceful 503.
+
+    The stream is pre-opened before the ``StreamingResponse`` is constructed, so
+    a connect/resolution failure surfaces as a 503 BEFORE the 200 SSE
+    response-start is committed — not an unhandled 500 traceback (routes/chat.py:79).
+    """
+
+    class _FailingStream:
+        """Context manager whose ``__aenter__`` fails like a DNS/connect error."""
+
+        async def __aenter__(self) -> _FailingStream:
+            raise httpx.ConnectError("Name or service not known")
+
+        async def __aexit__(self, *_: object) -> None:
+            pass
+
+    authed_mock_clients.rag_chat.stream = MagicMock(return_value=_FailingStream())
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/stream",
+            json={"message": "Latest Apple news?"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 503
+    body = resp.text
+    assert "Traceback" not in body
+    assert "Name or service not known" not in body
+    assert resp.json()["detail"] == "rag-chat unavailable"
+
+
+@pytest.mark.asyncio
+async def test_s9_chat_stream_mid_stream_drop_emits_clean_error_frame(authed_app, authed_mock_clients) -> None:
+    """NEW-5: SSE /v1/chat/stream → upstream drops mid-stream → clean SSE error frame.
+
+    Once tokens have started, the 200 is already committed and the status cannot
+    change; the proxy must emit a single traceback-free ``event: error`` frame and
+    stop, rather than surfacing the raw ``httpx.ReadError``.
+    """
+
+    class _DroppingStream:
+        async def __aenter__(self) -> _DroppingStream:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            pass
+
+        async def aiter_bytes(self):  # type: ignore[return]
+            yield b'event: token\ndata: {"text": "Apple"}\n\n'
+            raise httpx.ReadError("connection reset by peer")
+
+    authed_mock_clients.rag_chat.stream = MagicMock(return_value=_DroppingStream())
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/stream",
+            json={"message": "Latest Apple news?"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    # 200 already committed before the drop; the first token still arrived.
+    assert resp.status_code == 200
+    body = resp.text
+    assert '{"text": "Apple"}' in body
+    # Clean error frame, no leaked exception detail.
+    assert "UPSTREAM_UNAVAILABLE" in body
+    assert "connection reset by peer" not in body
+    assert "Traceback" not in body
+
+
 @pytest.mark.asyncio
 async def test_s9_threads_list_proxied(authed_app, authed_mock_clients) -> None:
     """GET /v1/threads → proxied to S8 /api/v1/threads."""
