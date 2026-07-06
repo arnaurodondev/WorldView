@@ -1,45 +1,77 @@
 # Docker Build Hygiene — Why a Rebuild Ships Stale Code
 
-> **TL;DR** — A service's app, its `*-migrate` job, and every `*-consumer` /
-> `*-worker` / `*-scheduler` / `*-dispatcher` are **separate Docker images**.
-> `docker compose build <service>` updates **only that one image**. To ship a
-> code change to a whole family reliably, use:
+> **TL;DR** — Every variant of a service family (the app, its `*-migrate` job,
+> and every `*-consumer` / `*-worker` / `*-scheduler` / `*-dispatcher`) now
+> **shares ONE image**, `worldview-<family>:latest`. The family's primary
+> service carries the single `build:` block (and tags the image); every sibling
+> references `image: worldview-<family>:latest` and overrides only
+> `command:` / `environment:` / `healthcheck:`. So one `build:` per family
+> builds the whole family. To ship a code change reliably:
 >
 > ```bash
-> make rebuild SVC=market-data        # no-cache, rebuilds + recreates ALL variants
+> make rebuild SVC=market-data        # builds the ONE family image + recreates ALL variants
 > # or
 > scripts/rebuild_service.sh market-data
 > ```
+>
+> **Buildable-image count dropped 77 → 16** (10 app families + 6 standalone
+> infra images).
 
 ---
 
-## The bug class: per-variant images (DEPLOY-STALENESS)
+## The shared-image model (current)
 
-In `infra/compose/docker-compose.yml`, every variant of a service has its **own
-`build:` block** pointing at the same Dockerfile/context. Docker Compose
-therefore builds and tracks a **separate image per compose service**, named
-`worldview-<service-name>:latest`. There is **no shared-image (`image:`)
-pattern** — all 72 built services carry their own `build:` block.
+In `infra/compose/docker-compose.yml`, each service **family** has exactly one
+`build:` block — on the primary service, which also tags the image via
+`image: worldview-<family>:latest`. Every other variant in the family carries
+**only** `image: worldview-<family>:latest` (no `build:`) and overrides just the
+per-variant keys (`command`, `environment`, `healthcheck`, `depends_on`).
 
-Family sizes (number of separate images that must each be rebuilt for one code
-change):
+Compose builds the primary once during its build phase, tags it, and every
+sibling starts from that same local image. This dropped the buildable-image
+count from **77 → 16** (10 app families + 6 standalone infra images:
+`postgres`, `postgres-intelligence`, `intelligence-migrations`, `gliner-server`,
+`worldview-web`, `synthetic-monitor`). `make rebuild SVC=<family>` is now **1
+build instead of N**.
 
-| Family              | # compose services (images) |
-|---------------------|-----------------------------|
-| knowledge-graph     | 15 |
-| nlp-pipeline        | 12 |
-| market-data         | 9  |
-| alert / portfolio   | 6 each |
-| content-store       | 5  |
-| content-ingestion   | 5  |
-| market-ingestion    | 5  |
-| rag-chat            | 3  |
+Family sizes (compose services now sharing ONE image each):
 
-### Consequence
+| Family              | # variants | shared image |
+|---------------------|------------|--------------|
+| knowledge-graph     | 15 | `worldview-knowledge-graph:latest` |
+| nlp-pipeline        | 12 | `worldview-nlp-pipeline:latest` |
+| market-data         | 9  | `worldview-market-data:latest` |
+| portfolio           | 8  | `worldview-portfolio:latest` |
+| alert               | 7  | `worldview-alert:latest` |
+| content-store       | 5  | `worldview-content-store:latest` |
+| content-ingestion   | 5  | `worldview-content-ingestion:latest` |
+| market-ingestion    | 5  | `worldview-market-ingestion:latest` |
+| rag-chat            | 3  | `worldview-rag-chat:latest` |
+| api-gateway         | 2  | `worldview-api-gateway:latest` |
 
-`docker compose build market-data` rebuilds **only** `worldview-market-data:latest`.
-The migrate job and every consumer keep running their **old** images. So a code
-fix appears "not to deploy" until you rebuild every variant. Observed incidents:
+> **Constraint that makes this safe:** within every family all variants share
+> identical `profiles: [infra, all]`, so the primary (which owns `build:`) is
+> always enabled whenever any sibling is — the family image can never be
+> requested without also being built.
+
+---
+
+## Historical bug class: per-variant images (DEPLOY-STALENESS)
+
+> **Superseded by the shared-image model above.** Retained because it explains
+> why the model exists and what the failure looked like before the refactor.
+
+Previously every variant of a service had its **own `build:` block** pointing at
+the same Dockerfile/context, so Docker Compose built and tracked a **separate
+image per compose service** (`worldview-<service-name>:latest`) — 72 of them. A
+one-line source edit then required rebuilding **every** variant image or the
+change appeared not to deploy.
+
+### Consequence (pre-refactor)
+
+`docker compose build market-data` rebuilt **only** `worldview-market-data:latest`.
+The migrate job and every consumer kept running their **old** images. So a code
+fix appeared "not to deploy" until you rebuilt every variant. Observed incidents:
 
 1. **`market-ingestion-migrate` — `Can't locate revision 0023`.** A new Alembic
    revision was added; `docker compose build market-ingestion` did **not** update
@@ -125,16 +157,22 @@ docker run --rm --entrypoint cat "worldview-market-data-intraday-resampling-cons
 
 ---
 
-## Why not just refactor compose to a shared image?
+## The shared-image refactor (done)
 
-The cleanest structural fix is to give each family **one** `build:` block and
-have siblings reference it via `image: worldview-<family>:latest`. That removes
-the duplicate-image footgun entirely. It was **not** done here because
-`infra/compose/docker-compose.yml` is under heavy concurrent edit by multiple
-sessions (healthchecks, kafka instance ids); a sweeping rewrite of 72 build
-blocks would collide. The script/Make target is the low-risk, non-compose fix.
-If/when the compose file stabilises, migrating each family to a shared `image:`
-is the recommended follow-up.
+The structural fix — give each family **one** `build:` block and have siblings
+reference it via `image: worldview-<family>:latest` — **has now been applied**
+(see "The shared-image model" above). It removes the duplicate-image footgun
+entirely: 71 sibling `build:` blocks collapsed onto 10 family images, so a
+`make rebuild SVC=<family>` builds once and every variant runs the fresh image.
+
+Maintenance notes for anyone editing the compose file:
+
+- A **new variant** of an existing family needs `image: worldview-<family>:latest`
+  and **no** `build:` block — just its `command`/`environment`/`healthcheck`.
+- A **new family** needs exactly one `build:` block (on its primary) plus an
+  `image: worldview-<family>:latest` tag; every other member references that tag.
+- Keep all members of a family on the **same `profiles:`** so the `build:`-owning
+  primary is always enabled when a sibling is (otherwise the image is never built).
 
 **Related:** `docs/bug-patterns/config-docker.md` (BP entry on per-variant
 images), `scripts/rebuild_service.sh`, `Makefile` (`rebuild` target).

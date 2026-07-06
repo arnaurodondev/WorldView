@@ -45,13 +45,6 @@ RUN --mount=type=cache,target=/root/.local/share/corepack \
 COPY --from=deps /workspace/node_modules ./node_modules
 COPY --from=deps /workspace/apps/worldview-web/node_modules ./apps/worldview-web/node_modules
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
-# Cache-bust for the source COPY below — defeats the BuildKit metadata-match
-# stale-snapshot bug (an edited file whose size+mtime+inode match a prior
-# snapshot silently ships OLD source, e.g. shipped a chat build without the
-# committed disclaimer/RC-3 fix). Bumping CACHE_BUST forces the COPY (and the
-# Next build below) to re-run; the deps stage (pnpm install) stays cached.
-ARG CACHE_BUST=unset
-RUN echo "cache-bust=${CACHE_BUST}"
 COPY apps/worldview-web ./apps/worldview-web
 ENV NEXT_TELEMETRY_DISABLED=1
 # Set API_GATEWAY_URL at build time so next.config.ts rewrites() bakes the
