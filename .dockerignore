@@ -64,3 +64,8 @@ apps/worldview-web/node_modules
 **/__pycache__
 **/*.pyc
 **/*.pyo
+apps/worldview-web/coverage/
+apps/worldview-web/test-results/
+apps/worldview-web/playwright-report/
+apps/worldview-web/.turbo/
+apps/worldview-web/tsconfig.tsbuildinfo
