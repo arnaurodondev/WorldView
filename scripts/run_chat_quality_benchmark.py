@@ -919,7 +919,17 @@ def _render_regression_section(
     lines.append("")
 
     # Worst verdict ranking so we can detect a regression direction.
-    _RANK = {"PASS": 0, "WARN": 1, "FAIL": 2, "SKIPPED": 3, "ERROR": 4}
+    # DATA_GAP + JUDGE_PARSE_ERROR are non-graded outcomes (2026-07-06): rank them
+    # as neutral (0) so they never register as a quality regression in the diff.
+    _RANK = {
+        "PASS": 0,
+        "WARN": 1,
+        "FAIL": 2,
+        "SKIPPED": 3,
+        "ERROR": 4,
+        "DATA_GAP": 0,
+        "JUDGE_PARSE_ERROR": 0,
+    }
 
     def _by_q_mean(arts: list[dict[str, Any]]) -> dict[str, tuple[float | None, str]]:
         """question id -> (mean score or None, worst verdict)."""

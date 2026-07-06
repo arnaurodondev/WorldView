@@ -1210,6 +1210,19 @@ def detect_phantom_citation(
         # ``[N1]`` etc. are citation-index markers, not tool names — never phantom.
         if _CITATION_INDEX_MARKER_RE.match(tool_name):
             continue
+        # B4 fix (2026-07-06): a Cypher / AGE relationship pattern renders an EDGE
+        # LABEL inside square brackets — ``-[supplier_of]->`` / ``--[supplier_of]-->``
+        # / ``<-[owns]-``. That ``[supplier_of]`` matches the permissive tool-name
+        # pattern and was mis-read as an invented tool citation, hard-failing correct
+        # GROUNDED graph answers. An edge label is unambiguously marked by a ``-``
+        # IMMEDIATELY before the ``[`` AND a ``-`` or ``>`` IMMEDIATELY after the ``]``
+        # (the relationship arrow). Require BOTH so a genuine prose citation that
+        # merely abuts a hyphen is never falsely skipped.
+        start, end = m.start(), m.end()
+        prev_ch = cleaned[start - 1] if start > 0 else ""
+        next_ch = cleaned[end] if end < len(cleaned) else ""
+        if prev_ch == "-" and next_ch in ("-", ">"):
+            continue
         if tool_name not in called:
             return f"phantom_citation:{tool_name}"
     return None
@@ -1352,8 +1365,22 @@ def evaluate_invariants(
     # 4) Grounding floor → GROUNDING_FLOOR. Reuses the existing veto floor
     #    constant. Fires only when we HAVE a sub-score and it is below the floor
     #    (strict ``<`` — score == floor does NOT fire, matching the legacy veto).
+    #
+    #    B3 fix (2026-07-06): the floor veto is SUPPRESSED in ``presumed`` mode.
+    #    With NO grounding sample the judge only GUESSES the grounding sub-score
+    #    (typically 10-25), and a hard floor of 12 turns a +/-5 wobble into a FAIL -
+    #    the same META-EPS answer flips PASS/FAIL/PASS across identical runs. No
+    #    sample = no basis to claim fabrication, so we score grounding neutrally and
+    #    let the other dimensions decide. The hard veto is RESERVED for ``verified``
+    #    mode: a real numeric contradiction there fires GROUNDING_CONTRADICTED
+    #    (deterministic, above), and a genuinely low grounding sub-score against
+    #    REAL samples still trips this floor.
     if InvariantCode.GROUNDING_FLOOR in active:
-        if grounding_score is not None and grounding_score < GROUNDING_VETO_FLOOR:
+        if (
+            grounding_score is not None
+            and grounding_score < GROUNDING_VETO_FLOOR
+            and grounding_check.evidence_mode == "verified"
+        ):
             results[InvariantCode.GROUNDING_FLOOR] = False
 
     return results
@@ -1434,12 +1461,10 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "operating_margin": ("operating margin", "operating_margin", "op margin"),
 }
 
-# Percent-valued fields a handler may emit as a RATIO (``0.586``) while the answer
-# states them as a PERCENT (``"58.6%"``). For these, a claim is compared against
-# BOTH the raw sample and ``sample * 100`` so the ratio/percent representation
-# mismatch does not produce a false contradiction. Cheap, one set — see
-# docs/audits/2026-06-26-substantiation-eval-design.md (margin-as-ratio note).
-_PERCENT_VALUED_FIELDS: frozenset[str] = frozenset({"gross_margin", "net_margin", "operating_margin"})
+# NOTE (2026-07-06): the former ``_PERCENT_VALUED_FIELDS`` allow-list was retired —
+# ``_field_value_matches`` now gates fraction↔percent normalisation on
+# ``_field_kind(...) == "percentage"`` (C2 fix), which covers every percentage field
+# (incl. ``dividend_yield`` and any future one) with no hand-maintained set.
 
 # 2026-06-26 failure-analysis #4: IDENTIFIER fields are non-numeric labels
 # (ticker, symbol, entity/company name). A grounding_sample for a comparison
@@ -1545,8 +1570,14 @@ def _normalise_claim_text(text: str) -> str:
 
 
 def _field_kind(field: str) -> str:
-    """Return the KIND of a (suffix-stripped) canonical field name, or 'unknown'."""
-    return _FIELD_KINDS.get(field.lower(), "unknown")
+    """Return the KIND of a canonical field name, or 'unknown'.
+
+    A trailing ``_<digits>`` period/row suffix (``gross_margin_4``, ``eps_2``) is
+    stripped first so a multi-period sample field resolves to its base kind. Most
+    callers already pass a suffix-stripped base name, but stripping here makes the
+    lookup robust for any caller (C2 percent-normalisation relies on it).
+    """
+    return _FIELD_KINDS.get(re.sub(r"_\d+$", "", field.lower()), "unknown")
 
 
 def _classify_claim(raw: str, suffix: str, before: str, after: str, *, has_dollar: bool = False) -> str:
@@ -1800,16 +1831,31 @@ def _values_within_tolerance(claim: float, sample: float) -> bool:
 def _field_value_matches(field_name: str, claim: float, sample: float) -> bool:
     """Tolerance match that knows percent-valued fields.
 
-    For a margin emitted as a ratio (``0.586``) while the answer states a percent
-    (``"58.6%"`` → claim ``58.6``), also compare the claim against ``sample * 100``
-    so the representation mismatch is not a false contradiction. The extra check is
-    one-directional (only widens matches) and gated on the canonical field name, so
-    non-percent fields are unaffected.
+    C2 fix (2026-07-06): a PERCENTAGE-valued field may be emitted as a RATIO /
+    FRACTION (``gross_margin = 0.1724``) while the answer states a PERCENT
+    (``"17.24%"`` → claim ``17.24``), OR the reverse. Normalise fraction↔percent in
+    BOTH directions (``x 100`` and ``/ 100``) before declaring a mismatch, so the
+    representation gap is not a false ``unmatched`` / contradiction.
+
+    The normalisation is gated on the field KIND being ``percentage`` (via
+    :func:`_field_kind`, which reads the suffix-stripped canonical name) rather than
+    a hand-maintained allow-list — this covers every percentage field (``gross_margin``,
+    ``net_margin``, ``operating_margin``, ``dividend_yield``, and any future one) with
+    no code change. Absolute / ratio fields (``revenue``, ``pe_ratio``) are NEVER
+    x100-normalised, so a genuine magnitude mismatch (``46.7`` vs ``4670``) can never
+    be minted into a false match.
     """
     if _values_within_tolerance(claim, sample):
         return True
-    if field_name in _PERCENT_VALUED_FIELDS:
-        return _values_within_tolerance(claim, sample * 100.0)
+    # ``_field_kind`` already lowercases + strips a trailing ``_<digits>`` period
+    # suffix, so ``gross_margin_4`` resolves to the ``gross_margin`` → percentage kind.
+    if _field_kind(field_name) == "percentage":
+        # fraction sample (0.1724) vs percent claim (17.24)  -> sample x 100
+        if _values_within_tolerance(claim, sample * 100.0):
+            return True
+        # percent sample (17.24) vs fraction claim (0.1724)  -> sample / 100
+        if _values_within_tolerance(claim, sample / 100.0):
+            return True
     return False
 
 
@@ -2856,6 +2902,114 @@ def _phantom_citation_fail_result(
     }
 
 
+def _judge_parse_error_result(
+    raw: str,
+    *,
+    judge_prompt_id: str,
+    substantiation_check: SubstantiationCheck | None = None,
+) -> dict[str, Any]:
+    """Build the DISTINCT ``JUDGE_PARSE_ERROR`` outcome (B1 fix, 2026-07-06).
+
+    Returned when the judge LLM's response could not be parsed into any scoring
+    dimension. This is NOT a FAIL: ``score`` is ``None`` (so it is excluded from the
+    quality average, like SKIPPED / ERROR) and no verdict_decision is composed —
+    the answer was never actually graded. The ``raw_response`` is preserved so a
+    regrade pass can recover it. Emitting this instead of an all-zero FAIL is the
+    whole point of the fix: a parser failure must never masquerade as a fabrication
+    veto.
+    """
+    note = "Judge response could not be parsed into any scoring dimension (truncated / malformed JSON)."
+    return {
+        "verdict": "JUDGE_PARSE_ERROR",
+        "score": None,
+        "dimensions": dict.fromkeys(DIMENSION_KEYS),
+        "reviewer_summary": note,
+        "notes": note,  # v1.x back-compat mirror
+        "raw_response": raw,
+        "judge_prompt_id": judge_prompt_id,
+        "verdict_decision": None,
+        "substantiation_check": (
+            substantiation_check.to_dict() if substantiation_check is not None else SubstantiationCheck().to_dict()
+        ),
+    }
+
+
+# Phrases marking an honest DATA-GAP non-answer: the model says a specific
+# metric / dataset is not available / not covered (as opposed to a fabrication or a
+# safety refusal). Kept conservative and lowercase-matched.
+_DATA_GAP_MARKERS: tuple[str, ...] = (
+    "not currently available",
+    "not available",
+    "isn't available",
+    "is not available",
+    "are not available",
+    "not yet available",
+    "no data available",
+    "no data was returned",
+    "not covered",
+    "not in our data",
+    "not present in our data",
+    "unable to retrieve",
+    "could not retrieve",
+    "couldn't retrieve",
+    "do not have data",
+    "don't have data",
+    "no coverage for",
+)
+
+
+def detect_data_gap_nonanswer(
+    answer_text: str,
+    rubric: Rubric,
+    tool_results: list[dict[str, Any]] | None = None,
+) -> bool:
+    """True when the answer is a FAITHFUL "data not available" non-answer.
+
+    Benchmark-validity fix (2026-07-06). A data-gap non-answer honestly states a
+    metric / dataset isn't available AND the relevant tool genuinely returned no
+    usable data. Such an answer is neither a great answer nor a failure — it should
+    be bucketed separately (``DATA_GAP``) so the LLM rubric's 90-100 reward for
+    "honest decline" does not inflate the quality average.
+
+    Fires only on the INTERSECTION of:
+      * a worded data-unavailability phrase is present;
+      * the answer delivers NO substantive data (a hedge that says "X isn't
+        available BUT here is the analysis…" is a real answer, not a gap); and
+      * the relevant expected tool(s) genuinely returned nothing (empty / error) —
+        so a WRONGFUL refusal that declines DESPITE returned data is NOT bucketed
+        here (it stays a real low grade / FAIL).
+    """
+    text = (answer_text or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if not any(m in lowered for m in _DATA_GAP_MARKERS):
+        return False
+    # A substantive answer (cited figures / magnitudes) is not a gap — even if it
+    # hedges that one metric is missing.
+    if _answer_delivers_data(text):
+        return False
+    results = tool_results or []
+    # No tool ran at all → an honest "I don't have that data" decline is a gap.
+    if not results:
+        return True
+    expected = set(rubric.expected_tools)
+    relevant = [r for r in results if (not expected) or (r.get("tool") in expected) or (r.get("name") in expected)]
+    if not relevant:
+        # A tool ran but none of the EXPECTED ones — cannot confirm a genuine gap.
+        return False
+
+    def _returned_nothing(r: dict[str, Any]) -> bool:
+        status = str(r.get("status") or "")
+        if status in {"error", "transport_error", "timeout", "missing", "failed", "empty"}:
+            return True
+        if status == "ok" and (r.get("item_count") or 0) == 0:
+            return True
+        return False
+
+    return all(_returned_nothing(r) for r in relevant)
+
+
 def judge_answer(
     inp: JudgeInput,
     *,
@@ -2986,35 +3140,227 @@ def judge_answer(
         }
 
     parsed = _parse_judge_response(raw)
+    # B1 fix (2026-07-06): a genuinely unparseable judge response is a DISTINCT
+    # outcome, NOT an all-zero FAIL. Silently zeroing every dimension fabricated a
+    # grounding veto and force-failed 7 answers whose ``raw_response`` actually held
+    # valid non-zero grades (truncated JSON / duplicate ```json fence). When the
+    # tolerant parser recovers NO gradable quality dimension, emit a
+    # ``JUDGE_PARSE_ERROR`` sentinel (score None -> excluded from averages) so the
+    # answer can be re-graded rather than counted as a real failure.
+    if not any(k in parsed for k in DIMENSION_KEYS):
+        return _judge_parse_error_result(
+            raw,
+            judge_prompt_id=judge_prompt_id,
+            substantiation_check=substantiation_check,
+        )
     # Pass ``inp`` so the deterministic invariant gate (answer-text + tool-result
     # checks) runs inside the tiered composition — the soft judge alone cannot
     # see leaked tokens / truncation / infra non-answers (PLAN-0110 W1).
     # ``substantiation_check`` is threaded through so the final judge block carries
     # it and the gate map is complete (feedback_audit_returned_value_persistence).
-    return _finalise_verdict(
+    final = _finalise_verdict(
         parsed,
         raw_response=raw,
         judge_prompt_id=judge_prompt_id,
         inp=inp,
         substantiation_check=substantiation_check,
     )
+    # Benchmark-validity fix (2026-07-06): a faithful DATA-GAP non-answer (the model
+    # honestly says a metric/data isn't available AND the relevant tool genuinely
+    # returned nothing) is neither a great answer nor a failure. Left as-is the LLM
+    # rubric awards it 90-100, inflating the quality average. Re-label a would-be
+    # PASS/WARN/STRONG into the SEPARATE ``DATA_GAP`` bucket (dimensions + score are
+    # preserved for inspection but the record is excluded from the score average).
+    # A wrongful refusal — declining DESPITE data — is NOT caught here (the tool did
+    # deliver), so it still falls through to the normal low grade / FAIL.
+    if final.get("verdict") in {"PASS", "WARN", "STRONG"} and detect_data_gap_nonanswer(
+        inp.answer_text, inp.rubric, inp.tool_results
+    ):
+        final["verdict"] = "DATA_GAP"
+        note = (
+            "DATA_GAP: honest 'data not available' non-answer — bucketed separately, excluded from the quality average."
+        )
+        final["reviewer_summary"] = (f"{note} {final.get('reviewer_summary') or ''}").strip()[:800]
+        final["notes"] = final["reviewer_summary"]
+    return final
 
 
-def _parse_judge_response(raw: str) -> dict[str, Any]:
-    """Defensive JSON parsing — strips markdown fences if present.
+# A fenced ```json … ``` block, tolerant of a MISSING closing fence (the model ran
+# out of tokens mid-block). ``(\{.*)`` greedily captures from the first ``{`` to the
+# closing fence OR end-of-string, so a truncated trailing block is still recovered.
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?)(?:```|\Z)", re.DOTALL | re.IGNORECASE)
 
-    Returns a dict containing whatever dimension keys could be recovered.
-    Missing keys default to 0 in `_finalise_verdict`.
+
+def _close_open_json(text: str) -> str | None:
+    """Close the open structures of a TRUNCATED JSON object.
+
+    Walks the text tracking string-literal state and the ``{``/``[`` nesting stack.
+    A model cut off mid-generation leaves an unterminated string and/or unclosed
+    brackets; we terminate the dangling string and append the closing brackets the
+    stack implies. Returns the closed candidate, or ``None`` when nothing was open
+    (the text was not truncated at the structural level — a different failure that a
+    trailing-trim retry may still fix). Deliberately does NOT strip trailing tokens
+    — that is handled by the trim ladder in :func:`_loads_recover`, so a COMPLETE
+    trailing ``"key": "value"`` is never mangled.
     """
-    text = raw.strip()
-    # Strip optional ```json ... ``` fences in case a future model variant
-    # ignores `response_format=json_object`.
-    text = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text)
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack.append(ch)
+            elif ch in "}]":
+                if stack:
+                    stack.pop()
+    if not in_str and not stack:
+        return None
+    result = text
+    if in_str:
+        result += '"'  # close the dangling string literal
+    for open_ch in reversed(stack):
+        result += "}" if open_ch == "{" else "]"
+    return result
+
+
+def _iter_trailing_trims(text: str) -> list[str]:
+    """Yield the text with an INCOMPLETE trailing member removed, most-conservative
+    first, so a truncation that stopped mid-separator / mid-key / mid-value can be
+    closed cleanly. Each candidate is fed back through :func:`_close_open_json`.
+    """
+    trims: list[str] = []
+    stripped = text.rstrip()
+    # a) drop a dangling separator comma:  ... }, <cut>
+    trims.append(re.sub(r",\s*$", "", stripped))
+    # b) drop a dangling ``"key":`` with no value yet:  ... "reviewer_summary": <cut>
+    trims.append(re.sub(r',?\s*"[^"\\]*"\s*:\s*$', "", stripped))
+    # c) drop back to the last completed member boundary (last ``}`` or ``"``),
+    #    discarding a half-written token:  ... "score": 1  /  ... "feed
+    m = list(re.finditer(r'[}\]"]', stripped))
+    if m:
+        trims.append(stripped[: m[-1].end()])
+    return trims
+
+
+def _loads_recover(text: str) -> dict[str, Any] | None:
+    """Parse ``text`` as a JSON object, tolerating trailing junk + truncation.
+
+    Tries, in order: a direct ``json.loads``; a greedy ``raw_decode`` (recovers the
+    FIRST complete object when a duplicate/second block or prose trails it); a
+    structural close of unterminated strings/brackets; and finally a trailing-trim
+    ladder (drop a dangling comma / key / half-token, then re-close). Returns the
+    parsed dict, or ``None`` when no strategy yields a JSON object.
+    """
+    text = text.strip()
+    if not text:
+        return None
     try:
         obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
     except json.JSONDecodeError:
+        pass
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    for candidate in [text, *_iter_trailing_trims(text)]:
+        repaired = _close_open_json(candidate)
+        if repaired is None:
+            continue
+        try:
+            obj = json.loads(repaired)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _iter_json_candidates(raw: str) -> list[str]:
+    """Yield candidate JSON fragments from a (possibly malformed) judge response.
+
+    Handles the two real failure modes from run_20260706T155740Z:
+      * a single truncated object (no closing ``}``);
+      * a duplicate ``​```json`` fenced block appended after a first (also
+        truncated) object — grab BOTH the pre-fence and the fenced content.
+    The caller parses every candidate and keeps whichever recovers the most
+    dimensions, so ``LAST valid fenced JSON`` and ``first more-complete block`` are
+    both reachable without guessing which the model intended.
+    """
+    text = raw.strip()
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _add(frag: str) -> None:
+        frag = frag.strip().strip("`").strip()
+        brace = frag.find("{")
+        if brace < 0:
+            return
+        frag = frag[brace:]
+        if frag and frag not in seen:
+            seen.add(frag)
+            candidates.append(frag)
+
+    # 1) Every fenced ```json block (closed or trailing-unclosed).
+    for m in _JSON_FENCE_RE.finditer(text):
+        _add(m.group(1))
+    # 2) Each segment BETWEEN fence markers — recovers a complete-ish object that
+    #    precedes a duplicate ```json fence (the pre-fence block in the real sample).
+    for seg in re.split(r"```(?:json)?", text):
+        _add(seg)
+    # 3) The whole text from its first ``{`` (leading-prose / no-fence case).
+    _add(text)
+    return candidates
+
+
+def _parse_judge_response(raw: str, *, dimension_keys: tuple[str, ...] = DIMENSION_KEYS) -> dict[str, Any]:
+    """Tolerant JSON parsing of a judge response (B1 fix, 2026-07-06).
+
+    Returns the parsed judge object with whatever grades could be recovered, or an
+    EMPTY dict ``{}`` when the response is genuinely unparseable. The old parser
+    stripped ONE fence and ``json.loads``'d; any failure returned ``{}`` -> all-zero
+    dimensions -> a fabricated grounding-veto FAIL for 7 answers whose raw response
+    actually held valid non-zero grades (one a true 92 PASS) in a truncated /
+    duplicate-fenced body. This recovers those.
+
+    Recovery: parse every candidate fragment (fenced blocks + inter-fence segments +
+    the whole text), tolerating trailing junk and truncation, and keep the fragment
+    that recovers the MOST scoring dimensions (ties -> most keys -> longest source).
+    ``dimension_keys`` lets a sibling judge (e.g. the trajectory judge) rank on its
+    OWN dimensions; it defaults to the quality-judge dimensions.
+
+    Back-compat: the ``{}``-on-failure return is preserved so existing callers
+    (including ``chat_trajectory_judge``) keep working unchanged. The DISTINCT
+    ``JUDGE_PARSE_ERROR`` outcome is decided by :func:`judge_answer`, which treats a
+    recovered object with NO gradable quality dimension as a parse error rather than
+    an all-zero FAIL.
+    """
+    if not raw or not raw.strip():
         return {}
-    return obj if isinstance(obj, dict) else {}
+    best: dict[str, Any] = {}
+    best_key: tuple[int, int, int] = (-1, -1, -1)
+    for cand in _iter_json_candidates(raw):
+        obj = _loads_recover(cand)
+        if obj is None:
+            continue
+        n_dims = sum(1 for k in dimension_keys if k in obj)
+        rank = (n_dims, len(obj), len(cand))
+        if rank > best_key:
+            best_key = rank
+            best = obj
+    return best
 
 
 def _band_quality_score(quality_score: int) -> Verdict:
@@ -3160,7 +3506,11 @@ def _finalise_verdict(
         # "passed".
         grounding_check = GroundingCheck()
         gate_results = dict.fromkeys(_ALL_INVARIANTS, True)
-        if grounding_score < GROUNDING_VETO_FLOOR:
+        # B3 (2026-07-06): the default GroundingCheck is ``presumed`` (no samples),
+        # so the floor veto stays SUPPRESSED here too — a guessed sub-score with no
+        # evidence must not force a FAIL. This path only fires the floor once a real
+        # ``verified`` check exists (the ``inp is not None`` branch above).
+        if grounding_score < GROUNDING_VETO_FLOOR and grounding_check.evidence_mode == "verified":
             gate_results[InvariantCode.GROUNDING_FLOOR] = False
 
     decision = compose_verdict(dimensions_int, gate_results, grounding_check)
@@ -3205,7 +3555,11 @@ def _finalise_verdict(
             "pre_veto_verdict": pre_veto_verdict,
         }
         reviewer_summary = (f"{veto_detail} {reviewer_summary}").strip()[:800]
-    elif grounding_score < GROUNDING_VETO_FLOOR:
+    elif grounding_score < GROUNDING_VETO_FLOOR and grounding_check.evidence_mode == "verified":
+        # B3 fix (2026-07-06): the legacy soft-floor veto mirrors the gate above —
+        # it fires ONLY in ``verified`` mode (real samples present). In ``presumed``
+        # mode a low GUESSED grounding sub-score is not evidence of fabrication, so
+        # the veto is suppressed and the additive band decides the verdict.
         pre_veto_verdict = verdict
         verdict = "FAIL"
         veto_detail = (
@@ -3279,7 +3633,19 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     `records` is a list of {id, verdict, score, dimensions:{key:{score,reason}}}.
     Skipped/errored entries are excluded from averages but counted in `n_*`.
     """
-    verdict_counts: dict[str, int] = {"PASS": 0, "WARN": 0, "FAIL": 0, "SKIPPED": 0, "ERROR": 0}
+    verdict_counts: dict[str, int] = {
+        "PASS": 0,
+        "WARN": 0,
+        "FAIL": 0,
+        "SKIPPED": 0,
+        "ERROR": 0,
+        # Non-graded outcomes (2026-07-06): a JUDGE_PARSE_ERROR (unparseable judge
+        # response) and a DATA_GAP (faithful "data not available" non-answer) are
+        # both counted here but EXCLUDED from the score/dimension averages below —
+        # neither is a real quality signal.
+        "JUDGE_PARSE_ERROR": 0,
+        "DATA_GAP": 0,
+    }
     dim_totals: dict[str, list[int]] = {k: [] for k in DIMENSION_KEYS}
     scored_totals: list[int] = []
     # Audit 2026-06-11 — failure-first aggregates. We tally the deterministic /
@@ -3313,7 +3679,7 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
             fr = decision.get("fail_reason")
             if isinstance(fr, str):
                 fail_reason_counts[fr] = fail_reason_counts.get(fr, 0) + 1
-        if v in {"SKIPPED", "ERROR"}:
+        if v in {"SKIPPED", "ERROR", "JUDGE_PARSE_ERROR", "DATA_GAP"}:
             continue
         score = r.get("score")
         if isinstance(score, int):
