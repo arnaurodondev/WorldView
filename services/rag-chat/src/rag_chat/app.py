@@ -205,7 +205,6 @@ def _warn_unpriceable_models_at_startup(settings: RagChatSettings) -> None:
         (settings.openrouter_completion_model, "openrouter"),
         (settings.deepinfra_stream_chat_fallback_model, "deepinfra"),
         (settings.citation_judge_model, settings.citation_judge_provider),
-        (settings.ollama_classification_model, "ollama"),
         (settings.ollama_completion_model, "ollama"),
         (settings.ollama_reranker_model, "ollama"),
     ]
