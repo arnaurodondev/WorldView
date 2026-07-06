@@ -179,6 +179,28 @@ class Settings(BaseSettings):
     # hybrid_boost_sweep``. NLP_PIPELINE_HYBRID_LEXICAL_BOOST.
     hybrid_lexical_boost: float = 1.0
 
+    # ── Hybrid chunk-search latency fix (R1 SEC-filings re-QA / 2026-07-06) ─────
+    # The POST /api/v1/search/chunks hybrid path ran its two independent legs
+    # (ANN vector + BM25/FTS) SEQUENTIALLY on one shared AsyncSession, so
+    # end-to-end latency was ~ann + lex (measured 20-22 s warm, 32-40 s under a
+    # host-load spike → rag-chat ReadTimeout → empty chat answers). With this
+    # flag ON the use case runs the two legs CONCURRENTLY, each on its OWN
+    # read-replica session leased from ``nlp_read_factory`` (a SQLAlchemy
+    # AsyncSession is NOT safe for concurrent use from one session, so a fresh
+    # session per leg is required). The embedding round-trip overlaps the
+    # lexical leg, so total latency collapses to ~max(embed+ann, lex).
+    # Set False to fall back to the (correct but slow) sequential path — the
+    # fused result set is identical either way (RRF is order-only).
+    # NLP_PIPELINE_CHUNK_SEARCH_PARALLEL_HYBRID
+    chunk_search_parallel_hybrid: bool = True
+
+    # Query-embedding cache TTL (seconds). Query text is embedded once via
+    # DeepInfra and cached in Valkey keyed by (model, normalized-query) so
+    # repeated/similar chat queries skip the embed round-trip. Short-ish TTL
+    # keeps the cache fresh if the embedding model is swapped.
+    # NLP_PIPELINE_CHUNK_EMBED_CACHE_TTL_S
+    chunk_embed_cache_ttl_s: int = 3600
+
     # Ollama / ML endpoints
     ollama_base_url: str = "http://localhost:11434"
     embedding_model_id: str = "bge-large"
