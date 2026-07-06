@@ -89,6 +89,17 @@ def upgrade() -> None:
     # run once under supervision.
     op.execute("SET LOCAL statement_timeout = 0")
 
+    # ── 1b. Drop the GLOBAL HNSW indexes BEFORE the backfill ──────────────────
+    # The backfill UPDATE rewrites every row (non-HOT: source_type is a fresh
+    # column and the pages are packed), which forces a per-row HNSW graph insert
+    # into idx_chunk_emb_hnsw / idx_section_emb_hnsw. At ~110k rows that per-row
+    # churn is ~68ms/row → ~110 min and pathological. Dropping the graph indexes
+    # first makes the backfill a plain heap UPDATE (minutes), then we rebuild the
+    # graphs ONCE in bulk below (far cheaper than 110k incremental inserts). All
+    # inside the migration txn, so a failure rolls the DROP back and restores them.
+    op.execute("DROP INDEX IF EXISTS idx_chunk_emb_hnsw")
+    op.execute("DROP INDEX IF EXISTS idx_section_emb_hnsw")
+
     # ── 2. Backfill from document_source_metadata via doc_id ──────────────────
     # chunk_embeddings → chunks(doc_id) → document_source_metadata(source_type)
     op.execute(
@@ -110,6 +121,24 @@ def upgrade() -> None:
         JOIN document_source_metadata dsm ON dsm.doc_id = s.doc_id
         WHERE se.section_id = s.section_id
           AND se.source_type IS DISTINCT FROM dsm.source_type
+        """
+    )
+
+    # ── 2b. Rebuild the GLOBAL HNSW indexes ONCE in bulk (dropped in 1b) ───────
+    # Bulk build over the whole corpus is far cheaper than the per-row churn the
+    # backfill would otherwise have caused. Exact defs mirror 0001 (opclass +
+    # predicate). maintenance_work_mem was raised above for this build.
+    op.execute(
+        """
+        CREATE INDEX idx_chunk_emb_hnsw ON chunk_embeddings
+            USING hnsw (embedding vector_cosine_ops)
+            WHERE embedding_status = 'ready'
+        """
+    )
+    op.execute(
+        """
+        CREATE INDEX idx_section_emb_hnsw ON section_embeddings
+            USING hnsw (embedding vector_cosine_ops)
         """
     )
 
