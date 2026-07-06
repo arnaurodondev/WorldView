@@ -267,21 +267,54 @@ def get_chunk_search_use_case(
     )
     indexed_source_types = frozenset(s.strip() for s in _raw_indexed.split(",") if s.strip())
     accel_ef_search = int(getattr(settings, "chunk_ann_accel_ef_search", 400)) if settings is not None else 400
-    return EnhancedChunkSearchUseCase(
-        chunk_ann_repo=ChunkANNRepository(
-            nlp_session,
+
+    def _make_chunk_repo(session: AsyncSession) -> ChunkANNRepository:
+        """Build a ChunkANNRepository with the tuned knobs, bound to *session*.
+
+        Factored out so BOTH the request-scoped repo (shared session, sequential
+        fallback + result enrichment) and the per-leg parallel scopes below use
+        IDENTICAL configuration — otherwise the two hybrid legs could diverge in
+        ef_search / exact-filter behaviour.
+        """
+        return ChunkANNRepository(
+            session,
             ef_search=ef_search,
             exact_when_filtered=exact_when_filtered,
             exact_max_rows=exact_max_rows,
             indexed_source_types=indexed_source_types,
             accel_ef_search=accel_ef_search,
-        ),
+        )
+
+    # ── Per-leg session scope for the parallel hybrid path (R1 latency fix) ────
+    # The hybrid search runs its ANN and lexical legs concurrently, and a single
+    # SQLAlchemy AsyncSession is NOT safe for concurrent use. So each leg leases
+    # its OWN read-replica session from nlp_read_factory via this async-CM
+    # factory. Falls back to the write factory when no read URL is configured
+    # (same rule as get_read_nlp_session). Disabled → sequential shared-session
+    # path (chunk_search_scope stays wired but parallel_hybrid gates it).
+    from contextlib import asynccontextmanager
+
+    nlp_read_factory = getattr(request.app.state, "nlp_read_factory", request.app.state.nlp_session_factory)
+
+    @asynccontextmanager
+    async def _chunk_search_scope() -> AsyncGenerator[ChunkANNRepository, None]:
+        async with nlp_read_factory() as leg_session:
+            yield _make_chunk_repo(leg_session)
+
+    parallel_hybrid = bool(getattr(settings, "chunk_search_parallel_hybrid", True)) if settings is not None else True
+    embed_cache_ttl_s = int(getattr(settings, "chunk_embed_cache_ttl_s", 3600)) if settings is not None else 3600
+
+    return EnhancedChunkSearchUseCase(
+        chunk_ann_repo=_make_chunk_repo(nlp_session),
         source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
         canonical_entity_repo=CanonicalEntityRepository(intel_session),
         valkey=raw_valkey,
         embedding_client=embedding_client,
         chunk_text_store=chunk_text_store,
         lexical_boost=lexical_boost,
+        chunk_search_scope=_chunk_search_scope,
+        parallel_hybrid=parallel_hybrid,
+        embed_cache_ttl_s=embed_cache_ttl_s,
     )
 
 
