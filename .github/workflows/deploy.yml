@@ -49,6 +49,11 @@ jobs:
       any_changed: ${{ steps.filter.outputs.any_changed }}
       postgres_changed: ${{ steps.filter.outputs.postgres }}
       gliner_changed: ${{ steps.filter.outputs.gliner }}
+      # api-gateway is the only service whose Dockerfile does
+      # `FROM worldview-python-base:latest`, so it needs the shared base image
+      # built + pushed to ghcr BEFORE its matrix build runs (see build-python-base
+      # job below). A change to services/api-gateway/** OR libs/** triggers it.
+      api_gateway_changed: ${{ steps.filter.outputs['api-gateway'] }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
@@ -101,15 +106,82 @@ jobs:
               - 'infra/gliner/**'
 
   # ═══════════════════════════════════════════════════════════════════════════
+  # Job 1b: Build + push the shared python base image
+  #
+  # WHY: services/api-gateway/Dockerfile begins with
+  #        FROM worldview-python-base:latest
+  #      That bare (registry-less) reference resolves to docker.io/library/... in
+  #      CI, which does NOT exist — so the api-gateway matrix build fails on ANY
+  #      push touching services/api-gateway/** or libs/**. Locally it only works
+  #      because `make build-bases` builds worldview-python-base:latest first.
+  #
+  #      This job builds infra/docker/python-base and pushes it to ghcr so the
+  #      api-gateway build can consume it. The matrix build below overrides the
+  #      bare FROM with this ghcr image via Buildx `build-contexts` (a named
+  #      build context keyed on the exact FROM ref) — so NO Dockerfile edit is
+  #      needed and the bare tag keeps working for local `make build-bases`.
+  #
+  #      Only runs when api-gateway is affected (it is the sole consumer today);
+  #      gated behind the GHA layer cache so a no-op change is cheap.
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-python-base:
+    name: Build & Push — python-base
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.api_gateway_changed == 'true'
+    permissions:
+      contents: read
+      packages: write  # required for ghcr.io push
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image tag
+        id: tag
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push python-base
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          # Repo-root context: the base Dockerfile COPYs libs/ to build wheels.
+          context: .
+          file: infra/docker/python-base/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/worldview-python-base:latest
+            ${{ env.IMAGE_PREFIX }}/worldview-python-base:${{ steps.tag.outputs.sha }}
+          cache-from: type=gha,scope=python-base
+          cache-to: type=gha,mode=max,scope=python-base
+
+  # ═══════════════════════════════════════════════════════════════════════════
   # Job 2: Build + push service images to ghcr.io
   # Runs in a matrix: one parallel job per changed service
   # ═══════════════════════════════════════════════════════════════════════════
   build-and-push:
     name: Build & Push — ${{ matrix.service }}
     runs-on: ubuntu-latest
-    needs: detect-changes
-    # Only run if at least one service changed
-    if: needs.detect-changes.outputs.services != '[]' && needs.detect-changes.outputs.services != ''
+    # Depend on build-python-base so the api-gateway matrix leg has its base
+    # image available. `always()` keeps the matrix running for every OTHER
+    # service even when build-python-base is skipped (api-gateway not changed);
+    # we only bail if the base build actually FAILED or was cancelled.
+    needs: [detect-changes, build-python-base]
+    # Only run if at least one service changed AND the base image build (if it
+    # ran) did not fail.
+    if: >-
+      always() &&
+      needs.detect-changes.outputs.services != '[]' &&
+      needs.detect-changes.outputs.services != '' &&
+      needs.build-python-base.result != 'failure' &&
+      needs.build-python-base.result != 'cancelled'
     strategy:
       fail-fast: false  # don't cancel other services if one fails
       matrix:
@@ -146,6 +218,15 @@ jobs:
           # Each service Dockerfile expects the build context at repo root
           # (it COPYs libs/ and services/<name>/ directly)
           file: services/${{ matrix.service }}/Dockerfile
+          # Override the bare `FROM worldview-python-base:latest` in the
+          # api-gateway Dockerfile with the image just pushed to ghcr by the
+          # build-python-base job. This is a Buildx named build context keyed on
+          # the EXACT FROM reference, so Buildx substitutes it WITHOUT any
+          # Dockerfile change. Dockerfiles that don't reference this name (every
+          # other service) simply ignore the unused context — harmless even on
+          # runs where python-base was not built.
+          build-contexts: |
+            worldview-python-base:latest=docker-image://${{ env.IMAGE_PREFIX }}/worldview-python-base:latest
           push: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/worldview-${{ matrix.service }}:latest
