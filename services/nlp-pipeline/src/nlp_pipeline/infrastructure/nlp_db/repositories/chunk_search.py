@@ -876,9 +876,15 @@ class ChunkANNRepository(ChunkSearchPort):
         # chunks — the same defect that made source_types=['sec_edgar'] return 0.
         tenant_filter_sql = "AND " + _tenant_predicate(params, "c.tenant_id", tenant_id)
 
-        # Use a CTE so we can reuse the result set for COUNT and SELECT without
-        # re-running the (relatively cheap, but not free) GIN match twice
-        # against arbitrarily large filter sets.
+        # ── Single-scan SELECT + total (S6 hybrid-latency fix / R1 re-QA) ──────
+        # Previously this ran the full FTS match TWICE: once for the ranked page
+        # and again in a separate COUNT(*) query that re-scanned the GIN index
+        # over the ENTIRE matched set (measured ~1.8 s cold each on the ~113k-chunk
+        # corpus). ``total_searched`` is only an approximate diagnostic, so we now
+        # fold it into the ranked query via ``COUNT(*) OVER ()`` — the window is
+        # computed over the same matched set the ORDER BY already has to sort, so
+        # it is essentially free and removes a whole duplicate GIN scan + one DB
+        # round-trip. The returned rows are byte-identical to the old query.
         sql = f"""
             WITH matched AS (
                 SELECT
@@ -899,22 +905,29 @@ class ChunkANNRepository(ChunkSearchPort):
                   AND {source_filter}
                   {entity_filter_sql}
                   {tenant_filter_sql}
+            ),
+            scored AS (
+                SELECT chunk_id, doc_id, section_id, heading_path, chunk_text_key,
+                       chunk_text, document_title, section_type, score,
+                       COUNT(*) OVER () AS total_matched
+                FROM matched
+                WHERE score >= :min_score
             )
             SELECT chunk_id, doc_id, section_id, heading_path, chunk_text_key,
-                   chunk_text, document_title, section_type, score
-            FROM matched
-            WHERE score >= :min_score
+                   chunk_text, document_title, section_type, score, total_matched
+            FROM scored
             ORDER BY score DESC
             LIMIT :top_k
             """
 
-        # Use the second-arg dict params form (instead of ``bindparams(**params)``)
-        # because ``bindparams`` requires every key to appear in the SQL, and
-        # the COUNT-only query below intentionally does not reference ``top_k``.
-        # Both ``execute(text, params)`` and ``execute(text(...).bindparams(...))``
-        # are public APIs; the dict form is the one with permissive key handling.
+        # Dict-form params (not ``bindparams(**params)``) so unused keys such as
+        # ``source_types`` when the filter is absent do not trip the bind check.
         result = await self._session.execute(text(sql), params)
         rows = result.all()
+
+        # total_searched = count of matched rows (post-score-filter, pre-LIMIT),
+        # carried on every row by the window function. Zero rows → zero matches.
+        total = int(rows[0].total_matched) if rows else 0
 
         chunk_results: list[dict[str, Any]] = [
             {
@@ -937,25 +950,6 @@ class ChunkANNRepository(ChunkSearchPort):
             }
             for row in rows
         ]
-
-        # total_searched = number of matched rows BEFORE LIMIT (post-filter).
-        # We re-run the matched CTE through COUNT — slightly redundant but
-        # mirrors the existing _search_chunks behaviour and avoids materialising
-        # an OVER() window over the full result set.
-        count_sql = f"""
-            SELECT COUNT(*)
-            FROM chunks c
-            JOIN sections s ON s.section_id = c.section_id
-            LEFT JOIN document_source_metadata dsm ON dsm.doc_id = c.doc_id
-            WHERE {match_sql}
-              AND {date_filter}
-              AND {source_filter}
-              {entity_filter_sql}
-              {tenant_filter_sql}
-              AND {score_sql} >= :min_score
-            """
-        count_result = await self._session.execute(text(count_sql), params)
-        total = int(count_result.scalar_one())
 
         return chunk_results, total
 
