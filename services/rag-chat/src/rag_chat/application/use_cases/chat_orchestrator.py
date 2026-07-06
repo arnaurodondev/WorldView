@@ -1008,6 +1008,13 @@ def _content_anchors(text: str) -> set[str]:
 _RESYNTHESIS_MIN_REWRITE_CHARS = 600
 _RESYNTHESIS_MIN_ORIG_ANCHORS = 8
 
+# 2026-07-05 — combined-grounding defeatist guard (BP-648). A rewrite is treated
+# as a defeatist refusal only when it is refusal-prefixed AND below this
+# substantive-content floor: a bare "I cannot answer that." (~20 chars) is
+# rejected, but a content-rich correction that merely opens with a hedge while
+# retaining the grounded body is KEPT (Qwen3-Next patch-not-refuse behaviour).
+_DEFEATIST_REWRITE_MIN_SUBSTANTIVE_CHARS = 200
+
 
 def _rewrite_is_divergent_resynthesis(original: str, rewritten: str, *, min_retained: float = 0.5) -> bool:
     """Return True when *rewritten* is a fresh re-synthesis, not a correction.
@@ -5156,11 +5163,27 @@ class ChatOrchestratorUseCase:
                 "content": (
                     f"{self_check_preamble}"
                     f"{combined_instructions}\n\n"
-                    "Provide a fresh response that answers the question directly using only "
-                    "values and entities supported by the tool results above. Do NOT "
-                    "acknowledge a prior draft; the user only sees this response. Do NOT "
-                    'begin with phrases such as "You\'re right", "Let me re-examine", '
-                    '"I need to correct", or any apology.'
+                    # 2026-07-05 (Qwen3-Next defeatist fix): the rewrite is a PATCH,
+                    # not a re-answer. The prior wording ("Provide a fresh response
+                    # that answers the question directly using ONLY supported values")
+                    # invited Qwen3-Next to conclude it could not answer at all and
+                    # emit a bare "I cannot calculate this from the retrieved data"
+                    # refusal, which the defeatist guard then discarded — serving the
+                    # ungrounded original with a caveat. Instruct the model to KEEP
+                    # the grounded remainder and only drop/mark the flagged items, and
+                    # to NEVER return a bare refusal.
+                    "Return a CORRECTED version of your answer. KEEP every part that IS "
+                    "supported by the tool results above (including its citations); only "
+                    "REMOVE or explicitly mark the specific flagged figures/names that are "
+                    "not supported — drop them, or annotate them inline as [unverified] "
+                    "(e.g. '(not in retrieved data)'). Preserve the grounded content and "
+                    "answer with whatever the tool results DO support. NEVER replace the "
+                    'answer with a bare refusal such as "I cannot calculate this", "I\'m '
+                    'unable to…", or "the data does not allow…"; if a single value is '
+                    "unsupported, state the grounded facts you DO have and flag only that "
+                    "value. Do NOT acknowledge a prior draft; the user only sees this "
+                    'response. Do NOT begin with phrases such as "You\'re right", "Let me '
+                    're-examine", "I need to correct", or any apology.'
                 ),
             },
         ]
@@ -5253,9 +5276,35 @@ class ChatOrchestratorUseCase:
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
         # 2. Defeatist short rewrite (BP-648) — keep the original.
+        # BP-648's purpose: never let a rewrite REPLACE a good grounded answer
+        # with a bare "I cannot…" refusal. But with Qwen3-Next as the rewrite
+        # model, a LEGITIMATE correction (dropping / flagging a couple of
+        # ungrounded numbers while keeping the grounded remainder) can open with
+        # a hedge and still be shorter than the original — the old
+        # "refusal-prefixed AND shorter" test discarded those corrections too,
+        # then served the UNGROUNDED original with a blanket caveat (2026-07-05).
+        # Refinement: a rewrite is defeatist ONLY when it is refusal-prefixed AND
+        # NOT substantive — i.e. it dropped below a real-content floor. A bare
+        # "I cannot answer that." (~20 chars) is still rejected (BP-648 intact);
+        # a refusal-prefixed but content-rich correction flows on to
+        # re-validation (which grounds it or banners residual numbers).
         _r_strip = rewritten.lstrip()
-        _refusal_prefixes = ("I cannot", "I am unable", "I'm unable", "I can't")
-        if any(_r_strip.startswith(pref) for pref in _refusal_prefixes) and len(rewritten) < len(response):
+        _refusal_prefixes = (
+            "I cannot",
+            "I am unable",
+            "I'm unable",
+            "I can't",
+            "I could not",
+            "I couldn't",
+        )
+        # Substantive-content floor: a genuine defeatist refusal is short (a
+        # sentence or two of "I can't do this"); a real correction retains the
+        # grounded body. Keep BP-648 conservative — only reject when the rewrite
+        # is BOTH refusal-prefixed AND below the floor AND shorter than the
+        # original it would replace.
+        _is_refusal_prefixed = any(_r_strip.startswith(pref) for pref in _refusal_prefixes)
+        _is_substantive_correction = len(_r_strip) >= _DEFEATIST_REWRITE_MIN_SUBSTANTIVE_CHARS
+        if _is_refusal_prefixed and len(rewritten) < len(response) and not _is_substantive_correction:
             log.warning(  # type: ignore[no-any-return]
                 "combined_grounding_rewrite_rejected_defeatist",
                 rewrite_len=len(rewritten),
