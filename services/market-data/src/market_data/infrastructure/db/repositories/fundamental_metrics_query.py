@@ -14,7 +14,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from sqlalchemy import Numeric, and_, func, select, text
+from sqlalchemy import Numeric, and_, func, literal, select, text, union_all
 
 from market_data.application.ports.repositories import MetricDataPoint, ScreenFilter, ScreenResult
 from market_data.config import Settings
@@ -248,16 +248,52 @@ async def _fetch_page_extras(
     m = FundamentalMetricModel
 
     # ── 1. Latest key-metric values (POST-branch union, gap #1) ──────────────
-    # DISTINCT ON (instrument_id, metric) + ORDER BY as_of_date DESC gives the
-    # newest row per pair in ONE index-driven query instead of N LATERALs.
+    # One UNION-ALL arm per metric, each a single-metric ``DISTINCT ON
+    # (instrument_id)`` scan, gives the newest row per (instrument, metric).
+    #
+    # ── NEW-6 R3 (2026-07-06): why NOT one ``metric IN (...)`` DISTINCT ON ────
+    # ROOT CAUSE of the still-504-ing ``sector=Technology + market_cap`` screen
+    # (audit 2026-07-06-r1-final-exhaustive-qa.md, NEW-6 PARTIAL): the earlier
+    # single-statement form
+    #     SELECT DISTINCT ON (instrument_id, metric) …
+    #     WHERE instrument_id IN (:page_ids) AND metric IN (:19 key metrics)
+    #     ORDER BY instrument_id, metric, as_of_date DESC
+    # put TWO ``= ANY`` arrays (19 metrics x 50 page ids) on the covering index
+    # ``ix_fundamental_metrics_metric_instr_date_val`` (metric, instrument_id,
+    # as_of_date DESC). PostgreSQL's ScalarArrayOp handling re-descends the btree
+    # for each of the ~950 (metric, instrument_id) combinations, so the Index
+    # Only Scan burned ~13.5 s of pure CPU returning 13,374 history rows only to
+    # DISTINCT them down to 828 — the whole screen blew the 8 s statement_timeout
+    # (EXPLAIN ANALYZE live: scan 13,530 ms, total 14,316 ms). The
+    # market-cap-SORT path (NEW-6 first fix) was fast because the no-metric branch
+    # calls ``_fetch_page_extras`` with EMPTY ``extra_metrics`` — it never hit
+    # this block; only the metric-FILTER branch (which unions the 19 display
+    # metrics) did, so only the sector+metric screen 504'd.
+    #
+    # FIX: split into one arm per metric. Each arm has a SINGLE scalar
+    # ``metric = :m`` leading-column equality + ``instrument_id IN (:page_ids)``,
+    # which is the exact fast single-value-leading shape the sort path already
+    # rides (~86 ms per metric). PostgreSQL runs the 19 arms as a Parallel Append
+    # → end-to-end ~0.6 s (14.3 s -> 0.6 s, ~24x). Result is IDENTICAL: verified
+    # live with an ``EXCEPT`` diff of the old vs new form for the
+    # ``sector=Technology`` page (828 = 828 rows, symmetric diff 0/0).
+    # ``literal(metric_name)`` carries the metric name through so the arms share a
+    # (instrument_id, metric, value_numeric) column shape; it is a bound
+    # parameter (never string-interpolated) so it is injection-safe.
     if extra_metrics:
         try:
-            metric_stmt = (
-                select(m.instrument_id, m.metric, m.value_numeric)
-                .where(m.instrument_id.in_(page_ids), m.metric.in_(extra_metrics))
-                .order_by(m.instrument_id, m.metric, m.as_of_date.desc())
-                .distinct(m.instrument_id, m.metric)
-            )
+            per_metric_selects: list[Any] = [
+                select(
+                    m.instrument_id.label("instrument_id"),
+                    literal(metric_name).label("metric"),
+                    m.value_numeric.label("value_numeric"),
+                )
+                .where(m.metric == metric_name, m.instrument_id.in_(page_ids))
+                .order_by(m.instrument_id, m.as_of_date.desc())
+                .distinct(m.instrument_id)
+                for metric_name in extra_metrics
+            ]
+            metric_stmt = union_all(*per_metric_selects)
             metric_rows: Any = await session.execute(metric_stmt)
             for iid, metric_name, value in metric_rows.all():
                 if value is not None:

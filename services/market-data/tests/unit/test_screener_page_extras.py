@@ -55,18 +55,21 @@ def _route_session(
     - ``information_schema`` → never hit (cache prefilled by conftest)
     - ``technicals_snapshots`` → technicals_rows
     - ``ohlcv_bars`` → volume_rows
-    - key-metric enrichment DISTINCT (projects ``metric AS metric``) → metric_rows
+    - key-metric enrichment (projects ``… AS metric``) → metric_rows
     - everything else → screen_rows (main query) / page_rows (page-IDs query)
 
-    NOTE: the rewritten default-sort page-selection query (Theme B fix,
-    2026-06-12) JOINs a ``DISTINCT ON (instrument_id)`` page-sort subquery that,
-    under the non-PostgreSQL default dialect, also renders as ``SELECT DISTINCT
-    fundamental_metrics ...``. We disambiguate it from the key-metric enrichment
-    DISTINCT by the metric predicate form: the enrichment filters ``metric IN
-    (...)`` (it fans out several display metrics), whereas the page-sort filters
-    ``metric = :p`` (a single sort metric) and selects only instrument_id +
-    value_numeric. Without this the page-sort query would be mis-routed to
-    ``metric_rows`` and the page would come back empty.
+    NOTE (NEW-6 R3, 2026-07-06): the key-metric enrichment query is now a
+    ``UNION ALL`` of one single-metric ``DISTINCT ON (instrument_id)`` arm per
+    display metric (see ``_fetch_page_extras`` block 1) — replacing the earlier
+    single ``metric IN (...)`` DISTINCT ON that blew the statement_timeout via a
+    double ``= ANY`` btree thrash. Each arm carries a ``literal(metric) AS
+    metric`` column, so ``AS metric`` uniquely identifies the enrichment query
+    (for one OR many metrics — ``union_all`` of a single arm drops the keyword).
+    The per-filter subquery and the default-sort page-selection subquery also
+    render ``SELECT DISTINCT fundamental_metrics …`` under the non-PostgreSQL
+    default dialect, but neither labels a column ``AS metric`` (they project
+    ``instrument_id`` + ``value_numeric``[+``period_type``]), so this key never
+    mis-routes them to ``metric_rows``.
     """
 
     async def _execute(stmt: Any) -> MagicMock:
@@ -82,7 +85,7 @@ def _route_session(
             result.all = MagicMock(return_value=technicals_rows or [])
         elif "ohlcv_bars" in s:
             result.all = MagicMock(return_value=volume_rows or [])
-        elif "DISTINCT fundamental_metrics" in flat and "fundamental_metrics.metric IN" in flat:
+        elif "fundamental_metrics" in flat and "AS metric" in flat:
             result.all = MagicMock(return_value=metric_rows or [])
         elif "count" in s.lower() and "km_" not in s and "total_count" not in s:
             result.scalar_one = MagicMock(return_value=1)
@@ -185,6 +188,39 @@ async def test_fetch_page_extras_is_fail_open() -> None:
     assert extras == {"instr-001": {}}
 
 
+@pytest.mark.asyncio
+async def test_key_metric_enrichment_is_union_all_of_single_metric_arms() -> None:
+    """NEW-6 R3 regression (audit 2026-07-06-r1, sector+metric screen 504).
+
+    ``_fetch_page_extras`` block 1 must fan the requested display metrics into a
+    ``UNION ALL`` of one single-metric ``DISTINCT ON (instrument_id)`` arm — NOT
+    a single ``metric IN (...) AND instrument_id IN (...)`` DISTINCT ON.
+
+    ROOT CAUSE it guards: the double ``= ANY`` (N metrics x M page ids) on the
+    covering index ``ix_fundamental_metrics_metric_instr_date_val`` made
+    PostgreSQL re-descend the btree per (metric, instrument) combination — a
+    ~13.5 s CPU thrash returning ~13 k history rows to DISTINCT down to a few
+    hundred, blowing the 8 s statement_timeout so the ``sector=Technology +
+    market_cap`` chat screen 504'd. Each single-metric arm is instead the fast
+    single-value-leading scan (scalar ``metric = <name>``) the sort path rides.
+    """
+    captured: list[Any] = []
+    session = _route_session(captured=captured)
+    metrics = ("market_capitalization", "pe_ratio", "revenue_ttm")
+    await _fetch_page_extras(session, ["instr-001", "instr-002"], metrics)
+
+    enrich = [s for s in captured if "fundamental_metrics" in str(s).replace("\n", " ") and "AS metric" in str(s)]
+    assert len(enrich) == 1, "exactly one page-bounded key-metric enrichment query expected"
+    compiled = str(enrich[0].compile(compile_kwargs={"literal_binds": True}))
+    flat = compiled.replace("\n", " ")
+    # One UNION ALL arm per metric (3 metrics → 2 UNION ALL joiners).
+    assert flat.count("UNION ALL") == len(metrics) - 1
+    # Every arm is a scalar metric equality — never the pathological multi-IN.
+    assert "metric IN (" not in flat
+    for mt in metrics:
+        assert f"fundamental_metrics.metric = '{mt}'" in flat
+
+
 # ---------------------------------------------------------------------------
 # POST (filtered) branch — gap #1 key-metric union
 # ---------------------------------------------------------------------------
@@ -246,15 +282,15 @@ async def test_filtered_screen_enrichment_excludes_filtered_metrics() -> None:
 
     await query_screen(session, [ScreenFilter(metric="pe_ratio", max_value=40.0)])
 
-    # NEW-6 (2026-07-06): the metric-filter branch's per-filter subquery is now
-    # also a ``DISTINCT ON`` (rendered ``SELECT DISTINCT fundamental_metrics`` on
-    # the default dialect), so the enrichment query is disambiguated by its
-    # ``metric IN (...)`` predicate — the filter subquery uses ``metric = :p``.
+    # NEW-6 R3 (2026-07-06): the enrichment query is a ``UNION ALL`` of one
+    # single-metric ``DISTINCT ON`` arm per display metric, each labelling a
+    # ``… AS metric`` column. That ``AS metric`` label is unique to the
+    # enrichment (the per-filter and page-sort subqueries project value_numeric,
+    # never a ``metric`` column), so it disambiguates the enrichment query.
     metric_stmts = [
         s
         for s in captured
-        if "SELECT DISTINCT fundamental_metrics" in str(s).replace("\n", " ")
-        and "fundamental_metrics.metric IN" in str(s).replace("\n", " ")
+        if "fundamental_metrics" in str(s).replace("\n", " ") and "AS metric" in str(s).replace("\n", " ")
     ]
     assert len(metric_stmts) == 1, "exactly one page-bounded metric enrichment query expected"
     compiled = str(metric_stmts[0].compile(compile_kwargs={"literal_binds": True}))
@@ -263,6 +299,11 @@ async def test_filtered_screen_enrichment_excludes_filtered_metrics() -> None:
     assert "'market_capitalization'" in compiled
     assert "'dist_from_52w_high_pct'" in compiled
     assert "'dist_from_52w_low_pct'" in compiled
+    # The core NEW-6 R3 optimisation: NO double ``= ANY`` (``metric IN (...)``
+    # combined with ``instrument_id IN (...)``) on the covering index — that was
+    # the 14 s btree-thrash. Each arm must be a single scalar ``metric = <name>``.
+    assert "metric IN (" not in compiled, "enrichment must not use a multi-metric IN (double = ANY 504)"
+    assert "UNION ALL" in compiled, "enrichment must fan out one single-metric arm per display metric"
 
 
 # ---------------------------------------------------------------------------
