@@ -37,7 +37,6 @@ Design choices:
 
 from __future__ import annotations
 
-import itertools
 import math
 import re
 from collections import Counter
@@ -2042,13 +2041,32 @@ def _matches_any(
 # tighter than any material claim gap.
 _DERIVATION_TOLERANCE = 0.01
 # Cap the combinatorial work (and the coincidence surface): only attempt
-# derivation when the entity-scoped pool is small. A real derivation draws on a
-# handful of cited figures; a large pool would both cost more and raise the odds
-# of an accidental match.
-_MAX_DERIVATION_POOL = 12
-# Maximum number of terms summed together (FY = 4 quarters; a couple of segment
-# revenues). Keeps subset enumeration bounded and the coincidence surface small.
-_MAX_SUM_TERMS = 4
+# derivation when the entity-scoped pool is bounded. A DEEP answer legitimately
+# draws on many cited figures — several quarters x several segments, plus totals
+# and margins — so 12 was too small and caused good answers to be flagged. Raised
+# to 40, which comfortably covers a multi-quarter/multi-segment deep answer while
+# staying bounded (the subset-sum below is a PRUNED DFS with a hard node budget,
+# NOT the old brute-force ``itertools.combinations`` — see ``_subset_sum_within``;
+# C(40, 8) ≈ 76M would have been prohibitive, the pruned walk is not).
+_MAX_DERIVATION_POOL = 40
+# Maximum number of terms summed together. A FY total is 4 quarters; a two-year
+# trailing sum is 8, and a combined multi-segment total can reach a similar count.
+# Raised 4 → 8. Enumeration stays bounded because the subset walk is pruned by
+# reachable-range bounds and a node budget, not by term-count alone.
+_MAX_SUM_TERMS = 8
+# Hard ceiling on subset-sum DFS node expansions. The pruned walk visits far fewer
+# nodes than this on real (large, positive) financial pools; the budget is a
+# safety valve that guarantees bounded runtime even on a pathological pool. On
+# exhaustion the SUM shape returns "not derivable" — the CONSERVATIVE direction
+# (the figure stays flagged), so the fabrication guarantee is never weakened by
+# the cutoff, only the over-eager-caveat relief is (rarely) forgone.
+_DERIVATION_NODE_BUDGET = 60_000
+# Upper bound on the "multiplier" operand in the two-step product form. A real
+# margin/ratio applied to a figure is ≤ ~100 (a fraction like 0.749 or a percent
+# like 74.9). Requiring one operand to be this small forbids multiplying two
+# billion-scale figures together, which could otherwise coincidentally land on a
+# fabricated large number.
+_PRODUCT_MULTIPLIER_MAX = 100.0
 
 
 def _approx_eq(a: float, b: float, tol: float) -> bool:
@@ -2056,6 +2074,79 @@ def _approx_eq(a: float, b: float, tol: float) -> bool:
     if b == 0:
         return abs(a) <= tol
     return abs(a - b) / abs(b) <= tol
+
+
+def _subset_sum_within(
+    value: float,
+    operands: list[float],
+    *,
+    max_terms: int,
+    tol: float,
+) -> bool:
+    """True when some 2..``max_terms``-element subset of *operands* sums to *value*.
+
+    Replaces the old ``itertools.combinations`` brute force (which was
+    ``Σ_{r=2..max_terms} C(N, r)`` — e.g. C(40, 8) ≈ 76M subsets — and became
+    unusable once the caps were raised) with a **pruned depth-first walk**:
+
+      * operands are sorted ascending so the include/skip recursion can bound the
+        still-reachable sum range at every node using precomputed suffix sums of
+        the remaining positive / negative operands;
+      * a branch is abandoned as soon as *value* falls outside
+        ``[current + reachable_negative, current + reachable_positive]`` widened by
+        the match tolerance — for the common all-positive financial pool this
+        prunes the walk to a small fraction of the full subset lattice;
+      * a hard ``_DERIVATION_NODE_BUDGET`` on node expansions guarantees bounded
+        runtime; on exhaustion we return ``False`` (conservative: the figure stays
+        flagged, so the fabrication guarantee is never weakened by the cutoff).
+
+    Only subsets of size ≥ 2 count as a derivation — a single value is a direct
+    match handled elsewhere, and admitting it here would broaden the coincidence
+    surface.
+    """
+    n = len(operands)
+    if n < 2:
+        return False
+    # DESCENDING sort so the include-first walk tries the LARGEST operands first.
+    # A real total (FY = Σ quarters, trailing sum) is the sum of the largest,
+    # comparable-magnitude figures, so this reaches it within a handful of node
+    # expansions — well inside the budget — instead of churning through tiny
+    # filler values first.
+    ops = sorted(operands, reverse=True)
+    # Suffix bounds: suf_pos[i] / suf_neg[i] = sum of the positive / negative
+    # operands in ops[i:]. current + suf_neg[i] .. current + suf_pos[i] is the
+    # widest sum still reachable from position i (ignoring the term cap, which
+    # only makes the true reachable set SMALLER — a safe over-approximation, so
+    # pruning never discards a genuinely reachable target).
+    suf_pos = [0.0] * (n + 1)
+    suf_neg = [0.0] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        suf_pos[i] = suf_pos[i + 1] + (ops[i] if ops[i] > 0 else 0.0)
+        suf_neg[i] = suf_neg[i + 1] + (ops[i] if ops[i] < 0 else 0.0)
+    band = tol * abs(value) + 1e-9
+    budget = _DERIVATION_NODE_BUDGET
+    # Explicit stack: (index, running_sum, terms_used). Recursion depth would be
+    # bounded by n anyway, but the stack keeps the node-budget accounting simple.
+    stack: list[tuple[int, float, int]] = [(0, 0.0, 0)]
+    while stack:
+        i, current, terms = stack.pop()
+        budget -= 1
+        if budget < 0:
+            return False
+        if terms >= 2 and _approx_eq(value, current, tol):
+            return True
+        if i >= n or terms >= max_terms:
+            continue
+        # Reachability prune: if the target cannot be hit from here even using all
+        # remaining positive/negative mass, abandon this branch.
+        if value > current + suf_pos[i] + band:
+            continue
+        if value < current + suf_neg[i] - band:
+            continue
+        # Branch: skip ops[i], or include it.
+        stack.append((i + 1, current, terms))
+        stack.append((i + 1, current + ops[i], terms + 1))
+    return False
 
 
 def _is_derivable_from_grounded(
@@ -2071,13 +2162,18 @@ def _is_derivable_from_grounded(
     numbers), using ONLY grounded ``candidates``:
 
       * SUM of 2..``_MAX_SUM_TERMS`` grounded values — FY revenue = Σ quarters,
-        combined-segment totals;
+        multi-year trailing sums, combined-segment totals;
       * PERCENT-CHANGE / growth of an ordered pair — ``(a - b) / b`` in both the
         fraction form (``0.081``) and the whole-number form (``8.1``); this is the
         YoY-growth case;
       * RATIO of an ordered pair — ``a / b`` (a P/E from grounded price & EPS, a
         margin from grounded profit & revenue), in both the fraction and the
-        ``x100`` percent form.
+        ``x100`` percent form;
+      * PRODUCT of an ordered pair where one operand is a ratio/percent-scale
+        multiplier — ``margin x revenue`` (the two-step "apply a cited margin to a
+        cited revenue" case). Gated tightly: at least one operand must be small
+        (|op| ≤ ``_PRODUCT_MULTIPLIER_MAX``, i.e. a fraction or a percent), so two
+        large figures can NEVER be multiplied into a coincidental match.
 
     Because every candidate is a GROUNDED tool value, a match means the number has
     a genuine grounded basis — it is derived, not fabricated. A number with NO
@@ -2103,16 +2199,15 @@ def _is_derivable_from_grounded(
     if not uniq or len(uniq) > _MAX_DERIVATION_POOL:
         return False
 
-    # 1. SUM of subsets (2..N terms). Same-sign terms only inside a subset is not
-    #    required — a genuine total may net a subtraction — but we keep it simple
-    #    and additive, which covers the FY = Σ quarters case.
-    max_terms = min(_MAX_SUM_TERMS, len(uniq))
-    for r in range(2, max_terms + 1):
-        for combo in itertools.combinations(uniq, r):
-            if _approx_eq(value, math.fsum(combo), tol):
-                return True
+    # 1. SUM of subsets (2..``_MAX_SUM_TERMS`` terms) — FY = Σ quarters, trailing
+    #    multi-year sums, combined-segment totals. Uses the pruned, node-budgeted
+    #    subset-sum walk (NOT brute-force combinations) so it stays fast at the
+    #    raised caps.
+    if _subset_sum_within(value, uniq, max_terms=_MAX_SUM_TERMS, tol=tol):
+        return True
 
-    # 2. Pairwise ratio / percent-change (ordered pairs).
+    # 2. Pairwise ratio / percent-change / gated product (ordered pairs). O(N^2),
+    #    trivial at N ≤ _MAX_DERIVATION_POOL.
     for a in uniq:
         for b in uniq:
             if a is b or b == 0:
@@ -2125,6 +2220,16 @@ def _is_derivable_from_grounded(
             pct = (a - b) / b
             if _approx_eq(value, pct, tol) or _approx_eq(value, pct * 100.0, tol):
                 return True
+            # Two-step product: apply a cited margin/ratio to a cited figure
+            # (margin x revenue → segment/adjusted figure). Gated so at least one
+            # operand is a small multiplier (a fraction or percent) — two large
+            # figures can never be multiplied into a coincidental large match.
+            if abs(a) <= _PRODUCT_MULTIPLIER_MAX or abs(b) <= _PRODUCT_MULTIPLIER_MAX:
+                product = a * b
+                # margin as a fraction (a in 0..1) → a*b directly; margin as a
+                # percent (a in 0..100) → a*b/100.
+                if _approx_eq(value, product, tol) or _approx_eq(value, product / 100.0, tol):
+                    return True
     return False
 
 
