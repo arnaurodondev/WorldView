@@ -101,6 +101,10 @@ def _build_consumer() -> _ProbeConsumer:
     # Crank the probe interval down so 3 misses take <50 ms, not 3 minutes.
     c._probe_interval_seconds = 0.01
     c._probe_list_topics_timeout = 0.01
+    # Pin the escalation threshold to 3 so these tests are deterministic and
+    # independent of the platform-wide default (raised to 5 for load tolerance;
+    # overridable via KAFKA_PROBE_FAILURE_THRESHOLD).
+    c._probe_failure_threshold = 3
     return c
 
 
@@ -109,17 +113,18 @@ def _build_consumer() -> _ProbeConsumer:
 
 class TestConnectivityProbe:
     async def test_probe_exits_after_3_failures(self) -> None:
-        """3 consecutive list_topics failures → sys.exit(2)."""
+        """3 consecutive list_topics failures → force process exit (code 2)."""
         consumer = _build_consumer()
         # Fake consumer whose list_topics ALWAYS raises.
         fake_kafka = MagicMock()
         fake_kafka.list_topics.side_effect = RuntimeError("broker unreachable")
         consumer._consumer = fake_kafka
 
-        with patch("messaging.kafka.consumer.base.sys.exit") as exit_mock:
-            # Probe loop calls sys.exit(2) — patch it so the test does not
-            # actually terminate the interpreter.  The patched mock simply
-            # records the call; the loop continues briefly, so we cap it.
+        # The probe now escalates via ``_force_process_exit`` (os._exit), NOT a
+        # bare ``sys.exit`` — the latter left a zombie because the SystemExit
+        # was captured/swallowed as the Task result.  Patch the escalation hook
+        # so the test records the call without terminating the interpreter.
+        with patch.object(type(consumer), "_force_process_exit") as exit_mock:
             task = asyncio.create_task(consumer._connectivity_probe_loop())
             # Wait long enough for at least 3 probes (3 x 10 ms = 30 ms;
             # give 200 ms of headroom for executor / scheduling jitter).
@@ -131,11 +136,11 @@ class TestConnectivityProbe:
             except asyncio.CancelledError:
                 pass
 
-        # At least one sys.exit(2) call after 3 failures.  The probe loop
+        # At least one force-exit(2) call after 3 failures.  The probe loop
         # would normally exit on the first call, but our patch makes it a
         # no-op so it may fire more than once in the test window — assert
         # ``called >= 1`` with exit code 2.
-        assert exit_mock.called, "sys.exit was never called after 3 probe failures"
+        assert exit_mock.called, "_force_process_exit was never called after 3 probe failures"
         # Every call we did capture must have been with exit code 2.
         for call in exit_mock.call_args_list:
             assert call.args == (2,)
@@ -165,7 +170,7 @@ class TestConnectivityProbe:
         fake_kafka.list_topics.side_effect = call_log
         consumer._consumer = fake_kafka
 
-        with patch("messaging.kafka.consumer.base.sys.exit") as exit_mock:
+        with patch.object(type(consumer), "_force_process_exit") as exit_mock:
             task = asyncio.create_task(consumer._connectivity_probe_loop())
             # Allow 4 probe cycles to land: 4 x 10 ms = 40 ms; pad to 150 ms.
             await asyncio.sleep(0.15)
@@ -177,9 +182,9 @@ class TestConnectivityProbe:
                 pass
 
         # The trailing failure run only hit 2 of the 3-failure threshold →
-        # sys.exit must NOT have been called.
+        # the force-exit must NOT have been called.
         assert not exit_mock.called, (
-            "sys.exit should not fire when failures are interrupted by a success "
+            "_force_process_exit should not fire when failures are interrupted by a success "
             f"(call_args_list={exit_mock.call_args_list})"
         )
 
@@ -203,7 +208,7 @@ class TestConnectivityProbe:
                 consume_counter["n"] += 1
                 await asyncio.sleep(0.005)
 
-        with patch("messaging.kafka.consumer.base.sys.exit"):
+        with patch.object(type(consumer), "_force_process_exit"):
             probe_task = asyncio.create_task(consumer._connectivity_probe_loop())
             consume_task = asyncio.create_task(fake_consume_loop())
             await asyncio.sleep(0.1)
@@ -221,6 +226,39 @@ class TestConnectivityProbe:
         assert (
             consume_counter["n"] >= 5
         ), f"consume loop appears to have been blocked by the probe (count={consume_counter['n']})"
+
+
+class TestForceProcessExit:
+    """``_force_process_exit`` must escalate to a REAL process exit.
+
+    Regression guard for the connectivity-probe zombie: ``sys.exit(2)`` raised
+    inside a Task-driven coroutine was captured/swallowed as the Task result,
+    leaving the process alive with a dead event loop and a closed /healthz
+    socket (Docker → ``Connection refused`` → ``unhealthy`` forever, yet
+    ``restart: unless-stopped`` never fired).  The fix routes both force-exit
+    sites through ``os._exit``, the only primitive that guarantees the process
+    dies regardless of asyncio/executor state.
+    """
+
+    def test_calls_os_exit_with_code(self) -> None:
+        consumer = _build_consumer()
+        with patch("messaging.kafka.consumer.base.os._exit") as os_exit:
+            consumer._force_process_exit(2)
+        os_exit.assert_called_once_with(2)
+
+    def test_flushes_before_exit(self) -> None:
+        """Stdio/log handlers are flushed so the CRITICAL diagnostic survives."""
+        consumer = _build_consumer()
+        with (
+            patch("messaging.kafka.consumer.base.os._exit") as os_exit,
+            patch("messaging.kafka.consumer.base.sys.stdout") as stdout,
+            patch("messaging.kafka.consumer.base.sys.stderr") as stderr,
+        ):
+            consumer._force_process_exit(3)
+        # Flush happens (best-effort) and the exit still fires with the code.
+        assert stdout.flush.called
+        assert stderr.flush.called
+        os_exit.assert_called_once_with(3)
 
 
 # ── Lag-stall early warning (BP-690) ──────────────────────────────────────────

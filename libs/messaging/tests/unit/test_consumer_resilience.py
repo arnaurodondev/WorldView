@@ -219,10 +219,18 @@ class TestReconnectWithBackoff:
         assert c.seconds_since_progress() is not None
 
     async def test_reconnect_exhaustion_force_exits(self) -> None:
-        """A permanently-down broker force-exits (sys.exit) — never a zombie."""
+        """A permanently-down broker force-exits (os._exit) — never a zombie.
+
+        Escalation now goes through ``_force_process_exit`` (os._exit) instead
+        of ``sys.exit``: a bare SystemExit raised in this Task-driven coroutine
+        was captured/swallowed as the Task result, leaving the very zombie this
+        path exists to prevent.
+        """
         c = _build()
         c._reconnect_max_attempts = 2  # exhaust fast
-        with patch("messaging.kafka.consumer.base.sys.exit", side_effect=SystemExit) as exit_mock:
+        # Patch the escalation hook to raise SystemExit so the loop unwinds in
+        # the test (real code calls os._exit, which we must not do under pytest).
+        with patch.object(type(c), "_force_process_exit", side_effect=SystemExit) as exit_mock:
             # Drive attempts past the ceiling.
             for _ in range(3):
                 try:
