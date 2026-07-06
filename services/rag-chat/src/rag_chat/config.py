@@ -291,6 +291,33 @@ class Settings(BaseSettings):
     # Override via RAG_CHAT_GROUNDING_REWRITE_MODEL.
     grounding_rewrite_model: str | None = None
 
+    # ── get_filings retrieval depth (R1 filings-chat fix, 2026-07-06) ────────
+    # ROOT CAUSE (docs/audits/2026-07-05-r1-sec-filings-reqa.md §Final): the
+    # get_filings tool deduped each filing to its ONE best-ranked chunk and
+    # injected only a ≤400-char snippet — which is the filing's cover /
+    # section-listing header, NOT the numeric-table chunk. The income-statement
+    # and segment-revenue figures live in a DIFFERENT chunk of the same filing,
+    # so the model could identify + attribute the filing but never quote real
+    # revenue/segment numbers ("the specific revenue figures are not present in
+    # the retrieved excerpt").
+    #
+    # Fix: inject the top-N chunks per filing (biased toward the numeric-dense
+    # ones so the financial-statement chunk is included even when it ranks below
+    # the header for the generic filings query) with a larger per-chunk snippet
+    # cap, bounded by a per-filing text budget so the prompt cost stays sane.
+    #
+    # ``filing_chunks_per_filing``: how many chunks of a single filing to surface
+    #   to the LLM (was hard-coded to 1). RAG_CHAT_FILING_CHUNKS_PER_FILING.
+    filing_chunks_per_filing: int = Field(default=3, ge=1, le=8)  # RAG_CHAT_FILING_CHUNKS_PER_FILING
+    # ``filing_snippet_max_chars``: per-chunk body cap (was the hard-coded 400).
+    #   Raised so a chunk's numeric tables are not truncated mid-figure.
+    #   RAG_CHAT_FILING_SNIPPET_MAX_CHARS.
+    filing_snippet_max_chars: int = Field(default=1200, ge=200, le=8000)  # RAG_CHAT_FILING_SNIPPET_MAX_CHARS
+    # ``filing_result_max_chars``: hard ceiling on the total injected text for a
+    #   SINGLE filing row (title + all chunk snippets). Bounds the token budget
+    #   when multiple chunks are concatenated. RAG_CHAT_FILING_RESULT_MAX_CHARS.
+    filing_result_max_chars: int = Field(default=6000, ge=1000, le=16000)  # RAG_CHAT_FILING_RESULT_MAX_CHARS
+
     # ── Trust scoring weights (PLAN-0079 Wave C) ─────────────────────────────
     # The TrustScorer formula is additive:
     #   trust = w_source * source_authority + w_corroboration * corr_factor + w_extraction * extr_factor

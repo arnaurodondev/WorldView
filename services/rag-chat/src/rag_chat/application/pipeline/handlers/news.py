@@ -33,13 +33,49 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # Maximum characters for tool result text injected into LLM context.
 _TOOL_RESULT_MAX_CHARS = 4000
 
-# Fix ③ (2026-07-04): max chars of the filing BODY snippet injected per row.
-# sec_edgar chunks carry no structured filer/company field (title/source_name are
-# null) — the filer name lives ONLY in the chunk text. We surface a short,
-# whitespace-collapsed excerpt so the model can SEE which company each filing
-# belongs to (and attribute / cite it, or refuse a genuinely-absent one) instead
-# of being handed an anonymous "8-K — <date>" row. Kept short to bound prompt cost.
-_FILING_SNIPPET_MAX_CHARS = 400
+# Fix ③ (2026-07-04): the filing BODY text is injected per row — sec_edgar chunks
+# carry no structured filer/company field (title/source_name are null), so the
+# filer name lives ONLY in the chunk text.
+#
+# R1 depth fix (2026-07-06, docs/audits/2026-07-05-r1-sec-filings-reqa.md §Final):
+# the previous single-best-chunk + 400-char snippet surfaced only the filing's
+# cover / section-listing header, NEVER the numeric-table chunk — so the model
+# could identify + attribute the filing but could not quote revenue/segment
+# figures. The three knobs below (env-tunable, RAG_CHAT_FILING_*) control how much
+# of a filing reaches the LLM: how many chunks per filing, the per-chunk body cap,
+# and the per-filing total-text ceiling (token-budget bound).
+def _load_filing_settings() -> tuple[int, int, int]:
+    """Load get_filings retrieval-depth knobs from ``rag_chat.config.Settings``.
+
+    Lazy + best-effort (mirrors ``intelligence._load_resolver_settings``): when
+    Settings cannot be instantiated (minimal unit-test harness with no env) we
+    fall back to hard-coded defaults that mirror the Settings field defaults so
+    the tuning surface is identical across both code paths.
+
+    Returns ``(chunks_per_filing, snippet_max_chars, result_max_chars)``.
+    """
+    try:
+        from rag_chat.config import Settings  # local import to keep test imports cheap
+
+        s = Settings()  # type: ignore[call-arg]
+        return (
+            int(s.filing_chunks_per_filing),
+            int(s.filing_snippet_max_chars),
+            int(s.filing_result_max_chars),
+        )
+    except Exception:  # pragma: no cover — defensive fallback (mirrors field defaults)
+        return 3, 1200, 6000
+
+
+# Module-level cache (computed once on import). Tests / callers override via the
+# NewsHandler constructor kwargs, which fall back to these when not supplied.
+_FILING_CHUNKS_PER_FILING, _FILING_SNIPPET_MAX_CHARS, _FILING_RESULT_MAX_CHARS = _load_filing_settings()
+
+# Currency / number tokens ("$391,035", "1,234.5", "27.6") — a proxy for a
+# financial-statement chunk. The income-statement / segment-revenue chunk of a
+# filing is dense with these; the cover / section-listing header is not. Used to
+# BIAS which chunks of a filing we inject when we can only afford a few.
+_NUMERIC_TOKEN_RE = re.compile(r"\$?\d[\d,]*(?:\.\d+)?")
 
 # Recognises the common SEC form types embedded in a filing's title or body text.
 # All SEC EDGAR filings are stored under the single generic source_type
@@ -77,6 +113,9 @@ class NewsHandler(ToolHandler):
         user_id: UUID | None = None,
         tenant_id: UUID | None = None,
         timeout: float = 5.0,
+        filing_chunks_per_filing: int | None = None,
+        filing_snippet_max_chars: int | None = None,
+        filing_result_max_chars: int | None = None,
     ) -> None:
         self._s6 = s6
         self._brief_archive = brief_archive
@@ -84,6 +123,18 @@ class NewsHandler(ToolHandler):
         self._user_id = user_id
         self._tenant_id = tenant_id
         self._timeout = timeout
+        # R1 depth fix: get_filings retrieval-depth knobs. None → the module-level
+        # cache loaded from Settings (env-tunable in prod); explicit values let
+        # tests pin a deterministic depth without touching the environment.
+        self._filing_chunks_per_filing = (
+            filing_chunks_per_filing if filing_chunks_per_filing is not None else _FILING_CHUNKS_PER_FILING
+        )
+        self._filing_snippet_max_chars = (
+            filing_snippet_max_chars if filing_snippet_max_chars is not None else _FILING_SNIPPET_MAX_CHARS
+        )
+        self._filing_result_max_chars = (
+            filing_result_max_chars if filing_result_max_chars is not None else _FILING_RESULT_MAX_CHARS
+        )
 
     def can_handle(self, tool_name: str) -> bool:
         return tool_name in self._HANDLED_TOOLS
@@ -481,6 +532,20 @@ class NewsHandler(ToolHandler):
     # ── SEC EDGAR filings (clickable EDGAR citation URLs) ──────────────────────
 
     @staticmethod
+    def _numeric_density(text: str | None) -> int:
+        """Count currency/number tokens in a chunk — proxy for a financial table.
+
+        R1 depth fix: when we can inject only a few chunks per filing we bias
+        toward the numeric-dense ones. The income-statement / segment-revenue
+        chunk is packed with "$391,035"-style tokens; the cover / section-listing
+        header (which the generic filings query ranks FIRST) is not — so numeric
+        density is what surfaces the revenue figures the model needs to quote.
+        """
+        if not text:
+            return 0
+        return len(_NUMERIC_TOKEN_RE.findall(text))
+
+    @staticmethod
     def _detect_form_type(*texts: str | None) -> str | None:
         """Best-effort recover the SEC form label (10-K, 8-K, …) from text.
 
@@ -595,10 +660,12 @@ class NewsHandler(ToolHandler):
         advertises a ``source_types`` filter to the LLM but the value taxonomy it
         suggests (``sec_filing``) does NOT match the stored ``sec_edgar`` literal,
         so filing-only retrieval was effectively unreachable. This tool pins the
-        correct stored source_type, deduplicates to ONE result per filing
-        (chunk-search returns many chunks per document), and stamps
-        ``citation_meta.url`` with the canonical EDGAR index URL so the answer can
-        link straight to the primary source on sec.gov.
+        correct stored source_type, groups the many chunk hits into ONE result
+        per filing — injecting the top-N chunks per filing biased toward the
+        numeric-dense financial-statement chunk so the model can quote real
+        revenue/segment figures (R1 depth fix) — and stamps ``citation_meta.url``
+        with the canonical EDGAR index URL so the answer can link straight to the
+        primary source on sec.gov.
 
         Read path (R9 — rag-chat → S6 direct REST, the existing tool pattern):
         ``S6Port.search_chunks`` with ``source_types=['sec_edgar']`` filters
@@ -689,12 +756,20 @@ class NewsHandler(ToolHandler):
         from rag_chat.application.ports.upstream_clients import ChunkSearchRequest
 
         # Over-fetch: chunk search returns multiple chunks per filing, so request
-        # a larger window and dedupe by doc_id down to ``capped_results`` filings.
+        # a larger window and group by doc_id down to ``capped_results`` filings.
         # source_types pins the sec_edgar bucket; the company anchoring lives in
         # query_text (NO entity_ids filter — see BUG-3 note above).
+        #
+        # R1 depth fix: we now surface up to ``_filing_chunks_per_filing`` chunks
+        # PER filing (to reach the numeric-table chunk, not just the header), so
+        # the window must hold enough chunks even when the LLM asks for only a
+        # couple of filings. Floor the over-fetch at chunks-per-filing x 6 so a
+        # single-filing query still pulls that filing's numeric chunk. Bounded at
+        # 50 (unchanged upper bound → no new S6-latency regression vs. before).
+        _over_fetch = max(capped_results * 5, self._filing_chunks_per_filing * 6)
         request = ChunkSearchRequest(
             query_text=query_text,
-            top_k=min(50, capped_results * 5),
+            top_k=min(50, _over_fetch),
             search_type="hybrid",
             date_from=_parse_dt(date_from),
             date_to=_parse_dt(date_to),
@@ -713,53 +788,77 @@ class NewsHandler(ToolHandler):
             log.info("tool_no_data", tool="get_filings", entity_id=str(resolved_id) if resolved_id else None)
             return []
 
-        # Dedupe to ONE entry per filing (best-ranked chunk wins — results are
-        # already score-ordered by S6). Detect the form label per filing.
-        seen_docs: set[str] = set()
+        # Group the flat chunk hits into ONE entry per filing (doc_id). Results
+        # are already score-ordered by S6, so the FIRST chunk seen for a doc is
+        # its best-ranked chunk (drives the citation title / form / URL). Python
+        # dicts preserve insertion order, so ``grouped`` is best-first per doc and
+        # docs appear in the order their best chunk ranked.
+        grouped: dict[str, list[Any]] = {}
+        for result in results:
+            doc_id = str(result.doc_id) if result.doc_id else result.chunk_id
+            grouped.setdefault(doc_id, []).append(result)
+
         matched: list[RetrievedItem] = []
         fallback: list[RetrievedItem] = []
         _entity_label = ticker.strip().upper() if isinstance(ticker, str) and ticker.strip() else None
 
-        for result in results:
-            doc_id = str(result.doc_id) if result.doc_id else result.chunk_id
-            if doc_id in seen_docs:
-                continue
-            seen_docs.add(doc_id)
+        for doc_id, doc_chunks in grouped.items():
+            primary = doc_chunks[0]  # best-ranked chunk — citation title/form/URL/date
 
-            detected_form = self._detect_form_type(result.title, result.text)
+            # R1 depth fix: select up to N chunks to inject. Keep the primary
+            # (relevance-best, usually the cover/section-listing header) FIRST for
+            # context, then add the most NUMERIC-DENSE of the remaining chunks —
+            # the income-statement / segment-revenue tables live in a different
+            # chunk that ranks below the header for the generic filings query, so
+            # a plain top-N-by-relevance would still miss them. Sorting the rest
+            # by numeric density pulls the financial-table chunk into the window.
+            rest_by_numbers = sorted(
+                doc_chunks[1:],
+                key=lambda c: self._numeric_density(c.text),
+                reverse=True,
+            )
+            selected = [primary, *rest_by_numbers][: self._filing_chunks_per_filing]
+
+            detected_form = self._detect_form_type(primary.title, primary.text)
             # Compose a human title: "10-K filing — 2026-01-31" when we know both.
-            date_label = result.published_at.date().isoformat() if result.published_at else "date unknown"
+            date_label = primary.published_at.date().isoformat() if primary.published_at else "date unknown"
 
             # Fix ③ (2026-07-04): does THIS filing actually name the queried
-            # company? (sec_edgar retrieval can surface the wrong company.)
-            names_company = self._filing_names_company(result.text, result.title, company_name, ticker_upper)
+            # company? (sec_edgar retrieval can surface the wrong company.) Check
+            # across ALL selected chunk texts — the filer name may appear in any
+            # of them, not just the primary header chunk.
+            combined_text = "\n".join(c.text for c in selected if c.text)
+            names_company = self._filing_names_company(combined_text, primary.title, company_name, ticker_upper)
 
             # Fold the filer/company identity into the title when we can confirm
             # it — "10-K filing — NVIDIA Corporation (2026-01-31)" — so the LLM
             # (and the rendered citation) knows WHOSE filing this is. When the
             # row does NOT corroborate the queried company we deliberately keep
-            # the neutral form+date title (the body snippet below still carries
+            # the neutral form+date title (the body snippets below still carry
             # the real filer), rather than falsely attribute it to the query.
             if detected_form and names_company and company_name:
                 title = f"{detected_form} filing — {company_name} ({date_label})"
             elif detected_form:
                 title = f"{detected_form} filing — {date_label}"
-            elif result.title:
-                title = result.title
+            elif primary.title:
+                title = primary.title
             else:
                 title = f"SEC filing — {date_label}"
 
             # Text injected into the LLM context: title + form + date + link, AND
-            # a body snippet — the ONLY place the filer/company name appears on a
-            # sec_edgar row. Without it the model sees an anonymous filing and
-            # cannot attribute or cite it (Fix ③).
+            # the body of MULTIPLE chunks — the header chunk carries the filer name
+            # (Fix ③) while the numeric-dense chunk(s) carry the revenue/segment
+            # tables the model must quote (R1 depth fix). Each chunk snippet is
+            # whitespace-collapsed and per-chunk capped; the whole row is then
+            # bounded by ``_filing_result_max_chars`` to keep the prompt cost sane.
             text_lines = [title]
             text_lines.append(f"  Source: SEC EDGAR | Filed: {date_label}")
-            snippet = re.sub(r"\s+", " ", result.text).strip() if result.text else ""
-            if snippet:
-                text_lines.append(f"  Filer/content: {snippet[:_FILING_SNIPPET_MAX_CHARS]}")
-            if result.url:
-                text_lines.append(f"  Filing: {result.url}")
+            for c in selected:
+                snippet = re.sub(r"\s+", " ", c.text).strip() if c.text else ""
+                if snippet:
+                    text_lines.append(f"  Filer/content: {snippet[: self._filing_snippet_max_chars]}")
+            if primary.url:
+                text_lines.append(f"  Filing: {primary.url}")
 
             # Fix ③: only stamp the queried ticker as this row's entity_name when
             # the filing actually names the company — otherwise leave it UNSET so a
@@ -771,18 +870,18 @@ class NewsHandler(ToolHandler):
                 item_id=f"tool:filing:{doc_id}",
                 item_type=ItemType.chunk,
                 entity_id=resolved_id,
-                text="\n".join(text_lines)[:_TOOL_RESULT_MAX_CHARS],
-                score=max(0.5, float(result.score)),
+                text="\n".join(text_lines)[: self._filing_result_max_chars],
+                score=max(0.5, float(primary.score)),
                 # SEC filings are the highest-authority primary source (mirrors the
                 # sec_10k/10q → 0.95 trust weights in the TrustScorer invariant).
                 trust_weight=0.95,
                 source_type=_SEC_EDGAR_SOURCE_TYPE,
-                published_at=result.published_at,
+                published_at=primary.published_at,
                 citation_meta=CitationMeta(
                     title=title,
-                    url=result.url,  # canonical EDGAR filing index URL
+                    url=primary.url,  # canonical EDGAR filing index URL
                     source_name="sec_edgar",
-                    published_at=result.published_at,
+                    published_at=primary.published_at,
                     entity_name=row_entity_name,
                 ),
             )

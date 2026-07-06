@@ -435,3 +435,137 @@ class TestGetFilingsFilerIdentity:
 
         assert len(items) == 1
         assert items[0].citation_meta.entity_name == "TSLA"
+
+
+class TestGetFilingsRetrievalDepth:
+    """R1 depth fix (2026-07-06): the financials-bearing chunk must reach the LLM.
+
+    ROOT CAUSE (docs/audits/2026-07-05-r1-sec-filings-reqa.md §Final): get_filings
+    deduped each filing to its ONE best-ranked chunk and injected only a
+    <=400-char snippet — the cover / section-listing header. The revenue/segment
+    numeric tables live in a DIFFERENT chunk of the same filing, so the model
+    identified + attributed the filing but always said "the specific revenue
+    figures are not present in the retrieved excerpt". The fix groups chunks per
+    filing and injects the top-N, biased toward the numeric-dense chunk.
+    """
+
+    # The header chunk of a 10-Q: it NAMES the statements/segments (so the old
+    # code's snippet looked plausible) but carries NO numbers — exactly the trap.
+    _HEADER = (
+        "Apple Inc. FORM 10-Q QUARTERLY REPORT pursuant to Section 13. Index: "
+        "Condensed Consolidated Statements of Operations; Products and Services; "
+        "iPhone, Mac, iPad, Wearables, Services segment information follows."
+    )
+    # The financials chunk: the actual income-statement / segment revenue numbers
+    # the user asks the chat to quote. Ranks BELOW the header for the generic
+    # filings query, so a plain top-N-by-relevance would still drop it.
+    _FINANCIALS = (
+        "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS. Total net sales $124,300 "
+        "million. iPhone revenue $69,138 million. Services revenue $26,340 million. "
+        "Mac $8,987 million. Net income $36,330 million. Diluted EPS $2.40."
+    )
+    _FILLER = "Item 4. Controls and Procedures. There were no changes in internal control."
+
+    @pytest.mark.asyncio
+    async def test_financials_chunk_reaches_llm_not_just_header(self) -> None:
+        """A single filing's revenue-bearing chunk is injected, not only the header.
+
+        Under the OLD single-best-chunk + 400-char behaviour only ``_HEADER``
+        reached the prompt and the numbers were absent. The fix must surface the
+        ``_FINANCIALS`` chunk of the SAME filing so the model can quote revenue.
+        """
+        # All three chunks belong to ONE filing (same doc_id). Header ranks best.
+        chunks = [
+            _chunk(
+                doc_id="aapl-10q",
+                chunk_id="h",
+                text=TestGetFilingsRetrievalDepth._HEADER,
+                url=_EDGAR_URL_10K,
+                score=0.95,
+            ),
+            _chunk(
+                doc_id="aapl-10q",
+                chunk_id="f",
+                text=TestGetFilingsRetrievalDepth._FINANCIALS,
+                url=_EDGAR_URL_10K,
+                score=0.70,
+            ),
+            _chunk(
+                doc_id="aapl-10q",
+                chunk_id="x",
+                text=TestGetFilingsRetrievalDepth._FILLER,
+                url=_EDGAR_URL_10K,
+                score=0.60,
+            ),
+        ]
+        s6 = _make_s6(chunks, ticker_map={"AAPL": _AAPL_ID}, name_map={"AAPL": "Apple Inc."})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="AAPL", form_type="10-Q")
+
+        # Still ONE item per filing (grouping preserved, not one-per-chunk).
+        assert len(items) == 1
+        item = items[0]
+        # The revenue/segment NUMBERS from the financials chunk now reach the LLM.
+        assert "$124,300 million" in item.text
+        assert "iPhone revenue $69,138 million" in item.text
+        assert "Services revenue $26,340 million" in item.text
+        # The header context (filer name) is still present — Fix ③ intact.
+        assert "Apple Inc." in item.text
+        # Citation still points at the canonical EDGAR URL and is attributed.
+        assert item.citation_meta.url == _EDGAR_URL_10K
+        assert item.citation_meta.entity_name == "AAPL"
+        assert "10-Q" in (item.citation_meta.title or "")
+
+    @pytest.mark.asyncio
+    async def test_numeric_bias_prefers_financials_over_filler_at_low_depth(self) -> None:
+        """With only 2 chunks of budget, the numeric-dense chunk wins over filler.
+
+        Proves the selection is numeric-BIASED, not merely "first two chunks":
+        the filler chunk outranks the financials chunk by relevance score, yet the
+        financials chunk must be the one injected alongside the primary header.
+        """
+        chunks = [
+            _chunk(
+                doc_id="d1", chunk_id="h", text=TestGetFilingsRetrievalDepth._HEADER, url=_EDGAR_URL_10K, score=0.95
+            ),
+            # Filler ranks ABOVE financials by score, but has no numbers.
+            _chunk(
+                doc_id="d1", chunk_id="x", text=TestGetFilingsRetrievalDepth._FILLER, url=_EDGAR_URL_10K, score=0.80
+            ),
+            _chunk(
+                doc_id="d1", chunk_id="f", text=TestGetFilingsRetrievalDepth._FINANCIALS, url=_EDGAR_URL_10K, score=0.70
+            ),
+        ]
+        s6 = _make_s6(chunks, ticker_map={"AAPL": _AAPL_ID}, name_map={"AAPL": "Apple Inc."})
+        # Pin depth to 2: primary header + exactly one more chunk.
+        handler = _make_handler(s6)
+        handler._filing_chunks_per_filing = 2
+
+        items = await handler._handle_get_filings(ticker="AAPL", form_type="10-Q")
+
+        assert len(items) == 1
+        item = items[0]
+        # The financials chunk is the one selected (numeric bias), not the filler.
+        assert "$124,300 million" in item.text
+        assert "Controls and Procedures" not in item.text
+
+    @pytest.mark.asyncio
+    async def test_per_filing_text_budget_is_bounded(self) -> None:
+        """The injected text for one filing never exceeds the configured budget."""
+        big = "Revenue $1,000 million. " * 2000  # ~46k chars, well over any cap
+        chunks = [
+            _chunk(doc_id="d1", chunk_id="a", text=big, url=_EDGAR_URL_10K, score=0.9),
+            _chunk(doc_id="d1", chunk_id="b", text=big, url=_EDGAR_URL_10K, score=0.8),
+            _chunk(doc_id="d1", chunk_id="c", text=big, url=_EDGAR_URL_10K, score=0.7),
+        ]
+        s6 = _make_s6(chunks, ticker_map={"AAPL": _AAPL_ID})
+        handler = _make_handler(s6)
+        handler._filing_result_max_chars = 5000
+        handler._filing_snippet_max_chars = 1500
+
+        items = await handler._handle_get_filings(ticker="AAPL")
+
+        assert len(items) == 1
+        # Hard per-filing ceiling holds regardless of chunk sizes.
+        assert len(items[0].text) <= 5000
