@@ -146,6 +146,14 @@ services:
     # Restart the intelligence DB if it dies (has died exit-255 before) — S6/S7
     # workers DNS-crashloop while it is down, silently stalling the KG pipeline.
     restart: unless-stopped
+    # Docker defaults /dev/shm to 64MB. Parallel HNSW index builds on nlp_db's
+    # chunk_embeddings (~110k x 1024-dim, e.g. migration 0024) allocate a shared
+    # memory segment ~= maintenance_work_mem in /dev/shm; at 64MB they fail with
+    # "DiskFullError: could not resize shared memory segment ... No space left on
+    # device", forcing a single-threaded build that is ~30x slower on this host.
+    # 4GB comfortably fits a 2GB-maintenance_work_mem parallel build. (Applies on
+    # next postgres-intelligence recreate.)
+    shm_size: 4gb
     ports:
       # SEC-007: bind to localhost only — prevent external DB access.
       # 5433 on the host avoids clashing with the OLTP instance's 5432.

@@ -93,13 +93,13 @@ def upgrade() -> None:
     # run once under supervision.
     op.execute("SET LOCAL statement_timeout = 0")
 
-    # Build the HNSW indexes SINGLE-THREADED. A parallel maintenance build spins up
-    # worker processes that allocate a shared-memory segment sized ~maintenance_work_mem
-    # (~512MB) in the container's /dev/shm — which Docker defaults to 64MB — yielding
-    # ``DiskFullError: could not resize shared memory segment ... No space left on
-    # device``. A non-parallel build uses backend-LOCAL memory instead. (Belt-and-braces
-    # with any DB-level ALTER; transaction-local, reverts on commit.)
-    op.execute("SET LOCAL max_parallel_maintenance_workers = 0")
+    # Build the HNSW indexes in PARALLEL — single-threaded pgvector HNSW builds are
+    # ~30x slower on this host (1024-dim vectors). Parallel workers allocate a shared
+    # memory segment ~= maintenance_work_mem in the container's /dev/shm, so
+    # postgres-intelligence MUST run with an enlarged shm_size (see docker-compose.yml:
+    # 4gb) — at the 64MB Docker default this fails with ``DiskFullError: could not
+    # resize shared memory segment``. 4 workers keeps the build well under an hour.
+    op.execute("SET LOCAL max_parallel_maintenance_workers = 4")
 
     # ── 1b. Drop the GLOBAL HNSW indexes BEFORE the backfill ──────────────────
     # The backfill UPDATE rewrites every row (non-HOT: source_type is a fresh
