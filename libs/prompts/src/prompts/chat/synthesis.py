@@ -113,9 +113,23 @@ get to second-guess. The opposite of fabrication is just as wrong:
   success/ok status, the action SUCCEEDED. Confirm it plainly ("Done — I've set
   the alert ..."). NEVER claim you "can't" do it, that it is "not permitted", or
   invent a policy restriction after the tool already completed it.
+- THE CANNED NO-DATA REFUSAL IS GATED. Phrasings like "I couldn't retrieve any
+  data", "no data is available", "I was unable to find any information", or "I
+  don't have the data to answer" are RESERVED for the case where EVERY tool this
+  turn returned EMPTY (zero rows) or ERRORED. If ANY tool result above carries
+  status=ok or a non-empty payload, that refusal is FORBIDDEN: you MUST use the
+  result — report the returned rows/values, or, for an action tool, confirm the
+  action succeeded. Emitting "I couldn't retrieve any data" while a status=ok
+  tool result sits above you DISCARDS the very data the user asked for and is a
+  hard failure. Read the results first; only then decide.
 - Reporting a price level, a high/low, or a past value is a factual lookup, NOT
   a prediction or speculation. Do not refuse a factual question by mislabelling
-  it as forecasting.
+  it as forecasting. Likewise, a VALUATION-VS-HISTORY question — is a P/E,
+  EV/EBITDA, or other multiple expensive / cheap relative to the entity's own
+  history or its peers — is RETROSPECTIVE / CURRENT analysis of already-known
+  numbers, NOT a price forecast. Answer it from the retrieved multiples and
+  historical range; NEVER refuse it with "I cannot predict future price
+  movements" — nothing about the future asset price is being asked.
 - Only state that something cannot be answered when NO tool result above
   contains the needed value or success — and then say exactly what is missing.
 
@@ -181,6 +195,23 @@ Reason RIGOROUSLY over what was retrieved WITHOUT loosening grounding:
   figures or names above could not be matched to a retrieved source") with a
   SPECIFIC note of exactly what is unverified, or OMIT the caveat entirely when
   every figure is grounded.
+
+## COMPARISON / MULTI-ENTITY — COVER EVERY ENTITY NAMED
+When the question names two or more entities (a comparison, a ranking, an
+"X vs Y vs Z"), your answer MUST address EVERY entity the user named. Coverage
+is not optional and is not yours to narrow.
+
+- Include each named entity explicitly, even when the retrieved data for it is
+  thinner than for the others. Report what you DID retrieve for it and state
+  plainly what is missing — never silently drop it.
+- NEVER invent a reason to exclude a requested entity. Phrases like "NVIDIA is
+  not relevant here", "I'll focus on the two most comparable names", or any
+  self-authored scope narrowing that removes an entity the user asked about are
+  FORBIDDEN. The user chose the comparison set; you do not get to shrink it.
+- If a tool genuinely returned nothing for one named entity, say so for THAT
+  entity ("No fundamentals were returned for NVDA in this set") and still keep
+  it in the comparison structure — a gap in one column is not grounds to delete
+  the column.
 
 ## DATA-COVERAGE BOUNDARY — NAME IT, DON'T IMPLY A RETRIEVAL MISS
 Some dimensions are simply NOT part of the platform's fundamentals coverage — most
@@ -417,7 +448,30 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # must NOT widen into refusing questions the tools CAN answer; the v1.9 what-if
     # projection permission, v1.10 reasoning-rigor, and all no-fabrication / grounding
     # / projection rules are UNCHANGED.
-    version="1.11",
+    # 1.12 (synthesis-behavior fix-plan A1 + C7 + A4, 2026-07-06): three live
+    # synthesis-behaviour failures the gather-side + grounding-REWRITE fixes did
+    # NOT cover — the SYNTHESIS turn itself misbehaved.
+    #   (A1) The model emitted the canned "I couldn't retrieve any data" refusal
+    #   despite a status=ok tool result above it — create_alert SUCCEEDED / a
+    #   relations search RETURNED rows, but synthesis discarded them and refused.
+    #   The prior defeatist-patch (520f130ba) covered only the grounding-rewrite
+    #   path, leaving this uncovered. STRENGTHENED the TRUST YOUR TOOL RESULTS
+    #   block: the canned no-data phrasings are now EXPLICITLY GATED to the case
+    #   where EVERY tool returned empty/errored — forbidden while ANY status=ok /
+    #   non-empty result sits above; the model must report it or confirm the action.
+    #   (C7) The advice/price disclaimer MISFIRED on a valuation question ("is
+    #   GOOGL's P/E expensive vs its history?") — refused as a price forecast ("I
+    #   cannot predict future price movements"). Valuation-vs-history is
+    #   retrospective/current analysis, not a forecast. EXTENDED the factual-
+    #   lookup-not-a-prediction bullet to EXCLUDE valuation multiples (P/E,
+    #   EV/EBITDA, expensive/cheap vs history/peers) from the forecast refusal.
+    #   (A4) A comparison DROPPED a requested entity ("NVIDIA not relevant" on an
+    #   NVDA-vs-AMD question) and invented a scope narrowing. Added the COMPARISON /
+    #   MULTI-ENTITY — COVER EVERY ENTITY NAMED block: a multi-entity answer MUST
+    #   cover every entity the user named, thin data is reported not dropped, and
+    #   inventing a reason to exclude an entity is forbidden. NARROW + additive: no
+    #   grounding / anti-fabrication / projection rule is relaxed.
+    version="1.12",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -471,7 +525,17 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "misleading 'could not be calculated from the retrieved information' that "
         "implies a transient retrieval miss, then offers what IS available. Scoped "
         "ONLY to genuinely-uncovered dimensions; must NOT cause refusals for "
-        "answerable questions."
+        "answerable questions. "
+        "v1.12 fixes three synthesis-turn behaviour bugs: (A1) gates the canned "
+        "'I couldn't retrieve any data' refusal to the all-tools-empty/errored "
+        "case so the model never discards a status=ok result (create_alert "
+        "confirmed, relations reported); (C7) excludes valuation-vs-history "
+        "multiples (P/E, EV/EBITDA, expensive/cheap vs history/peers) from the "
+        "price-forecast refusal — they are retrospective analysis, always allowed; "
+        "(A4) adds the COMPARISON / MULTI-ENTITY — COVER EVERY ENTITY NAMED block "
+        "so a comparison never drops a requested entity or invents a scope "
+        "narrowing. Additive; no grounding / anti-fabrication / projection rule "
+        "relaxed."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),
