@@ -477,6 +477,7 @@ All variables are prefixed with `MARKET_DATA_`.
 | `MARKET_DATA_INTRADAY_SOURCE_TF` | `1m` | No | Source timeframe for intraday resampling (`IntradayResamplingWorker`). Valid: `1m`, `5m`, `15m`, `1h`. |
 | `MARKET_DATA_HOST` / `MARKET_DATA_PORT` / `MARKET_DATA_DEBUG` | `0.0.0.0` / `8003` / `false` | No | Uvicorn bind + debug flag |
 | `MARKET_DATA_FUNDAMENTALS_TIMEOUT_S` | `90` | No | Per-message watchdog for `FundamentalsConsumer` (BP-617). `consumer_main` co-scales `session_timeout_ms`/`heartbeat_interval_ms`. |
+| `MARKET_DATA_SCREEN_STATEMENT_TIMEOUT_MS` | `8000` | No | Screener statement-timeout ceiling (ms). `query_screen` issues `SET LOCAL statement_timeout` so a pathological plan is cancelled cleanly (`QueryCanceledError` → 504) instead of hanging. Raise under sustained host contention (NEW-6, 2026-07-06). The DISTINCT ON rewrite keeps the screen well under the default. |
 | `MARKET_DATA_INSIDER_ROLLUP_HOUR_UTC` | `3` | No | UTC hour for the daily `insider_net_buy_90d` rollup loop. |
 | `MARKET_DATA_INTELLIGENCE_ROLLUP_HOUR_UTC` | `4` | No | UTC hour for the daily intelligence-rollup sync loop. |
 | `MARKET_DATA_DISPATCHER_POLL_INTERVAL_SECONDS` | `5.0` | No | Outbox dispatcher poll interval. |

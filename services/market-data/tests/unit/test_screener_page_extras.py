@@ -246,7 +246,16 @@ async def test_filtered_screen_enrichment_excludes_filtered_metrics() -> None:
 
     await query_screen(session, [ScreenFilter(metric="pe_ratio", max_value=40.0)])
 
-    metric_stmts = [s for s in captured if "SELECT DISTINCT fundamental_metrics" in str(s).replace("\n", " ")]
+    # NEW-6 (2026-07-06): the metric-filter branch's per-filter subquery is now
+    # also a ``DISTINCT ON`` (rendered ``SELECT DISTINCT fundamental_metrics`` on
+    # the default dialect), so the enrichment query is disambiguated by its
+    # ``metric IN (...)`` predicate — the filter subquery uses ``metric = :p``.
+    metric_stmts = [
+        s
+        for s in captured
+        if "SELECT DISTINCT fundamental_metrics" in str(s).replace("\n", " ")
+        and "fundamental_metrics.metric IN" in str(s).replace("\n", " ")
+    ]
     assert len(metric_stmts) == 1, "exactly one page-bounded metric enrichment query expected"
     compiled = str(metric_stmts[0].compile(compile_kwargs={"literal_binds": True}))
     # Filtered metric excluded; the rest of _KEY_METRICS requested.

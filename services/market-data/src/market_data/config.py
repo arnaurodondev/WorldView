@@ -144,6 +144,19 @@ class Settings(BaseSettings):
     # again — the tail is the actionable signal, not the timeout itself.
     fundamentals_timeout_s: int = 90
 
+    # NEW-6 (2026-07-06) — screener statement-timeout ceiling (milliseconds).
+    # ``query_screen`` issues ``SET LOCAL statement_timeout`` for the duration of
+    # the read transaction so a pathological plan is cancelled cleanly at the DB
+    # (asyncpg ``QueryCanceledError`` → HTTP 504) instead of hanging the request
+    # and holding a pooled connection. This ceiling was previously HARDCODED to
+    # 8000 ms; it is now a tunable so ops can raise it during sustained host
+    # CPU/IO contention (the load-driven multiplier that turned a ~1 s screen
+    # into an ~18 s timeout in the R1 audit) without a redeploy, or lower it to
+    # shed load faster. The DISTINCT ON query rewrite that shipped with this
+    # setting keeps the screen well under 8 s even under contention, so the
+    # default is unchanged. Env var: ``MARKET_DATA_SCREEN_STATEMENT_TIMEOUT_MS``.
+    screen_statement_timeout_ms: int = 8000
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "market-data"
     log_level: str = "INFO"
