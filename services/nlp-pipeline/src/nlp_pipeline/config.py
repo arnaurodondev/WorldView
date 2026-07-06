@@ -323,6 +323,16 @@ class Settings(BaseSettings):
     # Articles below this threshold are skipped (too short for meaningful extraction).
     min_word_count: int = 50  # NLP_PIPELINE_MIN_WORD_COUNT
 
+    # BP-719 Mode B: cap the number of words fed to Block-10 deep extraction so the
+    # ML phase fits inside the 900s Kafka message watchdog on very large filings
+    # (20-48k-word 10-Q/10-K). Deep extraction runs on the first N words only;
+    # the rest of the document is STILL fully chunked + embedded + indexed by the
+    # phase-1 searchable write, so retrieval coverage is unaffected — only the
+    # KG-relation extraction is bounded (and remains backfillable). 0 disables the
+    # cap (process every window; the pre-BP-719 behaviour). Override via env
+    # NLP_PIPELINE_DEEP_EXTRACTION_MAX_WORDS.
+    deep_extraction_max_words: int = 0  # NLP_PIPELINE_DEEP_EXTRACTION_MAX_WORDS
+
     # GLiNER thresholds (PRD §6.7 Block 4)
     gliner_threshold: float = 0.35  # for routing/novelty signal
     gliner_resolution_threshold: float = 0.45  # for entity resolution cascade

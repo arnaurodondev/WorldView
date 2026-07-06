@@ -185,6 +185,9 @@ async def run_ml_phase(
             entailment_client=entailment_client,
             entailment_config=entailment_config,
             metrics=_NLP_METRICS,
+            # BP-719 Mode B: bound the deep-extraction prefix on very large filings
+            # so the ML phase fits the 900s watchdog. 0 (default) = no cap.
+            max_words=getattr(settings, "deep_extraction_max_words", 0),
         )
         s6_claims_extracted_total.inc(len(list(extraction_result.get("claims", []))))
         await synthesize_provisional_refs(

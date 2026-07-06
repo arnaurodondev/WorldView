@@ -79,7 +79,10 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.enriched_event impor
 )
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.helpers import _normalize_ref_variants
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.ml_phase import MLPhaseResult, run_ml_phase
-from nlp_pipeline.infrastructure.messaging.consumers.blocks.persist import persist_artifacts
+from nlp_pipeline.infrastructure.messaging.consumers.blocks.persist import (
+    persist_artifacts,
+    persist_searchable_artifacts,
+)
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.provisional import (
     _collect_extraction_refs,
     synthesize_provisional_refs,
@@ -1286,6 +1289,47 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             lede=_lede,
             source_type=source_type,
         )
+
+        # ── PHASE 1 (BP-719 Mode B): persist the SEARCHABLE artefacts in their OWN
+        # committed nlp_db transaction BEFORE the ML enrichment phase. ────────────
+        # ROOT CAUSE — the pipeline used to write chunk_text + chunk_embeddings (the
+        # artefacts chat's get_filings retrieves) only at the very END, inside the
+        # same trailing transaction as Blocks 8-10. On a large 10-Q the per-chunk
+        # deep-extraction (Block 10) blew past the 900s Kafka message watchdog; the
+        # watchdog cancelled the WHOLE message → the transaction rolled back → the
+        # chunks were NEVER written and the doc dead-lettered (~500+ DLQ rows,
+        # ~3,150 content_store docs incl. NVIDIA/MSFT 10-Qs missing from nlp_db, so
+        # chat could not answer their revenue).
+        #
+        # FIX — commit sections + chunks + embeddings first, in a standalone
+        # transaction. Enrichment (Blocks 8-10 + entity_mentions) then runs
+        # best-effort in the second transaction below; if it fails / times out /
+        # dead-letters, the searchable doc SURVIVES and mentions are backfillable
+        # (workers/backfill_entity_mentions.py). Skipped entirely when the doc
+        # produced no sections/chunks (e.g. SUPPRESS/HALT with empty output) so a
+        # no-op article does not open a needless transaction. Idempotent: chunk /
+        # section / embedding writes all use ON CONFLICT DO NOTHING with
+        # deterministic ids, so a redelivery of the same message never duplicates.
+        if sections or chunks:
+            async with self._nlp_sf() as searchable_s:
+                chunks = await persist_searchable_artifacts(
+                    nlp_session=searchable_s,
+                    section_repo=SectionRepository(searchable_s),
+                    chunk_repo=ChunkRepository(searchable_s),
+                    doc_id=doc_id,
+                    sections=sections,
+                    chunks=chunks,
+                    chunk_embs=chunk_embs,
+                    section_embs=section_embs,
+                    pending=pending,
+                    gliner_mention_floor=self._settings.gliner_mention_floor,
+                    settings=self._settings,
+                    # Pre-resolution GLiNER mentions — the best entity metadata
+                    # available before Block 9. persist_artifacts later refreshes the
+                    # JSONB with the resolved mentions on the happy path.
+                    ner_mentions=mentions,
+                )
+                await searchable_s.commit()
 
         # Blocks 8-10 + atomic DB write with D-004 dual-session ordering.
         # ALL repositories are constructed here (in article_consumer namespace)

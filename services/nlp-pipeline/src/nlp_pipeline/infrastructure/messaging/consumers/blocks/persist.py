@@ -84,12 +84,23 @@ async def persist_artifacts(
     settings: Settings,
     ml: MLPhaseResult,
 ) -> tuple[RoutingDecision, list[Chunk], list[EntityMention], Any]:
-    """Persist all NLP artifacts to nlp_db within the caller's open transaction.
+    """Persist the ENRICHMENT NLP artifacts to nlp_db within the caller's open txn.
 
-    Writes sections, chunks, entity mentions, stats, routing decision,
-    embeddings, and chunk-entity-mention links.  Does NOT enqueue outbox
-    events — that is handled by the caller so unit tests can patch the
-    emission helpers at the ``article_consumer`` module namespace.
+    BP-719 Mode B: the SEARCHABLE artefacts (sections, chunks/chunk_text, chunk +
+    section embeddings, embedding-pending queue) are persisted EARLIER by
+    ``persist_searchable_artifacts`` in a separate committed transaction, BEFORE the
+    ML enrichment phase runs — so an enrichment failure / watchdog timeout can never
+    lose the searchable document. This function therefore writes only the
+    enrichment-derived rows: entity mentions, mention-resolution audit, doc entity
+    stats, routing decision, and chunk-entity-mention links — plus an in-place
+    refresh of the already-inserted chunks' ``entity_mentions`` JSONB with the now-
+    resolved mentions. Does NOT enqueue outbox events — that is handled by the caller
+    so unit tests can patch the emission helpers at the ``article_consumer`` module
+    namespace.
+
+    ``sections``, ``chunk_embs``, ``section_embs``, and ``pending`` are accepted for
+    backwards-compatible call sites but are no longer written here (they belong to
+    ``persist_searchable_artifacts``).
 
     Returns (routing_decision, chunks, final_mentions, outbox_repo) so the
     caller can proceed with event emission using the same outbox_repo instance.
@@ -98,7 +109,6 @@ async def persist_artifacts(
     (constructed in article_consumer._run_pipeline).  When omitted they are
     constructed here against ``nlp_session``.
     """
-    _sr = section_repo if section_repo is not None else SectionRepository(nlp_session)
     _cr = chunk_repo if chunk_repo is not None else ChunkRepository(nlp_session)
     _or = outbox_repo if outbox_repo is not None else OutboxRepository(nlp_session)
     _rdr = routing_decision_repo if routing_decision_repo is not None else RoutingDecisionRepository(nlp_session)
@@ -127,8 +137,15 @@ async def persist_artifacts(
     # JSONB cache + low-confidence overlap is intentionally permissive there for
     # future-proofing (re-resolution may upgrade scores later).
     persistable_mentions = [m for m in ml.final_mentions if m.confidence >= settings.min_persist_floor]
-    await _sr.add_batch(sections)
-    await _cr.add_batch(chunks)
+    # BP-719 Mode B: sections, chunks (chunk_text), section/chunk embeddings, and
+    # the embedding-pending queue are ALL persisted EARLIER, in their own committed
+    # transaction (``persist_searchable_artifacts``), BEFORE the ML enrichment phase
+    # — so an enrichment failure / 900s-watchdog timeout can no longer lose the
+    # searchable document. Here (post-ML) we only write the ENRICHMENT artefacts and
+    # refresh the already-inserted chunks' ``entity_mentions`` JSONB with the now-
+    # resolved mentions (the pre-ML insert carried the pre-resolution GLiNER JSONB).
+    if chunks:
+        await _cr.update_entity_mentions_batch(chunks)
     await _emr.add_batch(persistable_mentions)
     if ml.pending_resolution_audit:
         # F-DB-NEW-001 (BP-587): ``mention_resolutions.mention_id`` has a FK to
@@ -146,14 +163,6 @@ async def persist_artifacts(
     await _desr.upsert(stats)
     ml.routing_decision.processing_path = ml.final_path
     await _rdr.add(ml.routing_decision)
-    await _write_section_embeddings(nlp_session, section_embs, model_id=settings.embedding_model_id, doc_id=doc_id)
-    await _write_chunk_embeddings(nlp_session, chunk_embs, model_id=settings.embedding_model_id, doc_id=doc_id)
-    if pending:
-        from nlp_pipeline.infrastructure.nlp_db.repositories.embedding_pending import (
-            EmbeddingPendingRepository,
-        )
-
-        await EmbeddingPendingRepository(nlp_session).save_batch(pending)
     # PLAN-0093 C-2: chunk_entity_mentions has FK on entity_mentions.mention_id,
     # so the pair computation must use the same filtered set we just persisted —
     # otherwise links pointing at filtered-out mentions would raise FK violations.
@@ -162,6 +171,65 @@ async def persist_artifacts(
         await _cemr.link_batch(pairs)
 
     return ml.routing_decision, chunks, persistable_mentions, _or
+
+
+async def persist_searchable_artifacts(
+    *,
+    nlp_session: AsyncSession,
+    section_repo: _SectionRepo | None = None,
+    chunk_repo: _ChunkRepo | None = None,
+    doc_id: uuid.UUID,
+    sections: list[Section],
+    chunks: list[Chunk],
+    chunk_embs: list[tuple[uuid.UUID, list[float]]],
+    section_embs: list[tuple[uuid.UUID, list[float]]],
+    pending: Any,
+    gliner_mention_floor: float,
+    settings: Settings,
+    ner_mentions: list[EntityMention],
+) -> list[Chunk]:
+    """Persist the SEARCHABLE artefacts (BP-719 Mode B) — call BEFORE the ML phase.
+
+    Writes the rows that make a document retrievable by chat/RAG — sections, chunks
+    (``chunk_text`` + the lexical/denorm columns feeding the tsvector), chunk and
+    section embeddings, and the embedding-pending queue — into the caller's open
+    ``nlp_session``. The CALLER commits this session in its OWN transaction, so a
+    subsequent enrichment failure, deep-extraction timeout, or 900s Kafka watchdog
+    cancellation can no longer discard the searchable document (previously
+    everything was written in a single trailing transaction that rolled back whole).
+
+    The chunk ``entity_mentions`` JSONB is populated here from the PRE-resolution
+    GLiNER mentions (``ner_mentions``) so a doc is still usefully filterable even if
+    enrichment never completes. On the happy path ``persist_artifacts`` later
+    refreshes this JSONB in place with the resolved mentions (see
+    ``ChunkRepository.update_entity_mentions_batch``), so the final row is identical
+    to the pre-BP-719 single-write behaviour.
+
+    Idempotency: sections/chunks use ``ON CONFLICT (pk) DO NOTHING`` and embeddings
+    use deterministic UUID5 ids with ``DO NOTHING`` — so reprocessing the same Kafka
+    message (e.g. after an enrichment retry / redelivery) never duplicates a chunk
+    or embedding.
+
+    Returns the augmented ``chunks`` (with the pre-resolution JSONB attached) so the
+    caller can carry the same objects into the ML/enrichment phase.
+    """
+    _sr = section_repo if section_repo is not None else SectionRepository(nlp_session)
+    _cr = chunk_repo if chunk_repo is not None else ChunkRepository(nlp_session)
+
+    chunks = _augment_chunks(chunks, ner_mentions, gliner_mention_floor)
+
+    await _sr.add_batch(sections)
+    await _cr.add_batch(chunks)
+    await _write_section_embeddings(nlp_session, section_embs, model_id=settings.embedding_model_id, doc_id=doc_id)
+    await _write_chunk_embeddings(nlp_session, chunk_embs, model_id=settings.embedding_model_id, doc_id=doc_id)
+    if pending:
+        from nlp_pipeline.infrastructure.nlp_db.repositories.embedding_pending import (
+            EmbeddingPendingRepository,
+        )
+
+        await EmbeddingPendingRepository(nlp_session).save_batch(pending)
+
+    return chunks
 
 
 def _augment_chunks(
