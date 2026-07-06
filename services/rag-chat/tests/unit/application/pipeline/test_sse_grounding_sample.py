@@ -61,6 +61,64 @@ def _fundamentals_item(ticker: str) -> RetrievedItem:
     )
 
 
+def _batch_item(ticker: str, grounding: tuple[tuple[str, str], ...]) -> RetrievedItem:
+    """A batch fundamentals item carrying a per-ticker grounding_fields bag.
+
+    Mirrors ``MarketHandler._handle_get_fundamentals_history_batch`` output: one
+    item per ticker, each packing its own periods under bare + ``_N`` suffixed
+    keys, with the ticker surfaced via ``citation_meta.entity_name``.
+    """
+    return RetrievedItem.create(
+        item_id=f"tool:fundamentals_batch:{ticker}",
+        item_type=ItemType.financial,
+        text=f"{ticker} fundamentals",
+        score=0.88,
+        trust_weight=0.90,
+        grounding_fields=grounding,
+        citation_meta=CitationMeta(
+            title=f"Fundamentals: {ticker}",
+            url=None,
+            source_name="fundamentals",
+            published_at=None,
+            entity_name=ticker,
+        ),
+    )
+
+
+class TestBatchNoCrossAttribution:
+    """C6 (2026-07-06): a multi-ticker batch must key every value to the correct
+    entity — a later ticker's bare field must NEVER overwrite an earlier ticker's
+    suffixed period value (the ru_nvda_amd_revenue_4q silent clobber)."""
+
+    def test_two_ticker_batch_keeps_every_value_distinct(self) -> None:
+        # NVDA packs Q1(44.1B) bare + Q4(35B) as revenue_2. AMD packs Q1(9.246B)
+        # bare + Q4(7.44B) as revenue_2. The naive suffixer routed AMD's bare
+        # revenue to ``revenue_2`` — overwriting NVDA's 35B and cross-attributing.
+        nvda = _batch_item(
+            "NVDA",
+            (("ticker", "NVDA"), ("revenue", "44100000000"), ("revenue_2", "35000000000")),
+        )
+        amd = _batch_item(
+            "AMD",
+            (("ticker", "AMD"), ("revenue", "9246000000"), ("revenue_2", "7440000000")),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history_batch", [nvda, amd])
+        assert sample is not None
+        values = set(sample["fields"].values())
+        # Both tickers are present as identifiers.
+        assert "NVDA" in values
+        assert "AMD" in values
+        # No value was overwritten: NVDA's 44.1B AND 35B survive, and AMD's
+        # 9.246B is present under its OWN slot — never clobbering NVDA's row.
+        assert "44100000000" in values  # NVDA latest
+        assert "35000000000" in values  # NVDA prior — NOT clobbered by AMD
+        assert "9246000000" in values  # AMD latest — attributed to its own slot
+        # Sanity: no field key maps to two different entities' figures (the
+        # clobber symptom) — every distinct revenue value occupies a unique key.
+        revenue_vals = [v for k, v in sample["fields"].items() if k == "revenue" or k.startswith("revenue_")]
+        assert len(revenue_vals) == len(set(revenue_vals))
+
+
 # ---------------------------------------------------------------------------
 # build_grounding_sample — shape, caps, redaction, unknown tool.
 # ---------------------------------------------------------------------------
