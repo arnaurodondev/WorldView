@@ -20,7 +20,7 @@
 #   single command, so a code change reliably lands in every container.
 #
 # USAGE:
-#   scripts/rebuild_service.sh <family> [--cache] [--no-recreate] [--prod]
+#   scripts/rebuild_service.sh <family> [--cache] [--no-recreate] [--prod] [--parallel]
 #
 #   <family>        Service family prefix, e.g. market-data, market-ingestion,
 #                   knowledge-graph, nlp-pipeline, content-store, content-ingestion,
@@ -31,6 +31,21 @@
 #                   maximum reliability — never ship stale code again).
 #   --no-recreate   Build only; do not (re)create/restart containers.
 #   --prod          Operate on the prod compose stack instead of the dev stack.
+#   --parallel      Build up to COMPOSE_PARALLEL_LIMIT (default 3, capped at 3)
+#                   services concurrently instead of strictly one-at-a-time.
+#                   Opt-in: default stays serial (see the build loop for why).
+#
+# ENV:
+#   COMPOSE_PARALLEL_LIMIT   Max concurrent builds when --parallel is set
+#                            (default 3; clamped to the 1..3 safe range).
+#
+# POST-RECREATE VERIFICATION (always on when recreating):
+#   After `up -d --force-recreate`, the script ASSERTS, per compose service:
+#     1) the running container's image ID == the freshly built
+#        worldview-<svc>:latest image ID  (catches recreate-vs-rebuild staleness);
+#     2) every *-migrate sidecar reached exited(0) (catches the
+#        Created-but-never-started / crashed-migration class).
+#   Any mismatch fails the script loudly (exit 4).
 #
 # EXAMPLES:
 #   scripts/rebuild_service.sh market-data            # no-cache build + recreate all 9 variants
@@ -53,14 +68,24 @@ shift || true
 USE_CACHE=0
 RECREATE=1
 PROD=0
+PARALLEL=0
 for arg in "$@"; do
   case "$arg" in
     --cache)       USE_CACHE=1 ;;
     --no-recreate) RECREATE=0 ;;
     --prod)        PROD=1 ;;
+    --parallel)    PARALLEL=1 ;;
     *) echo "ERROR: unknown flag '$arg'" >&2; exit 2 ;;
   esac
 done
+
+# Clamp the concurrency cap to the 1..3 safe range (see the build loop rationale).
+PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-3}"
+if ! [[ "$PARALLEL_LIMIT" =~ ^[0-9]+$ ]] || [[ "$PARALLEL_LIMIT" -lt 1 ]]; then
+  PARALLEL_LIMIT=1
+elif [[ "$PARALLEL_LIMIT" -gt 3 ]]; then
+  PARALLEL_LIMIT=3
+fi
 
 # Select the same compose file set the Makefile uses for dev vs prod, so the
 # image names / project ("worldview") match what `make dev` / `make prod` boot.
@@ -93,7 +118,7 @@ done <<< "$ALL_SERVICES"
 if [[ "${#SERVICES[@]}" -eq 0 ]]; then
   echo "ERROR: no compose services match family '$FAMILY'." >&2
   echo "Known families/services:" >&2
-  echo "$ALL_SERVICES" | sed 's/^/  - /' >&2
+  while IFS= read -r _svc; do [[ -n "$_svc" ]] && echo "  - $_svc" >&2; done <<< "$ALL_SERVICES"
   exit 1
 fi
 
@@ -108,39 +133,115 @@ else
   echo "==> Building with layer cache (--cache)."
 fi
 
-# CACHE_BUST defeats BuildKit's stale local-source snapshot (see
-# docs/audits/2026-06-27-compose-build-stale-prompts.md and the matching
-# `ARG CACHE_BUST` in services/rag-chat/Dockerfile). A value that changes with
-# the working-tree state forces BuildKit to re-snapshot the local build context,
-# so an edited shared lib (libs/prompts, libs/contracts, …) can never be served
-# from a deduped old snapshot. Plain `docker build` without this arg keeps its
-# default behaviour (the ARG default is `unset`). Dockerfiles that do not declare
-# the ARG simply ignore it.
-CACHE_BUST_VALUE="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo nogit)-$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null | md5 2>/dev/null || git -C "$REPO_ROOT" status --porcelain 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || date +%s)"
-BUILD_FLAGS+=(--build-arg "CACHE_BUST=${CACHE_BUST_VALUE}")
+# NOTE (2026-07-05): the former `--build-arg CACHE_BUST=<tree-state>` was REMOVED.
+# The build/deploy audit concluded it was a workaround for the old `.next`/context
+# bloat (since fixed), NOT a live BuildKit defect: CI never passed it and never
+# shipped stale (fresh clone per run). The real staleness guard is the POST-BUILD
+# prompt-version assertion below, which we keep. A leftover default
+# `ARG CACHE_BUST=unset` in a Dockerfile is harmless (unused build args are just
+# ignored).
 
-echo "==> Building images SEQUENTIALLY (one service at a time)..."
-# CRITICAL: build each variant in its OWN `docker compose build` invocation, NOT
-# all at once. Building a whole family (up to 15 services) in a single parallel
-# BuildKit call crashes the BuildKit grpc frontend under memory pressure
-# ("failed to solve: frontend grpc server closed unexpectedly") and silently
-# leaves STALE images — which is exactly the deploy-staleness bug this script
-# exists to prevent. Sequential builds keep peak memory low (the host has OOM'd
-# during mass rebuilds) and surface any per-service failure immediately.
+# CRITICAL (default = strictly serial): build each variant in its OWN
+# `docker compose build` invocation, NOT all at once. Building a whole family
+# (up to 15 services) in a single parallel BuildKit call crashes the BuildKit
+# grpc frontend under memory pressure ("failed to solve: frontend grpc server
+# closed unexpectedly") and silently leaves STALE images — the very
+# deploy-staleness bug this script exists to prevent. Strict-serial keeps peak
+# memory low (the host has OOM'd during mass rebuilds) and surfaces any
+# per-service failure immediately.
+#
+# --parallel relaxes this to a SMALL bounded fan-out (COMPOSE_PARALLEL_LIMIT,
+# clamped 1..3). A cap of 2–3 is safe: it is nowhere near the "build everything
+# at once" pressure that OOMs the host / crashes the grpc frontend, and it
+# roughly halves wall-clock on multi-variant families. We also `docker pull
+# docker/dockerfile:1` FIRST so concurrent builds don't race to fetch the
+# Dockerfile frontend image (that race is the "frontend grpc server closed
+# unexpectedly" crash seen on the worldview-web build).
 #
 # NOTE: ${arr[@]+"${arr[@]}"} guards against `set -u` treating an EMPTY array as
 # an unbound variable on bash 3.2 (the default on macOS). BUILD_FLAGS is empty
 # whenever --cache is passed.
-for svc in "${SERVICES[@]}"; do
-  echo "    --> building $svc"
-  "${COMPOSE[@]}" build ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} "$svc"
-done
+build_one() {
+  # Build a single compose service; on failure print its captured log.
+  local svc="$1" logf="$2"
+  if ! "${COMPOSE[@]}" build ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} "$svc" >"$logf" 2>&1; then
+    echo "ERROR: build failed for $svc — log follows:" >&2
+    cat "$logf" >&2
+    return 1
+  fi
+  return 0
+}
+
+if [[ "$PARALLEL" -eq 1 && "${#SERVICES[@]}" -gt 1 ]]; then
+  echo "==> Building images with bounded parallelism (limit=$PARALLEL_LIMIT)..."
+  # Pre-pull the Dockerfile frontend so concurrent builds don't race to fetch it.
+  echo "    --> pulling docker/dockerfile:1 (frontend image, avoids grpc race)"
+  docker pull docker/dockerfile:1 >/dev/null 2>&1 || \
+    echo "    (warn) could not pre-pull docker/dockerfile:1; continuing"
+
+  # Batched fan-out: launch up to PARALLEL_LIMIT builds, wait for the batch,
+  # repeat. Batching (vs. a sliding window) stays portable to bash 3.2, which
+  # lacks `wait -n`. Per-service logs avoid interleaved output.
+  build_fail=0
+  pids=()
+  metas=()   # parallel array: "svc:::logf" for each pid
+  flush_batch() {
+    local i pid meta svc logf rc
+    for i in "${!pids[@]}"; do
+      pid="${pids[$i]}"; meta="${metas[$i]}"
+      svc="${meta%%:::*}"; logf="${meta##*:::}"
+      if wait "$pid"; then
+        rc=0
+      else
+        rc=1
+      fi
+      if [[ "$rc" -ne 0 ]]; then
+        echo "ERROR: build failed for $svc — log:" >&2
+        cat "$logf" >&2
+        build_fail=1
+      else
+        echo "    OK   built $svc"
+      fi
+      rm -f "$logf"
+    done
+    pids=()
+    metas=()
+  }
+  for svc in "${SERVICES[@]}"; do
+    logf="$(mktemp)"
+    echo "    --> building $svc (background)"
+    build_one "$svc" "$logf" &
+    pids+=("$!")
+    metas+=("$svc:::$logf")
+    if [[ "${#pids[@]}" -ge "$PARALLEL_LIMIT" ]]; then
+      flush_batch
+    fi
+  done
+  flush_batch
+  if [[ "$build_fail" -ne 0 ]]; then
+    echo "ERROR: one or more parallel builds failed (see logs above)." >&2
+    exit 3
+  fi
+else
+  echo "==> Building images SEQUENTIALLY (one service at a time)..."
+  for svc in "${SERVICES[@]}"; do
+    echo "    --> building $svc"
+    logf="$(mktemp)"
+    if ! build_one "$svc" "$logf"; then
+      rm -f "$logf"
+      exit 3
+    fi
+    cat "$logf"
+    rm -f "$logf"
+  done
+fi
 
 # ── Post-build staleness guard ────────────────────────────────────────────────
 # Belt-and-suspenders for the BuildKit stale-local-source bug
-# (docs/audits/2026-06-27-compose-build-stale-prompts.md): even with the
-# CACHE_BUST arg above, assert the FRESHLY BUILT image actually contains the
-# current on-disk libs/prompts version. We grep the version string in the image
+# (docs/audits/2026-06-27-compose-build-stale-prompts.md): assert the FRESHLY
+# BUILT image actually contains the current on-disk libs/prompts version. This
+# is now the PRIMARY staleness guard (replacing the removed CACHE_BUST arg). We
+# grep the version string in the image
 # and compare it to the source tree; a mismatch means a stale shared lib was
 # shipped — fail loudly instead of silently deploying old code.
 #
@@ -181,7 +282,87 @@ fi
 if [[ "$RECREATE" -eq 1 ]]; then
   echo "==> Recreating containers (--force-recreate)..."
   "${COMPOSE[@]}" up -d --force-recreate --no-deps "${SERVICES[@]}"
-  echo "==> Done. All ${#SERVICES[@]} variant(s) of '$FAMILY' are running the new image."
+
+  # ── Post-recreate deploy verification ──────────────────────────────────────
+  # Two failure classes this catches:
+  #   (1) recreate-vs-rebuild staleness — the container came up on an OLD image
+  #       (e.g. a variant that wasn't recreated, or compose reused a cached
+  #       container). We assert the RUNNING container's image ID equals the
+  #       freshly built worldview-<svc>:latest image ID.
+  #   (2) Created-but-never-started / crashed migrations — a *-migrate sidecar
+  #       runs to completion; if it never reached exited(0) the schema is not
+  #       applied and dependent services will crashloop. We assert exited(0).
+  echo "==> Verifying recreated containers run the freshly built image..."
+  verify_fail=0
+  for svc in "${SERVICES[@]}"; do
+    built_id="$(docker image inspect --format '{{.Id}}' "worldview-${svc}:latest" 2>/dev/null || true)"
+    if [[ -z "$built_id" ]]; then
+      echo "    (skip) $svc: no worldview-${svc}:latest image found locally."
+      continue
+    fi
+
+    # Resolve the running container id(s) for this compose service. A service
+    # normally maps to exactly one container; loop to be safe.
+    cids="$("${COMPOSE[@]}" ps -q "$svc" 2>/dev/null || true)"
+
+    is_migrate=0
+    case "$svc" in *-migrate) is_migrate=1 ;; esac
+
+    if [[ -z "$cids" ]]; then
+      if [[ "$is_migrate" -eq 1 ]]; then
+        # A migrate job may already have exited; look it up including stopped.
+        cids="$(docker ps -aq --filter "name=${svc}" 2>/dev/null || true)"
+        if [[ -z "$cids" ]]; then
+          echo "ERROR: migrate sidecar '$svc' has NO container (never started)." >&2
+          verify_fail=1
+        fi
+      else
+        echo "ERROR: service '$svc' has NO running container after recreate." >&2
+        verify_fail=1
+      fi
+    fi
+
+    while IFS= read -r cid; do
+      [[ -z "$cid" ]] && continue
+      run_id="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
+      status="$(docker inspect --format '{{.State.Status}}' "$cid" 2>/dev/null || true)"
+      exitcode="$(docker inspect --format '{{.State.ExitCode}}' "$cid" 2>/dev/null || true)"
+
+      # Image-digest match (both are sha256:... image IDs from the same daemon).
+      if [[ "$run_id" != "$built_id" ]]; then
+        echo "ERROR: STALE CONTAINER — $svc ($cid) runs image '$run_id'" >&2
+        echo "       but freshly built worldview-${svc}:latest is '$built_id'." >&2
+        verify_fail=1
+      fi
+
+      if [[ "$is_migrate" -eq 1 ]]; then
+        # Migrate must have run to completion successfully.
+        if [[ "$status" != "exited" || "$exitcode" != "0" ]]; then
+          echo "ERROR: migrate sidecar '$svc' ($cid) is status='$status'" >&2
+          echo "       exit=$exitcode — expected exited(0). Schema NOT applied." >&2
+          verify_fail=1
+        else
+          echo "    OK   $svc: migrate exited(0) on fresh image."
+        fi
+      else
+        # Long-running service must actually be up (not restarting/exited).
+        if [[ "$status" != "running" ]]; then
+          echo "ERROR: service '$svc' ($cid) is status='$status' — not running." >&2
+          verify_fail=1
+        elif [[ "$run_id" == "$built_id" ]]; then
+          echo "    OK   $svc: running on freshly built image."
+        fi
+      fi
+    done <<< "$cids"
+  done
+
+  if [[ "$verify_fail" -ne 0 ]]; then
+    echo "ERROR: deploy verification FAILED — one or more containers are stale" >&2
+    echo "       or a migration did not complete. See errors above." >&2
+    exit 4
+  fi
+
+  echo "==> Done. All ${#SERVICES[@]} variant(s) of '$FAMILY' verified on the new image."
 else
   echo "==> Build complete (--no-recreate: containers NOT restarted)."
 fi
