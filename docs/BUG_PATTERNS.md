@@ -570,3 +570,6 @@ PLAN-0107 D-5. Detail and recovery guide for BP-590 (parallel-session worktree c
 ### Pattern 4: YAML/JSON revert
 Same as #3 but on config files; often missed because tests still pass.
 **Detection**: explicit diff against expected state in CI.
+
+### BP-719: nlp-pipeline persists searchable chunks LAST → enrichment failure loses them (corpus gap)
+The article consumer persists chunk_text + embeddings only in the final `persist_artifacts`, AFTER Block-4 NER (GLiNER) and Block-8-10 LLM extraction. Any enrichment failure aborts the whole Kafka message → DLQ, so the doc is never chunked/indexed and is unanswerable in chat — even though content_store has it. Two modes hit large SEC 10-Qs (2026-07-05 backfill): Mode A GLiNER outage (fixed: NER made non-fatal), Mode B the 900s message watchdog cancelling per-chunk deep-extraction on 20-48k-word filings. Fix Mode B by persisting chunks+embeddings BEFORE the ML phase, or size-gating Block-10. Recovery: re-drive stranded content_store outbox_events (delivered→pending, paced).

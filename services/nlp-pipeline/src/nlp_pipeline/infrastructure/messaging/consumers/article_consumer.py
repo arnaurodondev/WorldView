@@ -1138,16 +1138,54 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # constructed with it (avoids the post-construction stamp going
         # missing in any future refactor).  The explicit post-construction
         # stamp below is retained as a belt-and-braces safeguard.
-        mentions, stats = await run_ner_block(
-            doc_id=doc_id,
-            sections=sections,
-            ner_client=self._ner,
-            threshold=self._settings.gliner_threshold,
-            batch_size=self._settings.gliner_batch_size,
-            ner_model_id=self._settings.ner_model_id,
-            section_token_limit=self._settings.gliner_section_token_limit,
-            tenant_id=tenant_id,
-        )
+        # BP-718 (SEC-filings corpus-coverage gap): NER is NON-FATAL.
+        # ROOT CAUSE — the article consumer persists chunk_text + chunk_embeddings
+        # only at the very END of the pipeline (``persist_artifacts``), AFTER NER
+        # (this block) and the LLM deep-extraction ML phase. A GLiNER outage
+        # (``connection error`` / ``Server disconnected`` / ``Name or service not
+        # known``) therefore aborted the WHOLE message → DLQ, so the document's
+        # SEARCHABLE chunks + embeddings were never written — even though chat
+        # retrieval does not need entity mentions at all. During the 2026-07-05 bulk
+        # SEC backfill (2,265 filings) GLiNER was flaky and thousands of large
+        # 10-Q/10-K filings were DLQ'd whole: content_store held them, but the chat
+        # corpus (nlp_db chunks) never received them, so NVIDIA/Microsoft/Amazon
+        # revenue could not be answered from the filings corpus (only Apple's one
+        # 10-Q, ingested earlier when the pipeline was healthy, worked).
+        #
+        # FIX — treat a GLiNER failure as "zero mentions" rather than a hard error.
+        # The Block-4 contract already guarantees "zero mentions NEVER suppresses a
+        # document", so downstream routing/embedding/persist all tolerate an empty
+        # mention list. The document still gets chunked + embedded + indexed and is
+        # immediately answerable in chat; entity mentions can be backfilled later by
+        # ``workers/backfill_entity_mentions.py`` once GLiNER recovers. This trades a
+        # transient loss of KG enrichment for durable retrieval coverage — the right
+        # tradeoff for a filings corpus whose primary value is its numeric text.
+        try:
+            mentions, stats = await run_ner_block(
+                doc_id=doc_id,
+                sections=sections,
+                ner_client=self._ner,
+                threshold=self._settings.gliner_threshold,
+                batch_size=self._settings.gliner_batch_size,
+                ner_model_id=self._settings.ner_model_id,
+                section_token_limit=self._settings.gliner_section_token_limit,
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            # GLiNER unavailable/slow — do NOT drop the document. Proceed with no
+            # mentions so chunk_text + chunk_embeddings still persist and the filing
+            # becomes searchable. Logged at WARNING (not raised) so the message is
+            # NOT routed to the DLQ for a purely-enrichment failure.
+            from nlp_pipeline.domain.models import DocumentEntityStats
+
+            logger.warning(
+                "article_consumer.ner_block_failed_nonfatal",
+                doc_id=str(doc_id),
+                source_type=source_type,
+                exc_info=True,
+            )
+            mentions = []
+            stats = DocumentEntityStats(doc_id=doc_id)
         for _i, m in enumerate(mentions):
             m.mention_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(_i), m.mention_text.lower().strip()))
         # PLAN-0098 W2 T-W2-01 (BP-586): unconditional stamp.  ``tenant_id`` is
