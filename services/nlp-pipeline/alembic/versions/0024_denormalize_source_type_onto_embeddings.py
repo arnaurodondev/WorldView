@@ -77,9 +77,13 @@ def upgrade() -> None:
     op.execute("ALTER TABLE chunk_embeddings ADD COLUMN source_type TEXT")
     op.execute("ALTER TABLE section_embeddings ADD COLUMN source_type TEXT")
 
-    # Speed up the HNSW build over the existing corpus (avoids the on-disk graph
-    # spill warning at ~14k tuples). Transaction-local — reverts on commit.
-    op.execute("SET LOCAL maintenance_work_mem = '512MB'")
+    # Keep the ENTIRE HNSW graph in backend-local memory during the bulk rebuild.
+    # 512MB is too small for ~110k x 1024-dim vectors (~500MB of vectors alone) →
+    # the graph spills to disk and the single-threaded build decelerates to a crawl
+    # (~0.5%/min). 2GB holds it in RAM → minutes not tens-of-minutes. Backend-local
+    # (not shared), so it does NOT hit /dev/shm; the host has ample free memory.
+    # Transaction-local — reverts on commit.
+    op.execute("SET LOCAL maintenance_work_mem = '2GB'")
 
     # The one-time backfill (~110k-row UPDATE that churns the existing HNSW index)
     # plus the partial-index CREATE exceed nlp_db's 10min ``statement_timeout`` on a
