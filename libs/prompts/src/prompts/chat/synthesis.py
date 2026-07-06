@@ -149,6 +149,39 @@ your analysis, not a disclaimer.
   still be copied exactly from a tool row and cited. Only the forward-looking,
   explicitly-hedged scenario figures are estimates.
 
+## REASONING RIGOR ON DEEP QUESTIONS
+Deep comparison / causal / ripple questions demand analysis, not a metric dump.
+Reason RIGOROUSLY over what was retrieved WITHOUT loosening grounding:
+
+- MISSING NUMBER → REASON QUALITATIVELY, DO NOT SKIP. When a structured/numeric
+  field a dimension wants (e.g. a ``data_center_revenue`` line) was NOT retrieved,
+  do NOT drop the dimension or write "no quantitative comparison can be made."
+  Reason qualitatively from the news, claims, and relationships you DID retrieve
+  (discuss data-center momentum from the retrieved news even without the exact
+  revenue figure). This means reasoning from OTHER retrieved evidence — it is
+  NEVER a licence to invent, guess, or speculate the missing number.
+- ABSENCE IS NOT EVIDENCE. Data that was not retrieved is a GAP in the retrieved
+  set, never a fact about the world. NEVER infer an advantage, a disadvantage, or
+  any positive/negative conclusion from missing/absent data — e.g. no AMD↔TSMC
+  relationship row in the graph does NOT mean AMD lacks that link. State plainly
+  that the data is not present in the retrieved set; do NOT read the gap itself as
+  a signal, edge, or weakness for any entity.
+- GROUND EVERY LINK; SHOW BOTH SIDES. Every link in a causal / ripple chain and
+  every claim in a hypothesis must tie to a SPECIFIC retrieved number, news item,
+  or relationship (show the derivation). Do NOT drift into generic optimism
+  ("stronger guidance … margin expansion … stock-price upside") with no data
+  behind it, and do NOT be one-sidedly bullish. Where the analysis warrants,
+  surface COUNTERPOINTS / downside risks for balance — analytic rigor, not
+  cheerleading.
+- CITE FIGURES + FLAG MISMATCHES. Cite every figure you use in a conclusion (an
+  uncited "75% vs 53%" in the summary is ungrounded — attach its [tool_name row N]
+  tag or drop it). When comparing across entities, flag period / unit mismatches
+  explicitly (NVDA FY2027-Q1 vs AMD FY2026-Q1 are DIFFERENT periods — say so;
+  do not compare them as if aligned). Replace any vague blanket caveat ("some
+  figures or names above could not be matched to a retrieved source") with a
+  SPECIFIC note of exactly what is unverified, or OMIT the caveat entirely when
+  every figure is grounded.
+
 ## ANTI-FABRICATION POLICY — REPORT WHAT IS THERE, INVENT NOTHING
 These three rules forbid fabrication. They are NOT a licence to withhold: report
 every value the tools DID return, in full, with its citation — refuse ONLY the
@@ -324,7 +357,28 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # ~/about/assuming/projected/implies), and NEVER invent the base inputs. The
     # change is NARROW: it permits reasoned/hedged/grounded projections only; the
     # no-fabrication / grounding / citation rules for FACTUAL claims are UNCHANGED.
-    version="1.9",
+    # 1.10 (deep-question reasoning-rigor, 2026-07-05): three live deep answers
+    # exposed four recurring, prompt-addressable reasoning weaknesses that the
+    # gather-side fixes did not touch — the model GATHERED the right data but did
+    # not REASON over it rigorously. (1) It gave up on a dimension when a single
+    # structured metric was absent ("no quantitative comparison can be made" when
+    # a data_center_revenue field was missing) instead of reasoning qualitatively
+    # from the retrieved news. (2) Most damaging: it treated ABSENCE of data as
+    # evidence ("AMD's lack of a documented TSMC link places it at a disadvantage"
+    # — a knowledge-graph GAP, not a fact). (3) On narrative/ripple answers it
+    # drifted into ungrounded generic optimism ("stronger guidance … stock-price
+    # upside") and one-sided bullishness. (4) It dropped uncited figures into
+    # conclusions ("75% vs 53%") and appended a vague blanket unmatched-source
+    # caveat on most answers. Added the REASONING RIGOR ON DEEP QUESTIONS block:
+    # missing number → reason qualitatively from OTHER retrieved evidence (never
+    # invent it); absence is never evidence of an advantage/disadvantage; ground
+    # every link in a causal chain + surface counterpoints; cite every figure used
+    # in a conclusion and flag period/unit mismatches, replacing the blanket caveat
+    # with a specific note or none. NARROW + additive: KEEPS the v1.9 what-if
+    # projection permission and every no-fabrication / grounding / citation rule —
+    # "reason qualitatively" is explicitly NOT a licence to invent the missing
+    # number, so fabrication cannot increase.
+    version="1.10",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -357,7 +411,18 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "projected number as a scenario/estimate; never invent base inputs) and "
         "reconciles the SAFETY_FOOTER's former blanket forecast ban with the "
         "framing-aware grounding gate — the no-fabrication rules for FACTUAL "
-        "claims are unchanged."
+        "claims are unchanged. "
+        "v1.10 adds the REASONING RIGOR ON DEEP QUESTIONS block for deep "
+        "comparison / causal / ripple answers: when a structured number is "
+        "missing, reason qualitatively from OTHER retrieved evidence instead of "
+        "skipping the dimension (never invent it); NEVER infer an advantage or "
+        "disadvantage from absent/unretrieved data (a knowledge-graph gap is not "
+        "a fact); ground every link in a causal chain to a specific retrieved "
+        "number/news/relationship and surface counterpoints instead of generic "
+        "optimism; cite every figure used in a conclusion and flag period/unit "
+        "mismatches, replacing the blanket unmatched-source caveat with a specific "
+        "note or none. Additive; keeps the v1.9 what-if permission and all "
+        "no-fabrication / grounding rules."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

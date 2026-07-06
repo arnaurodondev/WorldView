@@ -59,9 +59,9 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.9 (analytical / what-if forecast-refusal) added the ANALYTICAL / WHAT-IF
-    # projection block on top of v1.8's news-headline citation directive.
-    assert ident.startswith("chat_synthesis_system@1.9#")
+    # v1.10 (deep-question reasoning-rigor) added the REASONING RIGOR ON DEEP
+    # QUESTIONS block on top of v1.9's ANALYTICAL / WHAT-IF projection permission.
+    assert ident.startswith("chat_synthesis_system@1.10#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -200,6 +200,44 @@ def test_synthesis_prompt_permits_grounded_hedged_projections() -> None:
     assert "HYPOTHETICAL / WHAT-IF question the user explicitly asks" in rendered
     # …while still forbidding a projected value as a definite fact.
     assert "definite retrieved fact" in rendered
+
+
+def test_synthesis_prompt_deep_question_reasoning_rigor() -> None:
+    """v1.10 (deep-question reasoning-rigor): three live deep answers exposed four
+    prompt-addressable reasoning weaknesses. The REASONING RIGOR ON DEEP QUESTIONS
+    block must cover all four: (1) missing structured number → reason qualitatively
+    from other retrieved evidence, do NOT skip the dimension; (2) absence of data is
+    NEVER evidence of an advantage/disadvantage; (3) ground every link in a causal
+    chain to specific retrieved evidence + surface counterpoints; (4) cite every
+    figure in a conclusion and flag period/unit mismatches. And it must NOT loosen
+    grounding: qualitative fallback is explicitly not a licence to invent.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    assert "REASONING RIGOR ON DEEP QUESTIONS" in rendered
+    # (1) missing metric → reason qualitatively, do not skip; never invent it.
+    assert "REASON QUALITATIVELY, DO NOT SKIP" in rendered
+    assert "no quantitative comparison can be made" in rendered
+    assert "NEVER a licence to invent" in rendered
+    # (2) absence is not evidence — the most damaging failure.
+    assert "ABSENCE IS NOT EVIDENCE" in rendered
+    assert "does NOT mean AMD lacks" in rendered
+    assert "not read the gap" in rendered.lower() or "do NOT read the gap" in rendered
+    # (3) ground every link + counterpoints, not generic optimism.
+    assert "GROUND EVERY LINK" in rendered
+    assert "COUNTERPOINTS" in rendered
+    assert "generic optimism" in rendered
+    # (4) cite figures + flag period/unit mismatches; drop the blanket caveat.
+    assert "CITE FIGURES + FLAG MISMATCHES" in rendered
+    assert "FY2027-Q1 vs AMD FY2026-Q1" in rendered
+    assert "OMIT the caveat" in rendered
+
+    # GUARDRAIL: the v1.9 what-if projection permission must STILL be present —
+    # v1.10 is additive, not a replacement.
+    assert "ANALYTICAL / WHAT-IF QUESTIONS" in rendered
+    assert "blanket forecast refusal is a FAILURE" in rendered.replace("\n", " ")
+    # GUARDRAIL: the no-fabrication rules for factual claims must STILL be present.
+    assert "ANTI-FABRICATION POLICY" in rendered
+    assert "GROUND EVERY ROW — DO NOT FABRICATE" in rendered
 
 
 def test_synthesis_prompt_forbids_refusing_present_data() -> None:

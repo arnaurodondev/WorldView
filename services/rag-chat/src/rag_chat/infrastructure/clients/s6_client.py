@@ -15,9 +15,21 @@ import structlog
 
 from rag_chat.application.ports.upstream_clients import ChunkSearchRequest, EnrichedChunkResult
 from rag_chat.domain.entities.chat import ResolvedEntity
-from rag_chat.infrastructure.clients.base import BaseUpstreamClient
+from rag_chat.infrastructure.clients.base import BaseUpstreamClient, UpstreamTransportError
 
 _log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+# RC-1 (2026-07-05): number of attempts for the pre-loop entity-resolution POST.
+# 2 = first try + one retry. The retry exists to survive a STALE pooled
+# keep-alive socket: rag-chat holds the S6 connection idle across a long turn
+# (~80s of tool calls + synthesis), nlp-pipeline drops the idle connection, and
+# the NEXT turn reuses the dead socket → httpx.ConnectError /
+# RemoteProtocolError → UpstreamTransportError(reason="upstream_unreachable").
+# httpx evicts the dead connection from the pool the instant the send fails, so
+# the retry is *guaranteed* to dial a FRESH connection and succeed. We cap at
+# ONE retry so a genuinely-down upstream fails fast (tight 5s timeout) instead
+# of stacking latency onto the chat path.
+_RESOLVE_MAX_ATTEMPTS = 2
 
 
 class S6Client(BaseUpstreamClient):
@@ -28,12 +40,20 @@ class S6Client(BaseUpstreamClient):
     async def resolve_entities(self, query_text: str) -> list[ResolvedEntity]:
         """POST /api/v1/entities/resolve → list of resolved entities.
 
-        Returns an empty list on timeout or HTTP error (safe degradation).
+        Connection resilience (RC-1): a single transport-level failure of the
+        ``upstream_unreachable`` class (stale pooled keep-alive socket →
+        ConnectError / RemoteProtocolError) triggers exactly one retry on a
+        fresh connection before giving up. Read-timeouts and 5xx are NOT
+        retried here — those mean the upstream is reachable but unhealthy, and a
+        retry would only burn the chat latency budget; they propagate as
+        ``UpstreamTransportError`` for the caller to degrade on.
+
+        If ALL attempts fail, this re-raises ``UpstreamTransportError``. The
+        orchestrator's ``ChatPipeline.resolve_entities`` catches it and degrades
+        to an empty entity list so the chat turn still runs (RC-1 graceful
+        degradation) — the resolve step must NEVER hard-fail the whole turn.
         """
-        raw = await self._post(
-            "/api/v1/entities/resolve",
-            {"query_text": query_text},
-        )
+        raw = await self._resolve_with_stale_socket_retry(query_text)
         entities: list[dict] = raw.get("entities", [])
         results: list[ResolvedEntity] = []
         for item in entities:
@@ -52,6 +72,43 @@ class S6Client(BaseUpstreamClient):
             except (KeyError, TypeError, ValueError):
                 continue
         return results
+
+    async def _resolve_with_stale_socket_retry(self, query_text: str) -> dict:
+        """POST /entities/resolve with one retry on a stale-socket transport error.
+
+        Only ``upstream_unreachable`` (ConnectError / RemoteProtocolError — the
+        dead pooled keep-alive socket class) is retried. On the first such
+        failure httpx has already evicted the dead connection from its pool, so
+        simply re-issuing the request opens a FRESH connection — that is the
+        "force a fresh connection" mechanism, no manual pool poking required
+        (poking the shared client's pool would be unsafe for sibling turns
+        using the same S6Client instance concurrently).
+
+        ``upstream_timeout`` / ``upstream_5xx`` are re-raised on the first hit
+        (no retry) — retrying an up-but-unhealthy upstream just spends the chat
+        latency budget. After the last attempt any transport error propagates to
+        the caller for graceful degradation.
+        """
+        for attempt in range(_RESOLVE_MAX_ATTEMPTS):
+            try:
+                return await self._post(
+                    "/api/v1/entities/resolve",
+                    {"query_text": query_text},
+                )
+            except UpstreamTransportError as exc:
+                is_last = attempt == _RESOLVE_MAX_ATTEMPTS - 1
+                # Only the stale-socket class is worth a fresh-connection retry.
+                if exc.reason != "upstream_unreachable" or is_last:
+                    raise
+                _log.warning(  # type: ignore[no-any-return]
+                    "s6_resolve_stale_socket_retry",
+                    reason=exc.reason,
+                    path=exc.path,
+                    attempt=attempt,
+                    elapsed_ms=exc.elapsed_ms,
+                )
+        # Unreachable: the loop either returns or raises on every iteration.
+        return {}  # pragma: no cover
 
     # ── Chunk search ───────────────────────────────────────────────────────────
 

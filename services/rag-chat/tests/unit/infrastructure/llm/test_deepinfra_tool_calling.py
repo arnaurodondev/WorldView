@@ -141,6 +141,52 @@ async def test_deepinfra_chat_with_no_tools_omits_tools_from_payload() -> None:
 
 
 # ---------------------------------------------------------------------------
+# DEF-036: chat_with_tools — per-call planner model override
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deepinfra_chat_with_tools_uses_model_override_in_payload() -> None:
+    """DEF-036: an explicit ``model=`` overrides the adapter's configured model.
+
+    The planning turn passes ``model=planning_model`` so the POST payload's
+    ``model`` field must be the override (fast planner), NOT the adapter's
+    configured completion/synthesis model.
+    """
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=_mock_response(_stop_body("planned")))
+    # Adapter configured with the SYNTHESIS model on purpose — the override
+    # must win for the planning payload.
+    adapter = _make_adapter(mock_client)  # model=deepseek-...-70B
+
+    await adapter.chat_with_tools(
+        [{"role": "user", "content": "plan this"}],
+        _SAMPLE_TOOLS,
+        model="Qwen/Qwen3-235B-A22B-Instruct-2507",
+    )
+
+    payload = mock_client.post.call_args.kwargs["json"]
+    assert payload["model"] == "Qwen/Qwen3-235B-A22B-Instruct-2507"
+
+
+@pytest.mark.asyncio
+async def test_deepinfra_chat_with_tools_defaults_to_configured_model() -> None:
+    """DEF-036: with no ``model=`` override, the configured model is used verbatim.
+
+    Guards the safe default: existing callers (brief agentic loop) that never
+    pass ``model`` are byte-for-byte unchanged.
+    """
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=_mock_response(_stop_body("planned")))
+    adapter = _make_adapter(mock_client)  # model=deepseek-ai/DeepSeek-R1-Distill-Llama-70B
+
+    await adapter.chat_with_tools([{"role": "user", "content": "plan this"}], _SAMPLE_TOOLS)
+
+    payload = mock_client.post.call_args.kwargs["json"]
+    assert payload["model"] == "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
+
+
+# ---------------------------------------------------------------------------
 # chat_with_tools — response parsing
 # ---------------------------------------------------------------------------
 
