@@ -1853,6 +1853,25 @@ class NumericGroundingValidator:
                 scoped_any = [tv.value for tv in scoped]
                 candidate_pool = scoped_same or scoped_any
                 effective_tol = tol
+                # NEW-3 / over-fire fix (2026-07-06,
+                # docs/audits/2026-07-06-r1-final-exhaustive-qa.md): the response
+                # scoped a number to an entity (e.g. "Apple") but NO tool value
+                # carries a matching entity_tag. This is the sec_edgar-filing case
+                # — the filer name lives only in the chunk TEXT, not a structured
+                # tag, so a correct figure quoted verbatim from the filing chunk
+                # was flagged as ungrounded (false positive), which suppressed the
+                # answer / dropped its citation. Fall back to UNTAGGED same-kind
+                # tool values at EXACT tolerance (tol=0), mirroring the no-entity
+                # branch's cross-entity safeguard: a fabricated number matches
+                # nothing, a real figure present verbatim in the untagged filing
+                # text matches. Only UNTAGGED values (not other tagged entities)
+                # are eligible, so this can never launder one company's figure
+                # onto another.
+                if not candidate_pool:
+                    untagged_same = [tv.value for tv in tool_values if not tv.entity_tag and tv.field_kind is kind]
+                    if untagged_same:
+                        candidate_pool = untagged_same
+                        effective_tol = 0.0
             else:
                 # No entity context — keep legacy same-kind > any-kind
                 # ordering, but tighten tolerance for any-kind fallback

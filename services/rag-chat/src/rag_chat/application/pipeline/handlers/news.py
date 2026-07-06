@@ -33,6 +33,7 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # Maximum characters for tool result text injected into LLM context.
 _TOOL_RESULT_MAX_CHARS = 4000
 
+
 # Fix ③ (2026-07-04): the filing BODY text is injected per row — sec_edgar chunks
 # carry no structured filer/company field (title/source_name are null), so the
 # filer name lives ONLY in the chunk text.
@@ -798,9 +799,37 @@ class NewsHandler(ToolHandler):
             doc_id = str(result.doc_id) if result.doc_id else result.chunk_id
             grouped.setdefault(doc_id, []).append(result)
 
-        matched: list[RetrievedItem] = []
-        fallback: list[RetrievedItem] = []
-        _entity_label = ticker.strip().upper() if isinstance(ticker, str) and ticker.strip() else None
+        # NEW-1 (2026-07-06, docs/audits/2026-07-06-r1-final-exhaustive-qa.md):
+        # each retained filing is scored on TWO independent axes so we can rank
+        # the RIGHT company's filing first without regressing form-type or
+        # newest-first ordering:
+        #   * ``names_company`` — does this filing actually name the QUERIED
+        #     company? (the core partition — see the hard-filter below).
+        #   * ``form_ok``       — does its detected form match a requested one?
+        # We collect ``(names_company, form_ok, item)`` and partition AFTER the
+        # loop, then date-sort WITHIN the retained set. The old code sorted ALL
+        # grouped filings by date regardless of filer, so a newer numeric-dense
+        # Meta/AMD/Intel filing outranked the target's real 10-Q (wrong-company
+        # citation, 4/8 QA runs).
+        scored: list[tuple[bool, bool, RetrievedItem]] = []
+
+        # Entity LABEL stamped onto matching rows (drives citation entity_name +
+        # the numeric/entity grounding entity_tag). Prefer the explicit ticker;
+        # fall back to the scoped-entity ticker so a page-scoped filings query
+        # (entity_id / EntityContext, no explicit ticker) still tags its rows —
+        # otherwise the filing's tool values carry an EMPTY entity_tag and the
+        # numeric-grounding validator cannot scope the answer's figures to them
+        # (the over-fire / dropped-citation class in NEW-3 / fix ③).
+        _entity_label = ticker_upper
+        if _entity_label is None and self._entity_context is not None:
+            ctx_ticker = (self._entity_context.ticker or "").strip().upper()
+            _entity_label = ctx_ticker or None
+
+        # Does this query TARGET a specific company? Only then do we hard-filter
+        # to its filings. company_name/ticker are the inputs ``_filing_names_company``
+        # matches on; without either we cannot corroborate a filer, so we must
+        # NOT filter (the generic "recent filings across the corpus" path).
+        company_targeted = bool(company_name or ticker_upper)
 
         for doc_id, doc_chunks in grouped.items():
             primary = doc_chunks[0]  # best-ranked chunk — citation title/form/URL/date
@@ -885,21 +914,45 @@ class NewsHandler(ToolHandler):
                     entity_name=row_entity_name,
                 ),
             )
-            # When a specific form was requested, partition matches vs the rest so
-            # we can prefer exact-form filings but still degrade gracefully.
-            if normalised_form is not None and (detected_form is None or detected_form != normalised_form):
-                fallback.append(item)
+            # Record both axes; the partition happens after the loop so the
+            # company filter (NEW-1) can dominate the form filter.
+            form_ok = normalised_form is None or (detected_form is not None and detected_form == normalised_form)
+            scored.append((names_company, form_ok, item))
+
+        # ── NEW-1 company partition (the core fix) ────────────────────────────
+        # When the query targets a specific company AND at least one retrieved
+        # filing actually names it, keep ONLY those — a newer but unrelated filer
+        # (Meta/AMD/Intel) must never outrank the target's real 10-Q. We only
+        # fall back to non-matching filings when the target has NO corroborated
+        # filing at all (so the EDGAR link still lets the user verify something),
+        # exactly mirroring the graceful form-type fallback below.
+        if company_targeted and any(nc for nc, _f, _i in scored):
+            _dropped = [it for nc, _f, it in scored if not nc]
+            if _dropped:
+                log.info(
+                    "filings_company_filter_applied",
+                    tool="get_filings",
+                    kept=sum(1 for nc, _f, _i in scored if nc),
+                    dropped=len(_dropped),
+                )
+            scored = [(nc, fo, it) for nc, fo, it in scored if nc]
+
+        # ── Form partition (existing behaviour, now over the company-filtered set) ─
+        form_matched: list[tuple[bool, bool, RetrievedItem]] = [(nc, fo, it) for nc, fo, it in scored if fo]
+        if normalised_form is not None:
+            if form_matched:
+                scored = form_matched
             else:
-                matched.append(item)
+                log.info("filings_form_filter_fallback", tool="get_filings", form_type=normalised_form)
 
-        chosen = matched if matched else fallback
-        if normalised_form is not None and not matched:
-            log.info("filings_form_filter_fallback", tool="get_filings", form_type=normalised_form)
-
-        # Newest filing first — chronological ordering is what users expect for a
-        # filings list (chunk search ordered by relevance, not date).
-        chosen.sort(key=lambda it: it.published_at or datetime.min.replace(tzinfo=UTC), reverse=True)
-        items = chosen[:capped_results]
+        # Newest filing first WITHIN the retained (company/form-filtered) set —
+        # chronological ordering is what users expect for a filings list (chunk
+        # search ordered by relevance, not date).
+        scored.sort(
+            key=lambda t: t[2].published_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )
+        items = [it for _nc, _fo, it in scored][:capped_results]
 
         log.info(
             "tool_executed",

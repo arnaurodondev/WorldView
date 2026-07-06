@@ -1023,3 +1023,41 @@ class TestEmptyPoolHelpers:
         from rag_chat.application.services.numeric_grounding import flatten_tool_values_count
 
         assert flatten_tool_values_count([_row_with_value(24.7e9, FieldKind.REVENUE)]) >= 1
+
+
+class TestUntaggedFilingScopeFallback:
+    """NEW-3 / over-fire fix (2026-07-06): a figure scoped to an entity in the
+    response but present only in an UNTAGGED tool value (the sec_edgar-filing
+    case — the filer name lives in the chunk text, not a structured tag) must be
+    treated as grounded, while the fabrication guarantee is preserved."""
+
+    def setup_method(self) -> None:
+        self.v = NumericGroundingValidator()
+
+    def test_scoped_figure_grounded_by_untagged_filing_value(self) -> None:
+        """'AAPL ... $94.9B' with an UNTAGGED tool row of 94.9e9 → passes.
+
+        Pre-fix this false-positived: the response scoped to AAPL, the scoped
+        pool was empty (the filing row has no entity_tag), so the (correct)
+        figure was flagged ungrounded and the answer/citation was suppressed.
+        """
+        rows = [_row_with_value(94.9e9, FieldKind.REVENUE)]  # entity_tag == ""
+        result = self.v.validate("AAPL reported revenue of $94.9B in the filing.", rows)
+        rev_failures = [u for u in result.unsupported if u.field_kind is FieldKind.REVENUE]
+        assert not rev_failures, result.unsupported
+
+    def test_fabricated_figure_still_fails_against_untagged_value(self) -> None:
+        """The guarantee holds: a fabricated '$34.6B' with an untagged 94.9e9 row
+        matches nothing (exact tolerance on the untagged fallback) → fails."""
+        rows = [_row_with_value(94.9e9, FieldKind.REVENUE)]
+        result = self.v.validate("AAPL reported revenue of $34.6B in the filing.", rows)
+        rev_failures = [u for u in result.unsupported if u.field_kind is FieldKind.REVENUE]
+        assert any(abs(u.value - 34.6e9) < 1 for u in rev_failures), result.unsupported
+
+    def test_untagged_fallback_never_launders_other_entity_value(self) -> None:
+        """Only UNTAGGED values are eligible: an AAPL-scoped $68B must NOT ground
+        on a TAGGED NVDA $68B row (no untagged row exists)."""
+        rows = [_TaggedRow(value=68.0e9, field_kind=FieldKind.REVENUE, item_id="NVDA_2026Q1")]
+        result = self.v.validate("AAPL revenue was $68B last quarter.", rows)
+        rev_failures = [u for u in result.unsupported if u.field_kind is FieldKind.REVENUE]
+        assert rev_failures, result.unsupported

@@ -569,3 +569,134 @@ class TestGetFilingsRetrievalDepth:
         assert len(items) == 1
         # Hard per-filing ceiling holds regardless of chunk sizes.
         assert len(items[0].text) <= 5000
+
+
+# EDGAR index URL for a DIFFERENT filer (Intel CIK 50863) — used to prove the
+# wrong-company filing is NOT the one cited under an Apple query.
+_EDGAR_URL_INTEL = "https://www.sec.gov/Archives/edgar/data/50863/000005086326000010/0000050863-26-000010-index.htm"
+
+
+class TestGetFilingsCompanyPartition:
+    """NEW-1 (2026-07-06): filings must be attributed to the QUERIED filer.
+
+    Root cause (docs/audits/2026-07-06-r1-final-exhaustive-qa.md): the corpus
+    has ~3,017 distinct CIKs; a NEWER numeric-dense filing from a DIFFERENT
+    company (Meta/AMD/Intel) outranked the target's real 10-Q because the final
+    sort ordered ALL grouped filings by date regardless of filer. These tests
+    assert the company partition — they FAIL against the pre-fix date-only sort.
+    """
+
+    @pytest.mark.asyncio
+    async def test_target_filing_selected_over_newer_wrong_company(self) -> None:
+        """Apple query + a NEWER Intel filing → Apple's filing is the one returned.
+
+        R19: this is the regression assertion for NEW-1. Under the old date-only
+        sort the newer Intel row would rank FIRST (and, being non-matching, would
+        also be UNLABELLED), producing the wrong-company citation seen in QA.
+        """
+        chunks = [
+            # Apple's real 10-Q — OLDER filed date, names the company.
+            _chunk(
+                doc_id="018f0000-0000-7000-8000-0000000000a1",
+                chunk_id="aapl-c1",
+                text="Apple Inc. Form 10-Q. Total net sales $124,300 million for the quarter.",
+                url=_EDGAR_URL_10K,
+                days_ago=20,
+            ),
+            # Intel's 10-Q — NEWER filed date, numeric-dense, WRONG company.
+            _chunk(
+                doc_id="018f0000-0000-7000-8000-0000000000b2",
+                chunk_id="intc-c1",
+                text="Intel Corporation Form 10-Q. Revenue $12,900 million; operating income $1,700 million.",
+                url=_EDGAR_URL_INTEL,
+                days_ago=1,
+            ),
+        ]
+        s6 = _make_s6(chunks, ticker_map={"AAPL": _AAPL_ID}, name_map={"AAPL": "Apple Inc."})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="AAPL")
+
+        # Only Apple's filing is returned; the newer Intel filing is dropped.
+        assert len(items) == 1
+        item = items[0]
+        assert item.citation_meta.url == _EDGAR_URL_10K
+        assert "Apple" in item.text
+        assert "Intel" not in item.citation_meta.title
+        # The matched row is LABELLED with the queried ticker (drives grounding).
+        assert item.citation_meta.entity_name == "AAPL"
+
+    @pytest.mark.asyncio
+    async def test_matched_company_kept_over_newer_wrong_company_multi(self) -> None:
+        """When BOTH the target and a newer wrong filer are present, only the
+        target survives — and Apple's newest matching filing ranks first."""
+        chunks = [
+            _chunk(
+                doc_id="d-aapl-old",
+                chunk_id="a1",
+                text="Apple Inc. Form 10-K. Net sales $391,035 million.",
+                url=_EDGAR_URL_10K,
+                days_ago=25,
+            ),
+            _chunk(
+                doc_id="d-aapl-new",
+                chunk_id="a2",
+                text="Apple Inc. Form 10-Q. Net sales $124,300 million.",
+                url=_EDGAR_URL_8K,
+                days_ago=10,
+            ),
+            _chunk(
+                doc_id="d-intc-newest",
+                chunk_id="i1",
+                text="Intel Corporation Form 10-Q. Revenue $12,900 million.",
+                url=_EDGAR_URL_INTEL,
+                days_ago=1,
+            ),
+        ]
+        s6 = _make_s6(chunks, ticker_map={"AAPL": _AAPL_ID}, name_map={"AAPL": "Apple Inc."})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="AAPL", max_results=10)
+
+        # Both Apple filings kept, Intel dropped; newest Apple first.
+        assert [i.citation_meta.url for i in items] == [_EDGAR_URL_8K, _EDGAR_URL_10K]
+        assert all("Intel" not in (i.citation_meta.title or "") for i in items)
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_nonmatching_when_no_target_filing(self) -> None:
+        """If the target has NO corroborated filing, we still return SOMETHING
+        (the EDGAR link lets the user verify) rather than an empty hand."""
+        chunks = [
+            _chunk(
+                doc_id="d-intc",
+                chunk_id="i1",
+                text="Intel Corporation Form 10-Q. Revenue $12,900 million.",
+                url=_EDGAR_URL_INTEL,
+                days_ago=1,
+            ),
+        ]
+        s6 = _make_s6(chunks, ticker_map={"AAPL": _AAPL_ID}, name_map={"AAPL": "Apple Inc."})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings(ticker="AAPL")
+
+        # Graceful degradation: the non-matching filing is returned but NOT
+        # mislabelled as Apple (entity_name stays unset).
+        assert len(items) == 1
+        assert items[0].citation_meta.entity_name is None
+
+    @pytest.mark.asyncio
+    async def test_untargeted_query_keeps_all_filings_by_date(self) -> None:
+        """With no company target, behaviour is unchanged: all filings, newest
+        first (the generic 'recent filings across the corpus' path)."""
+        chunks = [
+            _chunk(doc_id="d1", chunk_id="c1", text="Some Corp Form 8-K.", url=_EDGAR_URL_10K, days_ago=5),
+            _chunk(doc_id="d2", chunk_id="c2", text="Other Corp Form 8-K.", url=_EDGAR_URL_INTEL, days_ago=1),
+        ]
+        s6 = _make_s6(chunks)  # no ticker_map / no ticker arg → untargeted
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_filings()
+
+        # Both kept, newest first.
+        assert [i.citation_meta.url for i in items] == [_EDGAR_URL_INTEL, _EDGAR_URL_10K]
