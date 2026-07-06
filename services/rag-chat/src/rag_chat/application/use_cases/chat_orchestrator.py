@@ -2410,6 +2410,20 @@ class ChatOrchestratorUseCase:
         # so the per-intent style addendum reflects what the LLM actually
         # asked the tools to fetch (E-1 T-E-1-02).
         intent = QueryIntent.GENERAL
+        # ── What-if / projection FRAMING (2026-07-05) ─────────────────────────
+        # The live agent-era ``infer_intent`` cannot emit REASONING and its
+        # CONTRADICTION regex never matches projection framing, so gating the
+        # disclaimer + numeric relaxation on the intent ENUM missed every
+        # what-if / projection question (they land GENERAL / FINANCIAL_DATA).
+        # We compute a deterministic question-side framing signal ONCE here (it
+        # is a pure property of the immutable user message) and use it at both
+        # gate sites below instead of the enum check.
+        from rag_chat.application.services.intent_inference import (
+            answer_has_projected_figure,
+            question_is_whatif,
+        )
+
+        _question_is_whatif = question_is_whatif(request.message)
         _tool_use_prompt = get_tool_use_system_prompt(
             intent=intent.value,
             today_iso=_today,
@@ -4305,13 +4319,17 @@ class ChatOrchestratorUseCase:
                     thread_id=request.thread_id,
                     user_id=request.user_id,
                     # Point 2 Stage 2 — relax the numeric gate for analytical /
-                    # hypothetical turns. CONTRADICTION (bear/bull case, "what
-                    # argues against X", counter-argument) and REASONING are the
-                    # analytical intents the classifier tags; on those the Stage 1
-                    # gate downgrades a FULLY-HEDGED-SENTENCE number (a projection /
-                    # estimate), never a bare factual assertion — the fabrication
-                    # guarantee is intact for factual lookups.
-                    analytical_intent=intent in (QueryIntent.CONTRADICTION, QueryIntent.REASONING),
+                    # hypothetical turns. Gated on the deterministic what-if
+                    # FRAMING signal (question_is_whatif), NOT the intent enum:
+                    # the live infer_intent cannot emit REASONING and its
+                    # CONTRADICTION regex never matches projection framing, so the
+                    # old enum check missed every projection. CONTRADICTION is kept
+                    # (cheap, and bear/bull-case turns are genuinely analytical).
+                    # On a relaxed turn the Stage-1 gate downgrades ONLY a
+                    # FULLY-HEDGED-SENTENCE number (a projection / estimate), never
+                    # a bare factual assertion — the fabrication guarantee is intact
+                    # for factual lookups.
+                    analytical_intent=_question_is_whatif or intent is QueryIntent.CONTRADICTION,
                 )
         elif not grounded:
             # BP-605: never cache a refusal answer — its content is a
@@ -4419,14 +4437,18 @@ class ChatOrchestratorUseCase:
         # ── Point 2 (owner-requested): NOT-FINANCIAL-ADVICE disclaimer ────────
         # Append the canonical, model-independent disclaimer to ANALYTICAL /
         # HYPOTHETICAL / PROJECTION turns for liability coverage as we unlock
-        # what-if / projection analysis. Gated on the same analytical-intent
-        # signal the numeric gate uses (REASONING / CONTRADICTION — bull/bear
-        # case, "what argues against X", counter-argument, reasoning) so a simple
-        # factual lookup (a P/E query) never gets it. Deterministic + deduped
+        # what-if / projection analysis. Gated on the deterministic FRAMING
+        # signal — NOT the intent enum, which the live infer_intent cannot set to
+        # REASONING and whose CONTRADICTION regex never matches projection framing
+        # (so the old enum check missed every what-if). Fires when EITHER the
+        # QUESTION is a what-if / projection ("assuming X grows 25%, how might FY
+        # revenue evolve") OR the ANSWER states a hedged / projected figure
+        # ("could reach ~$X"). A simple factual lookup ("what is NVDA's P/E") is
+        # neither, so it never gets the disclaimer. Deterministic + deduped
         # (``_append_advice_disclaimer`` is idempotent), placed after the answer
         # and after any grounding note. The stub detector discounts it so it
         # cannot inflate a leaked planning stub past the size gate.
-        if full_text and intent in (QueryIntent.REASONING, QueryIntent.CONTRADICTION):
+        if full_text and (_question_is_whatif or answer_has_projected_figure(full_text)):
             full_text = _append_advice_disclaimer(full_text)
 
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
