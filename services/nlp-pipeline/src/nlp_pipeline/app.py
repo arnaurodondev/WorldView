@@ -13,8 +13,9 @@ Lifespan sequence (STANDARDS.md §5):
 
 from __future__ import annotations
 
+import asyncio
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING, Any
 
 import structlog.contextvars
@@ -78,38 +79,129 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# The two embedding tables this housekeeping drains. Hardcoded literals (never
+# user input), so interpolating them into the SQL below is injection-safe.
+_EMBEDDING_TABLES: tuple[str, ...] = ("chunk_embeddings", "section_embeddings")
+
+
+async def _drain_stale_embeddings_for_table(
+    session_factory: Any,
+    table: str,
+    current_ids: list[str],
+    config: Settings,
+) -> int:
+    """Expire stale rows in *table* in bounded, per-batch-committed UPDATEs.
+
+    Bounds the write set (and therefore its HNSW graph churn) to
+    ``config.embedding_expiry_batch_size`` rows per statement, each in its own
+    transaction with a ``SET LOCAL statement_timeout`` so a large one-time expiry
+    after a genuine model change can never trip the 60 s OLTP backstop. Loops
+    until a batch expires fewer than ``batch_size`` rows (drained) or the per-run
+    cap is hit. Returns the total rows expired.
+
+    Injection safety: *table* is one of the hardcoded :data:`_EMBEDDING_TABLES`
+    literals; ``current_ids`` and the batch size are BOUND parameters; the
+    ``SET LOCAL`` timeout is an ``int`` coerced from config.
+    """
+    from sqlalchemy import text
+
+    batch_size = max(1, config.embedding_expiry_batch_size)
+    timeout_ms = config.embedding_expiry_statement_timeout_ms
+    max_batches = max(1, config.embedding_expiry_max_batches_per_run)
+
+    # NOT IN (:m0, :m1, ...) over the current-label set — all bound params.
+    placeholders = ", ".join(f":m{i}" for i in range(len(current_ids)))
+    id_params: dict[str, Any] = {f"m{i}": mid for i, mid in enumerate(current_ids)}
+    # Bound the UPDATE to a batch of primary keys (ORDER-free LIMIT is fine — we
+    # loop to drain everything) so the churned index pages stay small per commit.
+    update_sql = text(
+        f"UPDATE {table} SET expires_at = now() "  # noqa: S608 - table is a hardcoded literal; ids/batch are bound
+        f"WHERE embedding_id IN ("
+        f"  SELECT embedding_id FROM {table} "
+        f"  WHERE model_id NOT IN ({placeholders}) AND expires_at IS NULL "
+        f"  LIMIT :batch"
+        f")"
+    )
+
+    total = 0
+    for _ in range(max_batches):
+        async with session_factory() as session:
+            if timeout_ms and timeout_ms > 0:
+                # SET LOCAL cannot bind params; timeout_ms is coerced to int.
+                await session.execute(text(f"SET LOCAL statement_timeout = {int(timeout_ms)}"))
+            result = await session.execute(update_sql, {**id_params, "batch": batch_size})
+            await session.commit()
+        rowcount = result.rowcount or 0
+        total += rowcount
+        if rowcount < batch_size:
+            break  # fewer than a full batch left → drained
+    return total
+
+
 async def _expire_stale_embeddings(
     session_factory: Any,
     config: Settings,
 ) -> None:
-    """On startup, if current embedding model differs from stored, bulk-expire stale rows (PLAN-0031 B-2).
+    """On startup, expire embeddings written by a NO-LONGER-current model (PRE-1 / PLAN-0031 B-2).
 
-    Sets ``expires_at = now()`` on any ``chunk_embeddings`` / ``section_embeddings``
-    rows whose ``model_id`` does not match ``config.embedding_model_id``.
-    The EmbeddingRetryWorker will re-generate them on its next cycle.
+    Sets ``expires_at = now()`` on ``chunk_embeddings`` / ``section_embeddings``
+    rows whose ``model_id`` is not one of ``current_embedding_model_ids(config)``
+    (the logical AND provider-API labels of the configured model), so the
+    EmbeddingRetryWorker regenerates them on its next cycle.
+
+    Root cause of PRE-1: the old query compared only against
+    ``config.embedding_model_id`` (``"bge-large"``), but the live DeepInfra
+    provider writes ``config.embedding_api_model_id``
+    (``"BAAI/bge-large-en-v1.5"``) — the SAME physical model under a different
+    label — so ~half the corpus was flagged stale and the unbounded UPDATE
+    (~13k rows, each an HNSW re-insert) blew the 10-min statement_timeout on
+    every boot. Comparing against BOTH labels makes the common case a 0-row
+    no-op; the drain is batched so a genuine model change still completes without
+    tripping the timeout. Idempotent — safe to run every boot.
     """
     import structlog
-    from sqlalchemy import text
+
+    from nlp_pipeline.bootstrap.embedding import current_embedding_model_ids
 
     _log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
-    async with session_factory() as session:
-        r1 = await session.execute(
-            text("UPDATE chunk_embeddings SET expires_at = now() WHERE model_id != :current AND expires_at IS NULL"),
-            {"current": config.embedding_model_id},
+    current_ids = current_embedding_model_ids(config)
+    if not current_ids:
+        # No configured model labels → we cannot classify staleness; skip rather
+        # than expire the ENTIRE corpus on a misconfiguration.
+        _log.warning("expire_stale_embeddings_skipped_no_model_id")
+        return
+
+    stale_counts: dict[str, int] = {}
+    for table in _EMBEDDING_TABLES:
+        stale_counts[table] = await _drain_stale_embeddings_for_table(session_factory, table, current_ids, config)
+
+    if any(stale_counts.values()):
+        _log.warning(
+            "embedding_model_changed",
+            stale_chunk_count=stale_counts["chunk_embeddings"],
+            stale_section_count=stale_counts["section_embeddings"],
+            current_models=current_ids,
         )
-        r2 = await session.execute(
-            text("UPDATE section_embeddings SET expires_at = now() WHERE model_id != :current AND expires_at IS NULL"),
-            {"current": config.embedding_model_id},
-        )
-        if r1.rowcount > 0 or r2.rowcount > 0:
-            _log.warning(
-                "embedding_model_changed",
-                stale_chunk_count=r1.rowcount,
-                stale_section_count=r2.rowcount,
-                current_model=config.embedding_model_id,
-            )
-        await session.commit()
+
+
+async def _run_expire_stale_embeddings(
+    session_factory: Any,
+    config: Settings,
+    log: Any,
+) -> None:
+    """Background wrapper: run the drain and log (never raise) on failure.
+
+    Exceptions in a fire-and-forget ``asyncio.create_task`` are otherwise
+    swallowed, so we catch and log here — mirroring the previous inline
+    ``try/except`` — while re-raising ``CancelledError`` so shutdown can await it.
+    """
+    try:
+        await _expire_stale_embeddings(session_factory, config)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.warning("expire_stale_embeddings_failed", exc_info=True)
 
 
 def _build_embedding_client(settings: Settings) -> object:
@@ -170,11 +262,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.intel_write_factory = intel_sf
     app.state.intel_read_factory = intel_read_sf
 
-    # 4b. Expire stale embeddings if embedding model changed (PLAN-0031 B-2)
-    try:
-        await _expire_stale_embeddings(nlp_sf, settings)
-    except Exception:
-        log.warning("expire_stale_embeddings_failed", exc_info=True)
+    # 4b. Expire stale embeddings if the embedding model changed (PRE-1 / PLAN-0031 B-2).
+    # Run OFF the boot critical path as a background task: a genuine model change
+    # can leave tens of thousands of stale rows and each expiry forces an HNSW
+    # re-insert, so a synchronous drain would block startup (and the old unbounded
+    # UPDATE tripped the boot statement_timeout — PRE-1). The task drains in
+    # bounded, committed batches and is cancelled on shutdown. Common case (model
+    # unchanged) finishes in milliseconds.
+    app.state._expire_embeddings_task = asyncio.create_task(_run_expire_stale_embeddings(nlp_sf, settings, log))
 
     # 5. Valkey + WatchlistCache
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
@@ -218,6 +313,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
+    # Cancel the background stale-embedding drain BEFORE disposing the engine it
+    # uses, so an in-flight batch can't run against a torn-down pool.
+    expire_task: asyncio.Task[None] | None = getattr(app.state, "_expire_embeddings_task", None)
+    if expire_task is not None and not expire_task.done():
+        expire_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await expire_task
     await valkey.close()
     await nlp_engine.dispose()
     if nlp_read_engine is not nlp_engine:

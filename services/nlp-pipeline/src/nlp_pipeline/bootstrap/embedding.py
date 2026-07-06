@@ -27,6 +27,36 @@ if TYPE_CHECKING:
     from nlp_pipeline.config import Settings
 
 
+def current_embedding_model_ids(settings: Settings) -> list[str]:
+    """The set of ``model_id`` labels that denote the CURRENTLY configured model.
+
+    A single physical embedding model is written under DIFFERENT ``model_id``
+    labels depending on which provider produced the vector:
+
+      * ``deepinfra`` writes ``settings.embedding_api_model_id`` (e.g.
+        ``"BAAI/bge-large-en-v1.5"``) — see :func:`build_embedding_client` and
+        ``embedding_retry_worker_main``.
+      * ``ollama`` / the ``POST /api/v1/embed`` endpoint write
+        ``settings.embedding_model_id`` (e.g. ``"bge-large"``).
+
+    Both labels name the SAME 1024-dim bge-large model, so BOTH are "current".
+    ``_expire_stale_embeddings`` must treat the whole set as current: comparing
+    against only ``embedding_model_id`` flagged every DeepInfra-written row
+    (~half the live corpus) as stale, which is the PRE-1 boot timeout root cause
+    (the UPDATE tried to expire ~13k rows, each forcing an HNSW re-insert, and
+    ran past the 10-min statement_timeout on every boot).
+
+    A GENUINELY different model (e.g. switching to ``embeddinggemma-300m`` or
+    ``jina-embeddings-v3``) carries a label in NEITHER config field, so its old
+    vectors are still correctly expired once both config values are updated.
+
+    Empty strings are dropped (unset optional labels must not match every row's
+    NULL-ish/empty ``model_id``). The list is sorted for deterministic SQL params
+    and log output.
+    """
+    return sorted({settings.embedding_model_id, settings.embedding_api_model_id} - {""})
+
+
 def build_embedding_client(settings: Settings) -> Any:
     """Instantiate the embedding adapter selected by ``settings.embedding_provider``.
 

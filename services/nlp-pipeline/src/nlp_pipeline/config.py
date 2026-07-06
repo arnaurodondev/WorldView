@@ -232,6 +232,32 @@ class Settings(BaseSettings):
     # error-rate from DeepInfra can be tolerated without a code change.
     embedding_retry_max_attempts: int = 5
 
+    # ── Startup stale-embedding expiry (PRE-1 / PLAN-0031 B-2) ───────────────
+    # ``_expire_stale_embeddings`` runs on boot and sets ``expires_at = now()`` on
+    # embeddings whose ``model_id`` is not one of the CURRENTLY configured model
+    # labels (see ``current_embedding_model_ids``), so the EmbeddingRetryWorker
+    # regenerates them after a genuine embedding-model change. In the common case
+    # (model unchanged) it matches 0 rows and returns immediately. A GENUINE model
+    # change can leave tens of thousands of stale rows, and each expiry forces an
+    # HNSW graph re-insert (~0.5 s/row on the grown ~110k-vector corpus) → a single
+    # unbounded UPDATE blew the 10-min statement_timeout on EVERY boot (PRE-1). The
+    # expiry is therefore drained in bounded, individually-committed batches, off
+    # the boot critical path, so it never blocks startup and never trips the
+    # per-connection statement_timeout.
+    #
+    # Rows expired per UPDATE statement. Small enough that one batch (incl. its
+    # HNSW churn) stays well under the per-batch timeout below.
+    embedding_expiry_batch_size: int = 200  # NLP_PIPELINE_EMBEDDING_EXPIRY_BATCH_SIZE
+    # Per-batch statement_timeout (ms), applied via SET LOCAL inside each batch
+    # transaction so the one-time large expiry gets more headroom than the 60 s
+    # OLTP default without loosening the global backstop. 0 = unbounded (not
+    # recommended). 300 s comfortably covers a batch of HNSW re-inserts.
+    embedding_expiry_statement_timeout_ms: int = 300_000  # NLP_PIPELINE_EMBEDDING_EXPIRY_STATEMENT_TIMEOUT_MS
+    # Safety ceiling on batches per boot run so a pathological predicate can never
+    # loop forever. 100_000 * batch_size rows is effectively unbounded for real
+    # corpora while still terminating.
+    embedding_expiry_max_batches_per_run: int = 100_000  # NLP_PIPELINE_EMBEDDING_EXPIRY_MAX_BATCHES_PER_RUN
+
     # Deep extraction via external API (DeepInfra / OpenAI-compatible)
     # When extraction_api_key is set, DeepSeekExtractionAdapter is used instead of OllamaExtractionAdapter.
     # Qwen3-235B-A22B-Instruct-2507: $0.071/$0.10 per 1M tokens; 250k context >> 24k max extraction window.
