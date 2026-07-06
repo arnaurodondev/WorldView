@@ -548,3 +548,88 @@ def test_framing_analytical_intent_relaxes_full_sentence_hedge() -> None:
     # … but with an analytical/what-if question the full-sentence hedge relaxes it.
     assert material_unsupported_numbers(result, analytical_intent=True) == ()
     assert numeric_grounding_effectively_passed(result, analytical_intent=True) is True
+
+
+# ── Point 3 (2026-07-05): grounded-BY-DERIVATION recognition ──────────────────
+#
+# Deep answers legitimately DERIVE numbers from cited figures (FY = Σ quarters,
+# YoY growth %, a P/E from cited price & EPS). Those derived results appear
+# verbatim in no tool value, so the pre-existing direct-match + citation
+# fast-path flagged them → the over-eager "unmatched source" caveat fired on
+# nearly every good deep answer. These tests pin the derivation fast-path AND
+# prove the fabrication guarantee survives (a truly invented figure with no
+# grounded basis still fails).
+
+
+def test_derivation_sum_of_cited_quarters_grounded() -> None:
+    """FY revenue = SUM of four cited quarterly revenues → grounded, no caveat."""
+    validator = NumericGroundingValidator()
+    tool = _tool("Q1 revenue 20B. Q2 revenue 21B. Q3 revenue 22B. Q4 revenue 23B.")
+    answer = "For nvda, full-year revenue totalled $86B."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    # 20+21+22+23 = 86 → derivable from the grounded pool → not material.
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_derivation_yoy_growth_percent_grounded() -> None:
+    """A YoY growth % derived from two cited revenues → grounded, no caveat."""
+    validator = NumericGroundingValidator()
+    tool = _tool("nvda Q1 2026 revenue was 20B. nvda Q1 2025 revenue was 18.5B.")
+    answer = "nvda revenue grew 8.1% year-over-year."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    # (20 - 18.5) / 18.5 ≈ 0.0811 → the 8.1% is grounded by derivation.
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_formatting_variant_of_cited_number_grounded() -> None:
+    """A formatting variant ($81.61B) of a cited raw number → grounded, no caveat."""
+    validator = NumericGroundingValidator()
+    tool = _tool("nvda revenue was 81,615,000,000 for the quarter.")
+    answer = "nvda revenue was $81.61B."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    # $81.61B ≈ 81,615,000,000 after scale/notation normalisation → matches directly.
+    assert material_unsupported_numbers(result) == ()
+    assert numeric_grounding_effectively_passed(result) is True
+
+
+def test_derivation_does_not_ground_fabricated_pe() -> None:
+    """A fabricated P/E with NO cited price/EPS basis STILL fails (fabrication guard)."""
+    validator = NumericGroundingValidator()
+    # Pool has only revenue + net income; no pair derives 32.5 (ratios ≈ 4 / 0.25).
+    tool = _tool("nvda revenue was 100B. nvda net income 25B.")
+    answer = "nvda's P/E ratio is 32.5x."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    assert any(u.field_kind == FieldKind.RATIO for u in material_unsupported_numbers(result))
+    assert numeric_grounding_effectively_passed(result) is False
+
+
+def test_derivation_does_not_ground_fabricated_revenue() -> None:
+    """An invented revenue with no derivable grounded basis STILL fails."""
+    validator = NumericGroundingValidator()
+    tool = _tool("nvda total revenue 100B. nvda net income 25B.")
+    answer = "nvda cloud revenue was $47.3B."
+    result = validator.validate(answer, tool_results=[tool], called_tool_names=["query_fundamentals"])
+    # No subset sum / ratio / growth of {100B, 25B} lands on 47.3B → stays material.
+    assert len(material_unsupported_numbers(result)) >= 1
+    assert numeric_grounding_effectively_passed(result) is False
+
+
+def test_is_derivable_from_grounded_unit() -> None:
+    """Direct unit coverage of the derivation helper's shapes + negatives."""
+    from rag_chat.application.services.numeric_grounding import _is_derivable_from_grounded
+
+    pool = [20e9, 21e9, 22e9, 23e9]
+    assert _is_derivable_from_grounded(86e9, pool) is True  # sum of all four
+    assert _is_derivable_from_grounded(41e9, pool) is True  # 20 + 21
+    # YoY growth fraction + percent forms.
+    assert _is_derivable_from_grounded(0.081081, [20e9, 18.5e9]) is True
+    assert _is_derivable_from_grounded(8.1081, [20e9, 18.5e9]) is True
+    # Ratio (P/E) from grounded price & EPS.
+    assert _is_derivable_from_grounded(30.0, [150.0, 5.0]) is True
+    # Negatives: no grounded basis.
+    assert _is_derivable_from_grounded(32.5, [100e9, 25e9]) is False
+    assert _is_derivable_from_grounded(47.3e9, [100e9, 25e9]) is False
+    assert _is_derivable_from_grounded(5.0, []) is False
+    assert _is_derivable_from_grounded(0.0, [1.0, 2.0]) is False

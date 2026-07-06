@@ -511,6 +511,34 @@ _VERIFICATION_BANNER_RE = re.compile(
 )
 _CANONICAL_UNVERIFIED_DISCLAIMER = "Note: some figures or names above could not be matched to a retrieved source."
 
+# ── Point 2 (owner-requested) — canonical NOT-FINANCIAL-ADVICE disclaimer ──────
+# For liability coverage as we unlock what-if / projection / analytical answers,
+# a fixed, model-independent disclaimer is appended DETERMINISTICALLY at
+# finalisation (like the grounding banner — the model cannot omit it) to
+# ANALYTICAL / HYPOTHETICAL / PROJECTION turns only. It is a single canonical
+# constant, appended once (deduped — see :func:`_append_advice_disclaimer`), and
+# is NOT added to simple factual lookups (a P/E query does not need it). The stub
+# detector discounts it (see ``_discount_artifacts``) so it can never inflate a
+# leaked planning stub past the size gate.
+_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER = (
+    "This is analysis for informational purposes only, not financial advice or a recommendation."
+)
+
+
+def _append_advice_disclaimer(text: str) -> str:
+    """Append the canonical not-financial-advice disclaimer once, deduped.
+
+    No-op when *text* is empty or already carries the disclaimer (idempotent, so
+    a second finalisation pass or a re-entrant caller never doubles it). Placed on
+    its own trailing line so it reads cleanly after the answer and after any
+    grounding note.
+    """
+    if not text or not text.strip():
+        return text
+    if _CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER in text:
+        return text
+    return f"{text.rstrip()}\n\n{_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER}"
+
 
 def _sanitize_unverified_markers(text: str) -> str:
     """Convert leaked ``[unverified]`` tags + banners into a clean disclaimer.
@@ -639,6 +667,11 @@ def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> b
     def _discount_artifacts(s: str) -> str:
         s = _GROUNDING_BANNER_RE.sub("", s)
         s = s.replace(_CANONICAL_UNVERIFIED_DISCLAIMER, "")
+        # Point 2: the deterministic not-financial-advice disclaimer is also a
+        # finalisation artifact, not "real answer" content — discount it so a
+        # leaked planning stub cannot ride past the size gate on the back of it
+        # (same treatment as the canonical unverified disclaimer above).
+        s = s.replace(_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER, "")
         return s.strip()
 
     base = _discount_artifacts(text)
@@ -4382,6 +4415,19 @@ class ChatOrchestratorUseCase:
                     "unverified_markers_sanitized",
                     request_id=str(getattr(audit, "turn_id", "") or ""),
                 )
+
+        # ── Point 2 (owner-requested): NOT-FINANCIAL-ADVICE disclaimer ────────
+        # Append the canonical, model-independent disclaimer to ANALYTICAL /
+        # HYPOTHETICAL / PROJECTION turns for liability coverage as we unlock
+        # what-if / projection analysis. Gated on the same analytical-intent
+        # signal the numeric gate uses (REASONING / CONTRADICTION — bull/bear
+        # case, "what argues against X", counter-argument, reasoning) so a simple
+        # factual lookup (a P/E query) never gets it. Deterministic + deduped
+        # (``_append_advice_disclaimer`` is idempotent), placed after the answer
+        # and after any grounding note. The stub detector discounts it so it
+        # cannot inflate a leaked planning stub past the size gate.
+        if full_text and intent in (QueryIntent.REASONING, QueryIntent.CONTRADICTION):
+            full_text = _append_advice_disclaimer(full_text)
 
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
         # Scrub entity/article refs in the answer that were NOT grounded in any
