@@ -81,6 +81,14 @@ def upgrade() -> None:
     # spill warning at ~14k tuples). Transaction-local — reverts on commit.
     op.execute("SET LOCAL maintenance_work_mem = '512MB'")
 
+    # The one-time backfill (~110k-row UPDATE that churns the existing HNSW index)
+    # plus the partial-index CREATE exceed nlp_db's 10min ``statement_timeout`` on a
+    # grown/loaded corpus → the statement is cancelled and the migrate container
+    # restart-loops without ever committing. Disable the timeout for THIS migration
+    # transaction only (transaction-local; reverts on commit). Bounded operations,
+    # run once under supervision.
+    op.execute("SET LOCAL statement_timeout = 0")
+
     # ── 2. Backfill from document_source_metadata via doc_id ──────────────────
     # chunk_embeddings → chunks(doc_id) → document_source_metadata(source_type)
     op.execute(
