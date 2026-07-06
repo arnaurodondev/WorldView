@@ -59,9 +59,9 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.10 (deep-question reasoning-rigor) added the REASONING RIGOR ON DEEP
-    # QUESTIONS block on top of v1.9's ANALYTICAL / WHAT-IF projection permission.
-    assert ident.startswith("chat_synthesis_system@1.10#")
+    # v1.11 (data-coverage-boundary honesty) added the DATA-COVERAGE BOUNDARY block
+    # on top of v1.10's deep-question reasoning-rigor and v1.9's what-if permission.
+    assert ident.startswith("chat_synthesis_system@1.11#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -236,6 +236,44 @@ def test_synthesis_prompt_deep_question_reasoning_rigor() -> None:
     assert "ANALYTICAL / WHAT-IF QUESTIONS" in rendered
     assert "blanket forecast refusal is a FAILURE" in rendered.replace("\n", " ")
     # GUARDRAIL: the no-fabrication rules for factual claims must STILL be present.
+    assert "ANTI-FABRICATION POLICY" in rendered
+    assert "GROUND EVERY ROW — DO NOT FABRICATE" in rendered
+
+
+def test_synthesis_prompt_data_coverage_boundary() -> None:
+    """v1.11 (data-coverage-boundary honesty): when the user asks for a dimension
+    the platform genuinely does not carry — revenue / financials by BUSINESS
+    SEGMENT, PRODUCT LINE, or GEOGRAPHY (absent from EODHD standard fundamentals) —
+    the model must state plainly this is a COVERAGE boundary, not imply a transient
+    retrieval miss ("could not be calculated"). The block must (a) exist and name
+    the segment/business-line/geographic breakdown + "coverage"; (b) forbid the
+    misleading transient-failure phrasing; (c) still offer what IS available; and
+    (d) be scoped so it does NOT cause refusals for answerable questions.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # (a) the block exists and names the uncovered dimensions + "coverage".
+    assert "DATA-COVERAGE BOUNDARY" in rendered
+    assert "BUSINESS SEGMENT" in rendered
+    assert "business-line" in rendered
+    assert "GEOGRAPHY" in rendered or "geographic" in rendered
+    assert "coverage" in rendered
+    # (b) forbid the misleading transient-miss phrasing.
+    assert "could not be calculated from the retrieved information" in rendered
+    assert "coverage boundary, not a miss" in rendered
+    # segment detail is in un-ingested SEC-filing footnotes; fundamentals are totals.
+    assert "SEC-filing footnotes" in rendered
+    assert "COMPANY-LEVEL totals" in rendered
+    # (c) still offer what IS available.
+    assert "OFFER WHAT IS AVAILABLE" in rendered
+    # (d) must NOT widen into a general refusal — scoped to uncovered dimensions.
+    assert "NEVER an excuse to refuse a question the tools CAN" in rendered
+    assert "Do not widen this into a general refusal" in rendered
+
+    # GUARDRAIL: v1.10 reasoning-rigor, v1.9 what-if permission, and the
+    # no-fabrication / grounding / projection rules must STILL be present (additive).
+    assert "REASONING RIGOR ON DEEP QUESTIONS" in rendered
+    assert "ANALYTICAL / WHAT-IF QUESTIONS" in rendered
+    assert "blanket forecast refusal is a FAILURE" in rendered.replace("\n", " ")
     assert "ANTI-FABRICATION POLICY" in rendered
     assert "GROUND EVERY ROW — DO NOT FABRICATE" in rendered
 
