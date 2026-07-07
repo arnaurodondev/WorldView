@@ -245,6 +245,33 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.15 — 2026-07-06 (eval FAIL routing fixes — date-anchored fundamentals args, earnings→fundamentals routing + fallback)
+
+- **D3 — date-anchored fundamentals arguments (highest-leverage prompt fix).**
+  `get_fundamentals_history(periods=N)` returns the LATEST N quarters (anchored
+  on "now" ≈ 2026). A question naming a specific past period
+  (`da_tsla_revenue_2024_full_year`, `da_nvda_amd_compare_fy2024q3`) answered
+  with `periods=N` got 2025-26 quarters and missed the 2024 target → the model
+  fabricated 2024 labels or refused, even though the 2024 rows exist via
+  `from_date`/`to_date`. v1.15 adds a `DATE-ANCHORED ARGUMENTS` rule to the
+  FINANCIAL_DATA addendum: a named past quarter / period-end / calendar-or-fiscal
+  year MUST be bounded with `from_date`/`to_date` (or `date_from`/`date_to`),
+  never `periods=N`; with a worked TSLA FY2024-Q4 example. `periods=N` is
+  reserved for latest / most-recent windows.
+- **D5 — earnings ⇒ fundamentals routing + fallback-before-refuse.** "What did
+  MSFT report / earnings figures for FY2024-Q4" (`da_msft_fy2024q4_earnings_citations`,
+  `iter3_msft_earnings_citations`) routed to `get_filings` / `search_events`
+  (empty) then refused — but the reported earnings NUMBERS live in the
+  fundamentals tools, not in filings/events (which carry only the narrative +
+  citation). v1.15 adds a TOOL ROUTING line routing earnings-report /
+  reported-numbers questions to `query_fundamentals` / `get_fundamentals_history`
+  first (filings/news add citation/context only), plus a `FALLBACK BEFORE
+  REFUSING` rule: an empty/errored FIRST tool MUST trigger the next-best tool
+  before any refusal.
+- **Impact.** Flips the content hash. Additive; no grounding / anti-fabrication /
+  citation rule is relaxed. Consistent with chat_synthesis_system v1.13 (the
+  synthesis-turn half of the same eval FAIL analysis: D7/D8/D4).
+
 ### 1.14 — 2026-07-06 (synthesis-behavior fixes — valuation-not-a-forecast, attempt-before-refuse, cover-every-entity)
 
 - **C7 — valuation analysis is not a price forecast.** The advice/price-forecast
@@ -383,6 +410,36 @@ is unchanged.
 > Note: CHANGELOG entries for v1.8–v1.11 were not recorded here at the time; the
 > full rationale for each lives in the version-log comments in
 > `src/prompts/chat/synthesis.py`. v1.12 below resumes the CHANGELOG.
+
+### 1.13 — 2026-07-06 (eval FAIL synthesis fixes — anti-over-refusal on partial failure, empty-result no-fabrication, no-placeholder-for-present-field)
+
+- **D7 — anti-over-refusal on partial tool failure.** `cmp_nvda_amd` had NVDA/AMD
+  core fundamentals `status=ok` but ABANDONED the comparison because the SEGMENT
+  (data-center) metric query errored and the news call timed out — a
+  data-gap-as-give-up, with no verdict emitted. v1.13 extends the REASONING RIGOR
+  block with a `PARTIAL / ERRORED TOOL → SYNTHESISE FROM WHAT SUCCEEDED` rule: a
+  partial/errored tool NEVER suppresses synthesis from the successful results;
+  reason qualitatively around the missing coverage field; treat an
+  unsupported-metric / "not covered" sentinel (a sibling adds one on the
+  market-data side) as a coverage gap to reason around, not a failure; never emit
+  a blanket "cannot be grounded" when core data WAS returned.
+- **D8 — fabrication guard on empty results.** `compare_entities` with non-US
+  tickers returned empty → the model hallucinated "Estée Lauder"; a competitor
+  chain hallucinated "Shift4 (FOUR)" from the phrase "past FOUR quarters." v1.13
+  adds ANTI-FABRICATION rule 4: on an EMPTY tool result, never name an
+  entity/ticker absent from ALL tool results, and never derive a ticker from the
+  question's own tokens ("four"→FOUR, "MA"→Mastercard); say the data isn't
+  available instead. (A sibling handles non-US-ticker mapping on the tool side.)
+- **D4 (prompt half) — no placeholder for a present field.** The model wrote a
+  dash placeholder for a P/E field the tool actually returned (`pe_ratio=37.32`).
+  v1.13 adds a bullet to TRUST YOUR TOOL RESULTS forbidding a "—"/"N/A"
+  placeholder for a value that IS present in a tool result (a placeholder is
+  permitted only for a genuinely-absent field). (The sibling orchestrator agent
+  strips the gpt-oss `【commentary…】` channel leak — the code half of D4.)
+- **Impact.** Flips the content hash. Additive; every v1.9–v1.12 rule is kept and
+  no grounding / anti-fabrication / projection rule is relaxed. Consistent with
+  tool_use_system v1.15 (the planning-turn half of the same eval FAIL analysis:
+  D3/D5).
 
 ### 1.12 — 2026-07-06 (synthesis-behavior fixes — trust ok results, valuation-not-a-forecast, cover-every-entity)
 

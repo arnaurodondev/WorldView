@@ -59,9 +59,9 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.12 (synthesis-behavior fix-plan A1 + C7 + A4) on top of v1.11's
-    # data-coverage-boundary, v1.10's reasoning-rigor and v1.9's what-if permission.
-    assert ident.startswith("chat_synthesis_system@1.12#")
+    # v1.13 (fix-plan D7 + D8 + D4) on top of v1.12's synthesis-behavior fixes,
+    # v1.11's data-coverage-boundary, v1.10's reasoning-rigor and v1.9's what-if.
+    assert ident.startswith("chat_synthesis_system@1.13#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -352,3 +352,72 @@ def test_synthesis_prompt_comparison_covers_every_entity() -> None:
     # Thin data is reported, not deleted.
     assert "never silently drop it" in rendered
     assert "not grounds to delete" in rendered
+
+
+def test_synthesis_prompt_partial_tool_failure_no_over_refusal() -> None:
+    """D7 (fix-plan, 2026-07-06): cmp_nvda_amd had NVDA/AMD core fundamentals
+    status=ok but ABANDONED the comparison when the SEGMENT metric query errored
+    + news timed out. The REASONING RIGOR block must add a PARTIAL / ERRORED TOOL
+    rule: a partial/errored tool NEVER suppresses synthesis from the successful
+    results; reason qualitatively around the missing coverage field; treat an
+    unsupported-metric / "not covered" sentinel as a coverage gap, not a failure;
+    never emit a blanket "cannot be grounded" when core data was returned.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    assert "PARTIAL / ERRORED TOOL" in rendered
+    # A failed tool never suppresses synthesis from the successful ones.
+    assert "NEVER suppresses synthesis" in rendered
+    assert "status=ok" in rendered
+    # The unsupported-metric / "not covered" sentinel is a coverage gap, not a fail.
+    assert "not covered" in rendered
+    assert "COVERAGE GAP" in rendered or "coverage gap" in rendered
+    # No blanket "cannot be grounded" when core data returned.
+    assert "blanket" in rendered
+    assert "when core data WAS returned" in rendered
+    # GUARDRAIL: the v1.10 reasoning-rigor block it extends is still present.
+    assert "REASONING RIGOR ON DEEP QUESTIONS" in rendered
+    assert "ABSENCE IS NOT EVIDENCE" in rendered
+
+
+def test_synthesis_prompt_empty_result_no_fabrication() -> None:
+    """D8 (fix-plan, 2026-07-06): compare_entities on non-US tickers returned
+    empty -> hallucinated "Estée Lauder"; chain_competitor hallucinated
+    "Shift4 (FOUR)" from "past FOUR quarters." ANTI-FABRICATION rule 4 must:
+    (a) forbid naming an entity/ticker absent from ALL tool results on an EMPTY
+    result, (b) forbid deriving a ticker from the question's own tokens, and
+    (c) tell the model to say the data isn't available instead.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # (a) empty result → no new entity/ticker not present in a tool result.
+    assert "EMPTY RESULT → NAME NO NEW ENTITY" in rendered
+    assert "NOT present in SOME tool result" in rendered
+    # (b) never derive a ticker from question tokens — the two live examples.
+    assert "FOUR" in rendered  # "past FOUR quarters" ⇏ ticker FOUR / Shift4
+    assert "Estée Lauder" in rendered
+    # (c) say the data isn't available instead of filling the gap.
+    assert "not available for the\n   requested entities" in rendered or (
+        "not available for the requested entities" in rendered.replace("\n   ", " ")
+    )
+    # GUARDRAIL: the three original ANTI-FABRICATION rules are still present.
+    assert "ANTI-FABRICATION POLICY" in rendered
+    assert "NEVER invent periods" in rendered
+    assert "NEVER add entities" in rendered
+
+
+def test_synthesis_prompt_no_placeholder_for_present_field() -> None:
+    """D4 prompt half (fix-plan, 2026-07-06): the model wrote a dash placeholder
+    for a P/E field the tool actually returned (pe_ratio=37.32). The TRUST YOUR
+    TOOL RESULTS block must forbid emitting a placeholder for a field whose value
+    IS present in a tool result, while still permitting a placeholder for a
+    genuinely-absent field.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # Names the placeholder tokens and forbids them for a PRESENT value.
+    assert "NEVER write a placeholder" in rendered
+    assert "whose value IS present" in rendered
+    # The exact live example value must be named.
+    assert "37.32" in rendered
+    assert "grounding failure" in rendered
+    # A placeholder is permitted ONLY for a genuinely-absent field (not banned outright).
+    assert "genuinely absent" in rendered
+    assert "from every returned row" in rendered

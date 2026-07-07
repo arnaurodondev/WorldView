@@ -152,10 +152,37 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          (A4) COVER EVERY ENTITY rule added to the COMPARISON addendum — a
     #          comparison dropped a requested entity ("NVIDIA not relevant") and
     #          invented a scope narrowing; every named entity must be covered.
-    version="1.14",
+    #   1.15 — 2026-07-06 (fix-plan D3 + D5): two routing fixes on the planning
+    #          turn surfaced by the eval FAIL analysis.
+    #          (D3, HIGHEST leverage) DATE-ANCHORED ARGUMENTS added to the
+    #          FINANCIAL_DATA addendum — a question naming a specific past quarter
+    #          / year (da_tsla_revenue_2024_full_year, da_nvda_amd_compare_fy2024q3)
+    #          was answered with periods=N, which returns the LATEST N quarters
+    #          (2025-26) and misses the 2024 target → fabricated 2024 labels or
+    #          refusal. The rule forces from_date/to_date (date_from/date_to)
+    #          bounding for any named past period, with a worked TSLA FY2024-Q4
+    #          example; periods=N is reserved for latest/most-recent windows.
+    #          (D5) EARNINGS ⇒ FUNDAMENTALS routing + FALLBACK-BEFORE-REFUSING
+    #          added to the core TOOL ROUTING block — "what did MSFT report /
+    #          earnings figures for <period>" (da_msft_fy2024q4_earnings_citations,
+    #          iter3_msft_earnings_citations) routed to get_filings / search_events
+    #          (empty) then refused; the reported NUMBERS live in the fundamentals
+    #          tools. Earnings-report questions now route to query_fundamentals /
+    #          get_fundamentals_history first (filings/news add citation/context
+    #          only), and an empty result from one tool MUST trigger a fallback
+    #          tool before refusing.
+    version="1.15",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.14 fixes three synthesis-behaviour bugs: C7 excludes valuation "
+        "(v1.15 fixes two routing bugs from the eval FAIL analysis: D3 adds a "
+        "DATE-ANCHORED ARGUMENTS rule (a named past quarter/year MUST be queried "
+        "with from_date/to_date, never periods=N which returns the latest N and "
+        "misses the target) to the FINANCIAL_DATA addendum; D5 routes "
+        "earnings-report / 'what did X report' questions to the fundamentals "
+        "tools first — the reported numbers live there, not in filings/events — "
+        "and adds a FALLBACK-BEFORE-REFUSING rule so an empty first tool triggers "
+        "a fallback before any refusal; "
+        "v1.14 fixes three synthesis-behaviour bugs: C7 excludes valuation "
         "multiples (P/E, EV/EBITDA, expensive/cheap vs history/peers) from the "
         "price-forecast refusal; A5 adds an ATTEMPT-BEFORE-REFUSING rule so an "
         "answerable factual/financial question is never refused before the "
@@ -512,9 +539,33 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "`traverse_graph` or `search_entity_relations`.\n"
         "- numbers (revenue, EPS, P/E, margins) -> `query_fundamentals` / "
         "`get_fundamentals_history_batch`.\n"
+        # 1.15 (2026-07-06, fix-plan D5): "what did MSFT report / MSFT's
+        # earnings figures for FY2024-Q4" routed to get_filings / search_events,
+        # both empty, then refused. The reported earnings NUMBERS (revenue, EPS,
+        # net income, margins) live in the fundamentals tools, NOT in filings /
+        # events (those carry only the narrative + citation, not the figures).
+        # Route earnings-report / reported-numbers questions to the fundamentals
+        # tools FIRST; use filings / news only for the narrative or citation.
+        "- 'what did X report' / 'X's earnings (figures / results / numbers) for "
+        "<period>' / 'how did X do last quarter' -> the REPORTED NUMBERS live in "
+        "`query_fundamentals` / `get_fundamentals_history(_batch)` — call those "
+        "FIRST. `get_filings` / `search_events` carry only the narrative + a "
+        "citation, NOT the earnings figures; use them to ADD a citation/context, "
+        "never as the sole source for the reported numbers, and never as the "
+        "reason to refuse when the fundamentals tools can supply the figures.\n"
         "`search_documents` is a FALLBACK for open-ended free-text only — reach "
         "for it AFTER the matching structured tool above, never as the first "
-        "choice for news, competitors, events, relations, or numbers.\n\n"
+        "choice for news, competitors, events, relations, or numbers.\n"
+        # 1.15 (2026-07-06, fix-plan D5): an empty result from ONE tool must
+        # trigger a FALLBACK tool before refusing (msft earnings looped
+        # get_filings→empty→refuse without ever trying query_fundamentals).
+        "FALLBACK BEFORE REFUSING: if the FIRST tool you routed to returns 0 rows "
+        "or errors, you MUST try the next-best tool for that question shape "
+        "before concluding the data is unavailable — e.g. get_filings / "
+        "search_events empty on an earnings question ⇒ fall back to "
+        "query_fundamentals / get_fundamentals_history; get_entity_news empty ⇒ "
+        "fall back to search_documents. Refuse only AFTER the fallback also came "
+        "back empty/errored.\n\n"
         # FIX-LIVE-S (2026-05-25): Q5 ("macro events affecting Tesla") graded
         # USELESS because the agent called only get_economic_calendar — when
         # it returned zero events the answer pipeline gave up.  A real macro
@@ -612,6 +663,31 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "(quarter-over-quarter) growth, request periods >= 5 so the "
         "prior-period comparison quarter is included. For multi-quarter "
         "trend questions, default to periods=6.\n\n"
+        # 1.15 (2026-07-06, fix-plan D3 — HIGHEST-leverage prompt fix):
+        # `get_fundamentals_history(periods=N)` returns the LATEST N quarters
+        # (anchored on "now" ≈ 2026). A question about a SPECIFIC past quarter /
+        # year (e.g. "TSLA revenue for FY2024-Q4", "AAPL's Dec-2024 P/E") that is
+        # answered with periods=N gets the most-RECENT quarters (2025-26) — the
+        # 2024 target is not in the window, so the model fabricates 2024 labels
+        # or refuses. The 2024 rows DO exist and are reachable via the
+        # from_date/to_date (a.k.a. date_from/date_to) bounds. Force a
+        # date-bounded query for any NAMED past period.
+        "DATE-ANCHORED ARGUMENTS (mandatory for named past periods):\n"
+        "When the question names a SPECIFIC past quarter, period-end date, or\n"
+        "calendar/fiscal year (e.g. 'FY2024-Q4', 'the quarter ending Sep 2024',\n"
+        "'full-year 2024', 'Dec 2024'), you MUST bound the fundamentals query with\n"
+        "`from_date`/`to_date` (or `date_from`/`date_to`) covering that exact\n"
+        "window. NEVER rely on `periods=N` for a named past period: `periods=N`\n"
+        "returns the most-RECENT N quarters (anchored on today), so it will MISS\n"
+        "any past-year target and lead you to fabricate the requested period's\n"
+        "labels or wrongly refuse. Worked example — 'What was TSLA's revenue for\n"
+        "FY2024-Q4?': call get_fundamentals_history(ticker='TSLA',\n"
+        "from_date='2024-10-01', to_date='2024-12-31') (bounding calendar\n"
+        "2024-Q4) — do NOT call get_fundamentals_history(ticker='TSLA',\n"
+        "periods=4), which returns 2025-26 quarters and misses the 2024 target.\n"
+        "For a full past YEAR, bound Jan 1 to Dec 31 of that year. Only fall back\n"
+        "to `periods=N` when the question is about the LATEST / most-recent periods,\n"
+        "not a named historical one.\n\n"
         # PLAN-0103 W23 BP-639: RATIO-OR-TTM directive. The chat-quality
         # benchmark question "What's AAPL's P/E ratio?" was answered with
         # a fabricated "37.7x" sourced from a single-quarter snapshot

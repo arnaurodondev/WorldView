@@ -681,3 +681,63 @@ class TestToolUsePromptContract:
         assert "Do NOT recompute the fiscal quarter" in prompt
         # Issuer-specific examples so the LLM recognises non-calendar FY-ends.
         assert "Apple" in prompt and "Microsoft" in prompt
+
+    def test_prompt_template_version_bumped_for_routing_fixes(self) -> None:
+        """v1.15 adds D3 (date-anchored args) + D5 (earnings routing + fallback),
+        both edit the template body (flipping the content hash), so the semver
+        version MUST advance to >= 1.15. Pinning the floor catches an accidental
+        revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 15), f"expected version >= 1.15 for routing fixes, got {_ver}"
+
+    def test_financial_data_addendum_contains_date_anchored_rule(self) -> None:
+        """D3 (fix-plan, 2026-07-06 — HIGHEST leverage): a question naming a
+        specific past quarter/year (da_tsla_revenue_2024_full_year) was answered
+        with periods=N — which returns the LATEST N quarters (2025-26) and misses
+        the 2024 target → fabricated 2024 labels or refusal. The FINANCIAL_DATA
+        addendum must add a DATE-ANCHORED ARGUMENTS rule: a named past period MUST
+        be bounded with from_date/to_date (or date_from/date_to), never periods=N,
+        with a worked TSLA FY2024-Q4 example.
+        """
+        prompt = get_tool_use_system_prompt(intent="FINANCIAL_DATA", today_iso="2026-07-06")
+        # Section anchor.
+        assert "DATE-ANCHORED ARGUMENTS (mandatory for named past periods):" in prompt
+        # The date-bound argument names (both spellings) must be named.
+        assert "from_date" in prompt and "to_date" in prompt
+        assert "date_from" in prompt and "date_to" in prompt
+        # The explicit anti-pattern: periods=N returns the most-recent N, misses target.
+        assert "NEVER rely on `periods=N` for a named past period" in prompt
+        assert "most-RECENT N quarters" in prompt
+        # The worked example must be present so the model has a concrete template.
+        assert "FY2024-Q4" in prompt
+        assert "from_date='2024-10-01'" in prompt and "to_date='2024-12-31'" in prompt
+        # The directive must NOT leak into intents where it would distort format.
+        for intent in ("MACRO", "GENERAL", "PORTFOLIO"):
+            other = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-06")
+            assert (
+                "DATE-ANCHORED ARGUMENTS (mandatory for named past periods):" not in other
+            ), f"DATE-ANCHORED rule leaked into {intent} addendum"
+
+    def test_core_routes_earnings_to_fundamentals_with_fallback(self) -> None:
+        """D5 (fix-plan, 2026-07-06): "what did MSFT report / earnings figures for
+        <period>" routed to get_filings / search_events (empty) then refused — the
+        reported NUMBERS live in the fundamentals tools. The core TOOL ROUTING
+        block must (a) route earnings-report / reported-numbers questions to
+        query_fundamentals / get_fundamentals_history first (filings/news add
+        citation/context only), and (b) add a FALLBACK-BEFORE-REFUSING rule so an
+        empty first tool triggers a fallback before any refusal. Being CORE, it
+        must appear across intents.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "FACTUAL_LOOKUP"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-06")
+            # (a) earnings-report questions route to the fundamentals tools first.
+            assert "what did X report" in prompt, f"intent={intent}: missing earnings routing"
+            assert "the REPORTED NUMBERS live in" in prompt
+            assert "query_fundamentals" in prompt and "get_fundamentals_history" in prompt
+            # filings/events are citation/context only, never the sole source / refusal reason.
+            assert "carry only the narrative" in prompt
+            # (b) the fallback-before-refuse rule.
+            assert "FALLBACK BEFORE REFUSING" in prompt
+            assert "try the next-best tool" in prompt
+            assert "Refuse only AFTER the fallback" in prompt

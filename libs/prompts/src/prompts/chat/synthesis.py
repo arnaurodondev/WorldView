@@ -109,6 +109,12 @@ get to second-guess. The opposite of fabrication is just as wrong:
   data" when it is plainly present in a tool result above. Read every field of
   the result before deciding something is missing — e.g. if the user asks for a
   high/low and a row carries ``high`` and ``low`` fields, answer with them.
+- NEVER write a placeholder "—", "N/A", "not available", or "-" for a field
+  whose value IS present in a tool result. If a fundamentals row carries
+  ``pe_ratio: 37.32``, the answer says 37.32 (with its [tool_name row N] tag) —
+  writing "—" for a value the tool actually returned is a grounding failure, not
+  a caveat. A placeholder is permitted ONLY for a field that is genuinely absent
+  from every returned row.
 - If a tool that PERFORMS AN ACTION (e.g. create_alert, place_order) returned a
   success/ok status, the action SUCCEEDED. Confirm it plainly ("Done — I've set
   the alert ..."). NEVER claim you "can't" do it, that it is "not permitted", or
@@ -174,6 +180,20 @@ Reason RIGOROUSLY over what was retrieved WITHOUT loosening grounding:
   (discuss data-center momentum from the retrieved news even without the exact
   revenue figure). This means reasoning from OTHER retrieved evidence — it is
   NEVER a licence to invent, guess, or speculate the missing number.
+- PARTIAL / ERRORED TOOL → SYNTHESISE FROM WHAT SUCCEEDED, NEVER ABANDON. When
+  SOME tools returned status=ok / non-empty core data but ANOTHER tool errored,
+  timed out, or returned a "not covered" / unsupported-metric sentinel, you MUST
+  still write the full answer from the SUCCESSFUL results — the failed tool
+  NEVER suppresses synthesis from the ones that worked. Example: a NVDA-vs-AMD
+  comparison where both companies' core fundamentals came back status=ok but a
+  SEGMENT (data-center) metric query errored and the news call timed out — you
+  MUST still deliver the comparison from the core fundamentals, and reason
+  qualitatively around the missing segment field (per the rule above). Treat an
+  unsupported-metric / "not covered" sentinel from a tool as a COVERAGE GAP to
+  reason around — exactly like a missing field — NOT as a failure of the whole
+  answer. NEVER emit a blanket "this cannot be grounded" / "I couldn't determine"
+  / "no comparison can be made" when core data WAS returned: name only the
+  specific dimension that is missing and answer everything else in full.
 - ABSENCE IS NOT EVIDENCE. Data that was not retrieved is a GAP in the retrieved
   set, never a fact about the world. NEVER infer an advantage, a disadvantage, or
   any positive/negative conclusion from missing/absent data — e.g. no AMD↔TSMC
@@ -253,6 +273,16 @@ specific part that is genuinely unavailable, never the whole answer.
    scalar fields (high, low, revenue, eps, …) on the rows above. Decline ONLY
    the specific field that is genuinely absent — never the whole row or answer
    when other fields on it are present.
+4. EMPTY RESULT → NAME NO NEW ENTITY, DERIVE NO TICKER. When a tool returns
+   EMPTY (zero rows) — e.g. compare_entities on non-US tickers, or a competitor
+   lookup that came back with nothing — you MUST NOT populate the answer with any
+   company, entity, or ticker that is NOT present in SOME tool result this turn.
+   NEVER invent a plausible peer (e.g. answering an empty Apple-competitors query
+   with "Estée Lauder"), and NEVER derive a ticker from the WORDS of the question
+   ("past FOUR quarters" ⇏ ticker FOUR / Shift4; "a MAJOR player" ⇏ ticker MA).
+   A ticker or entity is usable ONLY when a tool actually returned it. When the
+   tool came back empty, say plainly that the data is not available for the
+   requested entities rather than filling the gap with a name you supplied.
 
 ## PERIOD-MATCHING — BIND EVERY FIGURE TO ITS ROW'S OWN LABEL
 A figure is only correct under the period the tool's own row gives it. The table
@@ -471,7 +501,33 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     #   cover every entity the user named, thin data is reported not dropped, and
     #   inventing a reason to exclude an entity is forbidden. NARROW + additive: no
     #   grounding / anti-fabrication / projection rule is relaxed.
-    version="1.12",
+    # 1.13 (fix-plan D7 + D8 + D4, 2026-07-06): three synthesis-turn defects
+    # surfaced by the eval FAIL analysis.
+    #   (D7) ANTI-OVER-REFUSAL ON PARTIAL TOOL FAILURE. cmp_nvda_amd had NVDA/AMD
+    #   core fundamentals status=ok but ABANDONED the comparison because the
+    #   SEGMENT metric query errored + news timed out (data-gap-as-give-up), and
+    #   emitted no verdict. Extended the REASONING RIGOR block with a PARTIAL /
+    #   ERRORED TOOL bullet: a partial/errored tool NEVER suppresses synthesis
+    #   from the SUCCESSFUL results; reason qualitatively around the missing
+    #   coverage field; treat an unsupported-metric / "not covered" sentinel (a
+    #   sibling adds one on the market-data side) as a coverage gap to reason
+    #   around, not a failure; never emit a blanket "cannot be grounded" when core
+    #   data was returned.
+    #   (D8) FABRICATION GUARD ON EMPTY RESULTS. compare_entities with non-US
+    #   tickers returned empty -> hallucinated "Estee Lauder"; chain_competitor
+    #   hallucinated "Shift4 (FOUR)" from "past FOUR quarters." Added ANTI-
+    #   FABRICATION rule 4: when a tool returns EMPTY, never name an entity/ticker
+    #   absent from ALL tool results, and never derive a ticker from question
+    #   tokens ("four"->FOUR, "MA"->Mastercard); say the data isn't available. (A
+    #   sibling handles non-US-ticker mapping on the tool side.)
+    #   (D4, prompt half) NO PLACEHOLDER FOR A PRESENT FIELD. The model wrote a
+    #   dash placeholder for a P/E field the tool actually returned (pe_ratio=
+    #   37.32). Added a bullet to TRUST YOUR TOOL RESULTS forbidding a "-"/"N/A"
+    #   placeholder for a value present in a tool result. (The sibling orchestrator
+    #   agent strips the gpt-oss commentary-channel leak — the code half of D4.)
+    # NARROW + additive: KEEPS every v1.9-v1.12 rule; no grounding / anti-
+    # fabrication / projection rule is relaxed.
+    version="1.13",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -535,6 +591,19 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "(A4) adds the COMPARISON / MULTI-ENTITY — COVER EVERY ENTITY NAMED block "
         "so a comparison never drops a requested entity or invents a scope "
         "narrowing. Additive; no grounding / anti-fabrication / projection rule "
+        "relaxed. "
+        "v1.13 fixes three synthesis-turn defects from the eval FAIL analysis: "
+        "(D7) extends REASONING RIGOR with a PARTIAL / ERRORED TOOL rule — a "
+        "partial/errored tool NEVER suppresses synthesis from the successful "
+        "results; reason qualitatively around the missing coverage field and "
+        "treat an unsupported-metric / 'not covered' sentinel as a gap, not a "
+        "failure (fixes cmp_nvda_amd abandoning a comparison whose core "
+        "fundamentals were status=ok); (D8) adds ANTI-FABRICATION rule 4 — on an "
+        "EMPTY tool result, never name an entity/ticker absent from all tool "
+        "results and never derive a ticker from question tokens ('four'->FOUR) "
+        "(fixes the Estee-Lauder / Shift4 hallucinations); (D4 prompt half) "
+        "forbids a '-'/'N/A' placeholder for a field whose value IS present in a "
+        "tool result. Additive; no grounding / anti-fabrication / projection rule "
         "relaxed."
     ),
     template=_TEMPLATE,
