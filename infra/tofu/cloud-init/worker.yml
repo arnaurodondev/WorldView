@@ -1,6 +1,12 @@
 #cloud-config
 # cloud-init for k3s worker nodes
-# Templated by OpenTofu — k3s_token and cp_private_ip are substituted at apply time
+# Templated by OpenTofu — k3s_token, cp_private_ip and node_role are
+# substituted at apply time.
+#
+# node_role is CRITICAL: the k3s agent joins with `--node-label
+# node-role=${node_role}` (either "stateful" or "stateless"). Every workload
+# in the platform nodeSelects on node-role, so a worker that joins WITHOUT
+# this label leaves all its pods Pending forever (B4).
 
 package_update: true
 packages:
@@ -10,13 +16,28 @@ packages:
   - netcat-openbsd
 
 runcmd:
+  # ── Swap (B12) ─────────────────────────────────────────────────────────────
+  # 8 GB swapfile prevents OOM-kill on the over-committed stateful node under
+  # NLP/embedding/DB load. Mirrors infra/gitops/scripts/hetzner-bootstrap.sh
+  # (which uses 4 GB); the stateful node needs the larger 8 GB headroom.
+  - |
+    if [ ! -f /swapfile ]; then
+      fallocate -l 8G /swapfile
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+
   # Wait until the control-plane API is reachable on the private network
   - until nc -z ${cp_private_ip} 6443; do sleep 5; done
 
-  # Join the cluster as an agent (worker)
+  # Join the cluster as an agent (worker), labelled with its node-role so the
+  # scheduler can place stateful vs. stateless workloads on the right node.
   - |
     curl -sfL https://get.k3s.io | \
       INSTALL_K3S_VERSION="v1.31.4+k3s1" \
       K3S_URL="https://${cp_private_ip}:6443" \
       K3S_TOKEN="${k3s_token}" \
-      sh -s - agent
+      sh -s - agent \
+        --node-label "node-role=${node_role}"

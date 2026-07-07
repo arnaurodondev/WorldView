@@ -66,18 +66,9 @@ resource "hcloud_volume_attachment" "valkey" {
   automount = true
 }
 
-resource "hcloud_volume" "ollama" {
-  name     = "worldview-ollama"
-  size     = 30  # Ollama models: qwen2.5:3b ~2GB, nomic-embed-text ~270MB, bge-* ~1.5GB each
-  location = var.region
-  format   = "ext4"
-}
-
-resource "hcloud_volume_attachment" "ollama" {
-  volume_id = hcloud_volume.ollama.id
-  server_id = hcloud_server.worker1.id
-  automount = true
-}
+# NOTE: the Ollama model volume was removed 2026-07-06 — Ollama was dropped from the
+# platform (all embedding/extraction use DeepInfra; GLiNER bakes its model into the
+# image). No dedicated model volume is needed.
 
 # ── Object Storage for Tofu state backend ─────────────────────────────────────
 # The S3 bucket itself cannot be managed by Tofu (chicken-and-egg problem —

@@ -1,6 +1,14 @@
 #cloud-config
 # cloud-init for k3s control-plane node
-# Templated by OpenTofu — k3s_token and floating_ip are substituted at apply time
+# Templated by OpenTofu — k3s_token and domain are substituted at apply time.
+#
+# NOTE (B16): there is no floating IP any more. Traefik runs as a
+# type: LoadBalancer Service, so the Hetzner Cloud Controller Manager (CCM)
+# provisions a Hetzner Load Balancer at runtime — that LB is the public
+# ingress, not a tofu-managed floating IP. The API-server TLS SAN and the
+# kubeconfig rewrite therefore use the control-plane node's own public IP,
+# fetched from the Hetzner metadata service at boot (the node cannot reference
+# its own tofu-computed IP in its own user_data without a dependency cycle).
 
 package_update: true
 package_upgrade: true
@@ -14,17 +22,24 @@ packages:
 runcmd:
   # Install k3s server (control-plane) with:
   #   - Traefik disabled (we install our own via Helm)
-  #   - ServiceLB disabled (we use Hetzner CCM LoadBalancer)
-  #   - TLS SAN = floating IP (so kubeconfig works with the stable IP)
+  #   - ServiceLB disabled (we use the Hetzner CCM LoadBalancer)
+  #   - TLS SAN = public IP (+ domain if set) so kubeconfig works remotely
   #   - NoSchedule taint on CP (app workloads go to workers)
+  # NOTE: each runcmd entry runs in its own shell, so PUBLIC_IP is fetched
+  # from the Hetzner metadata service inside every block that needs it.
   - |
+    PUBLIC_IP="$(curl -sf http://169.254.169.254/hetzner/v1/metadata/public-ipv4)"
+    TLS_SAN_ARGS="--tls-san $PUBLIC_IP"
+    if [ -n "${domain}" ]; then
+      TLS_SAN_ARGS="$TLS_SAN_ARGS --tls-san ${domain}"
+    fi
     curl -sfL https://get.k3s.io | \
       INSTALL_K3S_VERSION="v1.31.4+k3s1" \
       K3S_TOKEN="${k3s_token}" \
       sh -s - server \
         --disable traefik \
         --disable servicelb \
-        --tls-san "${floating_ip}" \
+        $TLS_SAN_ARGS \
         --node-label "node-role=control-plane" \
         --node-taint "node-role/control-plane:NoSchedule" \
         --write-kubeconfig-mode "0644"
@@ -32,7 +47,8 @@ runcmd:
   # Wait until the node is Ready
   - until kubectl get nodes 2>/dev/null | grep -q " Ready"; do sleep 5; done
 
-  # Rewrite kubeconfig to use the floating IP (accessible from developer machine)
+  # Rewrite kubeconfig to use the public IP (accessible from developer machine)
   - |
-    sed "s/127.0.0.1/${floating_ip}/g" /etc/rancher/k3s/k3s.yaml > /tmp/kubeconfig
+    PUBLIC_IP="$(curl -sf http://169.254.169.254/hetzner/v1/metadata/public-ipv4)"
+    sed "s/127.0.0.1/$PUBLIC_IP/g" /etc/rancher/k3s/k3s.yaml > /tmp/kubeconfig
     chmod 0600 /tmp/kubeconfig

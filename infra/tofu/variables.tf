@@ -17,7 +17,7 @@ variable "cp_type" {
 }
 
 variable "worker1_type" {
-  description = "Server type for worker-1 (stateful: Postgres, Kafka, MinIO, Ollama)"
+  description = "Server type for worker-1 (stateful: Postgres, Kafka, MinIO, GLiNER)"
   type        = string
   default     = "cx52"  # 16 vCPU, 32 GB RAM
 }
