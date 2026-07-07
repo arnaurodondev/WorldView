@@ -1733,6 +1733,10 @@ def _execute_slot(
                 answer_text=result.answer_text or "",
                 tool_calls=[{"name": tc.name, "arguments": tc.arguments} for tc in result.tool_calls],
                 tool_results=list(result.tool_results),
+                # D10: thread the error envelope so an INPUT_REJECTED safety refusal
+                # (empty body, decline text in ``error["message"]``) is spared the
+                # empty-answer veto instead of being force-failed as degenerate.
+                error=result.error if isinstance(result.error, dict) else None,
             )
             judge_result = judge_answer(judge_input)
             judge_record = {"id": q_id, "slot": slot, **judge_result}
