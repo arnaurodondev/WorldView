@@ -1262,8 +1262,44 @@ class MarketHandler(ToolHandler):
         coverage: dict[str, str] = bundle.get("coverage") or {}
 
         if not rows and not snapshot:
-            log.warning("tool_no_data", tool="query_fundamentals", ticker=ticker)
-            return None
+            # D7 (2026-07-06): a valid bundle with NO rows and NO snapshot means the
+            # requested metric(s) are genuinely uncovered (unsupported metric like
+            # ``data_center_revenue``, or no fundamentals for this entity) — NOT a
+            # transient failure. Returning ``None`` here made this indistinguishable
+            # from the transport/timeout ``except`` path, so the model over-refused
+            # ("I couldn't retrieve data") instead of reasoning around a coverage gap.
+            # Emit an explicit COVERAGE-GAP sentinel item so synthesis states the
+            # metric is not covered rather than treating it as a failure. The
+            # ``coverage=not_covered`` grounding marker is NOT allow-listed, so it
+            # never leaks into a grounding sample; it just labels the sentinel.
+            log.info(
+                "tool_coverage_gap",
+                tool="query_fundamentals",
+                ticker=ticker,
+                metrics=metrics,
+            )
+            upper_ticker = ticker.upper()
+            metric_list = ", ".join(metrics)
+            return RetrievedItem.create(
+                item_id=f"tool:fundamentals:{upper_ticker}:not_covered",
+                item_type=ItemType.financial,
+                text=(
+                    f"Coverage gap: the requested metric(s) for {upper_ticker} "
+                    f"({metric_list}) are not covered by the available fundamentals "
+                    "data. This is a data-coverage limitation, not a temporary error "
+                    "— state that the metric is not available rather than estimating it."
+                ),
+                score=0.50,
+                trust_weight=0.90,
+                grounding_fields=(("ticker", upper_ticker), ("coverage", "not_covered")),
+                citation_meta=CitationMeta(
+                    title=f"Fundamentals query: {upper_ticker} (not covered)",
+                    url=None,
+                    source_name="fundamentals",
+                    published_at=None,
+                    entity_name=upper_ticker,
+                ),
+            )
 
         # PLAN-0104 W35 / BP-NEW: align the envelope with
         # ``_handle_get_fundamentals_history`` so numeric_grounding can
@@ -1603,7 +1639,21 @@ class MarketHandler(ToolHandler):
             # can return KeyboardInterrupt, SystemExit, etc. which are BaseException but not Exception.
             if isinstance(item, BaseException) or item.get("error"):  # type: ignore[union-attr]
                 ticker_label = item.get("ticker", "?") if not isinstance(item, BaseException) else "?"  # type: ignore[union-attr]
-                lines.append(f"### {ticker_label} — data unavailable\n")
+                # D8 (2026-07-06): ``find_instrument_by_ticker`` returned None for a
+                # ticker that does not resolve to a US-listed instrument (Samsung /
+                # Huawei / Xiaomi are not on our US universe). The old bare "data
+                # unavailable" line read like a transient gap, so the model filled
+                # it with a WRONG entity (iter3_apple_competitors_spanish →
+                # hallucinated "Estée Lauder"). Emit an EXPLICIT not-covered /
+                # not-US-listed signal so synthesis says so instead of fabricating.
+                err = item.get("error") if not isinstance(item, BaseException) else None  # type: ignore[union-attr]
+                if err == "not_found":
+                    lines.append(
+                        f"### {ticker_label} — not covered: ticker not found or not "
+                        "US-listed (no fundamentals available)\n"
+                    )
+                else:
+                    lines.append(f"### {ticker_label} — data unavailable\n")
                 continue
             ticker = item["ticker"]  # type: ignore[index]
             quote = item.get("quote") or {}  # type: ignore[union-attr]
@@ -1697,6 +1747,20 @@ class MarketHandler(ToolHandler):
             compare_grounding.extend(entity_grounding)
             entity_idx += 1
             lines.append("")
+
+        # D8 (2026-07-06): when NO requested entity resolved to a US-listed
+        # instrument (e.g. an all-non-US comparison set), make the coverage
+        # boundary explicit so synthesis refuses rather than substituting an
+        # unrelated company. Without this the single returned item was just a
+        # header + "not covered" lines, which the model back-filled with a
+        # fabricated entity.
+        if entity_idx == 0:
+            lines.append(
+                "Note: none of the requested entities are covered by US-listed "
+                "fundamentals data. Do not fabricate figures or substitute a "
+                "different company — state that the requested comparison data is "
+                "not available."
+            )
 
         text = "\n".join(lines)
         log.info(

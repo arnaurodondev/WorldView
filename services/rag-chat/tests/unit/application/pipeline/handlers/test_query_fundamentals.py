@@ -398,3 +398,58 @@ async def test_query_fundamentals_synthetic_period_label_when_upstream_null() ->
     # Regression guard: a bare row-leading "| ? |" (the old fallback) is
     # forbidden — it was the source of the "Period -> Period" prose bug.
     assert "| ? |" not in text, "Old '?' fallback leaked into rendered period table"
+
+
+@pytest.mark.asyncio
+async def test_query_fundamentals_unsupported_metric_returns_coverage_sentinel() -> None:
+    """D7 (2026-07-06): a valid bundle with NO rows and NO snapshot (the requested
+    metric is genuinely uncovered, e.g. ``data_center_revenue``) returns an
+    explicit COVERAGE-GAP sentinel item — NOT ``None``.
+
+    ``None`` was indistinguishable from the transport/timeout failure path, so the
+    model over-refused ("I couldn't retrieve data") instead of reasoning around a
+    coverage gap. The sentinel labels itself so synthesis states the metric is not
+    covered; the ``coverage`` grounding marker is not allow-listed so it never
+    leaks into a grounding sample.
+    """
+    s3 = AsyncMock()
+    s3.query_fundamentals = AsyncMock(
+        return_value={
+            "metrics_by_period": [],
+            "snapshot": None,
+            "coverage": {"data_center_revenue": "missing"},
+        }
+    )
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="nvda",
+        metrics=["data_center_revenue"],
+        periods=4,
+    )
+    # Distinct from the transport-error path (which still returns None).
+    assert result is not None
+    assert result.item_id == "tool:fundamentals:NVDA:not_covered"
+    assert "not covered" in result.text.lower()
+    assert "data_center_revenue" in result.text
+    # The coverage marker is present but is NOT an allow-listed grounding field,
+    # so it will never enter a grounding sample.
+    gf = _gf_dict(result)
+    assert gf["ticker"] == "NVDA"
+    assert gf["coverage"] == "not_covered"
+
+
+@pytest.mark.asyncio
+async def test_query_fundamentals_transport_error_still_returns_none() -> None:
+    """D7 guard: the transport/timeout path stays ``None`` (distinct from the
+    coverage-gap sentinel) so a transient failure is not mistaken for a real
+    coverage boundary."""
+
+    s3 = AsyncMock()
+    s3.query_fundamentals = AsyncMock(side_effect=TimeoutError())
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="AAPL",
+        metrics=["revenue"],
+        periods=4,
+    )
+    assert result is None

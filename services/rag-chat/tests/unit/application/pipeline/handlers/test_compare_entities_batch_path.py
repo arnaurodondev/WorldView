@@ -364,3 +364,48 @@ class TestSelectLatestFullyPopulatedPeriod:
             "B": {"status": "error", "reason": "no_quarterly_history"},
         }
         assert _select_latest_fully_populated_period(["A", "B"], batch) is None
+
+
+class TestCompareEntitiesNonUsCoverageSignal:
+    """D8 (2026-07-06): non-US / unresolvable tickers (Samsung / Huawei / Xiaomi
+    are not on our US universe) must yield an EXPLICIT not-covered / not-US-listed
+    signal so synthesis says so, instead of the bare "data unavailable" line that
+    let the model back-fill a WRONG entity (iter3_apple_competitors_spanish →
+    hallucinated "Estée Lauder")."""
+
+    @pytest.mark.asyncio
+    async def test_non_us_ticker_renders_not_covered_signal(self) -> None:
+        s3 = AsyncMock()
+        # AAPL resolves (US-listed); SAMSUNG does not (non-US) → None.
+        s3.find_instrument_by_ticker.side_effect = lambda ticker: {
+            "AAPL": _NVDA_ID,
+        }.get(ticker)
+        s3.get_quote.return_value = {"price": 210.0}
+        s3.get_fundamentals_highlights.return_value = {}
+        s3.get_fundamentals_history_batch.return_value = {
+            "AAPL": {"status": "ok", "periods": [_batch_period(revenue=90e9, eps=1.5, gross=40e9, market_cap=3e12)]},
+        }
+        handler = _make_handler(s3)
+        results = await handler._handle_compare_entities(entity_tickers=["AAPL", "SAMSUNG"])
+        assert len(results) == 1
+        text = results[0].text
+        # The unresolvable ticker is explicitly flagged not-covered / not-US-listed.
+        assert "SAMSUNG" in text
+        assert "not covered" in text.lower()
+        assert "not us-listed" in text.lower() or "not us listed" in text.lower()
+
+    @pytest.mark.asyncio
+    async def test_all_non_us_emits_anti_fabrication_note(self) -> None:
+        """When NO requested entity resolves, an explicit anti-fabrication coverage
+        note is emitted so synthesis refuses rather than substituting a company."""
+        s3 = AsyncMock()
+        s3.find_instrument_by_ticker.side_effect = lambda ticker: None  # nothing US-listed
+        s3.get_fundamentals_history_batch.return_value = {}
+        handler = _make_handler(s3)
+        results = await handler._handle_compare_entities(entity_tickers=["SAMSUNG", "HUAWEI"])
+        assert len(results) == 1
+        text = results[0].text.lower()
+        assert "do not fabricate" in text
+        assert "not available" in text
+        # No grounding numbers were invented for the uncovered entities.
+        assert results[0].grounding_fields == ()

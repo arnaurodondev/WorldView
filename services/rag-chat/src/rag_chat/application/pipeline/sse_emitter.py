@@ -838,6 +838,125 @@ class SSEEmitter:
                 return gf_map[field]
         return None
 
+    # ── D2 (2026-07-06): per-entity / per-period grounding view ────────────────
+    # A period-slot label for the Nth-newest period within an entity. The newest
+    # period keeps ``"latest"``; older periods get ``"p2"``, ``"p3"`` … mirroring
+    # market.py's ``_grounding_fields_from_rows`` suffix convention (newest-first).
+    # NOTE: this is a period *slot* (unambiguous ordinal), not a calendar quarter
+    # — grounding_fields do not carry the fiscal label, but the slot is sufficient
+    # for the LLM to attribute a value to (entity, period) without cross-mixing.
+    @staticmethod
+    def _period_slot_label(slot: int) -> str:
+        return "latest" if slot <= 1 else f"p{slot}"
+
+    @classmethod
+    def _merge_item_into_entity_view(
+        cls,
+        item: Any,
+        allow: tuple[str, ...],
+        view: dict[str, dict[str, dict[str, str]]],
+    ) -> None:
+        """Fold ONE result item's grounding into the ``{entity:{period:{metric:val}}}`` view.
+
+        Handles the two multi-value handler shapes uniformly:
+          * ENTITY-suffixed (compare_entities / get_market_movers): a SINGLE item
+            packs several entities under ``ticker``/``ticker_2`` + ``revenue``/
+            ``revenue_2`` — the ``_N`` suffix encodes the ENTITY. Detected by >= 2
+            distinct ``ticker`` slots; each slot's metrics attach to that slot's
+            ticker under the ``"latest"`` period.
+          * PERIOD-suffixed (get_fundamentals_history[_batch] / query_fundamentals):
+            ONE item per entity, whose ``_N`` suffix encodes the PERIOD (newest
+            bare, older ``_2`` …). The whole item attaches to its single entity,
+            one nested dict per period slot.
+
+        Only allow-listed metric bases survive (same fail-closed contract as the
+        flat builder), the same portfolio/account redaction applies, and each
+        value is str-coerced + length-capped. Reads the item's grounding_fields
+        DIRECTLY (never the byte-capped flat bag) so entity-1's core metrics are
+        never dropped by the flat free-slot logic.
+        """
+        primary_raw = cls._grounding_field_value(item, "ticker")
+        primary = str(primary_raw) if primary_raw is not None else None
+        gf = getattr(item, "grounding_fields", None)
+        if gf:
+            # Parse the bag into per-slot metric dicts + per-slot ticker labels.
+            slot_metrics: dict[int, dict[str, str]] = {}
+            slot_ticker: dict[int, str] = {}
+            for raw_key, raw_val in gf:
+                if raw_val is None:
+                    continue
+                m = re.search(r"_(\d+)$", raw_key)
+                if m:
+                    base = raw_key[: m.start()]
+                    slot = int(m.group(1))
+                else:
+                    base = raw_key
+                    slot = 1
+                if base not in allow:
+                    continue
+                if any(sub in base.lower() for sub in cls._GROUNDING_REDACT_NAME_SUBSTRINGS):
+                    continue
+                value = str(raw_val)[: cls.GROUNDING_VALUE_MAX_CHARS]
+                if base == "ticker":
+                    slot_ticker[slot] = value
+                    continue
+                slot_metrics.setdefault(slot, {})[base] = value
+            if len(slot_ticker) >= 2:
+                # ENTITY-suffixed: each slot is a distinct entity, single period.
+                for tk in slot_ticker.values():
+                    view.setdefault(tk, {})
+                for slot, metrics in slot_metrics.items():
+                    entity = slot_ticker.get(slot) or primary or f"entity_{slot}"
+                    if metrics:
+                        view.setdefault(entity, {}).setdefault("latest", {}).update(metrics)
+            else:
+                # PERIOD-suffixed: one entity, one nested dict per period slot.
+                entity = slot_ticker.get(1) or primary or "entity"
+                view.setdefault(entity, {})
+                for slot in sorted(slot_metrics):
+                    metrics = slot_metrics[slot]
+                    if metrics:
+                        view[entity][cls._period_slot_label(slot)] = dict(metrics)
+        else:
+            # Attr/dict item (no structured bag): single entity, single period.
+            entity = primary or "entity"
+            metrics = {}
+            for field in allow:
+                if field == "ticker":
+                    continue
+                if any(sub in field.lower() for sub in cls._GROUNDING_REDACT_NAME_SUBSTRINGS):
+                    continue
+                raw = cls._grounding_field_value(item, field)
+                if raw is None:
+                    continue
+                metrics[field] = str(raw)[: cls.GROUNDING_VALUE_MAX_CHARS]
+            if metrics:
+                view.setdefault(entity, {}).setdefault("latest", {}).update(metrics)
+            elif primary is not None:
+                view.setdefault(entity, {})
+
+    @classmethod
+    def _build_entity_period_view(cls, tool_name: str, items: list[Any]) -> dict[str, dict[str, dict[str, str]]] | None:
+        """Build the D2 ``{entity:{period:{metric:value}}}`` disambiguation view.
+
+        Returns the view ONLY when it spans >= 2 distinct entities — a
+        single-entity result is already unambiguous via the flat bag's period
+        suffixes, and adding the key there would change the legacy 4-key sample
+        shape (AD-4). ``None`` for non-allow-listed tools / < 2 entities.
+        """
+        allow = cls._GROUNDING_FIELD_ALLOWLIST.get(tool_name)
+        if not allow:
+            return None
+        view: dict[str, dict[str, dict[str, str]]] = {}
+        for item in items[: cls.GROUNDING_MAX_ROWS]:
+            cls._merge_item_into_entity_view(item, allow, view)
+        # Drop entities that resolved to no metrics at all (identifier-only noise)
+        # UNLESS every entity is metric-less (then keep so the caller still sees
+        # the multi-entity structure). Simpler: require >= 2 entities overall.
+        if len(view) < 2:
+            return None
+        return view
+
     @classmethod
     def build_grounding_sample(cls, tool_name: str, items: list[Any]) -> dict[str, Any] | None:
         """Build a bounded, redacted, allow-list-only sample of tool-result values.
@@ -986,6 +1105,22 @@ class SSEEmitter:
                 total_rows=total_rows,
                 sampled_rows=sampled_rows,
             )
+
+        # ── D2 (2026-07-06): attach the per-entity/per-period view ────────────
+        # The flat ``fields`` bag above stays UNCHANGED — the W1/W3 numeric
+        # matcher strips ``_\d+$`` to the base metric and cross-checks the SET of
+        # values, so it must keep the free-slot flat shape. But for a multi-entity
+        # result (batch: one item per ticker; compare/movers: several tickers in
+        # one item) that flat ``_N`` suffix carries NO entity/period semantics, so
+        # the LLM cannot map a value back to its (ticker, period) and fabricates /
+        # cross-attributes (tc_batch_fundamentals_mag5, chain_nvda_competitor).
+        # ``by_entity`` is the explicit, unambiguous nesting built directly from
+        # the items' grounding_fields (never the byte-trimmed flat bag), so
+        # entity-1's core metrics are never dropped. Attached ONLY when it spans
+        # >= 2 entities so single-entity samples keep the legacy 4-key shape.
+        by_entity = cls._build_entity_period_view(tool_name, items)
+        if by_entity is not None:
+            sample["by_entity"] = by_entity
 
         return sample
 
