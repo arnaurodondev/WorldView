@@ -30,6 +30,7 @@ name: worldview
 services:
   # ── MinIO (S3-compatible object storage) ────────────────────────────────────
   minio:
+    init: true
     image: minio/minio:RELEASE.2025-04-08T15-41-24Z
     command: server /data --console-address ":9001"
     profiles: [infra, lib-test, all]
@@ -67,6 +68,7 @@ services:
 
   # ── MinIO bucket initialisation ─────────────────────────────────────────────
   minio-init:
+    init: true
     # WHY pinned: mc client version should match the MinIO server version to avoid API
     # compatibility drift. :latest is a floating tag that can change silently.
     image: minio/mc:RELEASE.2025-04-08T15-39-49Z
@@ -87,6 +89,7 @@ services:
   # Credentials: postgres:postgres — matches all services' docker.env files.
   # Init script creates one database per service (portfolio_db, ingestion_db, …).
   postgres:
+    init: true
     restart: unless-stopped
     build:
       context: ../postgres
@@ -139,6 +142,7 @@ services:
   # pgvector are required for intelligence_db/nlp_db. Own volume + own init dir that
   # creates ONLY the OLAP databases.
   postgres-intelligence:
+    init: true
     build:
       context: ../postgres
       dockerfile: Dockerfile
@@ -182,6 +186,7 @@ services:
 
   # ── Kafka (KRaft mode) ──────────────────────────────────────────────────────
   kafka:
+    init: true
     restart: unless-stopped
     image: confluentinc/cp-kafka:7.6.0
     profiles: [infra, all]
@@ -282,6 +287,7 @@ services:
       start_period: 300s
 
   schema-registry:
+    init: true
     restart: unless-stopped
     image: confluentinc/cp-schema-registry:7.6.0
     profiles: [infra, all]
@@ -303,6 +309,7 @@ services:
       start_period: 15s
 
   kafka-init:
+    init: true
     image: confluentinc/cp-kafka:7.6.0
     profiles: [infra, all]
     depends_on:
@@ -316,6 +323,7 @@ services:
 
   # ── Schema Registry: register all Avro schemas (one-shot) ─────────────────
   schema-registry-init:
+    init: true
     image: python:3.12-slim
     profiles: [infra, all]
     depends_on:
@@ -335,6 +343,7 @@ services:
   # every subject already exists. Idempotent re-runs are safe; we PUT
   # ``{"compatibility":"BACKWARD"}`` per subject regardless of current state.
   schema-compat-init:
+    init: true
     image: alpine:3.20
     profiles: [infra, all]
     depends_on:
@@ -352,6 +361,7 @@ services:
 
   # ── Valkey (Redis-compatible cache) ─────────────────────────────────────────
   valkey:
+    init: true
     restart: unless-stopped
     image: valkey/valkey:7.2-alpine
     profiles: [infra, all]
@@ -369,6 +379,7 @@ services:
   # ── Intelligence DB migrations (one-shot) ────────────────────────────────────
   # Owns ALL DDL for intelligence_db. S6/S7 must set ALEMBIC_ENABLED=false.
   intelligence-migrations:
+    init: true
     build:
       context: ../../services/intelligence-migrations
       dockerfile: Dockerfile
@@ -385,6 +396,7 @@ services:
 
   # ── Portfolio migrations (one-shot) ──────────────────────────────────────────
   portfolio-migrate:
+    init: true
     image: worldview-portfolio:latest
     profiles: [infra, all]
     depends_on:
@@ -397,6 +409,7 @@ services:
 
   # ── Portfolio service ────────────────────────────────────────────────────────
   portfolio:
+    init: true
     build:
       context: ../..
       dockerfile: services/portfolio/Dockerfile
@@ -427,6 +440,7 @@ services:
 
   # ── Portfolio outbox dispatcher ──────────────────────────────────────────────
   portfolio-dispatcher:
+    init: true
     image: worldview-portfolio:latest
     profiles: [infra, all]
     depends_on:
@@ -451,6 +465,7 @@ services:
       start_period: 30s
 
   portfolio-instrument-consumer:
+    init: true
     image: worldview-portfolio:latest
     profiles: [infra, all]
     depends_on:
@@ -479,6 +494,7 @@ services:
   # Consumes portfolio.holding.recompute_requested.v1 and calls
   # ComputeManualHoldingsUseCase (FIFO/AVCO replay).
   portfolio-manual-holdings-consumer:
+    init: true
     image: worldview-portfolio:latest
     profiles: [infra, all]
     depends_on:
@@ -506,6 +522,7 @@ services:
   # PLAN-0114 W1 / T-W1-08.
   # Fallback sweep: recomputes MANUAL portfolio holdings at 22:00 UTC daily.
   portfolio-manual-holdings-worker:
+    init: true
     image: worldview-portfolio:latest
     profiles: [infra, all]
     depends_on:
@@ -532,6 +549,7 @@ services:
   # Wakes up at 21:30 UTC daily, snapshots non-root portfolios, then aggregates
   # into root portfolios. Idempotent on (portfolio_id, snapshot_date).
   portfolio-snapshot-worker:
+    init: true
     image: worldview-portfolio:latest
     profiles: [infra, all]
     depends_on:
@@ -553,6 +571,7 @@ services:
 
   # ── Portfolio brokerage sync worker ─────────────────────────────────────────
   portfolio-brokerage-sync:
+    init: true
     image: worldview-portfolio:latest
     profiles: [infra, all]
     depends_on:
@@ -578,6 +597,7 @@ services:
 
   # ── Market ingestion migrations (one-shot) ──────────────────────────────────
   market-ingestion-migrate:
+    init: true
     image: worldview-market-ingestion:latest
     profiles: [infra, all]
     depends_on:
@@ -590,6 +610,7 @@ services:
 
   # ── Market ingestion service ─────────────────────────────────────────────────
   market-ingestion:
+    init: true
     build:
       context: ../..
       dockerfile: services/market-ingestion/Dockerfile
@@ -624,6 +645,7 @@ services:
 
   # ── Market ingestion scheduler ───────────────────────────────────────────────
   market-ingestion-scheduler:
+    init: true
     image: worldview-market-ingestion:latest
     profiles: [infra, all]
     depends_on:
@@ -643,6 +665,7 @@ services:
 
   # ── Market ingestion worker ──────────────────────────────────────────────────
   market-ingestion-worker:
+    init: true
     image: worldview-market-ingestion:latest
     profiles: [infra, all]
     depends_on:
@@ -664,6 +687,7 @@ services:
 
   # ── Market ingestion outbox dispatcher ───────────────────────────────────────
   market-ingestion-dispatcher:
+    init: true
     image: worldview-market-ingestion:latest
     profiles: [infra, all]
     depends_on:
@@ -688,6 +712,7 @@ services:
       start_period: 30s
 
   prometheus:
+    init: true
     image: prom/prometheus:v3.2.1
     profiles: [monitoring, infra, all]
     restart: unless-stopped  # single-instance metrics store; auto-recover on crash
@@ -705,6 +730,7 @@ services:
       start_period: 10s
 
   tempo:
+    init: true
     image: grafana/tempo:2.7.2
     profiles: [monitoring, infra, all]
     restart: unless-stopped  # single-instance trace store; auto-recover on crash
@@ -724,6 +750,7 @@ services:
       start_period: 10s
 
   loki:
+    init: true
     image: grafana/loki:3.5.0
     profiles: [monitoring, infra, all]
     restart: unless-stopped  # single-instance log store; auto-recover on crash
@@ -741,6 +768,7 @@ services:
       start_period: 15s
 
   grafana:
+    init: true
     image: grafana/grafana:11.6.0
     profiles: [monitoring, infra, all]
     restart: unless-stopped  # single-instance dashboards; auto-recover on crash
@@ -771,6 +799,7 @@ services:
       start_period: 15s
 
   alloy:
+    init: true
     image: grafana/alloy:v1.8.3
     profiles: [monitoring, infra, all]
     restart: unless-stopped  # telemetry collector; auto-recover on crash
@@ -801,6 +830,7 @@ services:
       start_period: 10s
 
   alertmanager:
+    init: true
     image: prom/alertmanager:v0.27.0
     profiles: [monitoring, infra, all]
     # Restart the alert router — if it stays down, incident alerts (e.g. the very
@@ -830,6 +860,7 @@ services:
   # requested (same as Prometheus/Grafana).
 
   postgres_exporter:
+    init: true
     image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
     profiles: [monitoring, infra, all]
     restart: unless-stopped  # metrics exporter; auto-recover on crash
@@ -848,6 +879,7 @@ services:
         condition: service_healthy
 
   redis_exporter:
+    init: true
     image: oliver006/redis_exporter:v1.62.0
     profiles: [monitoring, infra, all]
     restart: unless-stopped  # metrics exporter; auto-recover on crash
@@ -861,6 +893,7 @@ services:
   # ── Content Ingestion (S4) — 4 processes, same image ──────────────────────
   # Migrations (one-shot)
   content-ingestion-migrate:
+    init: true
     image: worldview-content-ingestion:latest
     profiles: [infra, all]
     depends_on:
@@ -873,6 +906,7 @@ services:
 
   # API server
   content-ingestion:
+    init: true
     build:
       context: ../..
       dockerfile: services/content-ingestion/Dockerfile
@@ -908,6 +942,7 @@ services:
 
   # Scheduler process — evaluates sources and creates tasks
   content-ingestion-scheduler:
+    init: true
     image: worldview-content-ingestion:latest
     profiles: [infra, all]
     command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_main"]
@@ -927,6 +962,7 @@ services:
 
   # Worker process — claims and executes ingestion tasks
   content-ingestion-worker:
+    init: true
     image: worldview-content-ingestion:latest
     profiles: [infra, all]
     command: ["python", "-m", "content_ingestion.infrastructure.workers.worker_main"]
@@ -954,6 +990,7 @@ services:
 
   # Outbox dispatcher — publishes events from outbox to Kafka
   content-ingestion-dispatcher:
+    init: true
     image: worldview-content-ingestion:latest
     profiles: [infra, all]
     command: ["python", "-m", "content_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
@@ -981,6 +1018,7 @@ services:
   # TimescaleDB for OHLCV hypertables. The "postgres" service also serves as
   # "timescaledb" via its network alias (both names resolve to the same container).
   market-data-migrate:
+    init: true
     image: worldview-market-data:latest
     profiles: [infra, all]
     depends_on:
@@ -992,6 +1030,7 @@ services:
     restart: "on-failure:5"
 
   market-data:
+    init: true
     build:
       context: ../..
       dockerfile: services/market-data/Dockerfile
@@ -1023,6 +1062,7 @@ services:
     restart: unless-stopped
 
   market-data-dispatcher:
+    init: true
     image: worldview-market-data:latest
     profiles: [infra, all]
     depends_on:
@@ -1045,6 +1085,7 @@ services:
       start_period: 30s
 
   market-data-ohlcv-consumer:
+    init: true
     image: worldview-market-data:latest
     profiles: [infra, all]
     depends_on:
@@ -1067,6 +1108,7 @@ services:
       start_period: 30s
 
   market-data-quotes-consumer:
+    init: true
     image: worldview-market-data:latest
     profiles: [infra, all]
     depends_on:
@@ -1089,6 +1131,7 @@ services:
       start_period: 30s
 
   market-data-fundamentals-consumer:
+    init: true
     image: worldview-market-data:latest
     profiles: [infra, all]
     depends_on:
@@ -1118,6 +1161,7 @@ services:
   # instruments despite being filterable. Mirrors the fundamentals-consumer
   # definition exactly (same image, env, healthcheck).
   market-data-insider-transactions-consumer:
+    init: true
     image: worldview-market-data:latest
     profiles: [infra, all]
     depends_on:
@@ -1140,6 +1184,7 @@ services:
       start_period: 30s
 
   market-data-prediction-market-consumer:
+    init: true
     image: worldview-market-data:latest
     profiles: [infra, all]
     depends_on:
@@ -1162,6 +1207,7 @@ services:
       start_period: 30s
 
   market-data-intraday-resampling-consumer:
+    init: true
     image: worldview-market-data:latest
     profiles: [infra, all]
     depends_on:
@@ -1185,6 +1231,7 @@ services:
 
   # ── Content Store (S5) — migrate + API + dispatcher + consumer ──────────────
   content-store-migrate:
+    init: true
     image: worldview-content-store:latest
     profiles: [infra, all]
     depends_on:
@@ -1196,6 +1243,7 @@ services:
     restart: "on-failure:5"
 
   content-store:
+    init: true
     build:
       context: ../..
       dockerfile: services/content-store/Dockerfile
@@ -1227,6 +1275,7 @@ services:
     restart: unless-stopped
 
   content-store-dispatcher:
+    init: true
     image: worldview-content-store:latest
     profiles: [infra, all]
     depends_on:
@@ -1249,6 +1298,7 @@ services:
       start_period: 30s
 
   content-store-consumer:
+    init: true
     image: worldview-content-store:latest
     profiles: [infra, all]
     depends_on:
@@ -1280,6 +1330,7 @@ services:
   # Separate consumer group from content-store-consumer so it maintains
   # its own independent offset on the stored.v1 topic.
   content-store-dedup-consumer:
+    init: true
     image: worldview-content-store:latest
     profiles: [infra, all]
     depends_on:
@@ -1318,6 +1369,7 @@ services:
   #   Ollama is healthy. No manual `docker exec ollama ollama pull ...` needed.
   #   Models are cached in the ollama_data volume and persist across container restarts.
   ollama:
+    init: true
     restart: unless-stopped
     image: ollama/ollama:0.6.7
     profiles: [infra, all]
@@ -1368,6 +1420,7 @@ services:
   # first-boot significantly. Pull it manually if DEEP tier is required:
   #   docker compose exec ollama ollama pull qwen2.5:7b-instruct
   ollama-init:
+    init: true
     image: ollama/ollama:0.6.7
     profiles: [infra, all]
     restart: "no"
@@ -1395,6 +1448,7 @@ services:
   #   GPU is optional but reduces latency to ~50 ms/batch.
   #   Uncomment the `deploy.resources` block to enable GPU passthrough (same as above).
   gliner-server:
+    init: true
     build:
       context: ../gliner
       dockerfile: Dockerfile
@@ -1468,6 +1522,7 @@ services:
   # ── NLP Pipeline (S6) — migrate + API + dispatcher + 2 consumers ────────────
   # S6 owns nlp_db DDL; intelligence_db DDL is owned by intelligence-migrations.
   nlp-pipeline-migrate:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1480,6 +1535,7 @@ services:
     restart: "on-failure:5"
 
   nlp-pipeline:
+    init: true
     build:
       context: ../..
       dockerfile: services/nlp-pipeline/Dockerfile
@@ -1513,6 +1569,7 @@ services:
     restart: unless-stopped
 
   nlp-pipeline-dispatcher:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1545,6 +1602,7 @@ services:
   # The id is supplied via the NLP_PIPELINE_KAFKA_CONSUMER_INSTANCE_ID override
   # on top of the shared env_file (whose default is empty).
   nlp-pipeline-article-consumer-0:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1580,6 +1638,7 @@ services:
       start_period: 30s
 
   nlp-pipeline-article-consumer-1:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1615,6 +1674,7 @@ services:
       start_period: 30s
 
   nlp-pipeline-watchlist-consumer:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1635,6 +1695,7 @@ services:
       start_period: 30s
 
   nlp-pipeline-document-deletion-consumer:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1663,6 +1724,7 @@ services:
   # Kafka but is never consumed → silent no-op.
   # NOTE: was accidentally dropped in the PLAN-0089 merge; restored here.
   nlp-pipeline-entity-refresh-consumer:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1683,6 +1745,7 @@ services:
       start_period: 30s
 
   nlp-pipeline-price-impact-worker:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1703,6 +1766,7 @@ services:
       start_period: 30s
 
   nlp-pipeline-relevance-scoring:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1723,6 +1787,7 @@ services:
       start_period: 30s
 
   nlp-pipeline-unresolved-resolution-worker:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1754,6 +1819,7 @@ services:
   # drain whenever Ollama flakes — for no benefit.  The Ollama-fallback path
   # gracefully degrades to "embedding_retry_failed" and re-tries with backoff.
   nlp-pipeline-embedding-retry-worker:
+    init: true
     image: worldview-nlp-pipeline:latest
     profiles: [infra, all]
     depends_on:
@@ -1774,6 +1840,7 @@ services:
   # ── Knowledge Graph (S7) — API + dispatcher + scheduler + 4 consumers ───────
   # S7 has no Alembic migrations — intelligence_db DDL is owned by intelligence-migrations.
   knowledge-graph:
+    init: true
     build:
       context: ../..
       dockerfile: services/knowledge-graph/Dockerfile
@@ -1805,6 +1872,7 @@ services:
     restart: unless-stopped
 
   knowledge-graph-dispatcher:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -1827,6 +1895,7 @@ services:
       start_period: 30s
 
   knowledge-graph-scheduler:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -1850,6 +1919,7 @@ services:
       start_period: 30s
 
   knowledge-graph-enriched-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -1879,6 +1949,7 @@ services:
   # enriched without waiting for the 5-min ProvisionalEnrichmentWorker sweep.
   # DEF-037: container was missing from docker-compose.yml (present in test compose).
   knowledge-graph-provisional-queued-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -1903,6 +1974,7 @@ services:
       start_period: 30s
 
   knowledge-graph-entity-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -1927,6 +1999,7 @@ services:
       start_period: 30s
 
   knowledge-graph-fundamentals-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -1951,6 +2024,7 @@ services:
       start_period: 30s
 
   knowledge-graph-instrument-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -1985,6 +2059,7 @@ services:
   # it no canonical is materialised when ohlcv/quotes arrive before
   # fundamentals (the dominant production ordering).
   knowledge-graph-instrument-discovered-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -2009,6 +2084,7 @@ services:
       start_period: 30s
 
   knowledge-graph-temporal-event-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -2033,6 +2109,7 @@ services:
       start_period: 30s
 
   knowledge-graph-economic-events-dataset-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -2057,6 +2134,7 @@ services:
       start_period: 30s
 
   knowledge-graph-macro-indicator-dataset-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -2081,6 +2159,7 @@ services:
       start_period: 30s
 
   knowledge-graph-insider-transactions-dataset-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -2106,6 +2185,7 @@ services:
 
   # PLAN-0068 Wave A-1 — Consumer 13D-9: earnings calendar events
   knowledge-graph-earnings-calendar-dataset-consumer:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -2134,6 +2214,7 @@ services:
   # startup (or use KNOWLEDGE_GRAPH_PATH_INSIGHT_WORKER_INSTANCE_ID to pin it).
   # Runs as a standalone long-lived process (R22) — no port binding required.
   knowledge-graph-path-insight-worker:
+    init: true
     image: worldview-knowledge-graph:latest
     profiles: [infra, all]
     depends_on:
@@ -2155,6 +2236,7 @@ services:
 
   # ── Alert (S10) — migrate + API + dispatcher + 2 consumers ──────────────────
   alert-migrate:
+    init: true
     image: worldview-alert:latest
     profiles: [infra, all]
     depends_on:
@@ -2166,6 +2248,7 @@ services:
     restart: "on-failure:5"
 
   alert:
+    init: true
     build:
       context: ../..
       dockerfile: services/alert/Dockerfile
@@ -2198,6 +2281,7 @@ services:
     restart: unless-stopped
 
   alert-dispatcher:
+    init: true
     image: worldview-alert:latest
     profiles: [infra, all]
     depends_on:
@@ -2220,6 +2304,7 @@ services:
       start_period: 30s
 
   alert-intelligence-consumer:
+    init: true
     image: worldview-alert:latest
     profiles: [infra, all]
     depends_on:
@@ -2254,6 +2339,7 @@ services:
       start_period: 90s
 
   alert-watchlist-consumer:
+    init: true
     image: worldview-alert:latest
     profiles: [infra, all]
     depends_on:
@@ -2274,6 +2360,7 @@ services:
       start_period: 30s
 
   alert-email-scheduler:
+    init: true
     image: worldview-alert:latest
     profiles: [infra, all]
     depends_on:
@@ -2297,6 +2384,7 @@ services:
   # the APScheduler evaluation loop. Exposes Prometheus metrics on 9101
   # (s10_rule_poller_*). Disable instantly with ALERT_RULE_POLLER_ENABLED=false.
   alert-rule-poller:
+    init: true
     image: worldview-alert:latest
     profiles: [infra, all]
     depends_on:
@@ -2321,6 +2409,7 @@ services:
   # ── S8 RAG/Chat Service ───────────────────────────────────────────────────────
 
   rag-chat-migrate:
+    init: true
     image: worldview-rag-chat:latest
     profiles: [infra, all]
     depends_on:
@@ -2332,6 +2421,7 @@ services:
     restart: "on-failure:5"
 
   rag-chat:
+    init: true
     build:
       context: ../..
       dockerfile: services/rag-chat/Dockerfile
@@ -2367,6 +2457,7 @@ services:
   # users. Exposes Prometheus metrics on port 9100 (rag_brief_pregeneration_*).
   # NOTE: was accidentally dropped in the PLAN-0089 merge; restored here.
   rag-chat-brief-scheduler:
+    init: true
     image: worldview-rag-chat:latest
     profiles: [infra, all]
     depends_on:
@@ -2391,6 +2482,7 @@ services:
 
   # ── API Gateway (S9) — stateless reverse proxy + auth ─────────────────────────
   api-gateway:
+    init: true
     build:
       context: ../..
       dockerfile: services/api-gateway/Dockerfile
@@ -2421,6 +2513,7 @@ services:
   # set of entity IDs (S&P 500 starter list) so the downstream S7 intel/paths
   # caches stay populated. Default-OFF unless API_GATEWAY_PREWARM_ENABLED=true.
   api-gateway-bundle-prewarmer:
+    init: true
     image: worldview-api-gateway:latest
     profiles: [infra, all]
     depends_on:
@@ -2454,6 +2547,7 @@ services:
   # Canonical production frontend. Talks exclusively to S9 API Gateway via
   # /api/* rewrites. See docs/apps/worldview-web.md for architecture.
   worldview-web:
+    init: true
     build:
       context: ../..
       dockerfile: apps/worldview-web/Dockerfile
@@ -2492,6 +2586,7 @@ services:
   # HTTP server while running probes. Pushgateway acts as an intermediary: the
   # monitor pushes after each probe cycle, and Prometheus scrapes the gateway.
   pushgateway:
+    init: true
     image: prom/pushgateway:v1.8.0
     profiles: [monitoring, infra, all]
     ports:
@@ -2506,6 +2601,7 @@ services:
   # Results land in Prometheus via Pushgateway; SyntheticProbeDown alert fires
   # when any probe_success == 0 for >5 minutes.
   synthetic-monitor:
+    init: true
     build:
       context: ../synthetic
       dockerfile: Dockerfile
