@@ -14,13 +14,13 @@
 # tool-routing regression.
 
 - id: da_mstr_news_dec2024
-  prompt: Show me news on MSTR from the week of December 9-15, 2024 — what should I know?
+  prompt: Show me news on MSTR from the week of June 15-21, 2026 — what should I know?
   category: news
   tags: [date_anchored, regression_stable, news]
   rubric:
     expected_tools: [get_entity_news, search_documents]
-    required_facts: [news_items_from_dec_2024, microstrategy_or_mstr_referenced]
-    forbidden_facts: [news_dated_after_2024_12_15, blanket_no_data_when_corpus_has_period]
+    required_facts: [news_items_from_jun_2026, microstrategy_or_mstr_referenced]
+    forbidden_facts: [news_dated_after_2026_06_21, blanket_no_data_when_corpus_has_period]
     expected_depth: medium
     appropriate_refusal_ok: false
     must_not_call: []
@@ -29,22 +29,22 @@
     max_latency_s: 60
   notes: 'MIRROR OF: ru_mstr_news (in 00_real_user_and_aggregate.yaml)
 
-    ANCHOR: week of 2024-12-09 to 2024-12-15 (MicroStrategy was added to the
+    ANCHOR: week of 2026-06-15 to 2026-06-21. Re-anchored 2026-07-06 from the
+    original 2024-12-09..15 window: the news store holds a rolling recent
+    (~2026) window and never ingested Dec-2024 news, so the old anchor was
+    structurally unanswerable (required_facts demanded dec-2024 items that
+    do not exist) and failed for a data-coverage reason rather than an agent
+    regression. This week sits inside the seeded 2026 coverage window so MSTR
+    news is retrievable.
 
-    Nasdaq-100 on 2024-12-13, a well-documented event; news corpus should
 
-    have material coverage from this window).
+    WHY: the original (ru_mstr_news) asks for "latest" news, so the answer
 
+    drifts as the corpus grows and stories age out. This mirror pins a fixed
 
-    WHY: the original asks for "latest" news, so the answer drifts as the
+    historical week that the platform actually covers, so the score stays
 
-    corpus grows and stories age out. This mirror pins a historical week
-
-    where a verifiable corporate event happened (Nasdaq-100 inclusion);
-
-    if news ingestion has historical coverage at all, this window should
-
-    score consistently. Tool semantics matter: get_entity_news must accept
+    stable across runs. Tool semantics matter: get_entity_news must accept
 
     a date range, otherwise this becomes a partial test (still useful as
 
