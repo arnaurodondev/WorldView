@@ -451,8 +451,13 @@ class TestFallbackChainIntegration:
         short-circuits (no graceful-no-data LLM turn for bona-fide crashes).
 
         2026-06-12 root-cause audit Theme E (fix #3): the path no longer emits an
-        EMPTY error body (read as a crash). It now streams a worded
-        "I couldn't find a match…" answer so the body is never empty.
+        EMPTY error body (read as a crash). It streams a worded answer so the
+        body is never empty.
+
+        D9 (2026-07-06): when the question RESOLVED an entity (here MSTR) the
+        worded body is a data-error message anchored on the resolved name, NOT a
+        "couldn't find a match" resolution-miss (which is reserved for a genuine
+        unknown symbol). See ``TestD9RetryTransient`` in the dxfixes suite.
         """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
@@ -480,7 +485,14 @@ class TestFallbackChainIntegration:
         # Worded refusal body (final_answer) present; no empty error event.
         final_events = [e for e in events if e.get("event") == "final_answer"]
         assert len(final_events) == 1
-        assert "couldn't find a match" in json.loads(final_events[0]["data"])["text"]
+        # D9 (2026-07-06): the question RESOLVED an entity (MicroStrategy/MSTR)
+        # but every tool errored — this is an upstream DATA error, NOT a
+        # resolution miss. The worded body must anchor on the resolved name and
+        # must NOT falsely claim "couldn't find a match" (which is reserved for a
+        # genuine unknown symbol like "ZZZQQQ"). The body is still non-empty.
+        _body = json.loads(final_events[0]["data"])["text"]
+        assert "couldn't find a match" not in _body.lower()
+        assert "trouble retrieving" in _body.lower()
         assert not any(e.get("event") == "error" for e in events)
 
     def test_fallback_chain_exhaustion_falls_through_to_graceful_no_data(self) -> None:

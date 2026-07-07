@@ -540,6 +540,51 @@ def _append_advice_disclaimer(text: str) -> str:
     return f"{text.rstrip()}\n\n{_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER}"
 
 
+# ── D4 (2026-07-06) — gpt-oss commentary-channel leak strip ──────────────────
+# The gpt-oss synthesis model occasionally leaks its harmony CHANNEL markers
+# into the delivered answer: full-width ``【commentary row 0】`` / ``【analysis…】``
+# and the bold provenance shape ``[**tool_name row N**]`` (``da_aapl_pe_dec2024``
+# leaked ``【commentary row 0】``). These are control artifacts, never content —
+# strip them from the final answer. The LEGITIMATE ASCII provenance tag
+# ``[tool_name row N]`` (plain, real called tool) is PRESERVED: it is promoted to
+# a real ``[N]`` citation downstream. So we only remove:
+#   (1) any full-width ``【…】`` span that is a channel word or a ``… row N`` tag;
+#   (2) ASCII ``[…]`` spans that are a gpt-oss CHANNEL keyword (optionally
+#       ``… row N``), bold-wrapped or not;
+#   (3) the bold ``**`` wrapping inside a ``[**… row N**]`` provenance tag
+#       (unwrapped to ``[… row N]`` so the citation promotion still fires).
+_CHANNEL_WORDS = r"commentary|analysis|final|assistantfinal|assistant"
+_FULLWIDTH_CHANNEL_LEAK_RE = re.compile(
+    r"【\s*(?:(?:" + _CHANNEL_WORDS + r")(?:\s+row\s+\d+)?|[^】]*?\brow\s+\d+)\s*】",
+    re.IGNORECASE,
+)
+_ASCII_CHANNEL_LEAK_RE = re.compile(
+    r"\[\s*\*{0,2}\s*(?:" + _CHANNEL_WORDS + r")(?:\s+row\s+\d+)?\s*\*{0,2}\s*\]",
+    re.IGNORECASE,
+)
+_BOLD_ROW_TAG_RE = re.compile(
+    r"\[\s*\*{2}\s*([^\]]*?\brow\s+\d+)\s*\*{2}\s*\]",
+    re.IGNORECASE,
+)
+
+
+def _strip_commentary_channel_leak(text: str) -> str:
+    """Strip gpt-oss harmony channel-marker leaks from the delivered answer.
+
+    Idempotent + a no-op on a clean answer — safe to call unconditionally.
+    """
+    if not text:
+        return text
+    out = _FULLWIDTH_CHANNEL_LEAK_RE.sub("", text)
+    out = _ASCII_CHANNEL_LEAK_RE.sub("", out)
+    # Unwrap bold provenance tags so the legit ``[tool row N]`` citation promotion
+    # still fires on what remains.
+    out = _BOLD_ROW_TAG_RE.sub(r"[\1]", out)
+    # Collapse the double-space a mid-sentence removal can leave behind.
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out
+
+
 def _sanitize_unverified_markers(text: str, *, append_disclaimer: bool = True) -> str:
     """Convert leaked ``[unverified]`` tags + banners into a clean disclaimer.
 
@@ -1461,6 +1506,10 @@ _FALLBACK_MAP: dict[str, list[str]] = {
     # match. (A separate KG agent is raising the backend timeout; this is the
     # rag-chat-side graceful degradation.)
     "traverse_graph": ["get_entity_paths"],
+    # D6 (2026-07-06): a RELATIONSHIP/supplier question mis-routed to the
+    # narrative intelligence bundle comes back empty → fall back to the KG
+    # relation search (the correct tool for "who supplies / competes with X").
+    "get_entity_intelligence": ["search_entity_relations"],
 }
 
 
@@ -1529,6 +1578,34 @@ def _project_search_documents_to_entity_intelligence(
     if ctx is None or getattr(ctx, "entity_id", None) is None:
         return None
     return {"entity_id": str(ctx.entity_id)}
+
+
+def _project_entity_intelligence_to_search_relations(
+    failed_args: dict[str, Any],
+    ctx: Any,  # EntityContext | None
+) -> dict[str, Any] | None:
+    """get_entity_intelligence → search_entity_relations (D6 supplier/relationship route).
+
+    ``chain_apple_suppliers_high_margin`` asked for Apple's high-margin
+    suppliers; the router called ``get_entity_intelligence`` (a narrative
+    bundle) which returned empty for a RELATIONSHIP question, and graph
+    traversal was never tried → false refusal. When the intelligence bundle
+    comes back empty we fall back to the knowledge-graph relation search — the
+    correct tool for "who supplies / partners with / competes with X".
+    ``search_entity_relations`` takes a NAME (resolved KG-side), so we forward
+    the EntityContext name/ticker (or the failed call's ``entity_id`` echoed as
+    a name). Returns None when no anchor is available.
+    """
+    anchor: str | None = None
+    if ctx is not None:
+        anchor = getattr(ctx, "name", None) or getattr(ctx, "ticker", None)
+    if not anchor:
+        _eid = failed_args.get("entity_id")
+        if isinstance(_eid, str) and _eid.strip():
+            anchor = _eid.strip()
+    if not anchor:
+        return None
+    return {"entity_name": str(anchor)}
 
 
 def _project_economic_calendar_to_search_documents(
@@ -1604,6 +1681,8 @@ _FALLBACK_ARG_PROJECTIONS: dict[tuple[str, str], Any] = {
     ("get_economic_calendar", "search_documents"): _project_economic_calendar_to_search_documents,
     # Chat-eval #1: traverse_graph 504 → pre-computed /paths for the start node.
     ("traverse_graph", "get_entity_paths"): _project_traverse_graph_to_entity_paths,
+    # D6: empty intelligence bundle on a relationship query → KG relation search.
+    ("get_entity_intelligence", "search_entity_relations"): _project_entity_intelligence_to_search_relations,
 }
 
 
@@ -1669,6 +1748,142 @@ def _extract_ticker_hint(tool_calls: list[Any]) -> str | None:
                 if isinstance(first, str) and first.strip():
                     return first.strip()
     return None
+
+
+# ── D6 (2026-07-06) — bare-name entity_id → UUID coercion ────────────────────
+# Tools whose ``entity_id`` argument MUST be a canonical entity UUID (not a bare
+# name/ticker). The live model sometimes fills these with a company NAME
+# ("Apple") — a bare-name ``entity_id`` hits the S7 intel lookup as a MISS →
+# status="empty" → a false refusal, and the graph-traversal fallback is never
+# reached (``chain_apple_suppliers_high_margin``). We coerce the bare name to
+# the turn's resolved UUID BEFORE execution (and before dedup so the cache key
+# reflects the UUID).
+_UUID_ENTITY_ID_TOOLS: frozenset[str] = frozenset({"get_entity_intelligence", "get_entity_paths"})
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _build_name_to_uuid_map(entities: list[Any], entity_context: Any) -> dict[str, str]:
+    """Map lower-cased entity name / ticker / matched-text → resolved UUID string.
+
+    Built from the turn's S6-resolved ``entities`` plus the request
+    ``entity_context``. Later-added keys win, but all point at a real UUID so a
+    collision is harmless.
+    """
+    out: dict[str, str] = {}
+
+    def _add(name: Any, uuid_val: Any) -> None:
+        if isinstance(name, str) and name.strip() and uuid_val:
+            out[name.strip().lower()] = str(uuid_val)
+
+    for ent in entities or []:
+        _uuid = getattr(ent, "entity_id", None)
+        _add(getattr(ent, "canonical_name", None), _uuid)
+        _add(getattr(ent, "ticker", None), _uuid)
+        _add(getattr(ent, "matched_text", None), _uuid)
+    if entity_context is not None:
+        _uuid = getattr(entity_context, "entity_id", None)
+        _add(getattr(entity_context, "name", None), _uuid)
+        _add(getattr(entity_context, "ticker", None), _uuid)
+    return out
+
+
+def _coerce_entity_ids_to_uuids(
+    tool_calls: list[Any],
+    entities: list[Any],
+    entity_context: Any,
+) -> int:
+    """Rewrite bare-name ``entity_id``/``entity_ids`` args → resolved UUID in-place.
+
+    Only touches tools in ``_UUID_ENTITY_ID_TOOLS`` and only values that are NOT
+    already a UUID and DO match a resolved entity name/ticker. Anything else is
+    left untouched (a genuinely-unknown name still flows through to the normal
+    empty→fallback path). Returns the number of values coerced.
+    """
+    name_map = _build_name_to_uuid_map(entities, entity_context)
+    if not name_map:
+        return 0
+    coerced = 0
+    for tc in tool_calls:
+        if getattr(tc, "name", None) not in _UUID_ENTITY_ID_TOOLS:
+            continue
+        tc_input = getattr(tc, "input", None)
+        if not isinstance(tc_input, dict):
+            continue
+        _v = tc_input.get("entity_id")
+        if isinstance(_v, str) and _v.strip() and not _UUID_RE.match(_v.strip()):
+            _mapped = name_map.get(_v.strip().lower())
+            if _mapped:
+                tc_input["entity_id"] = _mapped
+                coerced += 1
+        _vs = tc_input.get("entity_ids")
+        if isinstance(_vs, list):
+            for _idx, _iv in enumerate(_vs):
+                if isinstance(_iv, str) and _iv.strip() and not _UUID_RE.match(_iv.strip()):
+                    _mapped = name_map.get(_iv.strip().lower())
+                    if _mapped:
+                        _vs[_idx] = _mapped
+                        coerced += 1
+    return coerced
+
+
+# ── D9 (2026-07-06) — retry-once on transient tool failure ───────────────────
+async def _retry_transient_tool_failures(
+    tool_executor: Any,
+    fresh_calls: list[Any],
+    fresh_results: list[Any],
+) -> int:
+    """Re-issue TRANSIENT tool failures EXACTLY ONCE, mutating *fresh_results*.
+
+    A ``TransportErrorMarker`` (upstream unreachable) or a ``None`` result
+    (status="error" — the tool raised) is retryable. An EMPTY list
+    (status="empty" — "no such data exists") is a legitimate answer and is
+    NEVER retried. A retried call is only ADOPTED when the retry genuinely
+    recovered (a non-error, non-transport result); a second failure keeps the
+    original marker so a genuinely-down upstream still fails fast. Returns the
+    number of calls retried (0 when nothing was transient).
+    """
+    retry_positions = [i for i, r in enumerate(fresh_results) if isinstance(r, TransportErrorMarker) or r is None]
+    if not retry_positions:
+        return 0
+    retry_calls = [fresh_calls[i] for i in retry_positions]
+    try:
+        retry_results = await tool_executor.execute_all(retry_calls)
+    except Exception:  # — a failed retry keeps the original error
+        retry_results = []
+    for pos, res in zip(retry_positions, retry_results, strict=False):
+        if not (isinstance(res, TransportErrorMarker) or res is None):
+            fresh_results[pos] = res
+    return len(retry_positions)
+
+
+def _build_all_errored_message(entities: list[Any], ticker_hint: str | None) -> str:
+    """Worded all-tools-errored answer — resolution-miss vs tool-error (D9).
+
+    When the question's entity WAS resolved (``entities`` non-empty) but every
+    tool still errored, the failure is an upstream DATA error, NOT a resolution
+    miss — telling the user "I couldn't find a match for 'AAPL'" is false. We
+    surface a transient-error message anchored on the resolved name. Only when
+    NO entity resolved do we use the resolver-miss string.
+    """
+    if entities:
+        anchor = ", ".join(
+            f"{getattr(e, 'canonical_name', '')}" f"{f' ({e.ticker})' if getattr(e, 'ticker', None) else ''}"
+            for e in entities
+        )
+        return (
+            f"I'm having trouble retrieving data for {anchor} right now — "
+            "the data source returned an error. Please try again in a moment."
+        )
+    if ticker_hint:
+        return (
+            f"I couldn't find a match for '{ticker_hint}'. Please double-check the "
+            "symbol or provide more context (company name, exchange) and I'll try again."
+        )
+    return (
+        "I couldn't find a match for that symbol. Please double-check it or "
+        "provide more context (company name, exchange) and I'll try again."
+    )
 
 
 # Chat-eval pack-10 (2026-06-12): tools that answer UNIVERSE / AGGREGATE /
@@ -3084,6 +3299,20 @@ class ChatOrchestratorUseCase:
                     ),
                 }
 
+            # ── D6 (2026-07-06): bare-name entity_id → UUID coercion ──────────
+            # Do this BEFORE the SSE emit + dedup + execution so (a) the frontend
+            # shows the resolved id, (b) the dedup cache key hashes the UUID, and
+            # (c) the S7 intel lookup gets a UUID instead of a bare name that
+            # would miss → status="empty" → false refusal
+            # (``chain_apple_suppliers_high_margin``).
+            _coerced = _coerce_entity_ids_to_uuids(tool_calls, list(entities), entity_context)
+            if _coerced:
+                log.info(  # type: ignore[no-any-return]
+                    "entity_id_coerced_to_uuid",
+                    coerced_count=_coerced,
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+
             # Emit tool_call SSE events before executing so the frontend spinner appears.
             for tc in tool_calls:
                 _safe_input = {k: v for k, v in tc.input.items() if k not in {"query", "text"}}
@@ -3154,6 +3383,30 @@ class ChatOrchestratorUseCase:
             # Execute fresh tool calls concurrently.
             _tool_t0 = time.monotonic()
             _fresh_results = await tool_executor.execute_all(_fresh_calls) if _fresh_calls else []
+            # D9 (2026-07-06): snapshot the FIRST-batch per-tool latencies before
+            # any retry re-invokes the executor (a retry overwrites
+            # ``last_per_tool_latencies_s`` with only the retried subset, which
+            # would mis-align it with ``_fresh_calls`` below).
+            _first_batch_latencies = getattr(tool_executor, "last_per_tool_latencies_s", None)
+            # ── D9 (2026-07-06): retry-once on TRANSIENT tool failure ────────────
+            # A ``TransportErrorMarker`` (upstream unreachable) or a ``None``
+            # result (status="error" — the tool raised) is a RETRYABLE outage.
+            # The agent used to give up after ONE hard error (the trajectory
+            # judges flagged the missing recovery on iter3_tesla_revenue,
+            # iter3_apple_suppliers, iter3_apple_revenue, da_apple_revenue).
+            # Re-issue ONLY the failing calls, exactly ONCE, before the turn
+            # treats them as failed. An EMPTY list (status="empty" — "no such
+            # data exists") is NEVER retried: it is a legitimate answer and a
+            # re-issue only wastes latency. The single bounded extra pass means a
+            # genuinely-down upstream still fails fast (no retry storm).
+            if _fresh_calls:
+                _retried = await _retry_transient_tool_failures(tool_executor, _fresh_calls, _fresh_results)
+                if _retried:
+                    log.info(  # type: ignore[no-any-return]
+                        "tool_transient_failure_retry",
+                        retry_count=_retried,
+                        request_id=str(getattr(audit, "turn_id", "") or ""),
+                    )
             _tool_latency = time.monotonic() - _tool_t0
             cumulative_tool_latency += _tool_latency
             # PLAN-0099 W1-T03: accumulate cumulative tool fan-out time.
@@ -3165,7 +3418,9 @@ class ChatOrchestratorUseCase:
             # _fresh_calls; cached calls get 0.0 (cache hit is near-instant).
             # isinstance guard: MagicMock test doubles return a MagicMock for any
             # attribute access; we must confirm we got a real list before using it.
-            _raw_latencies = getattr(tool_executor, "last_per_tool_latencies_s", None)
+            # D9: prefer the FIRST-batch snapshot (taken before any retry) so a
+            # retry's shorter latency list cannot mis-align the per-tool timings.
+            _raw_latencies = _first_batch_latencies
             _fresh_latencies: list[float] = (
                 _raw_latencies
                 if isinstance(_raw_latencies, list)
@@ -3651,17 +3906,15 @@ class ChatOrchestratorUseCase:
                     # symbol. We stream it as a normal answer (token +
                     # final_answer + done) rather than an error event so the
                     # body is never empty.
+                    # D9 (2026-07-06): distinguish a genuine RESOLUTION MISS (the
+                    # symbol never resolved to a known entity — e.g. "ZZZQQQ") from
+                    # a TOOL ERROR on an ALREADY-RESOLVED entity. When the
+                    # question's entity WAS resolved but every tool still errored
+                    # (surviving the D9 retry above), telling the user "I couldn't
+                    # find a match for 'AAPL'" is false (AAPL is valid;
+                    # ``iter3_apple_revenue_precision`` fabricated exactly that).
                     _ticker_hint = _extract_ticker_hint(tool_calls)
-                    if _ticker_hint:
-                        _worded = (
-                            f"I couldn't find a match for '{_ticker_hint}'. Please double-check the "
-                            "symbol or provide more context (company name, exchange) and I'll try again."
-                        )
-                    else:
-                        _worded = (
-                            "I couldn't find a match for that symbol. Please double-check it or "
-                            "provide more context (company name, exchange) and I'll try again."
-                        )
+                    _worded = _build_all_errored_message(list(entities), _ticker_hint)
                     yield p.emitter.emit_token(_worded)
                     yield p.emitter.emit_final_answer(_worded)
                     yield p.emitter.emit_done()
@@ -4458,6 +4711,12 @@ class ChatOrchestratorUseCase:
                     # RC-1: configurable repair-rewrite model (None → default
                     # completion model, unchanged behaviour).
                     rewrite_model=_grounding_rewrite_model,
+                    # D1 (2026-07-06): tell the grounding pass a real write
+                    # action succeeded this turn (``create_alert`` ran AND a
+                    # pending_action confirmation was emitted) so the empty-pool
+                    # numeric gate does not clobber the valid confirmation — an
+                    # action tool contributes 0 groundable rows by construction.
+                    write_action_succeeded=(_write_action_ran and _pending_action_emitted),
                     # PLAN-0117 (attribution): thread the identity down so the
                     # grounding-repair rewrite's leaf cost bumps the per-thread
                     # total + stamps the user (per-user quota, PRD-0118).
@@ -4562,6 +4821,19 @@ class ChatOrchestratorUseCase:
                     "post_grounding_narration_scrubbed",
                     pre_len=len(_pre),
                     post_len=len(full_text),
+                )
+
+        # ── D4 (2026-07-06): strip gpt-oss commentary-channel leaks ────────────
+        # Runs on EVERY delivered answer (not just the grounded-path branch that
+        # normalises full-width brackets earlier) so ``【commentary row 0】`` and
+        # ``[**tool_name row N**]`` artifacts never reach the user. Idempotent.
+        if full_text:
+            _pre_chan = full_text
+            full_text = _strip_commentary_channel_leak(full_text)
+            if full_text != _pre_chan:
+                log.info(  # type: ignore[no-any-return]
+                    "commentary_channel_leak_stripped",
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
                 )
 
         # ── C2: sanitise leaked [unverified] tags + verification banners ───────
@@ -4971,6 +5243,7 @@ class ChatOrchestratorUseCase:
         thread_id: UUID | None = None,
         user_id: UUID | None = None,
         analytical_intent: bool = False,
+        write_action_succeeded: bool = False,
     ) -> tuple[str, bool]:
         """RC-1 — single combined numeric + entity-name grounding pass.
 
@@ -5061,7 +5334,20 @@ class ChatOrchestratorUseCase:
                 )
                 response = strip_tool_row_tags(response, _phantom_benign)
 
-        if response_has_numeric_claims(response) and flatten_tool_values_count(tool_items) == 0:
+        # D1 (2026-07-06): exempt a SUCCESSFUL write-action from the empty-pool
+        # gate. A write action (e.g. ``create_alert``) that returned status="ok"
+        # and emitted a ``pending_action`` legitimately produces a numeric
+        # confirmation ("alert when NVDA drops below $400") but contributes ZERO
+        # groundable RetrievedItems — an ACTION tool has no rows. Without this
+        # carve-out the gate clobbers the valid confirmation with
+        # ``_EMPTY_POOL_REFUSAL`` (the ``tc_create_alert_nvda_below`` FAIL). The
+        # anti-fabrication guarantee is unchanged for read answers: this only
+        # relaxes when the caller proved a real write action succeeded.
+        if (
+            response_has_numeric_claims(response)
+            and flatten_tool_values_count(tool_items) == 0
+            and not write_action_succeeded
+        ):
             log.warning(  # type: ignore[no-any-return]
                 "numeric_grounding_empty_pool_refused",
                 called_tools=sorted({t.lower() for t in _called if t}),
@@ -5547,6 +5833,7 @@ class ChatOrchestratorUseCase:
         seed: int | None = None,
         thread_id: UUID | None = None,
         user_id: UUID | None = None,
+        write_action_succeeded: bool = False,
     ) -> tuple[str, bool]:
         """PLAN-0093 E-2 T-E-2-02 — numeric-grounding validation pass.
 
@@ -5638,7 +5925,14 @@ class ChatOrchestratorUseCase:
         # still pass them on a stray citation. Refuse rather than ship invented
         # figures. Gated on numeric claims so empty-tool prose answers (handled
         # by the entity-grounding pass) are untouched.
-        if response_has_numeric_claims(response) and flatten_tool_values_count(tool_items) == 0:
+        # D1 (2026-07-06): same successful-write-action carve-out as the combined
+        # pass — a status="ok" action with a pending_action confirmation has no
+        # groundable rows but must NOT be refused as an empty pool.
+        if (
+            response_has_numeric_claims(response)
+            and flatten_tool_values_count(tool_items) == 0
+            and not write_action_succeeded
+        ):
             log.warning(  # type: ignore[no-any-return]
                 "numeric_grounding_empty_pool_refused",
                 called_tools=sorted({t.lower() for t in _called if t}),
