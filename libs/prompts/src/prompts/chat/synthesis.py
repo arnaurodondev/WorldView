@@ -306,6 +306,19 @@ order:
   the tool table and quote the value ONLY under that exact label. NEVER re-order,
   re-index, or re-assign quarters by position — do not map the 1st/2nd/3rd row to
   Q1/Q2/Q3 by where it sits; map each value to the label that row actually shows.
+- LABEL EVERY FIGURE FROM ITS ROW'S OWN PERIOD — NEVER FROM TODAY'S DATE. The
+  period a figure belongs to is whatever the row's ``period_end`` / fiscal-period
+  field literally says, and NOTHING else. NEVER infer, shift, advance, or relabel
+  a period from today's date, the "current date is …" system context, or the
+  conversation's notion of the "current" year. If a row's ``period_end`` is
+  ``2024-09-30`` it is a 2024 figure (Q3 2024) — you MUST call it 2024 even when
+  today is 2026; do NOT restamp it as Q3 2025 / Q4 2025 / Q1 2026 because the
+  clock has moved on. The current-date context exists ONLY for recency reasoning
+  (deciding which data is newest, whether a quarter has reported yet); it is NEVER
+  a source for the period label you print next to a retrieved figure. When a row
+  carries a 2024 period_end and you write "2025"/"2026" over it, that is a
+  fabricated period label even though the number is real — read the row's own date
+  and print exactly that.
 - When the user names a specific fiscal period (e.g. "fiscal Q4 2024, quarter
   ending Sep 28 2024"), find the row whose label / ``period_end`` matches that
   exact period and quote THAT row.
@@ -555,7 +568,24 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     #   latest-earnings query so a reported quarter is in the payload. NARROW +
     #   additive: no grounding / anti-fabrication rule relaxed; "not available"
     #   remains correct for a specific field genuinely absent from every row.
-    version="1.14",
+    # 1.15 (da_tsla_revenue_2024_full_year period-mislabel, 2026-07-08): the
+    #   date-anchored fundamentals fix (tool_use D3) now correctly RETRIEVES TSLA's
+    #   2024 quarters (real Q1-Q3 2024 revenue values were in the tool result), but
+    #   the synthesis turn RELABELLED those rows as Q3 2025 / Q4 2025 / Q1 2026 and
+    #   then declared "no 2025 data available" — judge grounding=0, "Fabricated
+    #   period labels ... tool returned 2024 quarters." The same nuance recurred in
+    #   iter3_msft ("Fabricated period label contradicts tool scope"). Root cause:
+    #   the model inferred each row's period from the "current date is 2026" system
+    #   context instead of reading the row's own period_end. Added a bullet to the
+    #   PERIOD-MATCHING block: every figure MUST be labelled with the EXACT
+    #   period_end / fiscal period on its own row — NEVER infer, shift, or relabel
+    #   the period from today's date or the conversation's "current" year (a
+    #   2024-09-30 row is a Q3 2024 figure regardless of today's date); the
+    #   current-date context is for recency reasoning only, never for stamping
+    #   periods onto retrieved rows. NARROW + additive: reinforces the existing
+    #   date-anchoring / period-binding rules; no grounding / anti-fabrication /
+    #   coverage rule is weakened.
+    version="1.15",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -641,7 +671,15 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "state specifically that the latest fiscal quarter has not been reported "
         "yet (a timing boundary), never a generic refusal (fixes iter3_msft). "
         "Additive; 'not available' stays correct for a field genuinely absent "
-        "from every row."
+        "from every row. "
+        "v1.15 adds a PERIOD-MATCHING bullet: label every figure with the EXACT "
+        "period_end / fiscal period on its own tool row — never infer, shift, or "
+        "relabel the period from today's date or the conversation's 'current' "
+        "year (a 2024-09-30 row is a Q3 2024 figure regardless of today's date; "
+        "the current-date context is for recency reasoning only). Fixes "
+        "da_tsla_revenue_2024_full_year, where correctly-retrieved 2024 quarters "
+        "were relabelled 2025/2026 (judge grounding=0). Additive; no grounding / "
+        "anti-fabrication / coverage rule weakened."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

@@ -432,6 +432,26 @@ is unchanged.
 > full rationale for each lives in the version-log comments in
 > `src/prompts/chat/synthesis.py`. v1.12 below resumes the CHANGELOG.
 
+### 1.15 — 2026-07-08 (da_tsla_revenue_2024_full_year — label the period from the row, never from today's date)
+
+- **Period-fidelity bullet in PERIOD-MATCHING.** The date-anchored fundamentals
+  fix (`tool_use_system` D3) now correctly RETRIEVES TSLA's 2024 quarters — real
+  Q1-Q3 2024 revenue values were present in the tool result — but the synthesis
+  turn RELABELLED those rows as Q3 2025 / Q4 2025 / Q1 2026 and then declared "no
+  2025 data available" (judge grounding=0, framing=0, "Fabricated period labels …
+  tool returned 2024 quarters"; the same nuance recurred in `iter3_msft`,
+  "Fabricated period label contradicts tool scope"). Root cause: the model
+  inferred each row's period from the "current date is 2026" system context
+  instead of reading the row's own `period_end`. v1.15 adds a bullet requiring
+  every figure to be labelled with the EXACT `period_end` / fiscal period on its
+  own row and forbidding inferring, shifting, advancing, or relabelling the period
+  from today's date or the conversation's "current" year — a `2024-09-30` row is a
+  Q3 2024 figure regardless of today's date. The current-date context is scoped to
+  recency reasoning only, never to stamping period labels onto retrieved rows.
+- **Impact.** Flips the content hash. NARROW + additive: reinforces the existing
+  v1.6 date-binding / period-matching and v1.14 unreported-quarter rules; no
+  grounding / anti-fabrication / coverage rule is weakened.
+
 ### 1.14 — 2026-07-07 (iter3_msft_earnings_citations — unreported-latest-quarter is not "all not available")
 
 - **LATEST-QUARTER-ONLY / UNREPORTED PERIOD bullet in TRUST YOUR TOOL RESULTS.**

@@ -59,10 +59,11 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.14 (iter3_msft unreported-latest-quarter) on top of v1.13's D7/D8/D4,
-    # v1.12's synthesis-behavior fixes, v1.11's data-coverage-boundary,
-    # v1.10's reasoning-rigor and v1.9's what-if.
-    assert ident.startswith("chat_synthesis_system@1.14#")
+    # v1.15 (da_tsla period-mislabel — label from the row's period_end, not
+    # today's date) on top of v1.14 (iter3_msft unreported-latest-quarter),
+    # v1.13's D7/D8/D4, v1.12's synthesis-behavior fixes,
+    # v1.11's data-coverage-boundary, v1.10's reasoning-rigor and v1.9's what-if.
+    assert ident.startswith("chat_synthesis_system@1.15#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -161,6 +162,41 @@ def test_synthesis_prompt_period_matching_block() -> None:
     # The C1-companion long-series steer.
     assert "long price / time series" in rendered
     assert "summary statistics" in rendered
+
+
+def test_synthesis_prompt_labels_period_from_row_not_todays_date() -> None:
+    """v1.15 (da_tsla_revenue_2024_full_year): the date-anchored fundamentals fix
+    correctly retrieved TSLA's 2024 quarters, but synthesis RELABELLED them as
+    2025/2026 (judge grounding=0, "Fabricated period labels"). The new rule must
+    forbid inferring/shifting the period from today's date and require labelling
+    every figure with the period_end on its own row.
+
+    R19: this is additive on top of the v1.6 PERIOD-MATCHING block and every
+    v1.9-v1.14 rule — those assertions must still hold (checked below).
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # The period label comes from the row's own period_end, never today's date.
+    assert "NEVER FROM TODAY'S DATE" in rendered
+    assert "NEVER infer, shift, advance, or relabel" in rendered
+    # The concrete anchor: a 2024-09-30 row stays a 2024 figure even in 2026.
+    assert "2024-09-30" in rendered
+    # The current-date context is for recency reasoning only, never period labels.
+    assert "ONLY for recency reasoning" in rendered
+
+    # --- R19: the v1.6 PERIOD-MATCHING date-binding rules remain (additive). ---
+    assert "PERIOD-MATCHING" in rendered
+    assert "re-assign quarters by position" in rendered
+    assert "closest available period" in rendered
+    # --- R19: v1.9-v1.14 rules remain intact (not weakened by this edit). ---
+    assert "ANALYTICAL / WHAT-IF" in rendered  # v1.9
+    assert "REASONING RIGOR ON DEEP QUESTIONS" in rendered  # v1.10
+    assert "DATA-COVERAGE BOUNDARY" in rendered  # v1.11
+    assert "COVER EVERY ENTITY NAMED" in rendered  # v1.12
+    assert "NEVER suppresses synthesis" in rendered  # v1.13
+    assert "LATEST-QUARTER-ONLY / UNREPORTED PERIOD" in rendered  # v1.14
+    # Core anti-fabrication/grounding unchanged.
+    assert "ANTI-FABRICATION POLICY" in rendered
+    assert "NEVER invent periods" in rendered
 
 
 def test_synthesis_prompt_permits_grounded_hedged_projections() -> None:
