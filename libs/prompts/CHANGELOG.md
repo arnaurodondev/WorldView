@@ -245,6 +245,30 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.18 — 2026-07-08 (first-person portfolio-exposure routing — kill the fabricated get_portfolio_context gate)
+
+- **FIRST-PERSON PORTFOLIO clause + TOOL ROUTING entry.** `port_semis_export_exposure`
+  ("Which of my holdings are most exposed to the latest semiconductor
+  export-control news?") RE-FAILED under v1.17 with zero tools — but not from
+  memory this time: the model REFUSED, self-justifying with a FABRICATED gate,
+  "I cannot call `get_portfolio_context` unless you explicitly ask about your
+  portfolio, holdings, or watchlist", and treated the export-control-news framing
+  as a general/macro question. There is NO such gate. v1.18 adds a `FIRST-PERSON
+  PORTFOLIO ⇒ get_portfolio_context IS MANDATORY` clause to the mandatory-tool
+  rule: a first-person possessive about the user's own book ("my holdings /
+  positions / portfolio", "which of my …", "am I exposed", "how exposed am I")
+  IS the trigger, TRUE EVEN WHEN framed around news / an event / a policy /
+  export-control / a macro theme — the framing does NOT make it a
+  general-knowledge question. The prompt explicitly rebuts the invented
+  "explicit portfolio keyword" gate and forbids "I don't have access to your
+  holdings" before calling the tool ("the tool IS your access"). A matching
+  `TOOL ROUTING` entry routes first-person portfolio/exposure questions to
+  `get_portfolio_context` FIRST, then chains to `get_entity_news` /
+  `search_documents` / `search_events`.
+- **Impact.** Flips the content hash. Additive; no grounding / anti-fabrication /
+  citation rule is relaxed. Builds directly on v1.17 (same eval question, harder
+  refusal failure mode).
+
 ### 1.17 — 2026-07-08 (no-tools routing — mandatory tool call for entity/portfolio data questions)
 
 - **TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA rule.**

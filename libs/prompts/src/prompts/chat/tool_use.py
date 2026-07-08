@@ -197,10 +197,30 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          events, fundamentals) MUST call the relevant tool(s) first, in ANY
     #          language; a zero-tool memory answer is a HARD FAILURE. Complements A5
     #          (refuse-before-trying) — this covers answer-from-memory-without-trying.
-    version="1.17",
+    #   1.18 — 2026-07-08 (port_semis_export_exposure, re-fail under v1.17): the
+    #          v1.17 mandatory-tool rule did NOT catch a FIRST-PERSON portfolio-
+    #          exposure question ("Which of MY holdings are most exposed to the
+    #          latest semiconductor export-control news?"). The model REFUSED with
+    #          zero tools, self-justifying: "I cannot call get_portfolio_context
+    #          unless you explicitly ask about your portfolio, holdings, or
+    #          watchlist" — a FABRICATED gate. There is NO such gate: a first-person
+    #          possessive about the user's own book ("my holdings / positions /
+    #          portfolio", "which of my …", "am I exposed", "how exposed am I") IS
+    #          itself the trigger, and a news/event/policy framing does NOT exempt
+    #          it. Added the FIRST-PERSON PORTFOLIO clause to the mandatory rule +
+    #          a PORTFOLIO entry to TOOL ROUTING so get_portfolio_context is ALWAYS
+    #          called first for a first-person exposure/risk/holdings question.
+    version="1.18",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.17 adds the TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA rule to "
+        "(v1.18 adds a FIRST-PERSON PORTFOLIO clause to the mandatory-tool rule and "
+        "a PORTFOLIO entry to TOOL ROUTING: a first-person exposure/risk/holdings "
+        "question ('which of MY holdings are exposed to <news/event/policy>', 'am I "
+        "exposed', 'my positions') ALWAYS calls get_portfolio_context FIRST — a "
+        "news/event/policy framing does NOT exempt it, and there is NO 'explicit "
+        "portfolio keyword' gate (the model fabricated one and refused "
+        "port_semis_export_exposure with zero tools under v1.17); "
+        "v1.17 adds the TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA rule to "
         "STRICT RULES: any entity/portfolio DATA question (competitors, suppliers, "
         "exposure/risk, holdings, screening, relationships, news, events, "
         "fundamentals) MUST call the relevant tool(s) first, in ANY language — a "
@@ -398,6 +418,32 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "  holdings to the news). If, after actually calling the tool(s), the results\n"
         "  are empty, THEN say so transparently — but the tool call comes FIRST,\n"
         "  never a memory answer in its place.\n"
+        # 1.18 (2026-07-08, port_semis_export_exposure re-fail): the v1.17 rule
+        # above did NOT stop the model from REFUSING a first-person portfolio-
+        # exposure question with zero tools. It self-justified with a FABRICATED
+        # gate — "I cannot call get_portfolio_context unless you explicitly ask
+        # about your portfolio, holdings, or watchlist" — and treated the
+        # export-control-news framing as a general/macro question. This clause
+        # kills that fabricated gate at the source: a first-person possessive
+        # about the user's own book IS the trigger, full stop.
+        "- FIRST-PERSON PORTFOLIO ⇒ get_portfolio_context IS MANDATORY: If the\n"
+        "  question uses a FIRST-PERSON possessive about the user's own book —\n"
+        "  'my holdings', 'my positions', 'my portfolio', 'which of my …', 'do I\n"
+        "  own', 'am I exposed', 'how exposed am I', 'my watchlist' — you MUST call\n"
+        "  get_portfolio_context FIRST to resolve the user's actual holdings. This\n"
+        "  is TRUE EVEN WHEN the question is framed around news, an event, a policy,\n"
+        "  an export-control, a macro theme, or a risk ('which of my holdings are\n"
+        "  most exposed to the latest semiconductor export-control news?') — the\n"
+        "  news/event/policy framing does NOT turn it into a general-knowledge\n"
+        "  question; it is STILL a question about the user's portfolio and the\n"
+        "  portfolio must be resolved from the tool. There is NO gate requiring the\n"
+        "  user to say the literal word 'portfolio'/'holdings'/'watchlist' before\n"
+        "  you may call get_portfolio_context — do NOT invent one, and do NOT refuse\n"
+        "  'I don't have access to your holdings' before calling it: the tool IS\n"
+        "  your access. After it returns, link the resolved holdings to the\n"
+        "  news/event via get_entity_news / search_documents / search_events. A\n"
+        "  zero-tool refusal or memory answer to a first-person portfolio-exposure\n"
+        "  question is a HARD FAILURE.\n"
         "- PREMISE CHECK: Before answering, identify any factual claims embedded in\n"
         "  the user's question (e.g. 'Why did X acquire Y last quarter?'). For each\n"
         "  such claim, verify it appears in a tool result before treating it as true.\n"
@@ -605,6 +651,16 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "corporate-event search). Do NOT loop `search_documents` for events.\n"
         "- relationship / supply-chain / 'who supplies X' questions -> "
         "`traverse_graph` or `search_entity_relations`.\n"
+        # 1.18 (2026-07-08, port_semis_export_exposure): first-person portfolio /
+        # holdings / exposure questions had NO routing entry, so the model fell
+        # through to a general-knowledge answer and refused. Route them to
+        # get_portfolio_context FIRST, then chain to the news/event tools.
+        "- FIRST-PERSON portfolio / holdings / exposure ('which of MY holdings', "
+        "'my positions', 'am I exposed to X', 'how exposed is my portfolio to "
+        "<news/event/policy>') -> call `get_portfolio_context` FIRST to resolve "
+        "the user's actual book, THEN chain to `get_entity_news` / "
+        "`search_documents` / `search_events` to link those holdings to the "
+        "news/event. A news/policy framing does NOT make it a general question.\n"
         "- numbers (revenue, EPS, P/E, margins) -> `query_fundamentals` / "
         "`get_fundamentals_history_batch`.\n"
         # 1.15 (2026-07-06, fix-plan D5): "what did MSFT report / MSFT's

@@ -364,6 +364,53 @@ class TestToolUsePromptContract:
             assert "compare_entities" in prompt
             assert "get_portfolio_context" in prompt
 
+    def test_first_person_portfolio_exposure_routes_to_portfolio_context(self) -> None:
+        """v1.18 (port_semis_export_exposure re-fail under v1.17, 2026-07-08):
+        the v1.17 mandatory-tool rule did NOT stop the model refusing a
+        first-person portfolio-exposure question ("Which of MY holdings are most
+        exposed to the latest semiconductor export-control news?") with zero
+        tools. It self-justified with a FABRICATED gate — "I cannot call
+        get_portfolio_context unless you explicitly ask about your portfolio,
+        holdings, or watchlist". The prompt must add a FIRST-PERSON PORTFOLIO
+        clause killing that gate and a TOOL ROUTING entry so
+        get_portfolio_context is ALWAYS called first for such questions.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "COMPARISON", "PORTFOLIO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            flat = " ".join(prompt.split())
+            # The mandatory-rule clause anchor.
+            assert (
+                "FIRST-PERSON PORTFOLIO" in prompt
+            ), f"intent={intent}: missing first-person portfolio clause"
+            assert "get_portfolio_context IS MANDATORY" in prompt
+            # The first-person triggers that must be named.
+            assert "'my holdings'" in prompt
+            assert "'am I exposed'" in prompt
+            # The news/event/policy framing must NOT exempt it.
+            assert "does NOT turn it into a general-knowledge" in flat
+            # The fabricated gate must be explicitly rebutted.
+            assert "There is NO gate requiring the" in flat
+            # A zero-tool refusal/memory answer is a HARD FAILURE here too.
+            assert "portfolio-exposure question is a HARD FAILURE" in flat
+
+    def test_tool_routing_table_has_first_person_portfolio_entry(self) -> None:
+        """v1.18: TOOL ROUTING must map a first-person portfolio/exposure question
+        to get_portfolio_context FIRST (it had no routing entry, so the model fell
+        through to a general-knowledge answer and refused)."""
+        prompt = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
+        flat = " ".join(prompt.split())
+        assert "TOOL ROUTING" in prompt
+        assert "FIRST-PERSON portfolio / holdings / exposure" in prompt
+        assert "call `get_portfolio_context` FIRST to resolve" in flat
+        assert "A news/policy framing does NOT make it a general question" in flat
+
+    def test_prompt_template_version_bumped_for_first_person_portfolio(self) -> None:
+        """v1.18 edits the template body (flipping the content hash), so the semver
+        version MUST advance to >= 1.18. Pinning the floor catches an accidental
+        revert of the first-person portfolio-exposure routing fix."""
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 18), f"expected version >= 1.18 for first-person portfolio fix, got {_ver}"
+
     def test_attempt_before_refusing_rule_still_present_r19(self) -> None:
         """R19: the v1.17 mandatory-tool-call rule is ADDITIVE — the A5
         ATTEMPT-BEFORE-REFUSING rule (refuse-without-trying) must remain intact so
