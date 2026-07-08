@@ -128,6 +128,18 @@ get to second-guess. The opposite of fabrication is just as wrong:
   action succeeded. Emitting "I couldn't retrieve any data" while a status=ok
   tool result sits above you DISCARDS the very data the user asked for and is a
   hard failure. Read the results first; only then decide.
+- LATEST-QUARTER-ONLY / UNREPORTED PERIOD IS NOT "ALL NOT AVAILABLE". When a
+  fundamentals tool returns status=ok with a row for the NEWEST fiscal quarter
+  whose requested metric cells (revenue, net income, EPS, gross margin) are null
+  — because that quarter has not been reported yet — do NOT blanket-declare every
+  metric "not available" as if the tool returned nothing. That row is a
+  not-yet-reported placeholder, not a data gap. Instead: (a) if ANY other period
+  row in the payload carries the figures, report THAT most-recent REPORTED
+  quarter in full with its own period label and [tool_name row N] tag; (b) if the
+  unreported latest quarter is the ONLY row returned, say SPECIFICALLY that the
+  latest fiscal quarter (name it) has not been reported yet — a reporting-timing
+  boundary — rather than a generic "these figures are not in the data". Never let
+  a single all-null newest-quarter row collapse the whole answer into a refusal.
 - Reporting a price level, a high/low, or a past value is a factual lookup, NOT
   a prediction or speculation. Do not refuse a factual question by mislabelling
   it as forecasting. Likewise, a VALUATION-VS-HISTORY question — is a P/E,
@@ -527,7 +539,23 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     #   agent strips the gpt-oss commentary-channel leak — the code half of D4.)
     # NARROW + additive: KEEPS every v1.9-v1.12 rule; no grounding / anti-
     # fabrication / projection rule is relaxed.
-    version="1.13",
+    # 1.14 (iter3_msft_earnings_citations, 2026-07-07): "Microsoft's most recent
+    #   earnings report" routed correctly to query_fundamentals (status=ok, 1 item)
+    #   but the single returned row was the NEWEST fiscal quarter (Q4 FY2026), not
+    #   yet reported, so its revenue/net_income/eps/gross_margin cells were all
+    #   null. The model blanket-declared every metric "not available", which the
+    #   judge scored as a wrongful refusal over a status=ok result. Added the
+    #   LATEST-QUARTER-ONLY / UNREPORTED PERIOD bullet to TRUST YOUR TOOL RESULTS:
+    #   a newest-quarter row with all-null requested metrics is a not-yet-reported
+    #   placeholder, NOT an all-not-available data gap — report the most-recent
+    #   REPORTED quarter's figures if any other period row carries them, else state
+    #   specifically that the latest fiscal quarter has not been reported yet
+    #   (a timing boundary), never a generic blanket refusal. Pairs with tool_use
+    #   v1.16 which makes the planner fetch periods>=4 (not periods=1) for a
+    #   latest-earnings query so a reported quarter is in the payload. NARROW +
+    #   additive: no grounding / anti-fabrication rule relaxed; "not available"
+    #   remains correct for a specific field genuinely absent from every row.
+    version="1.14",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -604,7 +632,16 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "(fixes the Estee-Lauder / Shift4 hallucinations); (D4 prompt half) "
         "forbids a '-'/'N/A' placeholder for a field whose value IS present in a "
         "tool result. Additive; no grounding / anti-fabrication / projection rule "
-        "relaxed."
+        "relaxed. "
+        "v1.14 adds the LATEST-QUARTER-ONLY / UNREPORTED PERIOD bullet to TRUST "
+        "YOUR TOOL RESULTS: a status=ok fundamentals result whose only/newest "
+        "quarter row has all-null requested metrics (a not-yet-reported quarter) "
+        "must NOT be blanket-declared 'not available' — report the most-recent "
+        "REPORTED quarter's figures if any other period row carries them, else "
+        "state specifically that the latest fiscal quarter has not been reported "
+        "yet (a timing boundary), never a generic refusal (fixes iter3_msft). "
+        "Additive; 'not available' stays correct for a field genuinely absent "
+        "from every row."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

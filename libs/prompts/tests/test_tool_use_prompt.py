@@ -691,6 +691,42 @@ class TestToolUsePromptContract:
         _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
         assert _ver >= (1, 15), f"expected version >= 1.15 for routing fixes, got {_ver}"
 
+    def test_prompt_template_version_bumped_for_latest_earnings_periods(self) -> None:
+        """v1.16 adds the LATEST / MOST-RECENT EARNINGS rule (periods>=4, never
+        periods=1) to the FINANCIAL_DATA addendum — it edits the template body
+        (flipping the content hash), so the semver version MUST advance to >= 1.16.
+        Pinning the floor catches an accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 16), f"expected version >= 1.16 for latest-earnings fix, got {_ver}"
+
+    def test_financial_data_addendum_latest_earnings_avoids_periods_1(self) -> None:
+        """v1.16 (iter3_msft_earnings_citations, 2026-07-07): a plain "most recent
+        earnings report" question (revenue/net_income/eps/gross_margin — not a
+        ratio, not a named past period) fell through to periods=1, which returns
+        ONLY the newest fiscal quarter. For a not-yet-reported quarter that row is
+        a future-dated placeholder with all-null metrics, so synthesis saw
+        status=ok / 1 item with no figures and blanket-refused "not available".
+        The FINANCIAL_DATA addendum must add a LATEST / MOST-RECENT EARNINGS rule
+        forcing periods>=4 (never periods=1) so the last REPORTED quarter is in the
+        payload.
+        """
+        prompt = get_tool_use_system_prompt(intent="FINANCIAL_DATA", today_iso="2026-07-07")
+        # Section anchor.
+        assert "LATEST / MOST-RECENT EARNINGS (mandatory):" in prompt
+        # The core directive: a small window, never the single newest quarter.
+        assert "periods >= 4" in prompt
+        assert "NEVER `periods=1`" in prompt
+        # The rationale must name the null-placeholder failure so it is not reverted.
+        assert "not-yet-reported placeholder row" in prompt
+        assert "most recent REPORTED quarter" in prompt
+        # The directive must NOT leak into intents where it would distort format.
+        for intent in ("MACRO", "GENERAL", "PORTFOLIO"):
+            other = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-07")
+            assert (
+                "LATEST / MOST-RECENT EARNINGS (mandatory):" not in other
+            ), f"LATEST-EARNINGS rule leaked into {intent} addendum"
+
     def test_financial_data_addendum_contains_date_anchored_rule(self) -> None:
         """D3 (fix-plan, 2026-07-06 — HIGHEST leverage): a question naming a
         specific past quarter/year (da_tsla_revenue_2024_full_year) was answered

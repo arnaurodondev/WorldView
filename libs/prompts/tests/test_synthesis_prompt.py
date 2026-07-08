@@ -59,9 +59,10 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.13 (fix-plan D7 + D8 + D4) on top of v1.12's synthesis-behavior fixes,
-    # v1.11's data-coverage-boundary, v1.10's reasoning-rigor and v1.9's what-if.
-    assert ident.startswith("chat_synthesis_system@1.13#")
+    # v1.14 (iter3_msft unreported-latest-quarter) on top of v1.13's D7/D8/D4,
+    # v1.12's synthesis-behavior fixes, v1.11's data-coverage-boundary,
+    # v1.10's reasoning-rigor and v1.9's what-if.
+    assert ident.startswith("chat_synthesis_system@1.14#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -421,3 +422,34 @@ def test_synthesis_prompt_no_placeholder_for_present_field() -> None:
     # A placeholder is permitted ONLY for a genuinely-absent field (not banned outright).
     assert "genuinely absent" in rendered
     assert "from every returned row" in rendered
+
+
+def test_synthesis_prompt_unreported_latest_quarter_not_blanket_unavailable() -> None:
+    """v1.14 (iter3_msft_earnings_citations, 2026-07-07): "Microsoft's most recent
+    earnings report" routed correctly to query_fundamentals (status=ok, 1 item),
+    but the single returned row was the newest fiscal quarter — not yet reported —
+    whose revenue/net_income/eps/gross_margin cells were all null. The model
+    blanket-declared every metric "not available", a wrongful refusal over a
+    status=ok result. The TRUST YOUR TOOL RESULTS block must teach that an
+    all-null NEWEST-quarter row is a not-yet-reported placeholder, NOT an
+    all-not-available data gap: report the most-recent REPORTED quarter if any
+    other period row carries the figures, else state specifically that the latest
+    fiscal quarter has not been reported yet.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # The new bullet is present and lives in TRUST YOUR TOOL RESULTS (status=ok family).
+    assert "LATEST-QUARTER-ONLY / UNREPORTED PERIOD IS NOT" in rendered
+    assert "TRUST YOUR TOOL RESULTS" in rendered
+    # It must forbid the blanket refusal over an ok result.
+    assert "not-yet-reported placeholder" in rendered
+    assert "do NOT blanket-declare every" in rendered
+    # It must offer the two correct behaviours: report the reported quarter, else
+    # name the timing boundary specifically (never a generic "not in the data").
+    assert "most-recent REPORTED\n  quarter" in rendered or (
+        "most-recent REPORTED quarter" in rendered.replace("\n  ", " ")
+    )
+    assert "has not been reported yet" in rendered
+    # GUARDRAIL: this is additive — "not available" stays valid for a genuinely
+    # absent field, and the anti-fabrication policy is untouched.
+    assert "ANTI-FABRICATION POLICY" in rendered
+    assert "NEVER invent periods" in rendered

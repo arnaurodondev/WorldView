@@ -171,10 +171,30 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          get_fundamentals_history first (filings/news add citation/context
     #          only), and an empty result from one tool MUST trigger a fallback
     #          tool before refusing.
-    version="1.15",
+    #   1.16 — 2026-07-07 (iter3_msft_earnings_citations follow-up): D5 already
+    #          routed the "most recent MSFT earnings" question to
+    #          query_fundamentals (correct), but the planner picked periods=1.
+    #          periods=1 returns ONLY the newest fiscal quarter, which for a
+    #          not-yet-reported quarter is a future-dated placeholder row with
+    #          all-null metrics — so synthesis saw status=ok / 1 item, no figures,
+    #          and blanket-refused "not available" for every metric. Added the
+    #          LATEST / MOST-RECENT EARNINGS rule to the FINANCIAL_DATA addendum:
+    #          a latest/current-quarter earnings question (no named past period)
+    #          MUST request periods >= 4, never periods=1, so the last REPORTED
+    #          quarter with real figures is in the payload. Same null-placeholder
+    #          failure the RATIO-OR-TTM periods>=5 rule guards against, now closed
+    #          on the plain latest-earnings (non-ratio) path.
+    version="1.16",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.15 fixes two routing bugs from the eval FAIL analysis: D3 adds a "
+        "(v1.16 adds the LATEST / MOST-RECENT EARNINGS rule to the FINANCIAL_DATA "
+        "addendum: a latest/current-quarter earnings question with no named past "
+        "period MUST request periods >= 4, never periods=1 — the single newest "
+        "fiscal quarter is often a not-yet-reported placeholder row with all-null "
+        "metrics, so periods=1 yields an all-null result that the synthesis turn "
+        "blanket-refuses as 'not available'; a short window guarantees the last "
+        "REPORTED quarter with real figures is present (iter3_msft); "
+        "v1.15 fixes two routing bugs from the eval FAIL analysis: D3 adds a "
         "DATE-ANCHORED ARGUMENTS rule (a named past quarter/year MUST be queried "
         "with from_date/to_date, never periods=N which returns the latest N and "
         "misses the target) to the FINANCIAL_DATA addendum; D5 routes "
@@ -688,6 +708,28 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "For a full past YEAR, bound Jan 1 to Dec 31 of that year. Only fall back\n"
         "to `periods=N` when the question is about the LATEST / most-recent periods,\n"
         "not a named historical one.\n\n"
+        # 1.16 (2026-07-07, iter3_msft_earnings_citations): a plain "most recent
+        # earnings report" question (revenue / net_income / eps / gross_margin —
+        # NOT a ratio, so the RATIO-OR-TTM periods>=5 rule below did not apply, and
+        # NOT a named past period, so the DATE-ANCHORED rule did not apply either)
+        # fell through to periods=1. periods=1 returns ONLY the newest fiscal
+        # quarter, which for a company that has not yet reported it is a
+        # future-dated placeholder row whose every metric is null — so the model
+        # saw status=ok / 1 item with all-null figures and blanket-refused "not
+        # available". Same placeholder-row failure the RATIO-OR-TTM directive was
+        # built for, but on the plain latest-earnings path. Fix: never fetch the
+        # latest quarter alone; request a small window so the last REPORTED quarter
+        # is in the payload.
+        "LATEST / MOST-RECENT EARNINGS (mandatory):\n"
+        "When the question asks for the LATEST / most-recent earnings report,\n"
+        "quarterly results, or current-quarter figures (revenue, net income, EPS,\n"
+        "gross margin) with NO named past period, request `periods >= 4` (default\n"
+        "4) — NEVER `periods=1`. The single newest fiscal quarter is frequently a\n"
+        "not-yet-reported placeholder row whose metric cells are all null; asking\n"
+        "for only that row yields an all-null result that looks empty. A short\n"
+        "window guarantees the most recent REPORTED quarter (with real figures) is\n"
+        "present. Report that most-recent quarter that actually carries figures,\n"
+        "and quote its own period label / as-of date.\n\n"
         # PLAN-0103 W23 BP-639: RATIO-OR-TTM directive. The chat-quality
         # benchmark question "What's AAPL's P/E ratio?" was answered with
         # a fabricated "37.7x" sourced from a single-quarter snapshot

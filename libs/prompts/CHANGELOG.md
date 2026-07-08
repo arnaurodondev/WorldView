@@ -245,6 +245,27 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.16 — 2026-07-07 (iter3_msft_earnings_citations — latest-earnings periods>=4, never periods=1)
+
+- **LATEST / MOST-RECENT EARNINGS periods rule.** "What was Microsoft's most
+  recent earnings report?" (`iter3_msft_earnings_citations`) routed correctly to
+  `query_fundamentals` (D5, status=ok, 1 item) but the planner picked
+  `periods=1`. `periods=1` returns ONLY the newest fiscal quarter — for a company
+  that has not yet reported it, that is a future-dated placeholder row whose
+  revenue / net_income / eps / gross_margin cells are all null. Synthesis saw
+  status=ok / 1 item with no figures and blanket-refused "not available" for every
+  metric (judge grounding=10, wrongful refusal). This is the same null-placeholder
+  failure the `RATIO-OR-TTM` directive (periods>=5) already guards against, but it
+  slipped through on the plain latest-earnings (non-ratio, non-named-period) path.
+  v1.16 adds a `LATEST / MOST-RECENT EARNINGS` rule to the FINANCIAL_DATA addendum:
+  a latest / current-quarter earnings question with NO named past period MUST
+  request `periods >= 4` (never `periods=1`) so the last REPORTED quarter with real
+  figures is in the payload; report that most-recent reported quarter.
+- **Impact.** Flips the content hash. Additive; no grounding / anti-fabrication /
+  citation rule is relaxed. Pairs with chat_synthesis_system v1.14 (the
+  synthesis-turn half — an all-null newest-quarter row must not collapse into a
+  blanket refusal).
+
 ### 1.15 — 2026-07-06 (eval FAIL routing fixes — date-anchored fundamentals args, earnings→fundamentals routing + fallback)
 
 - **D3 — date-anchored fundamentals arguments (highest-leverage prompt fix).**
@@ -410,6 +431,26 @@ is unchanged.
 > Note: CHANGELOG entries for v1.8–v1.11 were not recorded here at the time; the
 > full rationale for each lives in the version-log comments in
 > `src/prompts/chat/synthesis.py`. v1.12 below resumes the CHANGELOG.
+
+### 1.14 — 2026-07-07 (iter3_msft_earnings_citations — unreported-latest-quarter is not "all not available")
+
+- **LATEST-QUARTER-ONLY / UNREPORTED PERIOD bullet in TRUST YOUR TOOL RESULTS.**
+  "Microsoft's most recent earnings report" (`iter3_msft_earnings_citations`)
+  routed correctly to `query_fundamentals` (status=ok, 1 item), but the single
+  returned row was the newest fiscal quarter (Q4 FY2026), not yet reported, so its
+  revenue / net_income / eps / gross_margin cells were all null. The model
+  blanket-declared every metric "not available" — a wrongful refusal over a
+  status=ok result (judge grounding=10, refusal_judgment=0). v1.14 adds a bullet
+  teaching that an all-null NEWEST-quarter row is a not-yet-reported placeholder,
+  NOT an all-not-available data gap: (a) report the most-recent REPORTED quarter's
+  figures if any other period row carries them, else (b) state specifically that
+  the latest fiscal quarter has not been reported yet (a reporting-timing
+  boundary), never a generic blanket "not in the data".
+- **Impact.** Flips the content hash. Additive; no grounding / anti-fabrication
+  rule relaxed — "not available" stays correct for a specific field genuinely
+  absent from every returned row. Pairs with tool_use_system v1.16 (the
+  planning-turn half — fetch periods>=4, not periods=1, so a reported quarter is
+  in the payload).
 
 ### 1.13 — 2026-07-06 (eval FAIL synthesis fixes — anti-over-refusal on partial failure, empty-result no-fabrication, no-placeholder-for-present-field)
 
