@@ -121,6 +121,12 @@ REASON_SEC_FORM_FRAGMENT = "sec_form_fragment"
 # delta gate, is surfaced to the LLM prompt as the resolved entity, and the
 # model answers about "S" instead of Apple.
 REASON_IMPLAUSIBLE_SHORT = "implausible_short_canonical"
+# D-i (2026-07-08): candidate ticker is a generic technology/theme CONCEPT token
+# ("AI" → C3.ai, "EV" → an EV name) that the query uses as a concept, not as a
+# company reference. Live failure: "AI semiconductor" screener query resolved the
+# "AI" token to C3.ai (ticker "AI") and refused despite good screener rows
+# (ru_ai_semi_screener). Symmetric to the extraction "ticker class-blind" family.
+REASON_CONCEPT_TOKEN = "concept_token_not_ticker"  # noqa: S105 — metric label, not a secret
 
 # Acceptance reason label for tiebreak-admitted candidates (BP-661).
 ACCEPTED_QUERY_TICKER_MATCH = "query_ticker_exact_match"
@@ -266,6 +272,55 @@ _SEC_FORM_RE = re.compile(
     r")(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+
+
+# ── Generic-concept ticker guard (D-i, 2026-07-08) ────────────────────────────
+# Short technology/theme concept tokens that ALSO happen to be real exchange
+# tickers. When such a token appears in a query it is overwhelmingly the CONCEPT
+# ("AI semiconductor", "EV makers", "IoT stocks"), not the one-name company that
+# owns the ticker. S6's alias-embedding search nonetheless ranks the company
+# (e.g. C3.ai, ticker "AI") at high similarity for the concept phrase, so the
+# whole turn misroutes to that single company and refuses (ru_ai_semi_screener).
+# A candidate whose TICKER is one of these is rejected UNLESS the query names the
+# company distinctively (a non-generic token of its canonical name appears
+# verbatim — e.g. literally "C3.ai" / "C3"), which is the only signal that the
+# user meant the company and not the concept.
+_CONCEPT_TICKER_BLOCKLIST: frozenset[str] = frozenset({"AI", "EV", "IOT", "AR", "VR", "ML"})
+
+# Generic corporate-suffix / filler tokens that do NOT distinguish a company from
+# the concept — stripped before the distinctive-name check so "C3.ai, Inc." only
+# matches on its distinctive token ("c3"), never on "ai"/"inc".
+_GENERIC_NAME_TOKENS: frozenset[str] = frozenset(
+    {
+        "inc", "incorporated", "corp", "corporation", "co", "company",
+        "ltd", "limited", "plc", "the", "ai", "group", "holdings",
+    }
+)  # fmt: skip
+
+
+def _canonical_distinctively_named(name: str, query_text: str | None) -> bool:
+    """True when a DISTINCTIVE token of the canonical name appears in the query.
+
+    Used by the concept-token guard: a candidate whose ticker is a generic
+    concept ("AI") is only kept when the user clearly meant the COMPANY, i.e. a
+    non-generic token of its canonical name ("C3.ai, Inc." → "c3") is present in
+    the query verbatim (word-boundary, case-insensitive). Corporate suffixes and
+    the concept word itself are stripped so they never count as evidence.
+    """
+    if not query_text:
+        return False
+    query_lower = re.sub(r"\s+", " ", strip_query_wrapper(query_text).lower())
+    distinctive = {t for t in _name_tokens(name) if len(t) >= 2 and t not in _GENERIC_NAME_TOKENS}
+    for tok in distinctive:
+        idx = query_lower.find(tok)
+        while idx != -1:
+            left_ok = idx == 0 or not query_lower[idx - 1].isalnum()
+            right = idx + len(tok)
+            right_ok = right == len(query_lower) or not query_lower[right].isalnum()
+            if left_ok and right_ok:
+                return True
+            idx = query_lower.find(tok, idx + 1)
+    return False
 
 
 def is_sec_form_designator(token: str) -> bool:
@@ -617,6 +672,33 @@ def filter_resolver_candidates(
         if not candidates:
             return [], rejected
 
+    # ── D-i pass: drop generic-concept ticker candidates ────────────────────
+    # A candidate whose ticker is a generic concept token ("AI" → C3.ai) is
+    # rejected UNLESS the query distinctively names the company (e.g. "C3.ai").
+    # Runs BEFORE the floor pass because the concept-named company usually sits
+    # well above the 0.75 floor (S6 returns it as a high-similarity alias hit for
+    # the concept phrase). Scoped by the distinctive-name escape hatch so an
+    # explicit company query ("how is C3.ai doing?") still resolves.
+    surviving_concept: list[GatedEntity] = []
+    for c in candidates:
+        c_ticker = (c.ticker or "").strip().upper()
+        if c_ticker in _CONCEPT_TICKER_BLOCKLIST and not _canonical_distinctively_named(c.canonical_name, query_text):
+            rejected.append(
+                GatedEntity(
+                    entity_id=c.entity_id,
+                    canonical_name=c.canonical_name,
+                    similarity=c.similarity,
+                    payload=c.payload,
+                    rejection_reason=REASON_CONCEPT_TOKEN,
+                    ticker=c.ticker,
+                )
+            )
+        else:
+            surviving_concept.append(c)
+    candidates = surviving_concept
+    if not candidates:
+        return [], rejected
+
     # ── C3 pass: drop implausibly-short canonical stubs ─────────────────────
     # A 1-2 char canonical ("S" = SentinelOne/Sprint) surfaced for a
     # natural-language query ("What was Apple's revenue…") misroutes the whole
@@ -735,6 +817,7 @@ def filter_resolver_candidates(
 __all__ = [
     "ACCEPTED_QUERY_NAME_MATCH",
     "ACCEPTED_QUERY_TICKER_MATCH",
+    "REASON_CONCEPT_TOKEN",
     "REASON_DELTA_BELOW_THRESHOLD",
     "REASON_IMPLAUSIBLE_SHORT",
     "REASON_LOW_TOP_SIMILARITY",

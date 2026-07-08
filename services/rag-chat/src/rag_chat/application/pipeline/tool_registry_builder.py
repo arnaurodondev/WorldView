@@ -1320,7 +1320,16 @@ def build_default_registry() -> ToolRegistry:
                 "EPS, P/E, market cap) for MULTIPLE tickers in a single call. "
                 "Returns a per-ticker dict {ticker: {status: ok|error, periods?, "
                 "reason?}}; partial failures (unknown ticker, missing data) do not fail the "
-                "whole batch. Cap: 25 tickers per call."
+                "whole batch. Cap: 25 tickers per call. "
+                # D-b (2026-07-08): batch date-anchoring — same contract as the
+                # singular get_fundamentals_history tool.
+                "By default this returns the LATEST N periods per ticker. **When the "
+                "question anchors to a specific PAST year or quarter (e.g. 'each company's "
+                "FY2024 Q3 revenue', 'compare 2023 margins'), you MUST pass `from_date` and "
+                "`to_date` (both, as YYYY-MM-DD) bounding that window** — otherwise you get "
+                "the latest quarters and would misreport them as the requested period. When "
+                "a window is given each ticker returns ONLY rows whose period_end falls in "
+                "it; a ticker with no rows in the window is marked 'not covered for that period'."
             ),
             parameters=[
                 ParameterSpec(
@@ -1333,6 +1342,30 @@ def build_default_registry() -> ToolRegistry:
                     name="periods",
                     type="integer",
                     description="Number of quarters per ticker (1-20). Default 5.",
+                    required=False,
+                ),
+                # D-b (2026-07-08): explicit historical-window bounds, mirroring
+                # the singular get_fundamentals_history tool. Both must be supplied
+                # together; a lone bound is ignored (falls back to latest-N).
+                ParameterSpec(
+                    name="from_date",
+                    type="string",
+                    description=(
+                        "Optional ISO date (YYYY-MM-DD). Pair with `to_date` to anchor a "
+                        "specific past year/quarter across ALL tickers — e.g. for calendar "
+                        "year 2024 use from_date='2024-01-01', to_date='2024-12-31'. Only rows "
+                        "whose period_end falls in [from_date, to_date] are returned. Omit for "
+                        "the latest N periods."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="to_date",
+                    type="string",
+                    description=(
+                        "Optional ISO date (YYYY-MM-DD) — the inclusive upper bound, paired with "
+                        "`from_date`. Ignored unless both are provided."
+                    ),
                     required=False,
                 ),
             ],

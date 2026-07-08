@@ -950,12 +950,52 @@ class SSEEmitter:
         view: dict[str, dict[str, dict[str, str]]] = {}
         for item in items[: cls.GROUNDING_MAX_ROWS]:
             cls._merge_item_into_entity_view(item, allow, view)
-        # Drop entities that resolved to no metrics at all (identifier-only noise)
-        # UNLESS every entity is metric-less (then keep so the caller still sees
-        # the multi-entity structure). Simpler: require >= 2 entities overall.
-        if len(view) < 2:
+        if not view:
             return None
-        return view
+        # Multi-entity result → always emit (the original D2 case: batch / compare
+        # / movers pack several entities the flat bag cannot disambiguate).
+        if len(view) >= 2:
+            return view
+        # H-1 (2026-07-08): a SINGLE-entity result ALSO gets the structured view
+        # when it packs >= 2 period/bar slots — a multi-period fundamentals trend
+        # or a multi-bar price series (tc_price_history, single fundamentals
+        # history). The flat bag alone reported ``total_rows:1`` with no per-row
+        # nesting, so the judge could not map each period/bar to a row and
+        # false-flagged real table data as fabricated. A genuinely single-period
+        # single-entity result (< 2 slots) stays on the legacy flat bag so the
+        # 4-key sample shape is preserved (AD-4).
+        only_periods = next(iter(view.values()))
+        if len(only_periods) >= 2:
+            return view
+        return None
+
+    @classmethod
+    def _max_value_row_depth(cls, items: list[Any]) -> int:
+        """Largest number of VALUE-ROWS (period/bar/entity slots) in any one item.
+
+        A multi-row table tool (price_history, single fundamentals-history) returns
+        ONE item whose ``grounding_fields`` pack N rows under ``_N`` suffixes
+        (``close``/``close_2`` …, ``revenue``/``revenue_2`` …). ``len(items)`` is
+        then 1 even though the sample REPRESENTS N rows — which the judge read as
+        "only 1 data point" and used to false-flag multi-value answers (H-1). This
+        returns the max ``_N`` slot index seen across items so the caller can
+        surface a truthful ``value_rows`` count alongside the item-count
+        ``total_rows``. Always >= 1.
+        """
+        max_depth = 1
+        for item in items[: cls.GROUNDING_MAX_ROWS]:
+            gf = getattr(item, "grounding_fields", None)
+            if not gf:
+                continue
+            depth = 1
+            for raw_key, raw_val in gf:
+                if raw_val is None:
+                    continue
+                m = re.search(r"_(\d+)$", raw_key)
+                if m:
+                    depth = max(depth, int(m.group(1)))
+            max_depth = max(max_depth, depth)
+        return max_depth
 
     @classmethod
     def build_grounding_sample(cls, tool_name: str, items: list[Any]) -> dict[str, Any] | None:
@@ -1121,6 +1161,19 @@ class SSEEmitter:
         by_entity = cls._build_entity_period_view(tool_name, items)
         if by_entity is not None:
             sample["by_entity"] = by_entity
+
+        # ── H-1 (2026-07-08): truthful value-row count ────────────────────────
+        # ``total_rows`` is the ITEM count (len(items)). A multi-row table tool
+        # (price_history, single fundamentals-history) returns ONE item packing
+        # N period/bar rows under ``_N`` suffixes, so ``total_rows:1`` under-
+        # reported the sample's depth and the judge false-flagged real table data
+        # as fabricated. ``value_rows`` reports the true per-row depth. Emitted
+        # ONLY when it exceeds ``total_rows`` so a single-row single-entity sample
+        # stays byte-identical to the legacy 4-key shape (AD-4). Additive +
+        # backward-compatible: a consumer that does not know the key ignores it.
+        value_rows = cls._max_value_row_depth(items)
+        if value_rows > total_rows:
+            sample["value_rows"] = value_rows
 
         return sample
 

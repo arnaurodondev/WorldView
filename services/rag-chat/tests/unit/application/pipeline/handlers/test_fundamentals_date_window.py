@@ -111,8 +111,16 @@ async def test_window_widens_the_upstream_fetch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_window_with_no_matching_rows_returns_none() -> None:
-    """If the requested year is absent, return None so the LLM refuses (no relabeling)."""
+async def test_window_with_no_matching_rows_returns_coverage_gap_sentinel() -> None:
+    """D-b (2026-07-08): an empty window returns a clean COVERAGE-GAP sentinel.
+
+    Prior behaviour returned ``None``, which the orchestrator rendered as
+    status=empty/error and the model OVER-REFUSED with a resolver-style failure
+    (da_apple_revenue_fy2024q4_precision). The sentinel degrades gracefully — it
+    tells synthesis the exact window has no data — while STILL carrying no period
+    numbers, so the anti-relabeling guarantee holds: no wrong-year figure can
+    leak into the answer.
+    """
     s3 = AsyncMock()
     # Only 2025/2026 rows available — nothing in the requested 2021 window.
     s3.get_fundamentals_history.return_value = [
@@ -128,7 +136,16 @@ async def test_window_with_no_matching_rows_returns_none() -> None:
         to_date="2021-12-31",
     )
 
-    assert result is None, "out-of-window rows leaked — the LLM would relabel them"
+    # A sentinel item, NOT None — and NOT a resolver-style hard error.
+    assert result is not None
+    assert result.item_id == "tool:fundamentals:TSLA:not_covered"
+    assert "not covered" in result.text.lower() or "no fundamentals" in result.text.lower()
+    # Anti-relabeling: no out-of-window figure may appear in the sentinel text.
+    assert "28" not in result.text and "24" not in result.text
+    assert "2026" not in result.text and "2025" not in result.text
+    # The coverage marker rides the grounding bag but is NOT allow-listed, so it
+    # never leaks into a grounding sample (mirrors query_fundamentals D7).
+    assert ("coverage", "not_covered") in result.grounding_fields
 
 
 @pytest.mark.asyncio

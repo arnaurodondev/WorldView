@@ -713,3 +713,84 @@ class TestBuildGroundingSampleReadsGroundingFields:
         payload = json.loads(frame["data"])
         assert "grounding_sample" not in payload
         assert set(payload.keys()) == {"type", "tool", "status", "item_count"}
+
+
+# ---------------------------------------------------------------------------
+# H-1 (2026-07-08): per-row / per-entity capture for multi-row table tools.
+# A single item packing N period/bar rows must report a truthful value_rows
+# count AND get a structured by_entity per-period view so the judge stops
+# reading total_rows:1 as "one data point" and false-flagging real table data.
+# ---------------------------------------------------------------------------
+
+
+class TestH1MultiRowCapture:
+    def _price_item(self) -> RetrievedItem:
+        """A price-history item packing 3 bar-slots (bare + _2 + _3), one entity."""
+        return RetrievedItem.create(
+            item_id="tool:price_history:NVDA",
+            item_type=ItemType.financial,
+            text="NVDA price table (see structured fields).",
+            score=0.88,
+            trust_weight=0.90,
+            citation_meta=CitationMeta(
+                title="NVDA price history (day)",
+                url=None,
+                source_name="market_data",
+                published_at=None,
+                entity_name="NVDA",
+            ),
+            grounding_fields=(
+                ("ticker", "NVDA"),
+                ("high", "1005.0"),
+                ("low", "800.0"),
+                ("close", "980.0"),
+                ("close_2", "870.0"),
+                ("period_2", "2026-05-01"),
+                ("close_3", "820.0"),
+                ("period_3", "2026-04-01"),
+            ),
+        )
+
+    def test_price_history_reports_value_rows_over_total_rows(self) -> None:
+        """A single 3-bar item reports value_rows=3 even though total_rows=1."""
+        sample = SSEEmitter.build_grounding_sample("get_price_history", [self._price_item()])
+        assert sample is not None
+        assert sample["total_rows"] == 1  # one RetrievedItem
+        assert sample["value_rows"] == 3  # ...but it packs 3 bar-rows
+
+    def test_single_entity_multi_period_gets_by_entity_view(self) -> None:
+        """A multi-bar single-entity result now gets the structured by_entity view."""
+        sample = SSEEmitter.build_grounding_sample("get_price_history", [self._price_item()])
+        assert sample is not None
+        assert "by_entity" in sample
+        view = sample["by_entity"]
+        assert set(view.keys()) == {"NVDA"}
+        # >= 2 period slots present (latest + older bars).
+        assert len(view["NVDA"]) >= 2
+        assert view["NVDA"]["latest"]["close"] == "980.0"
+
+    def test_single_period_single_entity_keeps_legacy_shape(self) -> None:
+        """A genuinely single-period single-entity result stays on the 4-key bag."""
+        item = _fundamentals_item_with_grounding("AAPL", (("ticker", "AAPL"), ("revenue", "94000000000")))
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", [item])
+        assert sample is not None
+        assert "by_entity" not in sample
+        assert "value_rows" not in sample
+        assert set(sample.keys()) == {"fields", "sampled_rows", "total_rows", "truncated"}
+
+    def test_multi_period_single_fundamentals_gets_view_and_value_rows(self) -> None:
+        """A single fundamentals item with 3 periods → by_entity + value_rows=3."""
+        item = _fundamentals_item_with_grounding(
+            "TSLA",
+            (
+                ("ticker", "TSLA"),
+                ("revenue", "25500000000"),
+                ("revenue_2", "24000000000"),
+                ("revenue_3", "21000000000"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("query_fundamentals", [item])
+        assert sample is not None
+        assert sample["value_rows"] == 3
+        assert "by_entity" in sample
+        assert len(sample["by_entity"]["TSLA"]) >= 2

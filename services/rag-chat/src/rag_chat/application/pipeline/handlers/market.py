@@ -123,6 +123,47 @@ def _format_market_cap_value(value: Any) -> str | None:
     return f"{sign}${abs_n:,.0f}"
 
 
+# ── D-h (2026-07-08): margin / yield percent formatting + magnitude gate ─────
+# Margins (gross/operating/net) and yields (dividend) come from upstream in TWO
+# shapes: a true FRACTION (0.7493 = 74.93 %) or, for some EODHD yield fields, an
+# ALREADY-PERCENT value (2.68 meaning 2.68 %). Two symmetric defects came out of
+# this ambiguity in the 2026-07-08 audit:
+#   * blindly x100-ing an already-percent value produced ">100 %" (XLU dividend
+#     yield 2.68 → "268 %", XLE → "265 %"): tc_portfolio_dividend / port_rate;
+#   * NOT x100-ing a fraction produced "0.7 %" for a 74.93 % gross margin:
+#     ru_nvda_amd_compare.
+# ``_format_ratio_as_percent`` disambiguates by magnitude and NEVER emits an
+# implausible (>100 %) percentage — an out-of-range value is suppressed (returns
+# None) so a misleading number can't reach the LLM.
+_MAX_PLAUSIBLE_PERCENT = 100.0
+
+
+def _format_ratio_as_percent(value: Any) -> str | None:
+    """Render a margin/yield as ``NN.NN%``, disambiguating fraction vs percent.
+
+    * ``|value| <= 1`` is treated as a FRACTION and scaled x100 (0.7493 → 74.93%).
+    * ``|value| > 1`` is treated as ALREADY a percent figure (2.68 → 2.68%) — the
+      EODHD dividend-yield case that x100 turned into "268%".
+    * The sign is preserved (a net-margin loss stays negative).
+    * A resulting magnitude above ``_MAX_PLAUSIBLE_PERCENT`` (100%) is not
+      physically meaningful for a margin/yield → returns ``None`` (caller omits
+      the cell) rather than emitting a misleading value.
+
+    Returns ``None`` for non-numeric input so callers can fall back gracefully.
+    """
+    num = _coerce_grounding_number(value)
+    if num is None:
+        return None
+    try:
+        v = float(num)
+    except (TypeError, ValueError):
+        return None
+    pct = v * 100.0 if abs(v) <= 1.0 else v
+    if abs(pct) > _MAX_PLAUSIBLE_PERCENT:
+        return None
+    return f"{pct:.2f}%"
+
+
 # ── Value-based substantiation (2026-06-26) ───────────────────────────────────
 # Helpers that lift the RAW numeric values the fundamentals handlers already
 # compute into a structured ``grounding_fields`` bag on RetrievedItem, so the
@@ -1156,15 +1197,58 @@ class MarketHandler(ToolHandler):
             non_phantom = in_window
 
         if not non_phantom:
-            # All rows were phantoms (or filtered out by the date window) —
-            # surface no-data so the LLM knows to refuse rather than fabricate.
-            # ``item_count=0`` is conveyed by returning None (the orchestrator
-            # increments item_count only for non-None returns).
+            if window_active:
+                # PERIOD-ANCHOR (BP-651) hardening — D-b (2026-07-08): the explicit
+                # historical window matched NO returned period. Returning None here
+                # made the tool read as status=empty/error and the model
+                # OVER-REFUSED with a resolver-style failure
+                # (da_apple_revenue_fy2024q4_precision: a precise fiscal-quarter
+                # window that the LLM anchored to a calendar range missing the
+                # fiscal period-end). Emit a clean COVERAGE-GAP sentinel instead so
+                # synthesis states the exact window has no data (and can offer the
+                # nearest available quarter) rather than erroring. The sentinel
+                # carries NO period numbers, so the anti-relabeling guarantee of the
+                # window filter still holds — the model cannot quote a wrong-year
+                # figure from it. ``coverage`` is NOT allow-listed, so it never
+                # leaks into a grounding sample (mirrors query_fundamentals D7).
+                log.info(
+                    "tool_no_data",
+                    tool="get_fundamentals_history",
+                    ticker=ticker,
+                    reason="window_no_rows",
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+                upper = ticker.upper()
+                return RetrievedItem.create(
+                    item_id=f"tool:fundamentals:{upper}:not_covered",
+                    item_type=ItemType.financial,
+                    text=(
+                        f"No fundamentals were reported for {upper} in the requested "
+                        f"window {from_date}..{to_date}. This is a period-coverage gap, "
+                        "not a temporary error — state that no data is available for "
+                        "that exact period rather than estimating it or relabeling a "
+                        "different quarter's figures as that period."
+                    ),
+                    score=0.50,
+                    trust_weight=0.90,
+                    grounding_fields=(("ticker", upper), ("coverage", "not_covered")),
+                    citation_meta=CitationMeta(
+                        title=f"Fundamentals: {upper} (window not covered)",
+                        url=None,
+                        source_name="fundamentals",
+                        published_at=None,
+                        entity_name=upper,
+                    ),
+                )
+            # All rows were phantoms — surface no-data so the LLM knows to refuse
+            # rather than fabricate. ``item_count=0`` is conveyed by returning None
+            # (the orchestrator increments item_count only for non-None returns).
             log.warning(
                 "tool_no_data",
                 tool="get_fundamentals_history",
                 ticker=ticker,
-                reason="window_no_rows" if window_active else "all_rows_phantom",
+                reason="all_rows_phantom",
             )
             return None
 
@@ -1209,6 +1293,8 @@ class MarketHandler(ToolHandler):
         self,
         tickers: list[str] | None = None,
         periods: int = 5,
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> list[RetrievedItem]:
         """Fetch fundamentals for many tickers in one HTTP call (PLAN-0095 W2 T-W2-02).
 
@@ -1218,6 +1304,23 @@ class MarketHandler(ToolHandler):
         dropped silently, so the LLM can decide whether to retry the missing
         tickers individually or carry on with what it has.
 
+        PERIOD-ANCHOR (BP-651, D-b 2026-07-08): ``from_date`` / ``to_date`` bound
+        the answer to a HISTORICAL calendar window for EVERY ticker — the batch
+        sibling of the singular-tool anchoring. market-data's ``/fundamentals/
+        batch`` endpoint accepts only ``periods`` (no date filter, same as the
+        singular ``/history`` endpoint), so we apply the identical OVER-FETCH +
+        window-FILTER pattern in code: widen ``periods`` so the window's start is
+        reachable in the latest-N stream, then keep only rows whose period_end
+        falls inside [from_date, to_date]. Without this, a multi-entity historical
+        question ("compare NVDA vs AMD revenue in FY2024 Q3") received the latest
+        N periods and the model back-filled the wrong quarters
+        (da_nvda_amd_compare_fy2024q3, ru_nvda_amd_compare_qtr). Both bounds must
+        be supplied together; a lone/invalid bound degrades to latest-N (logged).
+
+        A ticker that returns rows but NONE inside the window surfaces an explicit
+        per-entity "not covered for <window>" line (no numbers), so the model
+        cannot fabricate or cross-attribute a figure for that entity.
+
         R9: returns [] on missing port, invalid input, or upstream timeout.
         R27: read-only — no UnitOfWork.
         """
@@ -1225,6 +1328,28 @@ class MarketHandler(ToolHandler):
         if not ticker_list:
             log.warning("tool_invalid_param", tool="get_fundamentals_history_batch", reason="empty_tickers")
             return []
+
+        # PERIOD-ANCHOR: resolve the optional historical window (mirrors the
+        # singular handler). Active only when BOTH bounds parse and are ordered;
+        # a partial/invalid window degrades to latest-N (logged). market-data's
+        # batch endpoint is quarterly, so the over-fetch sizing uses "quarterly".
+        window_from = _parse_iso_date(from_date)
+        window_to = _parse_iso_date(to_date)
+        window_active = window_from is not None and window_to is not None and window_from <= window_to
+        if (from_date or to_date) and not window_active:
+            log.warning(
+                "tool_invalid_param",
+                tool="get_fundamentals_history_batch",
+                param="date_window",
+                from_date=from_date,
+                to_date=to_date,
+                fallback="latest_n",
+            )
+        fetch_periods = periods
+        if window_active:
+            assert window_from is not None  # narrowed by window_active; for mypy
+            fetch_periods = _periods_to_cover_window(window_from, "quarterly", periods)
+        periods = fetch_periods
         # Mirror the server-side cap (25) so we fail fast with a clear log
         # instead of letting the route return a 422 that becomes ``{}`` here.
         if len(ticker_list) > 25:
@@ -1276,8 +1401,40 @@ class MarketHandler(ToolHandler):
                 # renderer omits the section.
                 snap = entry.get("current_snapshot")
                 snap_dict = snap if isinstance(snap, dict) else None
-                if not periods_data and snap_dict is None:
-                    text = f"{ticker}: no quarterly fundamentals available"
+                # PERIOD-ANCHOR (D-b): when a historical window is active, keep
+                # ONLY rows whose period_end falls inside it — mirrors the singular
+                # handler's deterministic filter. Rows with an unparseable
+                # period_end are DROPPED (we cannot prove they belong to the
+                # requested year). The current_snapshot is TTM/current, NOT the
+                # historical window, so it is DROPPED from a windowed answer to
+                # stop the model quoting a live figure as the past-period value.
+                if window_active:
+                    assert window_from is not None and window_to is not None
+                    periods_data = [
+                        r
+                        for r in periods_data
+                        if (pe := _row_period_end(r)) is not None and window_from <= pe <= window_to
+                    ]
+                    snap_dict = None
+                if not periods_data:
+                    # No in-window rows (or no rows at all). Surface an EXPLICIT
+                    # per-entity coverage line so the model states this entity is
+                    # not covered for the window rather than fabricating or
+                    # cross-attributing another entity's figure to it (the AMD
+                    # empty-2nd-entity case, ru_nvda_amd_compare). No grounding_
+                    # fields → no numbers to hallucinate from.
+                    if window_active:
+                        text = (
+                            f"{ticker}: no fundamentals reported in {from_date}..{to_date} "
+                            "— not covered for that period (do not substitute another "
+                            "period's or another entity's figures)."
+                        )
+                    elif snap_dict is None:
+                        text = f"{ticker}: no quarterly fundamentals available"
+                    else:
+                        # Snapshot-only (no periods but a live snapshot) — render it.
+                        text = self._format_fundamentals_table(ticker, [], current_snapshot=snap_dict)
+                        grounding_fields = _grounding_fields_from_rows([], snap_dict, ticker=ticker)
                 else:
                     text = self._format_fundamentals_table(ticker, periods_data, current_snapshot=snap_dict)
                     # Value-substantiation: lift the raw period numbers (periods are
@@ -1543,8 +1700,13 @@ class MarketHandler(ToolHandler):
                         elif isinstance(v, float):
                             # Margins are fractions; render as percentage so
                             # the LLM does not quote "0.44" as a P/E ratio.
+                            # D-h (2026-07-08): use the magnitude-gated formatter
+                            # so a fraction is x100'd (0.7493 → 74.93%) but an
+                            # already-percent / implausible value never emits
+                            # ">100%". A suppressed value renders "not available".
                             if m.endswith("_margin") or m == "fcf_yield":
-                                cells.append(f"{v * 100:.2f}%")
+                                pct = _format_ratio_as_percent(v)
+                                cells.append(pct if pct is not None else "not available")
                             elif abs(v) >= 1e9:
                                 # Cap-style raw amount → defer to the same
                                 # B/M formatter so the LLM does not have to
@@ -1580,7 +1742,9 @@ class MarketHandler(ToolHandler):
                             out.append(f"    - {m}: not available")
                         elif isinstance(v, float):
                             if m.endswith("_margin") or m == "fcf_yield":
-                                out.append(f"    - {m}: {v * 100:.2f}%")
+                                # D-h: magnitude-gated percent (see table cell above).
+                                pct = _format_ratio_as_percent(v)
+                                out.append(f"    - {m}: {pct if pct is not None else 'not available'}")
                             elif abs(v) >= 1e9:
                                 fmt = _format_market_cap_value(v)
                                 out.append(f"    - {m}: {fmt if fmt is not None else v}")
@@ -1615,7 +1779,11 @@ class MarketHandler(ToolHandler):
                 any_populated = True
                 if isinstance(v, float):
                     if m.endswith("_margin") or m == "fcf_yield" or m == "dividend_yield":
-                        snap_lines.append(f"- {m}: {v * 100:.2f}%")
+                        # D-h (2026-07-08): a magnitude-gated percent. dividend_yield
+                        # is the field that produced ">100%" (XLU 268%) when an
+                        # already-percent value was x100'd — the gate suppresses it.
+                        pct = _format_ratio_as_percent(v)
+                        snap_lines.append(f"- {m}: {pct if pct is not None else 'not available'}")
                     elif abs(v) >= 1e9:
                         fmt = _format_market_cap_value(v)
                         snap_lines.append(f"- {m}: {fmt if fmt is not None else v} (raw: {v})")
@@ -2129,6 +2297,14 @@ class MarketHandler(ToolHandler):
                         # answer.
                         formatted = _format_market_cap_value(val)
                         row += f" | MCap: {formatted} (raw: {val})" if formatted is not None else f" | MCap: {val}"
+                    elif col_label in ("Gross margin", "Op margin", "Div yield"):
+                        # D-h (2026-07-08): margins/yields are ratios (0.7493) —
+                        # render as a magnitude-gated percent so the LLM copies
+                        # "74.93%" not the raw "0.7493" (which it misread as
+                        # "0.7%"), and an implausible (>100%) value is suppressed.
+                        pct = _format_ratio_as_percent(val)
+                        if pct is not None:
+                            row += f" | {col_label}: {pct}"
                     else:
                         row += f" | {col_label}: {val}"
                 lines.append(row)
@@ -2707,8 +2883,13 @@ class MarketHandler(ToolHandler):
                     snap_lines.append(f"  Price/Book: {float(snap_pb):.2f}x")
             snap_dy = current_snapshot.get("dividend_yield")
             if snap_dy is not None:
-                with contextlib.suppress(TypeError, ValueError):
-                    snap_lines.append(f"  Dividend Yield: {float(snap_dy):.4f}")
+                # D-h (2026-07-08): render as a magnitude-gated percent instead of
+                # a bare ratio (".4f"). The gate never emits an implausible
+                # (>100%) yield — the XLU/XLE "268%" bug — and disambiguates the
+                # fraction (0.0268 → 2.68%) vs already-percent (2.68 → 2.68%) shapes.
+                dy_pct = _format_ratio_as_percent(snap_dy)
+                if dy_pct is not None:
+                    snap_lines.append(f"  Dividend Yield: {dy_pct}")
             # PLAN-0104 W30 / BP-649: forward P/E + PEG ratio. Emitted only
             # when non-None — missing snapshot fields are NEVER rendered as
             # "—", because tool_use.py v1.5 instructs the LLM to refuse
