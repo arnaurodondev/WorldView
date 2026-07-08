@@ -379,9 +379,7 @@ class TestToolUsePromptContract:
             prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
             flat = " ".join(prompt.split())
             # The mandatory-rule clause anchor.
-            assert (
-                "FIRST-PERSON PORTFOLIO" in prompt
-            ), f"intent={intent}: missing first-person portfolio clause"
+            assert "FIRST-PERSON PORTFOLIO" in prompt, f"intent={intent}: missing first-person portfolio clause"
             assert "get_portfolio_context IS MANDATORY" in prompt
             # The first-person triggers that must be named.
             assert "'my holdings'" in prompt
@@ -876,3 +874,53 @@ class TestToolUsePromptContract:
             assert "FALLBACK BEFORE REFUSING" in prompt
             assert "try the next-best tool" in prompt
             assert "Refuse only AFTER the fallback" in prompt
+
+    def test_prompt_template_version_bumped_for_track3_planning_fixes(self) -> None:
+        """v1.19 adds the COMPOUND / MULTI-HOP / RIPPLE routing entry + the NO
+        REDUNDANT TOOL CALLS rule — both edit the template body (flipping the
+        content hash), so the semver version MUST advance to >= 1.19. Pinning the
+        floor catches an accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 19), f"expected version >= 1.19 for Track-3 planning fixes, got {_ver}"
+
+    def test_tool_routing_forces_multi_hop_traversal(self) -> None:
+        """v1.19 (Track-3 multi-hop): compound / supply-chain / ripple questions
+        ('X's suppliers and THEIR key customers', 'second-order exposure through
+        the supply chain') were answered ONE hop short — direct suppliers, never
+        the next link. The TOOL ROUTING block must add a COMPOUND / MULTI-HOP /
+        RIPPLE entry forcing traverse_graph to walk the full chain, not stop at
+        the first hop. Being CORE routing, it must appear across intents.
+        """
+        for intent in ("GENERAL", "REASONING", "COMPARISON", "PORTFOLIO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            flat = " ".join(prompt.split())
+            assert "COMPOUND / MULTI-HOP / RIPPLE" in prompt, f"intent={intent}: missing multi-hop routing entry"
+            assert "MUST use `traverse_graph`" in flat
+            # Must explicitly forbid stopping at the first hop.
+            assert "do NOT stop at the first hop" in flat
+            assert "walk the graph to the terminal" in flat
+            # The concrete second-order shapes.
+            assert "THEIR key customers" in flat or "THEIR key\ncustomers" in prompt
+            assert "second-order" in flat
+
+    def test_research_loop_forbids_redundant_tool_calls(self) -> None:
+        """v1.19 (Track-3 dedup): the loop called the SAME tool with the SAME args
+        up to 5x in one turn (chain_portfolio_upcoming, cmp_tsmc_intel). The
+        RESEARCH LOOP block must add a NO REDUNDANT TOOL CALLS rule forbidding an
+        identical repeat call, requiring a changed arg or a newly-surfaced entity
+        for any follow-up, and routing an empty/errored call to the fallback rule
+        rather than an identical retry. Being CORE, it must appear across intents.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "COMPARISON", "PORTFOLIO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            flat = " ".join(prompt.split())
+            assert "NO REDUNDANT TOOL CALLS" in prompt, f"intent={intent}: missing dedup rule"
+            assert "never call the SAME tool with the SAME" in flat
+            # A follow-up needs a changed arg or a newly-surfaced entity.
+            assert "at\nleast one argument changes" in prompt or "at least one argument changes" in flat
+            # An empty/errored call uses the fallback, not an identical retry.
+            assert "do not re-issue the identical" in flat or "do not re-issue the identical\ncall" in prompt
+        # GUARDRAIL: the RESEARCH LOOP block it extends is still present.
+        core = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
+        assert "RESEARCH LOOP — PLAN WIDE, THEN GO DEEP" in core

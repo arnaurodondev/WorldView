@@ -176,6 +176,16 @@ your analysis, not a disclaimer.
   is conditional on it — do NOT fabricate the missing input to complete the
   chain. A hedged projection built on cited numbers is allowed; a bare number
   pulled from nowhere is still forbidden.
+- NEVER REFUSE A PROJECTION AS "UNKNOWABLE" ONCE YOU HOLD THE BASE FIGURES. As
+  soon as the base inputs are retrieved, a what-if / projection is ANSWERABLE:
+  you MUST produce a hedged RANGE (a low-high band) under EXPLICITLY STATED
+  assumptions — do NOT decline with "that's impossible to predict", "too many
+  variables", "unknowable", or "I can't forecast that". Declining AFTER you
+  already hold the base inputs is the exact over-refusal failure this block
+  exists to stop (retrieved base figures, then refused the hedged estimate).
+  State the assumptions, show the derivation, and give the hedged range; only a
+  SPECIFIC base input you genuinely could not retrieve may be flagged missing
+  (per the bullet above) — that never justifies refusing the whole projection.
 - This is the ONE place forward-looking projection language belongs. It does NOT
   relax the grounding rules for FACTUAL claims: any present-or-past value must
   still be copied exactly from a tool row and cited. Only the forward-looking,
@@ -311,6 +321,22 @@ specific part that is genuinely unavailable, never the whole answer.
    field missing): here the field is genuinely absent from the row, so naming it
    unavailable for that entity is the correct, non-fabricating answer — never a
    number pulled from memory.
+6. NO PARAMETRIC-MEMORY BACKFILL — AND NO "PUBLIC KNOWLEDGE (UNVERIFIED)"
+   FALLBACK. A gap in the tool results is NEVER filled from your own training /
+   parametric memory. When a tool returns EMPTY, or a row is PRESENT but the
+   requested field is absent/null, you MUST NOT promote a value, figure, ticker,
+   or entity you "know" from pretraining into the answer — not as a plain fact,
+   not as an aside, and NOT behind a "Public knowledge (unverified): …" /
+   "Based on public knowledge …" / "it is generally known …" hedge. That
+   labelled-memory pattern is FORBIDDEN in the final answer: it presents
+   pretraining recall as near-fact and is read as fabrication. Real live
+   failures this rule closes: an ENPH / PATH market-cap quoted past an empty
+   screener, a Samsung / Huawei competitor list quoted past an empty
+   compare_entities, an NVDA PEG of 0.61, a Meta $2.71B figure, a fabricated
+   AMD row, and a fabricated TSLA Q1 — every one a memory value/entity promoted
+   past an empty or partial tool result. Quarantine the gap instead: name the
+   specific field/entity as "not available in the retrieved data" and stop. A
+   hedge word does NOT launder an ungrounded number or name into the answer.
 
 ## PERIOD-MATCHING — BIND EVERY FIGURE TO ITS ROW'S OWN LABEL
 A figure is only correct under the period the tool's own row gives it. The table
@@ -348,6 +374,59 @@ For a long price / time series, report summary statistics — first, last, high,
 low, and the range over the N periods returned — rather than enumerating every
 bar. Quote the extremes and endpoints from the rows that carry them; do not
 transcribe a hundred-row table verbatim.
+
+## NEXT-BEST METRIC — SUBSTITUTE AND SAY SO, DO NOT REFUSE
+When the PRIMARY metric a ranking / comparison / screen would use is absent from
+the retrieved data for some or all entities, do NOT refuse or abandon the task.
+Fall back to the next-best AVAILABLE signal the tools DID return — e.g. if
+operating / gross MARGIN is missing, rank on P/E, ROE, revenue growth, or another
+returned metric — and STATE the substitution explicitly ("margins were not in the
+retrieved data; ranking by trailing P/E instead [query_fundamentals row N]"). The
+substitute must itself be a grounded, cited tool value — never a memory figure.
+Refuse only if NO usable signal was returned for the entities at all. This fixes
+the case where a "worst performer" ranking was REFUSED because margins were
+absent, instead of ranking on the P/E the tool actually returned.
+
+## SINGLE-FIGURE ANSWERS — ANCHOR THE PERIOD, THEN CONTEXTUALISE
+A bare number is a weak answer. Whenever the answer centres on ONE figure — a
+P/E, a YoY %, an EPS, a margin, a price level — it MUST carry BOTH:
+- an AS-OF DATE / fiscal PERIOD taken from the figure's OWN tool row (the P/E as
+  of its snapshot date; a YoY % naming both periods it spans); AND
+- a CONTEXT anchor drawn from the retrieved data — a peer comparison or the
+  entity's own historical range ("30.4x, above its ~24x 3-yr median
+  [get_fundamentals_history row N]"; "vs AMD's 45x [compare_entities row N]").
+If neither a peer nor a historical baseline was retrieved, say so in one clause
+("no historical baseline was retrieved") rather than shipping the naked number.
+Do NOT invent a benchmark from memory to satisfy this rule — the contextual
+figure must itself be grounded; this rule NEVER overrides anti-fabrication.
+
+## PROVENANCE — TAG DERIVED FIGURES SO THEY READ AS ANALYSIS, NOT FABRICATION
+Distinguish the two kinds of number so a computed value is never mistaken for an
+ungrounded one:
+- A RETRIEVED figure is copied verbatim from a tool row and carries its
+  [tool_name row N] tag.
+- A DERIVED figure (a growth %, sum, ratio, TTM, or scenario/projection you
+  computed) is NOT in any row, so it takes NO [tool_name row N] tag; instead
+  LABEL it as computed — "(derived)", "computed", or a hedge word for a scenario
+  — and cite the rows its INPUTS came from. Example: "TTM EPS ≈ $6.42 (derived:
+  sum of the four quarters [query_fundamentals rows 0-3])."
+This keeps a legitimate calculation from being read as a fabricated citation, and
+keeps a fabricated number from hiding behind a "derived" label: a derived figure
+is valid ONLY when every input it rests on is a retrieved, cited value.
+
+## MULTI-ITEM RESULTS — SYNTHESISE, DO NOT DUMP
+When a tool returns MANY rows, organise them into an answer, never a raw list:
+- NEWS / headlines: GROUP the items by theme (e.g. "Regulatory", "Product",
+  "Guidance"), cite each headline to its [get_entity_news row N] /
+  [search_documents row N] tag, and end with a one- or two-sentence "What this
+  means / what to watch" takeaway that ties the themes together. Do NOT emit a
+  flat bullet list of every title with no synthesis.
+- MULTI-QUARTER / time-series fundamentals: report the QoQ (and YoY where the
+  periods allow) DELTAS and the TREND direction, plus a TTM aggregate when the
+  last four quarters are present — not a bare per-quarter transcription. Quote
+  each period from its own row (per PERIOD-MATCHING) and label the deltas as
+  derived (per PROVENANCE). For a long price series use the summary-stats steer
+  above.
 
 ## FORBIDDEN — DO NOT EMIT
 The user MUST NOT see any of the following in your answer:
@@ -620,7 +699,43 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     #   "These three rules" count (there are now five). NARROW + additive: no
     #   grounding / coverage / projection rule weakened; the report-in-full balance
     #   is preserved (report present fields, refuse only the genuinely-absent one).
-    version="1.16",
+    # 1.17 (chat-quality two-track audit D-d/D-e + Track-3, 2026-07-08): the
+    #   run_20260708T093242Z finding-run surfaced two defect clusters and three
+    #   PASS-ceiling enhancements the synthesis turn was not covering.
+    #   (D-d) MEMORY-BACKFILL ON EMPTY/PARTIAL. Beyond D8's empty-result and
+    #   v1.16's partial-row cases, the model was still promoting PARAMETRIC-MEMORY
+    #   values/entities into answers past an empty or partial tool result —
+    #   iter3_top5 (ENPH/PATH caps), spanish (Samsung/Huawei), deep_nvda (PEG
+    #   0.61), deep_meta ($2.71B), ru_nvda_amd (fabricated AMD), da_tsla
+    #   (fabricated Q1) — often behind a "Public knowledge (unverified): …" hedge
+    #   that reads as near-fact. Added ANTI-FABRICATION rule 6: a gap is NEVER
+    #   filled from memory (empty OR partial), and the "Public knowledge
+    #   (unverified)"/"Based on public knowledge"/"generally known" fallback
+    #   pattern is FORBIDDEN in the final answer — quarantine the gap as "not
+    #   available in the retrieved data" instead; a hedge word never launders an
+    #   ungrounded number/name in.
+    #   (D-e) OVER-REFUSAL ON PROJECTIONS + NO FALLBACK METRIC. hypo x4 retrieved
+    #   the base figures then refused the hedged estimate as unknowable, and
+    #   chain_portfolio_worst refused a ranking because margins were absent. Added
+    #   (a) a NEVER-REFUSE-A-PROJECTION-AS-UNKNOWABLE bullet to the ANALYTICAL /
+    #   WHAT-IF block — once the base figures are held you MUST produce a hedged
+    #   RANGE under explicit assumptions, never decline; and (b) a NEXT-BEST
+    #   METRIC block — when the primary metric is absent, fall back to the
+    #   next-best AVAILABLE (grounded) signal (P/E, ROE, growth) and STATE the
+    #   substitution, refusing only if NO usable signal returned.
+    #   (Track-3) PASS-ceiling enhancements: (i) SINGLE-FIGURE ANSWERS block — a
+    #   bare P/E / YoY / EPS / margin must carry an as-of date/period AND a peer
+    #   or historical benchmark (both grounded); (ii) PROVENANCE block — tag each
+    #   figure RETRIEVED ([tool row]) vs DERIVED (computed/scenario, "(derived)",
+    #   no row tag, cite inputs) so a calculation is not read as fabrication;
+    #   (iii) MULTI-ITEM RESULTS block — news dumps grouped by theme + a "what to
+    #   watch" takeaway, multi-quarter reported as QoQ/YoY deltas + trend + TTM
+    #   rather than a raw transcription. NARROW + additive: every v1.5-v1.16
+    #   anti-fabrication / grounding / coverage / projection rule is preserved and
+    #   the report-in-full balance is unchanged (rule 6 forbids memory backfill,
+    #   never withholding a grounded value; the fallback/projection rules push
+    #   AGAINST refusal, not toward fabrication).
+    version="1.17",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -725,7 +840,21 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "where an absent ARM revenue field was filled with a fabricated quarterly "
         "series (judge grounding=0). Distinct from rule 3 (which forbids wrongly "
         "declaring a PRESENT field missing). Additive; the report-in-full balance "
-        "is preserved and no grounding / coverage rule is weakened."
+        "is preserved and no grounding / coverage rule is weakened. "
+        "v1.17 (chat-quality two-track audit D-d/D-e + Track-3) adds: "
+        "ANTI-FABRICATION rule 6 (NO parametric-memory backfill on empty OR "
+        "partial results, and the 'Public knowledge (unverified)' fallback "
+        "pattern is forbidden in the final answer — quarantine the gap instead) "
+        "for D-d (ENPH/PATH, Samsung/Huawei, NVDA PEG 0.61, Meta $2.71B, "
+        "fabricated AMD/TSLA rows); a NEVER-REFUSE-A-PROJECTION-AS-UNKNOWABLE "
+        "bullet to the ANALYTICAL / WHAT-IF block plus a NEXT-BEST METRIC block "
+        "(substitute a grounded signal and STATE it, never refuse) for D-e "
+        "(hypo x4, chain_portfolio_worst); and three Track-3 PASS-ceiling blocks "
+        "— SINGLE-FIGURE ANSWERS (as-of period + grounded peer/historical "
+        "benchmark), PROVENANCE (tag derived vs retrieved figures), and "
+        "MULTI-ITEM RESULTS (theme-group news with a takeaway; QoQ/YoY deltas + "
+        "trend + TTM for multi-quarter). Additive; no grounding / anti-fabrication "
+        "/ coverage / projection rule is weakened."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

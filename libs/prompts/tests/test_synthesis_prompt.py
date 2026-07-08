@@ -59,11 +59,12 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.16 (chain_nvda partial-row field fabrication — ANTI-FABRICATION rule 5)
-    # on top of v1.15 (da_tsla period-mislabel), v1.14 (iter3_msft unreported-
+    # v1.17 (chat-quality two-track audit D-d/D-e + Track-3) on top of v1.16
+    # (chain_nvda partial-row field fabrication — ANTI-FABRICATION rule 5),
+    # v1.15 (da_tsla period-mislabel), v1.14 (iter3_msft unreported-
     # latest-quarter), v1.13's D7/D8/D4, v1.12's synthesis-behavior fixes,
     # v1.11's data-coverage-boundary, v1.10's reasoning-rigor and v1.9's what-if.
-    assert ident.startswith("chat_synthesis_system@1.16#")
+    assert ident.startswith("chat_synthesis_system@1.17#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -529,3 +530,134 @@ def test_synthesis_prompt_unreported_latest_quarter_not_blanket_unavailable() ->
     # absent field, and the anti-fabrication policy is untouched.
     assert "ANTI-FABRICATION POLICY" in rendered
     assert "NEVER invent periods" in rendered
+
+
+def test_synthesis_prompt_no_memory_backfill_on_empty_or_partial() -> None:
+    """v1.17 D-d: beyond D8 (empty result) and rule 5 (partial row), the model was
+    still promoting PARAMETRIC-MEMORY values/entities into answers past an empty
+    OR partial tool result, often behind a "Public knowledge (unverified): …"
+    hedge that reads as near-fact. ANTI-FABRICATION rule 6 must (a) forbid filling
+    ANY gap (empty OR partial) from memory, (b) explicitly forbid the
+    "Public knowledge (unverified)" / "Based on public knowledge" fallback
+    pattern in the final answer, and (c) require quarantining the gap instead.
+
+    R19: additive on top of rules 1-5 — those assertions still hold.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    # (a) the rule 6 anchor + empty-OR-partial scope.
+    assert "NO PARAMETRIC-MEMORY BACKFILL" in rendered
+    assert "empty OR partial" in flat or "empty or partial" in flat.lower()
+    # (b) the labelled-memory fallback pattern is explicitly forbidden.
+    assert "Public knowledge (unverified)" in rendered
+    assert "FORBIDDEN in the final answer" in flat
+    assert "hedge word does NOT launder" in flat
+    # (c) quarantine the gap instead.
+    assert "not available in the retrieved data" in flat
+    # The concrete live examples are named so the rule is not silently reverted.
+    for token in ("ENPH", "PATH", "Samsung", "Huawei", "PEG", "$2.71B"):
+        assert token in rendered, f"missing D-d example token {token}"
+
+    # --- R19: the prior ANTI-FABRICATION rules 1-5 remain intact. ---
+    assert "ANTI-FABRICATION POLICY" in rendered
+    assert "NEVER invent periods" in rendered  # rule 1
+    assert "NEVER add entities" in rendered  # rule 2
+    assert "NEVER claim returned data is missing without checking" in rendered  # rule 3
+    assert "EMPTY RESULT → NAME NO NEW ENTITY" in rendered  # rule 4
+    assert "PARTIAL ROW → DO NOT FILL A MISSING FIELD FROM MEMORY" in rendered  # rule 5
+    # The report-in-full balance is preserved (anti-fabrication, not anti-answering).
+    assert "refuse ONLY the" in rendered
+    assert "never the whole answer" in rendered
+
+
+def test_synthesis_prompt_never_refuses_projection_as_unknowable() -> None:
+    """v1.17 D-e (over-refusal on projections): hypo x4 retrieved the base figures
+    then refused the hedged estimate as unknowable. The ANALYTICAL / WHAT-IF block
+    must add a bullet forbidding a projection refusal ONCE the base figures are
+    held and requiring a hedged RANGE under explicit assumptions.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "NEVER REFUSE A PROJECTION AS" in rendered
+    assert "hedged RANGE" in rendered
+    assert "EXPLICITLY STATED\n  assumptions" in rendered or "EXPLICITLY STATED assumptions" in flat
+    # The specific over-refusal phrasings the model used must be named + forbidden.
+    assert "impossible to predict" in rendered
+    assert "unknowable" in rendered
+    # GUARDRAIL: the v1.9 what-if permission it extends is still present.
+    assert "ANALYTICAL / WHAT-IF QUESTIONS" in rendered
+    assert "NEVER invent the base inputs" in rendered
+
+
+def test_synthesis_prompt_next_best_metric_fallback() -> None:
+    """v1.17 D-e (no fallback metric): chain_portfolio_worst refused a ranking
+    because margins were absent instead of ranking on the P/E the tool returned.
+    The NEXT-BEST METRIC block must require substituting a grounded next-best
+    signal and STATING the substitution, refusing only if no usable signal
+    returned — and the substitute must itself be a grounded tool value.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "NEXT-BEST METRIC" in rendered
+    assert "STATE the substitution" in flat
+    # The substitute is grounded, never a memory figure.
+    assert "never a memory figure" in flat
+    # The concrete fallback signals + the refuse-only-if-nothing rule.
+    assert "P/E" in rendered and "ROE" in rendered
+    assert "Refuse only if NO usable signal" in flat
+
+
+def test_synthesis_prompt_single_figure_period_anchor_and_context() -> None:
+    """v1.17 Track-3 (period/unit anchoring + contextualization): a single-figure
+    answer (P/E, YoY, EPS, margin) must carry an as-of date/period AND a peer or
+    historical benchmark, both grounded — not a bare number. The rule must also
+    not override anti-fabrication (no memory benchmark).
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "SINGLE-FIGURE ANSWERS" in rendered
+    assert "AS-OF DATE / fiscal PERIOD" in rendered
+    assert "CONTEXT anchor" in rendered
+    assert "historical range" in flat or "historical baseline" in flat
+    # Must not invent a benchmark from memory.
+    assert "Do NOT invent a benchmark from memory" in flat
+    assert "NEVER overrides anti-fabrication" in flat
+
+
+def test_synthesis_prompt_provenance_tags_derived_vs_retrieved() -> None:
+    """v1.17 Track-3 (provenance-tag derived vs retrieved): each figure must be
+    tagged retrieved ([tool row]) vs model-derived; computed/scenario numbers must
+    be labelled derived so they are not read as fabrication — and a derived figure
+    is valid ONLY when every input it rests on is a retrieved, cited value.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "PROVENANCE" in rendered
+    assert "RETRIEVED figure" in rendered
+    assert "DERIVED figure" in rendered
+    assert "(derived)" in rendered
+    # A derived figure takes NO row tag but cites its inputs.
+    assert "takes NO [tool_name row N] tag" in flat
+    assert "cite the rows its INPUTS came from" in flat
+    # A fabricated number must not hide behind "derived".
+    assert "hiding behind a" in flat or "hiding behind" in flat
+    assert "every input it rests on is a retrieved, cited value" in flat
+
+
+def test_synthesis_prompt_multi_item_synthesis() -> None:
+    """v1.17 Track-3 (multi-item synthesis): news dumps must be theme-grouped with
+    a "what should I know" takeaway; multi-quarter must report QoQ/YoY deltas +
+    trend + TTM rather than a raw list.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "MULTI-ITEM RESULTS" in rendered
+    # News → theme groups + takeaway, not a flat dump.
+    assert "GROUP the items by theme" in flat
+    assert "What this\n  means / what to watch" in rendered or "what to watch" in flat
+    assert "Do NOT emit a\n  flat bullet list" in rendered or "flat bullet list" in flat
+    # Multi-quarter → deltas + trend + TTM.
+    assert "QoQ" in rendered and "TTM aggregate" in flat
+    assert "TREND direction" in rendered
+    # Deltas are labelled derived (ties to the PROVENANCE block).
+    assert "label the deltas as\n  derived" in rendered or "label the deltas as derived" in flat

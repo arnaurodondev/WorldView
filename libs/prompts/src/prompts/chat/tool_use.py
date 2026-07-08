@@ -210,10 +210,33 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          it. Added the FIRST-PERSON PORTFOLIO clause to the mandatory rule +
     #          a PORTFOLIO entry to TOOL ROUTING so get_portfolio_context is ALWAYS
     #          called first for a first-person exposure/risk/holdings question.
-    version="1.18",
+    #   1.19 — 2026-07-08 (chat-quality two-track audit, Track-3 planning fixes):
+    #          two planning-turn enhancements to raise the PASS ceiling.
+    #          (multi-hop) Compound / supply-chain / ripple questions ('X's
+    #          suppliers and THEIR key customers', 'second-order exposure through
+    #          the supply chain') were answered ONE hop short — direct suppliers,
+    #          never the next link. Added a COMPOUND / MULTI-HOP / RIPPLE routing
+    #          entry forcing traverse_graph with enough hops to reach the terminal
+    #          entity the question names, not stopping at the first hop.
+    #          (dedup) The loop called the SAME tool with the SAME args up to 5x
+    #          in one turn (chain_portfolio_upcoming, cmp_tsmc_intel) — wasted
+    #          rounds/latency/cost. Added a NO REDUNDANT TOOL CALLS rule to the
+    #          RESEARCH LOOP: never repeat an identical call; a follow-up needs a
+    #          changed arg or a newly-surfaced entity; an empty/errored call uses
+    #          the FALLBACK rule (different tool/args), never an identical retry.
+    #          Additive; no grounding / routing / refusal rule relaxed.
+    version="1.19",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.18 adds a FIRST-PERSON PORTFOLIO clause to the mandatory-tool rule and "
+        "(v1.19 adds two Track-3 planning fixes: a COMPOUND / MULTI-HOP / RIPPLE "
+        "TOOL ROUTING entry forcing traverse_graph to walk the FULL chain (not "
+        "stop one hop short at direct suppliers/customers) for supply-chain / "
+        "ripple / second-order questions, and a NO REDUNDANT TOOL CALLS rule in "
+        "the RESEARCH LOOP forbidding repeating the same tool with the same args "
+        "(seen up to 5x in chain_portfolio_upcoming / cmp_tsmc_intel) — a "
+        "follow-up needs a changed arg or a newly-surfaced entity, and an "
+        "empty/errored call uses the fallback rule, never an identical retry; "
+        "v1.18 adds a FIRST-PERSON PORTFOLIO clause to the mandatory-tool rule and "
         "a PORTFOLIO entry to TOOL ROUTING: a first-person exposure/risk/holdings "
         "question ('which of MY holdings are exposed to <news/event/policy>', 'am I "
         "exposed', 'my positions') ALWAYS calls get_portfolio_context FIRST — a "
@@ -532,7 +555,22 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "newly-surfaced entity. Keep looping — plan wide, then chase what each\n"
         "round reveals — until you have the evidence to answer; then STOP and\n"
         "synthesise. Do not pad with redundant calls once the question is\n"
-        "covered.\n\n"
+        "covered.\n"
+        # 2026-07-08 (chat-quality two-track audit, Track-3 dedup): the loop was
+        # observed calling the SAME tool with the SAME arguments repeatedly (up to
+        # 5x) within a single question (chain_portfolio_upcoming, cmp_tsmc_intel) —
+        # wasted rounds, latency, and cost with no new information. A tool call
+        # with identical args always returns the same result.
+        "NO REDUNDANT TOOL CALLS: never call the SAME tool with the SAME (or "
+        "materially identical) arguments more than once in a turn — the result "
+        "does not change, so a repeat call only wastes a round. Before issuing a "
+        "call, check you have not already made it; if a prior call already "
+        "returned that data, REUSE it. A follow-up call is warranted ONLY when at "
+        "least one argument changes (a new entity, a different period/date range, "
+        "a narrower filter) or you are chasing a genuinely NEW entity a prior "
+        "round surfaced. If a call returned empty/errored, use the FALLBACK rule "
+        "below (a DIFFERENT tool or DIFFERENT args) — do not re-issue the identical "
+        "call hoping for a different answer.\n\n"
         # v1.12 (2026-07-03): ANALYST REASONING — the owner observed the loop
         # producing "pretty simple" investigations. This elevates the model to
         # senior-analyst behaviour (hypotheses -> second-order chains ->
@@ -651,6 +689,21 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "corporate-event search). Do NOT loop `search_documents` for events.\n"
         "- relationship / supply-chain / 'who supplies X' questions -> "
         "`traverse_graph` or `search_entity_relations`.\n"
+        # 2026-07-08 (chat-quality two-track audit, Track-3 multi-hop): compound /
+        # supply-chain / ripple questions were answered ONE hop short — a
+        # "suppliers -> their key customers" or "who does X's main supplier also
+        # sell to" question stopped at the first hop (direct suppliers) and never
+        # traversed to the second. traverse_graph supports multi-hop; a single
+        # search_entity_relations call does not. Force multi-hop traversal for
+        # these shapes.
+        "- COMPOUND / MULTI-HOP / RIPPLE questions ('X's suppliers and THEIR key "
+        "customers', 'who does X's main supplier ALSO sell to', 'second-order "
+        "exposure to <event> through the supply chain', 'knock-on / ripple "
+        "effects') MUST use `traverse_graph` with enough hops to reach the FULL "
+        "chain the question asks for — do NOT stop at the first hop (direct "
+        "suppliers/customers) when the question asks about the NEXT link. One "
+        "hop answers only half the question; walk the graph to the terminal "
+        "entity the question names, then reason over the whole path.\n"
         # 1.18 (2026-07-08, port_semis_export_exposure): first-person portfolio /
         # holdings / exposure questions had NO routing entry, so the model fell
         # through to a general-knowledge answer and refused. Route them to

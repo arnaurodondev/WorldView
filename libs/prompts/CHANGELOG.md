@@ -245,6 +245,29 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.19 — 2026-07-08 (chat-quality two-track audit, Track-3 planning fixes — multi-hop traversal + dedup)
+
+- **COMPOUND / MULTI-HOP / RIPPLE routing entry.** Compound, supply-chain, and
+  ripple questions ("X's suppliers and THEIR key customers", "who does X's main
+  supplier ALSO sell to", "second-order exposure to <event> through the supply
+  chain") were answered ONE hop short — the model listed direct suppliers and
+  never traversed to the next link. A single `search_entity_relations` call does
+  not multi-hop; `traverse_graph` does. v1.19 adds a TOOL ROUTING entry forcing
+  `traverse_graph` with enough hops to reach the terminal entity the question
+  names, explicitly forbidding a stop at the first hop and requiring the model to
+  reason over the whole path.
+- **NO REDUNDANT TOOL CALLS rule (RESEARCH LOOP).** The loop was observed calling
+  the SAME tool with the SAME arguments up to 5× in one turn
+  (`chain_portfolio_upcoming`, `cmp_tsmc_intel`) — wasted rounds, latency, and
+  cost with no new information (an identical call always returns the same result).
+  v1.19 forbids repeating an identical call: a follow-up is warranted only when at
+  least one argument changes or a prior round surfaced a genuinely new entity, and
+  an empty/errored call must use the FALLBACK rule (a different tool/args), never
+  an identical retry.
+- **Impact.** Flips the content hash. Additive; no grounding / routing / refusal
+  rule is relaxed. Track-3 PASS-ceiling work from the
+  `2026-07-08-chat-quality-two-track-audit` (run_20260708T093242Z).
+
 ### 1.18 — 2026-07-08 (first-person portfolio-exposure routing — kill the fabricated get_portfolio_context gate)
 
 - **FIRST-PERSON PORTFOLIO clause + TOOL ROUTING entry.** `port_semis_export_exposure`
@@ -477,6 +500,43 @@ is unchanged.
 > Note: CHANGELOG entries for v1.8–v1.11 were not recorded here at the time; the
 > full rationale for each lives in the version-log comments in
 > `src/prompts/chat/synthesis.py`. v1.12 below resumes the CHANGELOG.
+
+### 1.17 — 2026-07-08 (chat-quality two-track audit — D-d memory-backfill ban, D-e projection/fallback, Track-3 enhancements)
+
+- **D-d — ANTI-FABRICATION rule 6: no parametric-memory backfill, no "Public
+  knowledge (unverified)" fallback.** Beyond D8 (empty result) and v1.16
+  (partial row), the model was still promoting PARAMETRIC-MEMORY values/entities
+  into answers past an empty OR partial tool result — `iter3_top5` (ENPH/PATH
+  market caps), `spanish` (Samsung/Huawei competitor list), `deep_nvda` (PEG
+  0.61), `deep_meta` ($2.71B), `ru_nvda_amd` (fabricated AMD), `da_tsla`
+  (fabricated Q1) — frequently behind a "Public knowledge (unverified): …" hedge
+  that reads as near-fact. Rule 6 forbids filling ANY gap from memory (empty or
+  partial), explicitly bans the "Public knowledge (unverified)" / "Based on
+  public knowledge" / "generally known" fallback pattern in the final answer, and
+  requires quarantining the gap as "not available in the retrieved data".
+- **D-e — never refuse a projection as unknowable + next-best-metric fallback.**
+  `hypo` (×4) retrieved the base figures then refused the hedged estimate as
+  unknowable, and `chain_portfolio_worst` refused a ranking because margins were
+  absent. Added (a) a NEVER-REFUSE-A-PROJECTION-AS-UNKNOWABLE bullet to the
+  ANALYTICAL / WHAT-IF block (once the base figures are held, produce a hedged
+  RANGE under explicit assumptions — never decline as "impossible to predict" /
+  "unknowable"); and (b) a NEXT-BEST METRIC block (when the primary metric is
+  absent, fall back to the next-best AVAILABLE grounded signal — P/E, ROE, growth
+  — and STATE the substitution; refuse only if no usable signal returned).
+- **Track-3 PASS-ceiling enhancements.** (i) SINGLE-FIGURE ANSWERS block — a bare
+  P/E / YoY / EPS / margin must carry an as-of date/period AND a grounded peer or
+  historical benchmark. (ii) PROVENANCE block — tag each figure retrieved
+  (`[tool row]`) vs model-derived (computed/scenario, labelled "(derived)", no row
+  tag, cites its inputs) so a calculation is not read as fabrication. (iii)
+  MULTI-ITEM RESULTS block — news dumps grouped by theme with a "what to watch"
+  takeaway; multi-quarter reported as QoQ/YoY deltas + trend + TTM rather than a
+  raw transcription.
+- **Impact.** Flips the content hash. Additive; every v1.5–v1.16 anti-fabrication
+  / grounding / coverage / projection rule is preserved and the report-in-full
+  balance is unchanged (rule 6 forbids memory backfill, never withholding a
+  grounded value; the fallback/projection rules push AGAINST refusal, not toward
+  fabrication). Source: `docs/plans/2026-07-08-chat-quality-two-track-audit.md`,
+  run_20260708T093242Z.
 
 ### 1.16 — 2026-07-08 (chain_nvda_competitor_growth_rank — no partial-row field fabrication; extends D8)
 
