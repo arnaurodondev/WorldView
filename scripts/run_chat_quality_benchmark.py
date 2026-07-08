@@ -90,6 +90,7 @@ from chat_quality_judge import (  # noqa: E402
     Rubric,
     _DEFAULT_JUDGE_MODEL,
     build_input_from_artifact,
+    is_input_rejected_safety_refusal,
     judge_answer,
     summarise_judge_records,
 )
@@ -269,17 +270,34 @@ def compute_heuristics(q: dict[str, Any], result: ChatRunResult) -> dict[str, An
     }
 
 
-def derive_pass_fail(heur: dict[str, Any]) -> tuple[str, list[str]]:
+def derive_pass_fail(
+    heur: dict[str, Any],
+    rubric: Rubric | None = None,
+) -> tuple[str, list[str]]:
     """Reduce heuristics to a coarse PASS/WARN/FAIL bucket + reason list.
 
     Purely descriptive — not used for exit code. The aggregate banner uses
     this so the human reader sees a quick "how did it do?" without reading
     every JSON file.
+
+    ``rubric`` is optional so callers/tests that only exercise the infra signals
+    can omit it. When supplied, it lets the D10 appropriate-refusal exemption fire
+    (see below) — matching the judge's SKIPPED verdict for the same shape.
     """
     reasons: list[str] = []
     bucket = "PASS"
 
     if heur["status_code"] != 200 or heur["error"]:
+        # D10 (2026-07-07): an INPUT_REJECTED safety-guard refusal (PII / prompt
+        # injection / disallowed request) to a question whose rubric PERMITS a
+        # refusal is the CORRECT behaviour delivered as an HTTP 400 / error envelope
+        # — NOT an infra failure. Bucket it SKIPPED (exempt), mirroring the judge's
+        # SKIPPED verdict, instead of FAIL. Reserved to genuine safety refusals by
+        # the double gate (rubric permits AND the error names INPUT_REJECTED) — a
+        # real transport error / 500 with no such rubric still FAILs below.
+        if rubric is not None and is_input_rejected_safety_refusal(heur["error"], rubric):
+            reasons.append("appropriate_refusal(input_rejected)")
+            return "SKIPPED", reasons
         reasons.append(f"http_status={heur['status_code']} error={heur['error']}")
         return "FAIL", reasons
     if heur["is_empty"]:
@@ -747,7 +765,14 @@ def _render_variance_table(by_q: dict[str, list[dict[str, Any]]]) -> list[str]:
 
 def _render_errors_section(artifacts: list[dict[str, Any]]) -> list[str]:
     """List any EXCEPTION / FAIL runs so they aren't buried."""
-    bad = [a for a in artifacts if (a.get("bucket") == "EXCEPTION") or (a.get("result") or {}).get("error")]
+    # A SKIPPED bucket is an intentional D10 exemption (an appropriate INPUT_REJECTED
+    # safety refusal) — its ``result.error`` is the decline envelope, NOT a failure —
+    # so exclude it from the errors appendix even though it carries an error dict.
+    bad = [
+        a
+        for a in artifacts
+        if a.get("bucket") != "SKIPPED" and ((a.get("bucket") == "EXCEPTION") or (a.get("result") or {}).get("error"))
+    ]
     lines: list[str] = ["## Errors and exceptions", ""]
     if not bad:
         lines.append("*(none)*")
@@ -1720,7 +1745,9 @@ def _execute_slot(
     try:
         result = client.ask(q.get("prompt") or "")
         heur = compute_heuristics(q, result)
-        bucket, reasons = derive_pass_fail(heur)
+        # Pass the rubric so the D10 appropriate-refusal exemption can bucket an
+        # INPUT_REJECTED safety refusal SKIPPED (not FAIL) — see derive_pass_fail.
+        bucket, reasons = derive_pass_fail(heur, Rubric.from_question(q))
         # PLAN-0104 W33 — call the LLM judge per-Q when --judge is
         # set. We grade after the chat call so a judge failure
         # never affects the captured chat artefact.
