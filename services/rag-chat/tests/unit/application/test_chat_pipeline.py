@@ -250,7 +250,14 @@ class TestResolveEntities:
     @pytest.mark.asyncio
     async def test_resolve_entities(self) -> None:
         """Returns entity list from S6 client."""
+        # Realistic resolver-inspected attributes so the entity clears the
+        # shared resolver gate (0.75 floor + C3 short-stub guard). The query
+        # "What is AAPL?" resolves to Apple Inc.; a bare MagicMock would have a
+        # zero-length canonical_name and be dropped as an implausibly-short stub.
         fake_entity = MagicMock()
+        fake_entity.canonical_name = "Apple Inc."
+        fake_entity.confidence = 0.97
+        fake_entity.ticker = "AAPL"
         s6_client = MagicMock()
         s6_client.resolve_entities = AsyncMock(return_value=[fake_entity])
         pipeline = _make_pipeline(s6_client=s6_client)

@@ -113,6 +113,14 @@ REASON_DELTA_BELOW_THRESHOLD = "delta_below_threshold"
 # SEC-FORM-001: candidate ticker is a bare fragment of a SEC-form designator
 # present in the query ("10-K" → "K" → Kellanova) with no standalone mention.
 REASON_SEC_FORM_FRAGMENT = "sec_form_fragment"
+# C3 (da_apple_revenue "S" fix): candidate canonical/ticker is an implausibly
+# short 1-2 char stub ("S" = SentinelOne/Sprint) that the query does NOT name
+# as a standalone uppercase ticker. S6's alias-embedding search occasionally
+# ranks such a stub at very high similarity (0.95) for an unrelated natural
+# language query ("What was Apple's revenue…"); it then dominates the floor +
+# delta gate, is surfaced to the LLM prompt as the resolved entity, and the
+# model answers about "S" instead of Apple.
+REASON_IMPLAUSIBLE_SHORT = "implausible_short_canonical"
 
 # Acceptance reason label for tiebreak-admitted candidates (BP-661).
 ACCEPTED_QUERY_TICKER_MATCH = "query_ticker_exact_match"
@@ -317,6 +325,35 @@ def _sec_form_reject_tickers(query_text: str | None) -> frozenset[str]:
 # (P/E → Pandora) silently misroutes the whole answer. We therefore drop
 # bare single-letter tokens from ticker evidence entirely.
 _MIN_TICKER_EVIDENCE_LEN = 2
+
+# C3: a canonical name (or ticker) shorter than this is treated as an
+# implausibly-short stub unless the query explicitly names it as a standalone
+# uppercase ticker. 3 → "S", "Q", "IT"(as a name) are stubs; "IBM", "Ford"
+# survive. Deliberately keyed on the CANONICAL NAME length, not the ticker:
+# a long canonical with a short ticker ("Ford Motor Company" / "F") is a real
+# entity and must not be caught.
+_MIN_CANONICAL_NAME_LEN = 3
+
+
+def _query_standalone_upper_tokens(query_text: str | None) -> frozenset[str]:
+    """Standalone ALL-UPPERCASE ticker-shaped tokens written verbatim in the query.
+
+    Unlike ``_query_ticker_tokens`` this KEEPS single-letter tokens — the whole
+    point of the C3 short-stub guard is to let a user who explicitly writes the
+    one-letter ticker ("how is S doing after earnings?") still resolve it, while
+    a natural-language query that merely happens to embed the letter elsewhere
+    ("What was Apple's revenue…") does not. Case-sensitive on purpose: only
+    explicit caps count as intent for a one/two-letter ticker.
+    """
+    if not query_text:
+        return frozenset()
+    unwrapped = strip_query_wrapper(query_text)
+    out: set[str] = set()
+    for raw in _QUERY_TOKEN_SPLIT_RE.split(unwrapped):
+        tok = raw.strip(".,!?:;'\"()[]")
+        if tok and tok.isupper() and TICKER_SHAPE_RE.fullmatch(tok):
+            out.add(tok)
+    return frozenset(out)
 
 
 def _query_ticker_tokens(query_text: str) -> set[str]:
@@ -580,6 +617,39 @@ def filter_resolver_candidates(
         if not candidates:
             return [], rejected
 
+    # ── C3 pass: drop implausibly-short canonical stubs ─────────────────────
+    # A 1-2 char canonical ("S" = SentinelOne/Sprint) surfaced for a
+    # natural-language query ("What was Apple's revenue…") misroutes the whole
+    # answer. Reject any candidate whose canonical name is shorter than
+    # ``_MIN_CANONICAL_NAME_LEN`` UNLESS the query names that stub verbatim as a
+    # standalone uppercase ticker ("how is S doing?"). Runs BEFORE the floor
+    # pass because the stub usually sits well above the 0.75 floor (S6 returns
+    # it as a high-confidence alias hit).
+    _upper_tokens = _query_standalone_upper_tokens(query_text)
+    surviving_short: list[GatedEntity] = []
+    for c in candidates:
+        name_stripped = c.canonical_name.strip()
+        tkr_stripped = (c.ticker or "").strip()
+        # "Named verbatim" = the stub's own text (name or its short ticker)
+        # appears as a standalone uppercase token in the query.
+        named = name_stripped.upper() in _upper_tokens or (bool(tkr_stripped) and tkr_stripped.upper() in _upper_tokens)
+        if len(name_stripped) < _MIN_CANONICAL_NAME_LEN and not named:
+            rejected.append(
+                GatedEntity(
+                    entity_id=c.entity_id,
+                    canonical_name=c.canonical_name,
+                    similarity=c.similarity,
+                    payload=c.payload,
+                    rejection_reason=REASON_IMPLAUSIBLE_SHORT,
+                    ticker=c.ticker,
+                )
+            )
+        else:
+            surviving_short.append(c)
+    candidates = surviving_short
+    if not candidates:
+        return [], rejected
+
     # ── Floor pass: drop any candidate below the absolute threshold ──
     for c in candidates:
         if c.similarity < config.top_similarity_min:
@@ -666,6 +736,7 @@ __all__ = [
     "ACCEPTED_QUERY_NAME_MATCH",
     "ACCEPTED_QUERY_TICKER_MATCH",
     "REASON_DELTA_BELOW_THRESHOLD",
+    "REASON_IMPLAUSIBLE_SHORT",
     "REASON_LOW_TOP_SIMILARITY",
     "REASON_SEC_FORM_FRAGMENT",
     "REASON_STOP_WORD_STRIP",
