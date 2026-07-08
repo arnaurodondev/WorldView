@@ -245,7 +245,12 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.infrastructure.llm.provider_chain import LLMProviderChain
 
     # Upstream service clients
-    s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
+    s6 = S6Client(
+        base_url=settings.s6_base_url,
+        timeout=settings.upstream_timeout_seconds,
+        # EMBED-RESIL: dedicated longer read timeout for the /api/v1/embed hop.
+        embed_timeout_seconds=settings.embed_call_timeout_seconds,
+    )
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
     s3 = S3Client(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
     # feat/chat-kg-source-links: resolves claim/event doc_id → source-article URL
@@ -699,7 +704,12 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
     # S5Client accepts an optional internal_jwt at construction for default auth; passing
     # None here means each gather call supplies the per-request JWT via x_internal_jwt kwarg.
     s5 = S5Client(base_url=settings.s5_base_url, timeout=settings.upstream_timeout_seconds)
-    s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
+    s6 = S6Client(
+        base_url=settings.s6_base_url,
+        timeout=settings.upstream_timeout_seconds,
+        # EMBED-RESIL: dedicated longer read timeout for the /api/v1/embed hop.
+        embed_timeout_seconds=settings.embed_call_timeout_seconds,
+    )
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
     # PLAN-0107 follow-up (brief vector descriptions, P1): intelligence client for
     # the entity narrative. WHY api_gateway_url (not s7_base_url): the intelligence

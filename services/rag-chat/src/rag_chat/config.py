@@ -373,6 +373,20 @@ class Settings(BaseSettings):
     rate_limit_per_tenant: int = 10  # requests per minute per tenant
     upstream_timeout_seconds: float = 5.0
 
+    # EMBED-RESIL (2026-07-07): dedicated (longer) read timeout for the
+    # query-embedding hop rag-chat → S6 ``/api/v1/embed`` → DeepInfra bge-large.
+    # That hop is a synchronous remote-model call which, under concurrent eval
+    # load, routinely exceeds the shared ``upstream_timeout_seconds`` (deployed
+    # at 10s). A slow-but-successful embedding was being killed at ~10s
+    # ReadTimeout → UpstreamTransportError → search_entity_relations / entity
+    # resolution / semantic search all failed. DeepInfra itself is healthy
+    # (idle ~0.3s) — this is a tight-timeout gap, not an outage. We give the
+    # embed POST its own generous read timeout aligned to the 30s upstream
+    # default while keeping connect tight (BP-235 explicit httpx.Timeout).
+    embed_call_timeout_seconds: float = Field(
+        default=30.0, gt=0.0, le=120.0, validation_alias="RAG_CHAT_EMBED_CALL_TIMEOUT_SECONDS"
+    )
+
     # ── Brief pre-generation (PLAN-0094 W2) ───────────────────────────────────
     # APScheduler-driven worker pre-generates morning briefs for active users
     # (identified via Valkey sorted-set ``active_users`` populated by S9 auth

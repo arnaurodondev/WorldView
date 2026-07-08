@@ -115,11 +115,18 @@ class BaseUpstreamClient:
         payload: dict,
         *,
         extra_headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | float | None = None,
     ) -> dict:
         """POST *path* with JSON *payload*.
 
         Returns ``{}`` on HTTP 4xx (client error / not found).  Raises
         ``UpstreamTransportError`` on connect failure, timeout, or HTTP 5xx.
+
+        ``timeout`` (EMBED-RESIL 2026-07-07): optional per-request override of
+        the client-level timeout. Pass an explicit ``httpx.Timeout`` (BP-235 —
+        distinct connect/read/write/pool) for hops whose read latency differs
+        from the shared default (e.g. the embed hop's slow remote-model call).
+        ``None`` keeps the client's construction-time default unchanged.
         """
         # WHY: Propagate X-Internal-JWT from the current request context to upstream
         # service calls (S6, S7). Without this, S6/S7 return 401 since they validate
@@ -145,7 +152,12 @@ class BaseUpstreamClient:
 
         t0 = time.monotonic()
         try:
-            resp = await self._client.post(path, json=payload, headers=headers)
+            # Only pass ``timeout`` when a caller supplied an explicit override,
+            # so every existing hop keeps its construction-time client timeout.
+            if timeout is None:
+                resp = await self._client.post(path, json=payload, headers=headers)
+            else:
+                resp = await self._client.post(path, json=payload, headers=headers, timeout=timeout)
             resp.raise_for_status()
             return resp.json()  # type: ignore[no-any-return]
         except httpx.HTTPStatusError as exc:

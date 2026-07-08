@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import UTC
 from uuid import UUID
 
+import httpx
 import structlog
 
 from rag_chat.application.ports.upstream_clients import ChunkSearchRequest, EnrichedChunkResult
@@ -31,9 +32,40 @@ _log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # of stacking latency onto the chat path.
 _RESOLVE_MAX_ATTEMPTS = 2
 
+# EMBED-RESIL (2026-07-07): attempts for the query-embedding POST (1 try + 1
+# retry). Unlike entity-resolve (which only retries the stale-socket class), the
+# embed hop ALSO retries a transport *timeout*: DeepInfra bge-large is a slow
+# remote model whose first call under concurrent load can blow the read budget
+# while the very next call (warm pool / less contention) succeeds. Bounded to
+# ONE retry so a genuinely-down S6 fails fast instead of stacking chat latency.
+_EMBED_MAX_ATTEMPTS = 2
+
+# Default read timeout for the embed hop when the caller does not pass one.
+# Aligned to the 30s upstream default (see config.embed_call_timeout_seconds).
+_EMBED_DEFAULT_READ_TIMEOUT_S = 30.0
+
 
 class S6Client(BaseUpstreamClient):
     """Concrete HTTP adapter for S6 NLP Pipeline."""
+
+    def __init__(
+        self,
+        base_url: str,
+        timeout: float = 5.0,
+        *,
+        embed_timeout_seconds: float | None = None,
+    ) -> None:
+        """Construct the S6 adapter.
+
+        ``embed_timeout_seconds`` (EMBED-RESIL): read timeout for the
+        ``/api/v1/embed`` hop only. Defaults to ``max(timeout, 30)`` so the slow
+        remote-model call is never killed at the (deployment-tightened ~10s)
+        shared upstream timeout while other S6 hops keep the tighter default.
+        """
+        super().__init__(base_url=base_url, timeout=timeout)
+        self._embed_timeout_seconds: float = (
+            embed_timeout_seconds if embed_timeout_seconds is not None else max(timeout, _EMBED_DEFAULT_READ_TIMEOUT_S)
+        )
 
     # ── Entity resolution ──────────────────────────────────────────────────────
 
@@ -193,20 +225,50 @@ class S6Client(BaseUpstreamClient):
         query embedding instead of a 1024-dim zero vector (F-RAG-004). The
         endpoint already exists on the S6 service (used by HyDE adapter).
 
-        On any transport/HTTP error we return a zero vector and log a
-        warning — callers that need ANN ranking can detect the empty
-        vector and skip the query.
+        Resilience (EMBED-RESIL 2026-07-07): the embed POST gets its OWN,
+        generous read timeout (``httpx.Timeout`` — BP-235: connect stays tight
+        at 5s while read is aligned to the 30s upstream default) so a
+        slow-but-successful bge-large embedding is not killed at the deployment's
+        tight ~10s shared upstream ReadTimeout. On a transport *timeout* /
+        *unreachable* we retry ONCE on a fresh call before giving up. If the
+        retry also fails, the ``UpstreamTransportError`` (a ``BaseException``,
+        NOT caught by ``except Exception`` below) propagates to the caller so the
+        tool surfaces "cannot reach upstream" rather than silently degrading to a
+        zero vector (BP-623). A non-transport error still degrades to a zero
+        vector so callers can detect the empty vector and skip ANN ranking.
         """
         if not text or not text.strip():
             return [0.0] * 1024
-        try:
-            raw = await self._post("/api/v1/embed", {"text": text})
-            vec = raw.get("embedding")
-            if isinstance(vec, list) and vec:
-                return [float(x) for x in vec]
-        except Exception as exc:
-            _log.warning("s6_embed_text_failed", error=str(exc), text_len=len(text))
-        return [0.0] * 1024
+        embed_timeout = httpx.Timeout(
+            connect=5.0,
+            read=self._embed_timeout_seconds,
+            write=5.0,
+            pool=5.0,
+        )
+        for attempt in range(_EMBED_MAX_ATTEMPTS):
+            try:
+                raw = await self._post("/api/v1/embed", {"text": text}, timeout=embed_timeout)
+                vec = raw.get("embedding")
+                if isinstance(vec, list) and vec:
+                    return [float(x) for x in vec]
+                return [0.0] * 1024
+            except UpstreamTransportError as exc:
+                is_last = attempt == _EMBED_MAX_ATTEMPTS - 1
+                # Retry a transient slow/unreachable upstream exactly once; a
+                # 5xx (up-but-broken) is not worth a retry and propagates.
+                if exc.reason not in ("upstream_timeout", "upstream_unreachable") or is_last:
+                    raise
+                _log.warning(  # type: ignore[no-any-return]
+                    "s6_embed_transport_retry",
+                    reason=exc.reason,
+                    path=exc.path,
+                    attempt=attempt,
+                    elapsed_ms=exc.elapsed_ms,
+                )
+            except Exception as exc:
+                _log.warning("s6_embed_text_failed", error=str(exc), text_len=len(text))
+                return [0.0] * 1024
+        return [0.0] * 1024  # pragma: no cover — loop returns or raises every iteration
 
     # ── Ticker → entity resolution (PLAN-0093 Wave E-4 T-E-4-02) ──────────────
 

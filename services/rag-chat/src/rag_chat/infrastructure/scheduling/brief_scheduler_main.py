@@ -167,7 +167,12 @@ async def _run_loop(settings: Settings) -> None:
     )
     s3 = S3Client(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
     s5 = S5Client(base_url=settings.s5_base_url, timeout=settings.upstream_timeout_seconds)
-    s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
+    s6 = S6Client(
+        base_url=settings.s6_base_url,
+        timeout=settings.upstream_timeout_seconds,
+        # EMBED-RESIL: dedicated longer read timeout for the /api/v1/embed hop.
+        embed_timeout_seconds=settings.embed_call_timeout_seconds,
+    )
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
 
     # PLAN-0094 follow-up: worker context — use the S5 service-token endpoint
