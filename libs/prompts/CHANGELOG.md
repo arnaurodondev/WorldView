@@ -245,6 +245,28 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.17 — 2026-07-08 (no-tools routing — mandatory tool call for entity/portfolio data questions)
+
+- **TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA rule.**
+  `iter3_apple_competitors_spanish` ("¿Cuáles son los principales competidores de
+  Apple…?") and `port_semis_export_exposure` ("Which of my holdings are most
+  exposed to the latest semiconductor export-control news?") were both answered
+  with ZERO tool calls (judge: `no_tools_called`, expected `[compare_entities,
+  get_entity_intelligence]` and the portfolio/news/graph set respectively). The
+  model did not refuse — the A5 `ATTEMPT-BEFORE-REFUSING` rule handles that — it
+  answered a competitors / portfolio-exposure question straight from parametric
+  memory, producing an ungrounded, unverifiable answer (and the Spanish phrasing
+  did not change the obligation). v1.17 adds a `TOOL CALL IS MANDATORY FOR ENTITY
+  / PORTFOLIO DATA` rule to STRICT RULES: any question about an entity's or
+  portfolio's DATA — competitors/peers, suppliers/supply-chain, exposure/risk,
+  holdings/positions, screening/ranking, relationships, news, events, or
+  fundamentals — MUST call the relevant tool(s) first (in ANY language); a
+  zero-tool answer from memory is a HARD FAILURE. It is explicitly distinguished
+  from a refusal and complements A5 (which covers refuse-without-trying).
+- **Impact.** Flips the content hash. Additive; no grounding / anti-fabrication /
+  citation rule is relaxed. Pairs with chat_synthesis_system v1.16 (the
+  partial-row field-fabrication fix from the same eval run).
+
 ### 1.16 — 2026-07-07 (iter3_msft_earnings_citations — latest-earnings periods>=4, never periods=1)
 
 - **LATEST / MOST-RECENT EARNINGS periods rule.** "What was Microsoft's most
@@ -431,6 +453,30 @@ is unchanged.
 > Note: CHANGELOG entries for v1.8–v1.11 were not recorded here at the time; the
 > full rationale for each lives in the version-log comments in
 > `src/prompts/chat/synthesis.py`. v1.12 below resumes the CHANGELOG.
+
+### 1.16 — 2026-07-08 (chain_nvda_competitor_growth_rank — no partial-row field fabrication; extends D8)
+
+- **ANTI-FABRICATION rule 5 (partial-row field fabrication).** In
+  `chain_nvda_competitor_growth_rank` ("which of NVIDIA's competitors had the best
+  revenue growth over the past four quarters?") the tool returned a PRESENT ARM
+  row carrying `pe_ratio` and `market_cap` but NO `revenue`, and the synthesis
+  turn FABRICATED an ARM quarterly revenue series ($1.053B / $1.135B / $1.242B /
+  $1.490B) to complete the growth ranking — judge grounding=0, "ARM revenue
+  figures are fabricated; tool_results show no revenue data for ARM (only pe_ratio
+  and market_cap)". D8 (rule 4) only covered a FULLY-EMPTY tool result; a partial
+  row that returns SOME fields but omits the requested one was uncovered. v1.16
+  adds rule 5: a PRESENT row carrying only some of the needed fields is NOT a
+  licence to fill the missing one from memory — report the fields the row DID
+  return with their tags, and state plainly that THAT SPECIFIC metric is not
+  available for THAT entity; a partial row is as binding as an empty one on the
+  field it omits. Explicitly distinguished from rule 3 (which forbids WRONGLY
+  declaring a PRESENT field missing): here the field is genuinely absent, so
+  naming it unavailable is the correct non-fabricating answer. Also corrected the
+  block preamble's stale "These three rules" count (there are now five).
+- **Impact.** Flips the content hash. Additive; the report-in-full balance is
+  preserved (report present fields, refuse only the genuinely-absent one) and no
+  grounding / coverage / projection rule is weakened. Pairs with tool_use_system
+  v1.17 (the no-tools-routing fix from the same eval run).
 
 ### 1.15 — 2026-07-08 (da_tsla_revenue_2024_full_year — label the period from the row, never from today's date)
 

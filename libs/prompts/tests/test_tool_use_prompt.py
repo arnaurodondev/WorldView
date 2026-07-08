@@ -332,6 +332,49 @@ class TestToolUsePromptContract:
             # the rule does not force a tool call on a forecast question.
             assert "hard-refuse asset-price" in prompt.lower()
 
+    def test_mandatory_tool_call_for_entity_portfolio_data_rule_present(self) -> None:
+        """v1.17 (iter3_apple_competitors_spanish + port_semis_export_exposure,
+        2026-07-08): both questions were answered with ZERO tool calls (judge:
+        no_tools_called) — the model answered a competitors question and a
+        portfolio-export-exposure question from parametric memory rather than
+        calling any tool. This is distinct from A5 (refuse-without-trying): here
+        the model did not refuse, it simply skipped the tools. STRICT RULES must
+        add a rule making a tool call MANDATORY for any entity/portfolio DATA
+        question, in any language, with a zero-tool memory answer named a HARD
+        FAILURE.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "COMPARISON", "PORTFOLIO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            # Section anchor.
+            assert (
+                "TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA" in prompt
+            ), f"intent={intent}: missing mandatory-tool-call rule"
+            # The failure it names: zero-tool answer from memory is a HARD FAILURE.
+            assert "HARD FAILURE" in prompt
+            assert "ZERO tool calls" in prompt
+            assert "from your own memory / pretraining" in prompt
+            # The specific data shapes the two failing questions hit.
+            assert "competitors" in prompt.lower()
+            assert "exposure" in prompt.lower()
+            # Language-agnostic (the Apple-competitors question was in Spanish).
+            assert "in ANY language" in prompt
+            # It must be explicitly distinguished from a refusal (A5's domain).
+            assert "distinct from a refusal" in " ".join(prompt.split())
+            # The named routing targets for each failing question.
+            assert "compare_entities" in prompt
+            assert "get_portfolio_context" in prompt
+
+    def test_attempt_before_refusing_rule_still_present_r19(self) -> None:
+        """R19: the v1.17 mandatory-tool-call rule is ADDITIVE — the A5
+        ATTEMPT-BEFORE-REFUSING rule (refuse-without-trying) must remain intact so
+        both no-tool failure modes stay covered.
+        """
+        prompt = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
+        assert "ATTEMPT BEFORE REFUSING" in prompt
+        assert "WITHOUT having run any tool is FORBIDDEN" in prompt
+        # And the new rule sits alongside it, not in its place.
+        assert "TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA" in prompt
+
     def test_comparison_addendum_covers_every_entity(self) -> None:
         """A4 (fix-plan, 2026-07-06): a comparison DROPPED a requested entity
         ("NVIDIA is not relevant here") and invented a scope narrowing. The
@@ -699,6 +742,15 @@ class TestToolUsePromptContract:
         """
         _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
         assert _ver >= (1, 16), f"expected version >= 1.16 for latest-earnings fix, got {_ver}"
+
+    def test_prompt_template_version_bumped_for_mandatory_tool_call(self) -> None:
+        """v1.17 adds the TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA rule to
+        STRICT RULES — it edits the template body (flipping the content hash), so
+        the semver version MUST advance to >= 1.17. Pinning the floor catches an
+        accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 17), f"expected version >= 1.17 for mandatory-tool-call rule, got {_ver}"
 
     def test_financial_data_addendum_latest_earnings_avoids_periods_1(self) -> None:
         """v1.16 (iter3_msft_earnings_citations, 2026-07-07): a plain "most recent

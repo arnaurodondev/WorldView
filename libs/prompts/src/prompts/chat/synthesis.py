@@ -267,7 +267,7 @@ SEC-filing footnotes we do not ingest.
   in full. Do not widen this into a general refusal.
 
 ## ANTI-FABRICATION POLICY — REPORT WHAT IS THERE, INVENT NOTHING
-These three rules forbid fabrication. They are NOT a licence to withhold: report
+These rules forbid fabrication. They are NOT a licence to withhold: report
 every value the tools DID return, in full, with its citation — refuse ONLY the
 specific part that is genuinely unavailable, never the whole answer.
 
@@ -295,6 +295,22 @@ specific part that is genuinely unavailable, never the whole answer.
    A ticker or entity is usable ONLY when a tool actually returned it. When the
    tool came back empty, say plainly that the data is not available for the
    requested entities rather than filling the gap with a name you supplied.
+5. PARTIAL ROW → DO NOT FILL A MISSING FIELD FROM MEMORY. A tool row that is
+   PRESENT but carries only SOME of the fields you need is NOT a licence to
+   supply the missing ones. When a row exists for an entity but the SPECIFIC
+   field the question asks about is absent or null in it — e.g. a fundamentals
+   row for ARM that carries ``pe_ratio`` and ``market_cap`` but NO ``revenue``
+   (and no quarterly revenue series) — you MUST NOT fabricate that field's
+   value, and you MUST NOT invent a quarterly trajectory for it (do not manufacture
+   "$1.053B, $1.135B, $1.242B, $1.490B" for a metric the row never returned).
+   Report the fields the row DID return (with their [tool_name row N] tags) and
+   state plainly that THAT SPECIFIC metric is not available for THAT entity in the
+   returned data. A partial row is exactly as binding as an empty one on the
+   field it omits: present-field ≠ permission to fill the gap for the absent
+   field. This is distinct from rule 3 (which forbids WRONGLY declaring a present
+   field missing): here the field is genuinely absent from the row, so naming it
+   unavailable for that entity is the correct, non-fabricating answer — never a
+   number pulled from memory.
 
 ## PERIOD-MATCHING — BIND EVERY FIGURE TO ITS ROW'S OWN LABEL
 A figure is only correct under the period the tool's own row gives it. The table
@@ -585,7 +601,26 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     #   periods onto retrieved rows. NARROW + additive: reinforces the existing
     #   date-anchoring / period-binding rules; no grounding / anti-fabrication /
     #   coverage rule is weakened.
-    version="1.15",
+    # 1.16 (chain_nvda_competitor_growth_rank partial-data fabrication, 2026-07-08):
+    #   extends D8. The competitor-ranking answer had a PRESENT ARM row (carrying
+    #   pe_ratio + market_cap) but NO revenue field, and the synthesis turn
+    #   FABRICATED an ARM quarterly revenue series ($1.053B/$1.135B/$1.242B/$1.490B)
+    #   to complete the growth ranking — judge grounding=0, "ARM revenue figures
+    #   are fabricated; tool_results show no revenue data for ARM (only pe_ratio and
+    #   market_cap)." D8 (ANTI-FABRICATION rule 4) only covered a FULLY-EMPTY tool
+    #   result; a partial row that returns SOME fields but omits the requested one
+    #   was uncovered. Added ANTI-FABRICATION rule 5: a PRESENT row carrying only
+    #   some of the needed fields is NOT a licence to fill the missing one from
+    #   memory — report the fields the row DID return with their tags, and state
+    #   plainly that THAT SPECIFIC metric is not available for THAT entity; a partial
+    #   row is as binding as an empty one on the field it omits. Explicitly
+    #   distinguished from rule 3 (which forbids wrongly declaring a PRESENT field
+    #   missing): here the field is genuinely absent, so naming it unavailable is the
+    #   correct non-fabricating answer. Also corrected the block preamble's stale
+    #   "These three rules" count (there are now five). NARROW + additive: no
+    #   grounding / coverage / projection rule weakened; the report-in-full balance
+    #   is preserved (report present fields, refuse only the genuinely-absent one).
+    version="1.16",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -679,7 +714,18 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "the current-date context is for recency reasoning only). Fixes "
         "da_tsla_revenue_2024_full_year, where correctly-retrieved 2024 quarters "
         "were relabelled 2025/2026 (judge grounding=0). Additive; no grounding / "
-        "anti-fabrication / coverage rule weakened."
+        "anti-fabrication / coverage rule weakened. "
+        "v1.16 extends D8 with ANTI-FABRICATION rule 5 (partial-row field "
+        "fabrication): a tool row that is PRESENT but omits the specific requested "
+        "field (e.g. an ARM fundamentals row carrying pe_ratio + market_cap but no "
+        "revenue) is NOT a licence to fill the missing field from memory — report "
+        "the fields the row DID return with their tags and state plainly that THAT "
+        "metric is not available for THAT entity; a partial row is as binding as an "
+        "empty one on the field it omits. Fixes chain_nvda_competitor_growth_rank, "
+        "where an absent ARM revenue field was filled with a fabricated quarterly "
+        "series (judge grounding=0). Distinct from rule 3 (which forbids wrongly "
+        "declaring a PRESENT field missing). Additive; the report-in-full balance "
+        "is preserved and no grounding / coverage rule is weakened."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

@@ -59,11 +59,11 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.15 (da_tsla period-mislabel — label from the row's period_end, not
-    # today's date) on top of v1.14 (iter3_msft unreported-latest-quarter),
-    # v1.13's D7/D8/D4, v1.12's synthesis-behavior fixes,
+    # v1.16 (chain_nvda partial-row field fabrication — ANTI-FABRICATION rule 5)
+    # on top of v1.15 (da_tsla period-mislabel), v1.14 (iter3_msft unreported-
+    # latest-quarter), v1.13's D7/D8/D4, v1.12's synthesis-behavior fixes,
     # v1.11's data-coverage-boundary, v1.10's reasoning-rigor and v1.9's what-if.
-    assert ident.startswith("chat_synthesis_system@1.15#")
+    assert ident.startswith("chat_synthesis_system@1.16#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -439,6 +439,46 @@ def test_synthesis_prompt_empty_result_no_fabrication() -> None:
     assert "ANTI-FABRICATION POLICY" in rendered
     assert "NEVER invent periods" in rendered
     assert "NEVER add entities" in rendered
+
+
+def test_synthesis_prompt_partial_row_no_field_fabrication() -> None:
+    """v1.16 (chain_nvda_competitor_growth_rank, 2026-07-08): extends D8. The
+    competitor-ranking answer had a PRESENT ARM row carrying pe_ratio + market_cap
+    but NO revenue, and the model FABRICATED an ARM quarterly revenue series
+    ($1.053B/$1.135B/$1.242B/$1.490B) to complete the growth ranking (judge
+    grounding=0). D8's rule 4 only covered a FULLY-EMPTY result; a partial row that
+    omits the requested field was uncovered. ANTI-FABRICATION rule 5 must forbid
+    filling an absent field on a PRESENT row from memory and require stating that
+    the specific metric is unavailable for that entity.
+
+    R19: additive on top of D8 rule 4 and rules 1-3 — those assertions still hold.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    # Collapse wrap-whitespace so line-wrapped phrases match reliably.
+    flat = " ".join(rendered.split())
+    # The new rule 5 anchor and its core prohibition.
+    assert "PARTIAL ROW → DO NOT FILL A MISSING FIELD FROM MEMORY" in rendered
+    assert "NOT a licence to supply the missing ones" in flat
+    # The concrete live example: an ARM row with pe_ratio + market_cap but no revenue.
+    assert "pe_ratio" in rendered and "market_cap" in rendered
+    assert "NO ``revenue``" in flat
+    # The fabricated series that must never be manufactured is named.
+    assert "$1.053B, $1.135B, $1.242B, $1.490B" in flat
+    # The correct behaviour: report present fields, name the specific metric absent.
+    assert "THAT SPECIFIC metric is not available for THAT entity" in flat
+    assert "as binding as an empty one" in flat
+    # Explicitly distinguished from rule 3 (wrongly declaring a PRESENT field missing).
+    assert "distinct from rule 3" in flat
+
+    # --- R19: D8 rule 4 and the original ANTI-FABRICATION rules remain intact. ---
+    assert "ANTI-FABRICATION POLICY" in rendered
+    assert "EMPTY RESULT → NAME NO NEW ENTITY" in rendered  # rule 4
+    assert "NEVER invent periods" in rendered  # rule 1
+    assert "NEVER add entities" in rendered  # rule 2
+    assert "NEVER claim returned data is missing without checking" in rendered  # rule 3
+    # The report-in-full balance line is preserved (anti-fabrication, not anti-answering).
+    assert "refuse ONLY the" in rendered
+    assert "never the whole answer" in rendered
 
 
 def test_synthesis_prompt_no_placeholder_for_present_field() -> None:

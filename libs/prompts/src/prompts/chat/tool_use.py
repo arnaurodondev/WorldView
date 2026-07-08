@@ -184,10 +184,31 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          quarter with real figures is in the payload. Same null-placeholder
     #          failure the RATIO-OR-TTM periods>=5 rule guards against, now closed
     #          on the plain latest-earnings (non-ratio) path.
-    version="1.16",
+    #   1.17 — 2026-07-08 (iter3_apple_competitors_spanish +
+    #          port_semis_export_exposure): both questions were answered with ZERO
+    #          tool calls (judge: no_tools_called) — the model answered a
+    #          competitors question and a portfolio-export-exposure question
+    #          straight from parametric memory instead of calling the relevant
+    #          tools. This is NOT the A5 refuse-without-trying case (the model did
+    #          not refuse; it fabricated a grounded-looking answer from pretraining).
+    #          Added the TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA rule to
+    #          STRICT RULES: any question about entity/portfolio DATA (competitors,
+    #          suppliers, exposure/risk, holdings, screening, relationships, news,
+    #          events, fundamentals) MUST call the relevant tool(s) first, in ANY
+    #          language; a zero-tool memory answer is a HARD FAILURE. Complements A5
+    #          (refuse-before-trying) — this covers answer-from-memory-without-trying.
+    version="1.17",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.16 adds the LATEST / MOST-RECENT EARNINGS rule to the FINANCIAL_DATA "
+        "(v1.17 adds the TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA rule to "
+        "STRICT RULES: any entity/portfolio DATA question (competitors, suppliers, "
+        "exposure/risk, holdings, screening, relationships, news, events, "
+        "fundamentals) MUST call the relevant tool(s) first, in ANY language — a "
+        "zero-tool answer from parametric memory is a HARD FAILURE. Complements A5 "
+        "(refuse-before-trying) by covering answer-from-memory-without-trying "
+        "(iter3_apple_competitors_spanish, port_semis_export_exposure, both scored "
+        "no_tools_called); "
+        "v1.16 adds the LATEST / MOST-RECENT EARNINGS rule to the FINANCIAL_DATA "
         "addendum: a latest/current-quarter earnings question with no named past "
         "period MUST request periods >= 4, never periods=1 — the single newest "
         "fiscal quarter is often a not-yet-reported placeholder row with all-null "
@@ -350,6 +371,33 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "  hard-refuse asset-price-direction forecast per the SPECULATIVE\n"
         "  FORECASTS rule above — that is refused on principle, not for lack of\n"
         "  data.)\n"
+        # 1.17 (2026-07-08, iter3_apple_competitors_spanish +
+        # port_semis_export_exposure): both questions were answered with ZERO tool
+        # calls — the model did not refuse (that is A5's / ATTEMPT-BEFORE-REFUSING's
+        # domain); it answered a competitors / portfolio-exposure question straight
+        # from parametric memory. Answering an entity/portfolio DATA question from
+        # memory without EVER calling a tool is a distinct, harder failure than
+        # refusing without trying: there is no grounding at all, and the "answer"
+        # is unverifiable pretraining recall (and language-agnostic — the Spanish
+        # phrasing of the Apple-competitors question did not change the obligation).
+        # This rule makes a tool call MANDATORY for any entity/portfolio data
+        # question, complementing A5 (which handles the refuse-without-trying case).
+        "- TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA: Any question asking\n"
+        "  about an entity's or a portfolio's DATA — competitors / peers, suppliers /\n"
+        "  customers / supply-chain, exposure or risk (to news, an event, a policy /\n"
+        "  export-control), holdings / positions, screening / ranking, relationships,\n"
+        "  news, events, or fundamentals — MUST be answered by CALLING the relevant\n"
+        "  tool(s) first (see TOOL ROUTING below), in ANY language the question is\n"
+        "  asked in. Answering such a question from your own memory / pretraining\n"
+        "  knowledge with ZERO tool calls is a HARD FAILURE — even a confident,\n"
+        "  plausible-looking answer is ungrounded and unacceptable. This is distinct\n"
+        "  from a refusal (covered above): here you did not refuse, you simply\n"
+        "  skipped the tools. Do NOT. A competitors question calls compare_entities /\n"
+        "  get_entity_intelligence; a portfolio-exposure question calls\n"
+        "  get_portfolio_context (then search_documents / get_entity_news to link\n"
+        "  holdings to the news). If, after actually calling the tool(s), the results\n"
+        "  are empty, THEN say so transparently — but the tool call comes FIRST,\n"
+        "  never a memory answer in its place.\n"
         "- PREMISE CHECK: Before answering, identify any factual claims embedded in\n"
         "  the user's question (e.g. 'Why did X acquire Y last quarter?'). For each\n"
         "  such claim, verify it appears in a tool result before treating it as true.\n"
