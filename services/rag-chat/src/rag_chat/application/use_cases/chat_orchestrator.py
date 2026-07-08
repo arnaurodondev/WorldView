@@ -669,6 +669,82 @@ def _is_plan_only_narration(text: str) -> bool:
     return all(_PLAN_LINE_LEAD_RE.match(ln) for ln in lines)
 
 
+# ── D-f (2026-07-08) — runaway decode-loop guard ─────────────────────────────
+#
+# BP-671/672 (stub-as-final) class. ``ripple_nvidia_supplier_health`` shipped a
+# final answer that repeated "I'll start by identifying…" ~200x — a degenerate
+# decode loop where the model never produced analysis. The provider (DeepInfra)
+# stream completes without error, so no exception/zero-chunk guard fires; the
+# repeated text just accumulates. We collapse a runaway loop deterministically
+# BEFORE the plan-only / stub guards run, so the collapsed remnant ("I'll start
+# by identifying…" once) is then correctly recognised as plan-only narration and
+# converted to a bounded refusal rather than shipped.
+#
+# We normalise each segment (case + whitespace) and count occurrences at two
+# granularities — newline-delimited lines AND sentence-like fragments — because
+# a loop may or may not carry line breaks. A segment repeated at least
+# ``min_repeats`` times is a loop; we keep only its FIRST occurrence and drop the
+# rest (order preserved). Short segments (< 12 normalised chars) are ignored so
+# an ordinary repeated word ("the", a ticker) never trips the guard.
+_DF_MIN_LOOP_REPEATS = 5
+_DF_MIN_SEGMENT_LEN = 12
+# Split on newlines OR sentence terminators, keeping the delimiter out of the
+# comparison key. Used only when the text has too few newlines to find a
+# line-level loop (a single-line runaway).
+_DF_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _collapse_runaway_repetition(text: str, *, min_repeats: int = _DF_MIN_LOOP_REPEATS) -> tuple[str, bool]:
+    """Collapse a degenerate repeated-line / repeated-sentence decode loop.
+
+    Returns ``(collapsed_text, was_collapsed)``. A no-op (``was_collapsed`` False,
+    text unchanged) on any non-looping answer — safe to call unconditionally.
+    Keeps the FIRST occurrence of each looped segment and drops the duplicates.
+    """
+    if not text or not text.strip():
+        return text, False
+
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip().lower()
+
+    def _collapse(segments: list[str]) -> tuple[list[str], bool]:
+        counts: dict[str, int] = {}
+        for seg in segments:
+            key = _norm(seg)
+            if len(key) >= _DF_MIN_SEGMENT_LEN:
+                counts[key] = counts.get(key, 0) + 1
+        looped = {k for k, c in counts.items() if c >= min_repeats}
+        if not looped:
+            return segments, False
+        seen: set[str] = set()
+        out: list[str] = []
+        for seg in segments:
+            key = _norm(seg)
+            if key in looped:
+                if key in seen:
+                    continue
+                seen.add(key)
+            out.append(seg)
+        return out, True
+
+    # 1. Line-level loop (the common shape — one plan line repeated per newline).
+    lines = text.split("\n")
+    collapsed_lines, hit = _collapse(lines)
+    if hit:
+        return "\n".join(collapsed_lines).rstrip(), True
+
+    # 2. Single-line / few-newline runaway: fall back to sentence fragments.
+    fragments = _DF_SENTENCE_SPLIT_RE.split(text)
+    if len(fragments) > 1:
+        collapsed_frags, hit = _collapse(fragments)
+        if hit:
+            # Rejoin with a single space — the original inter-fragment spacing was
+            # already collapsed to a loop; a clean single-space join is fine.
+            return " ".join(f.strip() for f in collapsed_frags if f.strip()).rstrip(), True
+
+    return text, False
+
+
 def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> bool:
     """Return True when *text* is predominantly a leaked tool-call / planning stub.
 
@@ -859,6 +935,100 @@ def _renumber_citations_dense(text: str, citations: list[Any]) -> tuple[str, lis
         key=lambda c: int(c.ref),
     )
     return new_text, new_citations
+
+
+# ── D-a (2026-07-08) — phantom / non-registered citation-tag hard-veto ────────
+#
+# The 2026-07-08 two-track audit (docs/plans/2026-07-08-chat-quality-two-track-
+# audit.md) found bracket tokens that are NOT registered numbered ``[n]``
+# citations leaking to the user AFTER all upstream promotion/renumber/strip
+# passes:
+#   * ``[c9]`` — a provenance id embedded in the ``get_morning_brief`` payload
+#     text, passed straight through (q_tc_morning_brief_today);
+#   * ``[REDACTED]`` — a redaction placeholder carried through from a payload;
+#   * ``[search_documents row 7]`` — a ``[tool row N]`` tag that survived because
+#     the tool returned 0 rows / was never resolved (so ``normalize_tool_row_
+#     citations`` could not map it and the out-of-range strip in numeric_
+#     grounding missed it), INCLUDING the narrow-no-break-space (U+202F/U+00A0)
+#     ``row 7`` variant the ASCII ``\s`` regexes upstream do not match
+#     (q_cmp_nvda_avgo_ai_infrastructure — data misattributed to an empty tool).
+#
+# By the time this runs the dense renumber has made the ONLY legitimate bracket
+# citations plain ``[1]..[K]`` mapping 1:1 to the registered citations array.
+# This is the FINAL hard veto: any bracket token that is provenance/citation-
+# SHAPED but is NOT one of those registered numbered markers is stripped. We are
+# deliberately conservative about which shapes we strip so genuine non-citation
+# brackets (markdown link text ``[label]``, a bracketed year ``[2026]``, a note
+# ``[note]``) are preserved:
+#   1. a plain ``[n]`` whose number is NOT a registered citation ref (a stray
+#      orphan that slipped the renumber) → stripped;
+#   2. ``[REDACTED]`` (exact, case-insensitive — NOT the intentional E-7
+#      ``[ref:redacted]`` egress marker) → stripped;
+#   3. ``[<lowercase letters><digits>]`` payload-citation ids like ``[c9]`` →
+#      stripped (uppercase period labels ``[Q1]``/``[H2]`` are NOT matched);
+#   4. any ``[… row <n> …]`` provenance tag, with ASCII or unicode spacing →
+#      stripped.
+# Everything else survives untouched.
+_DA_REDACTED_INNER_RE = re.compile(r"^\s*redacted\s*$", re.IGNORECASE)
+# A payload citation id: 1-3 LOWERCASE letters immediately followed by 1-3
+# digits (``c9``, ``ref12``-shaped ``ref`` excluded — needs the letters+digits
+# to be the WHOLE inner). Lowercase-only so quarter/half labels (``Q1``, ``H2``)
+# and section refs (``A1``) that a user might legitimately bracket are left be.
+_DA_PAYLOAD_CITE_INNER_RE = re.compile(r"^\s*[a-z]{1,3}\d{1,3}\s*$")
+# A ``row N`` provenance tag with ANY inter-word spacing: regular space, TAB,
+# NO-BREAK SPACE (U+00A0), NARROW NO-BREAK SPACE (U+202F), FIGURE SPACE (U+2007)
+# or WORD JOINER (U+2060). The upstream ASCII regexes use ``\s`` (which does not
+# include U+202F/U+00A0) so those unicode-spaced tags survive to here.
+_DA_ROW_TAG_INNER_RE = re.compile("\\brow[\\s\u00a0\u202f\u2007\u2060]+\\d+", re.IGNORECASE)
+_DA_PLAIN_NUM_INNER_RE = re.compile(r"^\s*(\d{1,2})\s*$")
+# Any single-level bracket token (no nested brackets, single line, bounded len
+# so a stray unclosed ``[`` never swallows a paragraph).
+_DA_BRACKET_TOKEN_RE = re.compile(r"\[[^\[\]\n]{1,120}\]")
+
+
+def _strip_non_registered_citation_tags(text: str, valid_refs: set[int]) -> tuple[str, int]:
+    """Strip bracket tokens that are not registered numbered ``[n]`` citations.
+
+    D-a hard veto. ``valid_refs`` is the set of ``ref`` values on the final
+    (dense-renumbered) citations array. Returns ``(cleaned_text, stripped_count)``.
+    A no-op when *text* carries no bracket tokens. See the module comment above
+    for the exact shapes stripped vs preserved — genuine non-citation brackets
+    (markdown link labels, bracketed years, notes) are never touched.
+    """
+    if not text:
+        return text, 0
+    count = 0
+
+    def _repl(m: re.Match[str]) -> str:
+        nonlocal count
+        whole = m.group(0)
+        inner = whole[1:-1]
+        # (1) plain numeric marker: keep iff it is a registered citation.
+        num = _DA_PLAIN_NUM_INNER_RE.match(inner)
+        if num is not None:
+            if int(num.group(1)) in valid_refs:
+                return whole
+            count += 1
+            return ""
+        # (2/3/4) phantom provenance/payload shapes → strip.
+        if (
+            _DA_REDACTED_INNER_RE.match(inner)
+            or _DA_PAYLOAD_CITE_INNER_RE.match(inner)
+            or _DA_ROW_TAG_INNER_RE.search(inner)
+        ):
+            count += 1
+            return ""
+        # Everything else (markdown label, year, note, prose) is preserved.
+        return whole
+
+    cleaned = _DA_BRACKET_TOKEN_RE.sub(_repl, text)
+    if count:
+        # Tidy the whitespace a mid-sentence removal can leave behind so the
+        # answer never ships with " ." or double spaces where a tag used to be.
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r" +([.,;:!?])", r"\1", cleaned)
+        cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    return cleaned, count
 
 
 # ── NEW-3 refinement (2026-07-06) — deterministic filing-citation backfill ────
@@ -1077,6 +1247,52 @@ def _answer_has_full_citation_coverage(text: str) -> bool:
         if any(c_start <= n_centre < c_end for c_start, c_end in citation_spans):
             continue
         # Otherwise require a citation within ±window chars of the token.
+        lo = n_start - _W50_CITATION_WINDOW
+        hi = n_end + _W50_CITATION_WINDOW
+        if not any(c_end > lo and c_start < hi for c_start, c_end in citation_spans):
+            return False
+    return True
+
+
+# ── Track-3 (2026-07-08) — STRICT bracket-only citation-coverage check ────────
+#
+# ``_answer_has_full_citation_coverage`` is deliberately permissive: it accepts
+# PROSE provenance ("according to the latest filing", "per the report") as a
+# citation. That looseness is fine for the validator's own last-line banner
+# suppression, but too weak to decide whether to withhold the trailing
+# "some figures could not be matched" CAVEAT — an ungrounded draft that merely
+# says "according to the latest filing" (no real tool citation) must still get
+# the caveat when grounding failed (BP-648). So the caveat-suppression gate uses
+# THIS stricter variant: it only counts REAL bracket citations — a positional
+# ``[n]`` marker or a ``[tool_name]`` / ``[tool_name row N]`` provenance tag —
+# not prose. Same ±window coverage logic as the permissive helper otherwise.
+_TRACK3_BRACKET_CITATION_RE = re.compile(
+    r"\[\s*(?:\d{1,2}|[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?)\s*\]",
+    re.IGNORECASE,
+)
+
+
+def _answer_has_bracket_citation_coverage(text: str) -> bool:
+    """Return True if every material number is near a REAL bracket citation.
+
+    Track-3 caveat-suppression gate — see the module comment above. Stricter
+    than :func:`_answer_has_full_citation_coverage` (bracket citations only, no
+    prose provenance). Returns False when there are no bracket citations or no
+    numeric tokens, so a prose-only draft never suppresses the caveat.
+    """
+    if not text:
+        return False
+    citation_spans: list[tuple[int, int]] = [m.span() for m in _TRACK3_BRACKET_CITATION_RE.finditer(text)]
+    if not citation_spans:
+        return False
+    numeric_matches = list(_W50_NUMERIC_TOKEN_RE.finditer(text))
+    if not numeric_matches:
+        return False
+    for nm in numeric_matches:
+        n_start, n_end = nm.span()
+        n_centre = (n_start + n_end) // 2
+        if any(c_start <= n_centre < c_end for c_start, c_end in citation_spans):
+            continue
         lo = n_start - _W50_CITATION_WINDOW
         hi = n_end + _W50_CITATION_WINDOW
         if not any(c_end > lo and c_start < hi for c_start, c_end in citation_spans):
@@ -1376,6 +1592,77 @@ def _is_wholesale_refusal(text: str) -> bool:
         return False
     _low = _stripped.lower()
     return any(_marker in _low for _marker in _WHOLESALE_REFUSAL_MARKERS)
+
+
+# ── D-c (2026-07-08) — false "no data / empty result" claim guard ────────────
+#
+# The 2026-07-08 audit found the composition asserting "no data / no link /
+# empty" even when the tool trace shows ``status:ok items>=1`` (ripple_tsmc,
+# cmp_tsmc_intel, ripple_aapl, iter3_msft). The synthesis model MISREAD a
+# non-empty serialized tool payload as empty and confidently refused. This is
+# the sibling of ``_is_wholesale_refusal`` (#2) but keyed on emptiness/no-data/
+# no-link phrasing rather than the two exact "not available…" markers. It is
+# consumed by the SAME fail-open guard, which only fires when the turn actually
+# retrieved non-empty tool data (``non_none_items`` non-empty) AND grounding
+# still passed — so a genuine empty-pool refusal (no items) is never rewritten.
+#
+# Substring markers of a WHOLESALE empty/no-data assertion. Kept phrase-anchored
+# (not bare "empty"/"no") so a long substantive answer that caveats a single
+# missing sub-fact is not matched; the short-length gate is the second guard.
+_FALSE_EMPTY_CLAIM_MARKERS: tuple[str, ...] = (
+    "no data was found",
+    "no data is available",
+    "no data available",
+    "no data found",
+    "could not find any data",
+    "couldn't find any data",
+    "no results were found",
+    "no results found",
+    "no relevant data",
+    "returned no data",
+    "returned no results",
+    "returned no rows",
+    "did not return any",
+    "didn't return any",
+    "no records were found",
+    "no records found",
+    "the result was empty",
+    "results were empty",
+    "empty result set",
+    "there is no link",
+    "there was no link",
+    "no link was provided",
+    "no link is available",
+    "no url was returned",
+    "i couldn't find any information",
+    "i could not find any information",
+    "unable to find any",
+    "i was unable to retrieve",
+    "i wasn't able to retrieve",
+)
+# Slightly more permissive than the wholesale-refusal cap: a false empty-claim
+# can carry one framing sentence ("I checked the sources but no data was found
+# for …") and still be a wholesale refusal, but a real multi-fact answer is far
+# longer. 320 chars stays comfortably below a genuine answer.
+_FALSE_EMPTY_CLAIM_MAX_LEN = 320
+
+
+def _falsely_claims_empty_result(text: str) -> bool:
+    """True when ``text`` is a short answer asserting no-data / empty / no-link.
+
+    Companion to :func:`_is_wholesale_refusal` for the D-c fail-open guard: when
+    the synthesis output claims emptiness BUT the turn retrieved non-empty tool
+    data, we replace it with a data-backed reply rather than serve the false
+    refusal. Length-gated so a substantive answer that caveats one missing
+    sub-fact in passing is never matched.
+    """
+    if not text:
+        return False
+    _stripped = text.strip()
+    if len(_stripped) > _FALSE_EMPTY_CLAIM_MAX_LEN:
+        return False
+    _low = _stripped.lower()
+    return any(_marker in _low for _marker in _FALSE_EMPTY_CLAIM_MARKERS)
 
 
 # ── Theme F (2026-06-12 root-cause audit) — false write-action claim guard ───
@@ -1883,6 +2170,134 @@ def _build_all_errored_message(entities: list[Any], ticker_hint: str | None) -> 
     return (
         "I couldn't find a match for that symbol. Please double-check it or "
         "provide more context (company name, exchange) and I'll try again."
+    )
+
+
+# ── D-g (2026-07-08) — entity context-bleed guard for refusals/no-data ───────
+#
+# ``tc_relations_msft`` (a Microsoft question) shipped a refusal that named
+# "Five Below" — a stale/wrong entity bled in from context. A refusal or
+# no-data message MUST speak about the entity RESOLVED for the current turn.
+# This guard rebinds a refusal-shaped final answer to the resolved entity when
+# the answer references NONE of the turn's resolved-entity tokens (so it is
+# either generic — which we still improve by naming the entity — or names the
+# WRONG entity, which we correct). It never touches a substantive answer:
+# gated on refusal-shape + a short length + at least one resolved entity.
+#
+# Generic company-name suffixes we do NOT treat as identifying tokens (so a
+# refusal that merely says "this corporation" is not mistaken for a correct
+# reference to "Microsoft Corporation").
+_DG_GENERIC_NAME_WORDS: frozenset[str] = frozenset(
+    {
+        "inc",
+        "inc.",
+        "corp",
+        "corp.",
+        "corporation",
+        "company",
+        "co",
+        "co.",
+        "ltd",
+        "ltd.",
+        "plc",
+        "group",
+        "holdings",
+        "holding",
+        "the",
+        "and",
+        "class",
+    }
+)
+# Refusal / no-data phrasing (superset of the wholesale + false-empty markers,
+# plus the leads of our own canonical refusal templates) used ONLY to decide
+# whether the final answer is refusal-shaped for the rebind gate.
+_DG_REFUSAL_MARKERS: tuple[str, ...] = (
+    "i couldn't find",
+    "i could not find",
+    "i couldn't retrieve",
+    "i could not retrieve",
+    "i wasn't able",
+    "i was not able",
+    "i'm unable",
+    "i am unable",
+    "unable to find",
+    "unable to retrieve",
+    "couldn't find a match",
+    "could not find a match",
+    "no data",
+    "no results",
+    "no records",
+    "not available in retrieved context",
+    "i'm having trouble retrieving",
+    "i won't report",
+    "i will not report",
+    "i can't help with that",
+    "i cannot help with that",
+)
+_DG_REFUSAL_MAX_LEN = 600
+
+
+def _resolved_entity_tokens(entities: list[Any]) -> set[str]:
+    """Lower-cased identifying tokens (name words + ticker) of resolved entities.
+
+    Generic suffixes ("Inc", "Corp", …) and very short words are dropped so the
+    presence check is anchored on the distinctive part of the name (``microsoft``,
+    ``msft``) rather than a word any refusal could contain.
+    """
+    tokens: set[str] = set()
+    for ent in entities or []:
+        ticker = getattr(ent, "ticker", None)
+        if isinstance(ticker, str) and ticker.strip():
+            tokens.add(ticker.strip().lower())
+        name = getattr(ent, "canonical_name", None)
+        if isinstance(name, str):
+            for word in re.split(r"[^0-9a-zA-Z]+", name):
+                wl = word.strip().lower()
+                if len(wl) >= 3 and wl not in _DG_GENERIC_NAME_WORDS:
+                    tokens.add(wl)
+    return tokens
+
+
+def _entity_anchor(entities: list[Any]) -> str:
+    """Human ``Name (TICKER)`` anchor for the resolved entities (D-g)."""
+    parts: list[str] = []
+    for ent in entities or []:
+        name = str(getattr(ent, "canonical_name", "") or "").strip()
+        ticker = getattr(ent, "ticker", None)
+        if not name:
+            continue
+        parts.append(f"{name} ({ticker})" if ticker else name)
+    return ", ".join(parts)
+
+
+def _bind_refusal_to_resolved_entity(answer: str, entities: list[Any]) -> str:
+    """Rebind a refusal-shaped final answer to the turn's RESOLVED entity (D-g).
+
+    No-op unless: an entity resolved this turn, the answer is refusal/no-data
+    shaped AND short, AND the answer references none of the resolved-entity
+    tokens (so it is generic or names the WRONG/stale entity). In that case the
+    answer is replaced with a refusal explicitly anchored on the resolved
+    entity, so a Microsoft question can never surface a "Five Below" refusal.
+    """
+    if not answer or not answer.strip() or not entities:
+        return answer
+    stripped = answer.strip()
+    if len(stripped) > _DG_REFUSAL_MAX_LEN:
+        return answer
+    low = stripped.lower()
+    if not any(marker in low for marker in _DG_REFUSAL_MARKERS):
+        return answer
+    tokens = _resolved_entity_tokens(entities)
+    if tokens and any(tok in low for tok in tokens):
+        # Refusal already speaks about the resolved entity — leave it alone.
+        return answer
+    anchor = _entity_anchor(entities)
+    if not anchor:
+        return answer
+    return (
+        f"I couldn't retrieve the data needed to answer this question about {anchor}. "
+        "I won't report figures I can't verify against the platform's data. Please try "
+        "again in a moment, or narrow the question to a specific metric or time period."
     )
 
 
@@ -4469,6 +4884,25 @@ class ChatOrchestratorUseCase:
                     delta_chars=_pre_scrub_len - len(full_text),
                 )
 
+        # ── D-f (2026-07-08): runaway decode-loop guard ───────────────────────
+        # ``ripple_nvidia_supplier_health`` shipped a final answer that repeated
+        # "I'll start by identifying…" ~200x (empty analysis, BP-671/672 stub-as-
+        # final class). Collapse the loop to a single occurrence of each repeated
+        # segment BEFORE the plan-only guard below, so the collapsed remnant is
+        # correctly recognised as plan-only narration and converted to a bounded
+        # refusal (rather than shipping a wall of duplicated prose). Idempotent
+        # and a no-op on any non-looping answer.
+        if full_text:
+            _pre_loop = full_text
+            full_text, _looped = _collapse_runaway_repetition(full_text)
+            if _looped:
+                log.warning(  # type: ignore[no-any-return]
+                    "runaway_repetition_collapsed",
+                    pre_len=len(_pre_loop),
+                    post_len=len(full_text),
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+
         # ── 2026-06-12 root-cause audit Theme D: plan-only synthesis guard ────
         # ``chain_nvda_competitor_growth_rank`` shipped a future-tense PLAN
         # ("I'll start by… **Step 1**… I'll search… Let me first…") as the final
@@ -4753,7 +5187,15 @@ class ChatOrchestratorUseCase:
         # citation / empty pool / plan-only) — those fire precisely because the
         # data was NOT usable; this guard is gated on ``non_none_items`` being
         # non-empty AND ``grounded`` still True.
-        if grounded and non_none_items and _is_wholesale_refusal(full_text):
+        # D-c (2026-07-08): the same fail-open also covers the case where the
+        # composition MISREAD a non-empty serialized tool payload as empty and
+        # asserted "no data / no link / empty" (ripple_tsmc, cmp_tsmc_intel,
+        # ripple_aapl, iter3_msft) — the tool trace shows status:ok items>=1.
+        # ``_falsely_claims_empty_result`` recognises that phrasing; gated on the
+        # SAME ``non_none_items`` non-empty + ``grounded`` conditions so a genuine
+        # empty-pool refusal (no retrieved items) is never rewritten.
+        _misread_empty = _is_wholesale_refusal(full_text) or _falsely_claims_empty_result(full_text)
+        if grounded and non_none_items and _misread_empty:
             log.warning(  # type: ignore[no-any-return]
                 "hallucinated_refusal_failed_open",
                 retrieved_item_count=len(non_none_items),
@@ -4851,7 +5293,20 @@ class ChatOrchestratorUseCase:
             # remain after the derivation/framing checks (a sibling tightened
             # those caps in numeric_grounding.py). Only then do we withhold the
             # caveat; a leaked banner/inline tag is still scrubbed either way.
-            full_text = _sanitize_unverified_markers(full_text, append_disclaimer=not grounding_passed)
+            #
+            # Track-3 (2026-07-08) — TIGHTEN the append gate. The banner was still
+            # appearing on FULLY-GROUNDED answers when the numeric validator
+            # over-flagged (``grounding_passed`` False) but every figure is in
+            # fact within ±200 chars of a real ``[tool row N]`` / ``[tool]``
+            # citation. ``_answer_has_full_citation_coverage`` is the exact
+            # last-line safety-net already trusted to suppress the validator
+            # banner elsewhere (both grounding methods call it): reuse it here so
+            # the caveat fires ONLY when grounding failed AND the answer is not
+            # demonstrably fully cited — i.e. genuinely material unsupported
+            # numbers remain. A leaked banner/inline tag is still scrubbed either
+            # way; we are only withholding the redundant trailing caveat.
+            _append_caveat = not (grounding_passed or _answer_has_bracket_citation_coverage(full_text))
+            full_text = _sanitize_unverified_markers(full_text, append_disclaimer=_append_caveat)
             if full_text != _pre_sanitize:
                 log.info(  # type: ignore[no-any-return]
                     "unverified_markers_sanitized",
@@ -5013,6 +5468,25 @@ class ChatOrchestratorUseCase:
             if _orphans:
                 log.warning("citation_marker_orphan", count=_orphans, retrieved=len(reranked))  # type: ignore[no-any-return]
 
+        # ── D-a (2026-07-08): phantom / non-registered citation-tag hard-veto ──
+        # FINAL gate — runs AFTER dense renumber has made the only legitimate
+        # bracket citations plain ``[1]..[K]`` mapping 1:1 to ``citations``.
+        # Strips any bracket token that is provenance/citation-SHAPED but is not
+        # a registered numbered marker: a ``[c9]`` payload id passed through from
+        # ``get_morning_brief``, a ``[REDACTED]`` placeholder, a ``[tool row N]``
+        # tag misattributed to a tool that returned 0 rows / was never resolved
+        # (incl. the narrow-no-break-space ``row 7`` variant the ASCII regexes
+        # miss), and any stray plain ``[n]`` with no backing citation. Genuine
+        # non-citation brackets (markdown labels, years, notes) are preserved.
+        _valid_refs = {int(getattr(c, "ref", 0)) for c in citations}
+        answer, _phantom_tags = _strip_non_registered_citation_tags(answer, _valid_refs)
+        if _phantom_tags:
+            log.warning(  # type: ignore[no-any-return]
+                "non_registered_citation_tags_stripped",
+                count=_phantom_tags,
+                request_id=str(getattr(audit, "turn_id", "") or ""),
+            )
+
         # ── 2026-06-26 #5: never emit a blank/whitespace final answer ─────────
         # safety_pii_executive_home_address returned an empty string — a blank
         # answer is the WRONG way to refuse (the refusal judge cannot credit
@@ -5033,6 +5507,24 @@ class ChatOrchestratorUseCase:
                 "ground in the platform's data. If you have a market- or company-"
                 "related question I can help with, please rephrase it."
             )
+
+        # ── D-g (2026-07-08): bind refusal/no-data answers to the resolved entity ─
+        # A refusal that names the WRONG/stale entity (``tc_relations_msft`` said
+        # "Five Below" on a Microsoft question) is a trust failure. When the final
+        # answer is refusal-shaped but references none of THIS turn's resolved
+        # entities, rebind it to a refusal anchored on the resolved entity. A
+        # refusal carries no legitimate sources, so any surviving citations are
+        # cleared alongside the rewrite. No-op on a substantive answer or when no
+        # entity resolved.
+        _rebound = _bind_refusal_to_resolved_entity(answer, list(entities))
+        if _rebound != answer:
+            log.warning(  # type: ignore[no-any-return]
+                "refusal_rebound_to_resolved_entity",
+                entities=[str(getattr(e, "canonical_name", "") or "") for e in entities],
+                request_id=str(getattr(audit, "turn_id", "") or ""),
+            )
+            answer = _rebound
+            citations = []
 
         # E-12: stash the final answer on the audit object so execute_streaming's
         # finally block can pass it to finalize(). Using a private attribute to avoid
