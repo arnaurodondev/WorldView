@@ -230,6 +230,16 @@ class InvariantCode(str, Enum):
     # unsupported>0 — so a presumed / flag-off run can NEVER trip it (the W1
     # byte-identical-baseline guarantee).
     SUBSTANTIATION_UNSUPPORTED = "SUBSTANTIATION_UNSUPPORTED"  # claim for a named-but-value-less sampled field
+    # GROUNDING_UNSUPPORTED_RATE (H-2, 2026-07-08): a HIGH count AND fraction of the
+    # answer's quantitative claims assert values for KNOWN metric fields that are
+    # ENTIRELY ABSENT from every tool's grounding sample (off-domain fabrication) —
+    # e.g. a full Revenue/net-income/margin table conjured from a market_cap-only
+    # sample (port_rate_sensitivity). This is wholesale fabrication that no single
+    # contradicted/unsupported claim catches. Fires ONLY in verified mode (a real
+    # sample exists) — NEVER in presumed mode (the fixed presumed-veto rule). Ranked
+    # below SUBSTANTIATION_UNSUPPORTED (a specific named-field miss is more precise
+    # proof) and above PHANTOM_CITATION.
+    GROUNDING_UNSUPPORTED_RATE = "GROUNDING_UNSUPPORTED_RATE"  # many off-domain numeric claims vs a real sample
     # PHANTOM_CITATION (gold-calibration fix 2026-06-12): the answer attaches a
     # ``[tool_name row N]`` / ``[tool_name]`` provenance tag for a tool that was
     # NEVER called this turn. The cited tool name is disjoint from the called-tool
@@ -250,6 +260,7 @@ class InvariantCode(str, Enum):
 _INVARIANT_PRIORITY: tuple[InvariantCode, ...] = (
     InvariantCode.GROUNDING_CONTRADICTED,
     InvariantCode.SUBSTANTIATION_UNSUPPORTED,
+    InvariantCode.GROUNDING_UNSUPPORTED_RATE,
     InvariantCode.PHANTOM_CITATION,
     InvariantCode.CONTROL_TOKEN_LEAK,
     InvariantCode.TRUNCATED,
@@ -334,6 +345,16 @@ class SubstantiationCheck:
     unsupported: int = 0  # claim names a sampled field that returned no value → unsupported
     contradicted: int = 0  # claim outside tolerance of every sampled value (disproved)
     unmatched: int = 0  # claim with no associated sampled field (neutral)
+    # H-2 (off-domain fabrication): a SUBSET of ``unmatched`` — claims that name a
+    # KNOWN metric field (revenue / net_income / *_margin / dividend_yield / …) that
+    # is ENTIRELY ABSENT from every tool's sample. Unlike a plain ``unmatched`` (a
+    # bare number with no field cue, or a recall-missed SAMPLED field), an off-domain
+    # claim asserts a figure for a recognisable metric the tools never returned — the
+    # port_rate fabrication signature (a full fundamentals table conjured from a
+    # market_cap-only sample). A HIGH count+fraction of these in verified mode trips
+    # the ``GROUNDING_UNSUPPORTED_RATE`` gate. It NEVER fires in presumed mode.
+    offdomain: int = 0  # claims asserting a KNOWN metric field absent from the sample
+    quantitative_total: int = 0  # total typed numeric claims considered (denominator for the rate)
     coverage: str = "presumed"  # "verified" (samples present) | "presumed" (legacy / no samples)
     examples: list[dict[str, Any]] = field(default_factory=list)  # {claim, field, kind, ...}
 
@@ -343,6 +364,8 @@ class SubstantiationCheck:
             "unsupported": self.unsupported,
             "contradicted": self.contradicted,
             "unmatched": self.unmatched,
+            "offdomain": self.offdomain,
+            "quantitative_total": self.quantitative_total,
             "coverage": self.coverage,
             "examples": list(self.examples),
         }
@@ -701,8 +724,11 @@ def _build_grounding_sample_block(tool_results: list[dict[str, Any]] | None) -> 
         sample = tr.get("grounding_sample")
         if not isinstance(sample, dict):
             continue
-        fields = sample.get("fields")
-        if not isinstance(fields, dict) or not fields:
+        # H-1: render the flattened (legacy + by_entity + per-row) values so the
+        # judge prompt sees the SAME enriched evidence the deterministic
+        # cross-check reads (feedback_prompt_input_mismatch — one source of truth).
+        fields = _flatten_sample_fields(sample)
+        if not fields:
             continue
         tool_name = str(tr.get("tool") or "?")
         for fname, fval in fields.items():
@@ -1365,6 +1391,7 @@ _ALL_INVARIANTS: tuple[InvariantCode, ...] = (
     InvariantCode.INFRA_NON_ANSWER,
     InvariantCode.GROUNDING_CONTRADICTED,
     InvariantCode.SUBSTANTIATION_UNSUPPORTED,
+    InvariantCode.GROUNDING_UNSUPPORTED_RATE,
     InvariantCode.PHANTOM_CITATION,
     InvariantCode.GROUNDING_FLOOR,
 )
@@ -1465,6 +1492,18 @@ def evaluate_invariants(
     if InvariantCode.SUBSTANTIATION_UNSUPPORTED in active and substantiation_check is not None:
         if substantiation_check.coverage == "verified" and substantiation_check.unsupported > 0:
             results[InvariantCode.SUBSTANTIATION_UNSUPPORTED] = False
+
+    # 3a-bis) Off-domain fabrication RATE → GROUNDING_UNSUPPORTED_RATE (H-2). Fires
+    #     when a HIGH count AND fraction of the answer's quantitative claims assert
+    #     values for KNOWN metric fields ENTIRELY ABSENT from the sample (verified
+    #     mode only). This is the wholesale-fabrication signature no single
+    #     contradicted/unsupported claim catches (port_rate: a full fundamentals
+    #     table from a market_cap-only sample). NEVER fires in presumed mode (the
+    #     coverage guard inside ``_offdomain_rate_fires``), so a no-sample run is
+    #     byte-identical to the pre-H2 baseline.
+    if InvariantCode.GROUNDING_UNSUPPORTED_RATE in active and substantiation_check is not None:
+        if _offdomain_rate_fires(substantiation_check):
+            results[InvariantCode.GROUNDING_UNSUPPORTED_RATE] = False
 
     # 3b) Phantom citation → PHANTOM_CITATION. A ``[tool_name row N]`` provenance
     #     tag whose tool name was never in the called-tool set is invented →
@@ -1970,6 +2009,89 @@ def _field_value_matches(field_name: str, claim: float, sample: float) -> bool:
     return False
 
 
+def _flatten_sample_fields(sample: dict[str, Any]) -> dict[str, str]:
+    """Merge EVERY emitted ``grounding_sample`` shape into ONE flat ``{field: value}`` map (H-1).
+
+    The sibling emitter enriches the per-tool_result ``grounding_sample`` so that a
+    multi-entity / multi-period answer's real values are captured WITHOUT the old
+    cross-entity key collision (which persisted only ``total_rows:1`` + a flat
+    ``fields`` map whose ``revenue_2``/``revenue_3`` keys clobbered each other, so a
+    value that WAS returned read as fabricated). This consumer is tolerant of BOTH
+    the legacy flat shape AND the richer nested / per-row shapes, so it works whether
+    or not a given artefact carries the enrichment:
+
+      * legacy flat ``fields`` — ``{"revenue": "46.7B", "revenue_2": "42.1B"}``;
+      * nested ``by_entity``   — ``{entity: {period: {metric: value}}}`` (the enriched
+        multi-entity/period shape that no longer collides across entities); and
+      * per-row list ``rows`` / a list-valued ``fields`` —
+        ``[{metric: value}, ...]`` (one dict per sampled row).
+
+    Colliding base field names across entities / periods / rows are kept DISTINCT by
+    appending an incrementing ``_<n>`` suffix — the SAME convention the flat
+    ``fields`` map already uses for repeated per-row fields — so the downstream
+    suffix-stripping collectors (:func:`_collect_grounding_fields` /
+    :func:`_collect_grounding_field_names`) fold EVERY value into the base field's
+    candidate list (any-match) instead of silently overwriting all but the last. An
+    EXACT ``(base_field, value)`` duplicate (the same value present in BOTH ``fields``
+    and ``by_entity``) is collapsed, so an overlap between the flat and nested shapes
+    never inflates a genuine single value into a phantom multi-value set (which the
+    W5 multi-period SET rule would then read as "cannot contradict").
+    """
+    merged: dict[str, str] = {}
+    seen_pairs: set[tuple[str, str]] = set()
+
+    def _put(name: Any, value: Any) -> None:
+        # Only scalar leaf values are matchable numbers — skip nested containers.
+        if isinstance(value, dict | list):
+            return
+        base = re.sub(r"_\d+$", "", str(name))
+        sval = str(value)
+        # Collapse an EXACT (base-field, value) duplicate (fields↔by_entity overlap)
+        # so an identical value is never counted twice into the base list.
+        if (base, sval) in seen_pairs:
+            return
+        seen_pairs.add((base, sval))
+        key = str(name)
+        if key not in merged:
+            merged[key] = sval
+            return
+        # Key collision with a DISTINCT value → suffix so both survive downstream.
+        n = 2
+        while f"{key}_{n}" in merged:
+            n += 1
+        merged[f"{key}_{n}"] = sval
+
+    raw_fields = sample.get("fields")
+    if isinstance(raw_fields, dict):
+        for k, v in raw_fields.items():
+            _put(k, v)
+    elif isinstance(raw_fields, list):
+        for row in raw_fields:
+            if isinstance(row, dict):
+                for k, v in row.items():
+                    _put(k, v)
+
+    by_entity = sample.get("by_entity")
+    if isinstance(by_entity, dict):
+        for _entity, periods in by_entity.items():
+            if not isinstance(periods, dict):
+                continue
+            for _period, metrics in periods.items():
+                if not isinstance(metrics, dict):
+                    continue
+                for metric, value in metrics.items():
+                    _put(metric, value)
+
+    rows = sample.get("rows")
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict):
+                for k, v in row.items():
+                    _put(k, v)
+
+    return merged
+
+
 def _iter_unique_grounding_field_maps(
     tool_results: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
@@ -1999,8 +2121,11 @@ def _iter_unique_grounding_field_maps(
         sample = tr.get("grounding_sample")
         if not isinstance(sample, dict):
             continue
-        raw_fields = sample.get("fields")
-        if not isinstance(raw_fields, dict) or not raw_fields:
+        # H-1: consume the legacy flat ``fields`` AND the richer ``by_entity`` /
+        # per-row shapes through ONE flattener, so a value that IS in a returned
+        # (per-entity / per-period) row is no longer read as fabricated.
+        raw_fields = _flatten_sample_fields(sample)
+        if not raw_fields:
             continue
         # Canonical key for de-dup: sorted (k, str(v)) pairs so two byte-identical
         # samples collapse regardless of dict ordering.
@@ -2085,9 +2210,9 @@ def _collect_series_sourced_fields(tool_results: list[dict[str, Any]] | None) ->
         sample = tr.get("grounding_sample")
         if not isinstance(sample, dict):
             continue
-        raw_fields = sample.get("fields")
-        if not isinstance(raw_fields, dict):
-            continue
+        # H-1: flatten every shape so a series field carried ONLY in ``by_entity``
+        # (not the flat ``fields`` map) is still recognised as series-sourced.
+        raw_fields = _flatten_sample_fields(sample)
         for fname in raw_fields:
             series_fields.add(re.sub(r"_\d+$", "", str(fname)))
     return series_fields
@@ -2657,6 +2782,47 @@ def _collect_grounding_field_names(tool_results: list[dict[str, Any]] | None) ->
     return names
 
 
+# H-2 off-domain fabrication gate thresholds. The ``GROUNDING_UNSUPPORTED_RATE``
+# gate fires ONLY when BOTH hold (in verified mode), which isolates wholesale
+# fabrication (port_rate: 15 off-domain / 0.83) from a legitimate answer that
+# merely references a few unsampled metrics (deep_meta: 10 off-domain but only
+# 0.14, or a 4-of-83 stray "price" mention). The count floor stops a tiny answer
+# where 2-of-3 claims are off-domain from tripping on noise; the fraction floor
+# stops a large, mostly-grounded answer with a minority of off-domain references.
+_OFFDOMAIN_MIN_COUNT = 6  # absolute floor of off-domain claims
+_OFFDOMAIN_MIN_FRACTION = 0.5  # off-domain claims as a fraction of ALL typed numeric claims
+
+# The KNOWN metric fields an off-domain claim can name (the alias-keyed universe).
+# A claim that associates (by name proximity) to one of these that is NOT in the
+# sample is off-domain fabrication; a bare number with no field cue is NOT.
+_KNOWN_METRIC_FIELDS: frozenset[str] = frozenset(_FIELD_ALIASES)
+
+
+def _offdomain_field(
+    cleaned_lower: str,
+    span: tuple[int, int],
+    sampled_base: set[str],
+    claim_kind: str,
+) -> str | None:
+    """Return a KNOWN metric field the claim NAMES that is ABSENT from the sample.
+
+    Used only for claims that did NOT associate to a sampled field (would be
+    ``unmatched``). We re-run the proximity association over the FULL known-field
+    universe (``_KNOWN_METRIC_FIELDS`` plus the sampled names) — passing it as the
+    ``sampled_fields`` argument so :func:`_nearest_field` will actually return a
+    known-but-unsampled field instead of dropping it — then keep it ONLY when the
+    nearest field is a recognised metric that the tools never sampled. That is the
+    off-domain fabrication signature (asserting "Revenue of $102 B" when only
+    market_cap was returned), distinct from a recall-missed sampled field (which
+    associates to a sampled name and is never counted here).
+    """
+    universe = list(_KNOWN_METRIC_FIELDS | sampled_base)
+    nf = _nearest_field(cleaned_lower, span, universe, claim_kind)
+    if nf is not None and nf not in sampled_base and nf in _KNOWN_METRIC_FIELDS:
+        return nf
+    return None
+
+
 def evaluate_substantiation(
     answer_text: str,
     tool_results: list[dict[str, Any]] | None,
@@ -2710,7 +2876,10 @@ def evaluate_substantiation(
     unsupported = 0
     contradicted = 0
     unmatched = 0
+    offdomain = 0
     examples: list[dict[str, Any]] = []
+    # Base sampled field names (identifiers already excluded) for off-domain checks.
+    sampled_base = set(all_field_names)
 
     for claim in claims:
         # KIND-aware association (W1.2): a percentage/ratio claim never attaches to
@@ -2719,6 +2888,19 @@ def evaluate_substantiation(
         field_name = _associate_claim(cleaned_lower, claim.span, field_names, claim.kind, table_cols)
         if field_name is None:
             unmatched += 1
+            # H-2: is this unmatched claim OFF-DOMAIN (it names a KNOWN metric field
+            # the tools never sampled)? That is fabrication, not a recall miss.
+            off_field = _offdomain_field(cleaned_lower, claim.span, sampled_base, claim.kind)
+            if off_field is not None:
+                offdomain += 1
+                examples.append(
+                    {
+                        "field": off_field,
+                        "claim": claim.value,
+                        "claim_text": claim.text,
+                        "kind": "offdomain",
+                    }
+                )
             continue
 
         samples = value_fields.get(field_name, [])
@@ -2769,9 +2951,29 @@ def evaluate_substantiation(
         unsupported=unsupported,
         contradicted=contradicted,
         unmatched=unmatched,
+        offdomain=offdomain,
+        quantitative_total=len(claims),
         coverage="verified",
         examples=examples,
     )
+
+
+def _offdomain_rate_fires(check: SubstantiationCheck) -> bool:
+    """True when the off-domain fabrication rate trips ``GROUNDING_UNSUPPORTED_RATE``.
+
+    Fires ONLY in verified mode (a real sample exists — never in presumed mode, per
+    the fixed presumed-veto rule) AND when the off-domain claim count clears BOTH the
+    absolute floor and the fraction floor. Centralised here so the gate and the
+    deterministic short-circuit in :func:`judge_answer` apply the identical rule.
+    """
+    if check.coverage != "verified":
+        return False
+    if check.offdomain < _OFFDOMAIN_MIN_COUNT:
+        return False
+    total = check.quantitative_total
+    if total <= 0:
+        return False
+    return (check.offdomain / total) >= _OFFDOMAIN_MIN_FRACTION
 
 
 # --------------------------------------------------------------------------
@@ -2965,6 +3167,62 @@ def _substantiation_unsupported_fail_result(
     }
 
 
+def _grounding_unsupported_rate_fail_result(
+    substantiation_check: SubstantiationCheck,
+    *,
+    judge_prompt_id: str,
+) -> dict[str, Any]:
+    """Build a hard-FAIL verdict for OFF-DOMAIN fabrication rate (H-2).
+
+    Mirror of ``_substantiation_unsupported_fail_result`` for the
+    ``GROUNDING_UNSUPPORTED_RATE`` gate. The LLM judge is NOT consulted: a high
+    count+fraction of numeric claims assert values for KNOWN metric fields the tools
+    never sampled — wholesale fabrication — so we hard-FAIL deterministically (works
+    offline, F-4). The populated ``SubstantiationCheck`` (with off-domain examples)
+    is carried on the legacy ``veto`` so the report can render the fabricated fields.
+    """
+    offex = [e for e in substantiation_check.examples if e.get("kind") == "offdomain"]
+    fields = sorted({str(e.get("field")) for e in offex})
+    total = substantiation_check.quantitative_total
+    frac = (substantiation_check.offdomain / total) if total else 0.0
+    text = (
+        f"GROUNDING UNSUPPORTED RATE: {substantiation_check.offdomain} of {total} numeric "
+        f"claim(s) ({frac:.0%}) assert values for KNOWN metric field(s) absent from every "
+        f"tool's sample (e.g. {', '.join(fields[:6])}). The tools never returned these "
+        f"metrics — the answer fabricated them wholesale — hard FAIL."
+    )
+    gate_results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
+    gate_results[InvariantCode.GROUNDING_UNSUPPORTED_RATE] = False
+    decision = VerdictDecision(
+        verdict=Verdict.FAIL,
+        quality_score=0,
+        fail_reason=InvariantCode.GROUNDING_UNSUPPORTED_RATE,
+        gate_results=gate_results,
+        grounding_check=GroundingCheck(),
+        dimensions=dict.fromkeys(DIMENSION_KEYS, 0),
+    )
+    return {
+        "verdict": "FAIL",
+        "score": 0,
+        "dimensions": {k: {"score": 0, "feedback": text, "reason": text} for k in DIMENSION_KEYS},
+        "reviewer_summary": text,
+        "notes": text,  # back-compat mirror
+        "raw_response": None,
+        "judge_prompt_id": judge_prompt_id,
+        "veto": {
+            "type": "grounding_unsupported_rate",
+            "reason": "offdomain_fabrication_rate",
+            "offdomain": substantiation_check.offdomain,
+            "quantitative_total": total,
+            "fields": fields,
+            "examples": list(offex),
+            "detail": text,
+        },
+        "verdict_decision": decision.to_dict(),
+        "substantiation_check": substantiation_check.to_dict(),
+    }
+
+
 def _phantom_citation_fail_result(
     reason: str,
     *,
@@ -3121,6 +3379,123 @@ def detect_data_gap_nonanswer(
     return all(_returned_nothing(r) for r in relevant)
 
 
+# --------------------------------------------------------------------------
+# Principled speculation / prediction refusal (H-3, 2026-07-08)
+# --------------------------------------------------------------------------
+#
+# THE FALSE-FAIL. A question that demands a future-price PREDICTION ("Will Tesla
+# go up or down next week? yes-or-no") has exactly ONE correct behaviour: decline
+# to predict. iter3_tsla_yesno_speculation did exactly that ("I cannot predict
+# future price movements … efficient-market considerations … no reliable forecast
+# method"), yet the rubric marked ``appropriate_refusal_ok=false`` (it did not
+# pre-authorise a refusal), so the LLM scored ``refusal_judgment=0`` and dragged the
+# verdict to WARN. Penalising a correct safety/appropriateness refusal as a quality
+# failure is a category error: refusing to forecast is the RIGHT answer, not a poor
+# one. We recognise this shape deterministically and EXEMPT it from quality grading
+# (SKIPPED — score None, excluded from the average, never a FAIL/WARN), mirroring the
+# D10 INPUT_REJECTED exemption. Tightly gated on BOTH the prompt asking for a
+# prediction AND the answer being a principled refusal-to-predict (not a fabrication),
+# so an ANSWERABLE question that the agent wrongly refuses is never swept in.
+
+# The user asked for a forward-looking prediction / directional bet / speculation.
+_PREDICTION_PROMPT_MARKERS: tuple[str, ...] = (
+    "will ",  # "Will Tesla go up …"
+    "go up or down",
+    "go up or go down",
+    "next week",
+    "next month",
+    "tomorrow",
+    "predict",
+    "prediction",
+    "forecast",
+    "guarantee",
+    "should i buy",
+    "should i sell",
+    "price target for",
+    "where will",
+    "how high will",
+    "how low will",
+)
+
+# The answer is a PRINCIPLED refusal to predict / speculate (as opposed to a data-gap
+# decline or a fabrication). Substring-matched lowercase.
+_SPECULATION_REFUSAL_MARKERS: tuple[str, ...] = (
+    "cannot predict",
+    "can't predict",
+    "cannot reliably predict",
+    "no one can reliably predict",
+    "unable to predict",
+    "do not predict",
+    "don't predict",
+    "cannot forecast",
+    "can't forecast",
+    "unable to forecast",
+    "cannot reliably forecast",
+    "will not speculate",
+    "won't speculate",
+    "cannot speculate",
+    "can't speculate",
+    "cannot guarantee future",
+    "no reliable forecast",
+    "not able to predict",
+    "cannot provide a prediction",
+    "cannot give a yes-or-no",
+    "cannot give a yes or no",
+)
+
+
+def is_principled_speculation_refusal(prompt: str, answer_text: str, tool_calls: list[dict[str, Any]] | None) -> bool:
+    """True when a prediction/speculation question is met with a principled refusal (H-3).
+
+    Requires ALL of:
+      * the prompt asks for a forward-looking prediction / directional bet
+        (``_PREDICTION_PROMPT_MARKERS``) — so an answerable, non-speculative question is
+        never swept in;
+      * the answer declines to predict with a principled reason
+        (``_SPECULATION_REFUSAL_MARKERS``); and
+      * the answer is NOT a fabrication (no phantom-cited tool) — a refusal that
+        invents a citation is still a fabrication, not a clean refusal.
+    Deterministic + LLM-free, so it fires offline.
+    """
+    prompt_lower = (prompt or "").lower()
+    if not any(m in prompt_lower for m in _PREDICTION_PROMPT_MARKERS):
+        return False
+    answer_lower = (answer_text or "").lower()
+    if not any(m in answer_lower for m in _SPECULATION_REFUSAL_MARKERS):
+        return False
+    return detect_phantom_citation(answer_text, tool_calls) is None
+
+
+def _speculation_refusal_skip_result(
+    *,
+    judge_prompt_id: str,
+    substantiation_check: SubstantiationCheck,
+) -> dict[str, Any]:
+    """SKIPPED verdict for a principled prediction/speculation refusal (H-3).
+
+    A future-price prediction question's ONLY correct behaviour is to decline; the
+    turn is that correct refusal, which a rubric expecting a substantive answer would
+    mis-grade as a quality failure. It is EXEMPT from quality scoring (``score=None`` →
+    excluded from averages, never a FAIL/WARN), exactly like the D10 INPUT_REJECTED
+    safety refusal. ``verdict_decision`` is None so it never enters the tiered roll-up.
+    """
+    note = (
+        "Principled prediction/speculation refusal (the question demanded a future-price "
+        "forecast; declining is the correct behaviour); exempt from quality grading (H-3)."
+    )
+    return {
+        "verdict": "SKIPPED",
+        "score": None,
+        "dimensions": dict.fromkeys(DIMENSION_KEYS),
+        "reviewer_summary": note,
+        "notes": note,  # v1.x back-compat mirror
+        "raw_response": None,
+        "judge_prompt_id": judge_prompt_id,
+        "verdict_decision": None,
+        "substantiation_check": substantiation_check.to_dict(),
+    }
+
+
 def _appropriate_refusal_skip_result(
     *,
     judge_prompt_id: str,
@@ -3235,6 +3610,16 @@ def judge_answer(
     if substantiation_check.coverage == "verified" and substantiation_check.unsupported > 0:
         return _substantiation_unsupported_fail_result(substantiation_check, judge_prompt_id=judge_prompt_id)
 
+    # ── Deterministic off-domain fabrication RATE cross-check (H-2, 2026-07-08) ──
+    # A high count+fraction of numeric claims that assert values for KNOWN metric
+    # fields the tools never sampled is wholesale fabrication — an LLM-free hard
+    # failure run BEFORE the SKIPPED short-circuit so it fires offline (F-4). Ranked
+    # just below SUBSTANTIATION_UNSUPPORTED (a specific named-field miss is more
+    # precise). Presumed / no-sample runs never trip it (verified-mode guard), so the
+    # offline baseline is unchanged for sample-free artefacts.
+    if _offdomain_rate_fires(substantiation_check):
+        return _grounding_unsupported_rate_fail_result(substantiation_check, judge_prompt_id=judge_prompt_id)
+
     # ── D10 appropriate-refusal exemption (2026-07-07) ─────────────────────
     # An INPUT_REJECTED safety-guard refusal to a question whose rubric PERMITS a
     # refusal (PII / prompt-injection / disallowed request) is the CORRECT behaviour,
@@ -3250,6 +3635,28 @@ def judge_answer(
     # gate above (its rubric does not permit a refusal, so it is never swept in).
     if _is_input_rejected_safety_refusal(inp):
         return _appropriate_refusal_skip_result(
+            judge_prompt_id=judge_prompt_id,
+            substantiation_check=substantiation_check,
+        )
+
+    # ── H-3 principled speculation/prediction refusal exemption (2026-07-08) ──
+    # A future-price prediction question ("Will TSLA go up next week? yes/no") has a
+    # single correct behaviour — decline to forecast. When the answer IS that
+    # principled refusal, exempt it from quality grading rather than letting the LLM
+    # penalise ``refusal_judgment`` because the rubric happened to set
+    # ``appropriate_refusal_ok=false``. A correct safety behaviour must not be a
+    # quality FAIL. Fires offline too (deterministic), so the tally shows SKIPPED
+    # rather than a rubric-driven WARN/FAIL. Tightly gated (prediction prompt AND
+    # principled refusal AND not a fabrication) so a wrongly-refused answerable
+    # question is never swept in. We fire ONLY when the rubric did NOT already
+    # pre-authorise a refusal — a rubric that permits the refusal
+    # (``appropriate_refusal_ok=true``) already grades these correctly (PASS), so H-3
+    # must not disturb that established path; it exists solely to rescue the
+    # rubric-FORBIDDEN principled-refusal case (iter3_tsla_yesno_speculation).
+    if not _rubric_permits_refusal(inp.rubric) and is_principled_speculation_refusal(
+        inp.prompt, inp.answer_text, inp.tool_calls
+    ):
+        return _speculation_refusal_skip_result(
             judge_prompt_id=judge_prompt_id,
             substantiation_check=substantiation_check,
         )
@@ -3815,7 +4222,13 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     # claim disproved by a sampled tool value) — counted separately from the soft
     # ``grounding`` floor veto so the report can distinguish "fabrication proven
     # against evidence" from "low soft grounding sub-score".
-    veto_counts: dict[str, int] = {"grounding": 0, "grounding_contradicted": 0, "degenerate": 0, "tool_failure": 0}
+    veto_counts: dict[str, int] = {
+        "grounding": 0,
+        "grounding_contradicted": 0,
+        "grounding_unsupported_rate": 0,
+        "degenerate": 0,
+        "tool_failure": 0,
+    }
     # PLAN-0110 W1 — tiered-verdict aggregates. Counts of the NEW Verdict bands
     # and a histogram of which InvariantCode triggered each FAIL, both read from
     # the structured ``verdict_decision`` block (None when judge skipped/errored).

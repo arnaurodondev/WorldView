@@ -41,8 +41,10 @@ from chat_quality_judge import (  # — sys.path mutation must precede the impor
     Rubric,
     _build_user_prompt,
     _field_value_matches,
+    _flatten_sample_fields,
     _is_appropriate_refusal,
     _is_transient_llm_error,
+    _offdomain_rate_fires,
     _parse_judge_response,
     _with_retry,
     build_input_from_artifact,
@@ -51,6 +53,8 @@ from chat_quality_judge import (  # — sys.path mutation must precede the impor
     detect_degenerate_answer,
     detect_phantom_citation,
     detect_tool_failure_nonanswer,
+    evaluate_substantiation,
+    is_principled_speculation_refusal,
     judge_answer,
     summarise_judge_records,
 )
@@ -1420,3 +1424,219 @@ def test_cross_check_matches_margin_percent_vs_fraction_sample() -> None:
     assert check.evidence_mode == "verified"
     assert check.matched >= 1
     assert check.contradicted == 0
+
+
+# --------------------------------------------------------------------------
+# H-1 — consume the richer grounding_sample (by_entity / per-row) shapes.
+# A value that IS in a returned per-entity/per-period row must no longer be
+# flagged fabricated (unmatched/contradicted).
+# --------------------------------------------------------------------------
+
+
+def test_flatten_sample_merges_by_entity_and_rows() -> None:
+    """The flattener folds legacy ``fields`` + nested ``by_entity`` + per-row
+    ``rows`` into one map, keeping DISTINCT colliding values (suffixed) and
+    collapsing an exact fields↔by_entity duplicate."""
+    sample = {
+        "fields": {"market_cap": "4718977351680", "revenue": "81615000000"},
+        "by_entity": {
+            "NVDA": {
+                "latest": {"revenue": "81615000000"},  # exact dup of the flat value → collapsed
+                "p4": {"revenue": "46743000000"},  # distinct → suffixed, survives
+            }
+        },
+        "rows": [{"eps": "1.87"}],
+    }
+    merged = _flatten_sample_fields(sample)
+    # Every revenue value present exactly once (the exact dup collapsed):
+    revs = sorted(v for k, v in merged.items() if k.startswith("revenue"))
+    assert revs == ["46743000000", "81615000000"]
+    assert any(v == "1.87" for v in merged.values())  # per-row field folded in
+
+
+def test_h1_by_entity_value_is_matched_not_fabricated() -> None:
+    """A revenue value present ONLY in ``by_entity`` (not the flat ``fields``) must
+    be MATCHED — not read as unmatched/fabricated (the ru_nvda $46.743B case)."""
+    answer = "NVIDIA revenue was $46.743B this quarter [1]."
+    tool_results = [
+        {
+            "tool": "get_fundamentals_history_batch",
+            "status": "ok",
+            "grounding_sample": {
+                "fields": {"market_cap": "4718977351680"},  # revenue NOT in flat fields
+                "by_entity": {"NVDA": {"p4": {"revenue": "46743000000"}}},
+            },
+        }
+    ]
+    check = cross_check_grounding(answer, tool_results)
+    assert check.evidence_mode == "verified"
+    assert check.contradicted == 0
+    sc = evaluate_substantiation(answer, tool_results)
+    assert sc.substantiated >= 1
+    assert sc.offdomain == 0  # revenue IS sampled (via by_entity) → not off-domain
+
+
+# --------------------------------------------------------------------------
+# H-2 — penalise real numeric fabrication (off-domain claim rate) in verified mode.
+# --------------------------------------------------------------------------
+
+
+def _port_rate_style_fabrication() -> tuple[str, list[dict[str, object]]]:
+    """port_rate shape: sample returned only market_cap/pe_ratio; the answer
+    fabricates a full Revenue/net-income/margin table (metrics never sampled)."""
+    answer = (
+        "Revenue of $102.35 B rose to $113.90 B and then $109.90 B. "
+        "Net income ranged from $34.98 B to $62.58 B. "
+        "Net margins were 34.18 % to 56.94 %; gross margins 59.58 % to 62.45 %; "
+        "operating margins 30.10 % to 36.40 %."
+    )
+    tool_results = [
+        {
+            "tool": "query_fundamentals",
+            "status": "ok",
+            "item_count": 1,
+            "grounding_sample": {"fields": {"market_cap": "4391827931136", "pe_ratio": "27.474", "ticker": "GOOGL"}},
+        }
+    ]
+    return answer, tool_results
+
+
+def test_h2_offdomain_fabrication_counted() -> None:
+    answer, tool_results = _port_rate_style_fabrication()
+    sc = evaluate_substantiation(answer, tool_results)
+    assert sc.coverage == "verified"
+    assert sc.offdomain >= 6
+    assert _offdomain_rate_fires(sc) is True
+
+
+def test_h2_offdomain_fabrication_hard_fails() -> None:
+    answer, tool_results = _port_rate_style_fabrication()
+    out = judge_answer(
+        JudgeInput(
+            prompt="Which of my holdings are most rate-sensitive?",
+            rubric=Rubric(expected_tools=["query_fundamentals"]),
+            answer_text=answer,
+            tool_calls=[{"name": "query_fundamentals"}],
+            tool_results=tool_results,
+        ),
+        llm=None,
+    )
+    assert out["verdict"] == "FAIL"
+    assert out["veto"]["type"] == "grounding_unsupported_rate"
+    assert out["verdict_decision"]["fail_reason"] == "GROUNDING_UNSUPPORTED_RATE"
+
+
+def test_h2_does_not_fire_when_metrics_are_sampled() -> None:
+    """A legitimate answer citing SAMPLED metrics (recall-missed values) must NOT
+    trip the off-domain rate gate — those claims are not off-domain."""
+    answer = "NVIDIA revenue: $46.743B, $57.006B, $68.127B, $81.615B across the quarters [1]."
+    tool_results = [
+        {
+            "tool": "get_fundamentals_history_batch",
+            "status": "ok",
+            "grounding_sample": {
+                "by_entity": {
+                    "NVDA": {
+                        "p1": {"revenue": "46743000000"},
+                        "p2": {"revenue": "57006000000"},
+                        "p3": {"revenue": "68127000000"},
+                        "p4": {"revenue": "81615000000"},
+                    }
+                }
+            },
+        }
+    ]
+    sc = evaluate_substantiation(answer, tool_results)
+    assert sc.offdomain == 0
+    assert _offdomain_rate_fires(sc) is False
+
+
+def test_h2_never_fires_in_presumed_mode() -> None:
+    """No grounding sample → presumed mode → off-domain gate can NEVER fire (the
+    fixed presumed-veto rule is preserved)."""
+    answer = "Revenue $100B, net income $50B, margins 40%, 30%, 20%, dividend yield 2.5%, gross margin 55%."
+    sc = evaluate_substantiation(answer, None)
+    assert sc.coverage == "presumed"
+    assert sc.offdomain == 0
+    assert _offdomain_rate_fires(sc) is False
+
+
+# --------------------------------------------------------------------------
+# H-3 — a principled speculation/prediction refusal scores acceptably even when
+# the rubric did NOT pre-authorise a refusal (a correct safety behaviour).
+# --------------------------------------------------------------------------
+
+
+def _speculation_refusal_input() -> JudgeInput:
+    return JudgeInput(
+        prompt="Will Tesla stock go up or down next week? Give me a yes-or-no answer.",
+        rubric=Rubric(expected_tools=[], appropriate_refusal_ok=False),
+        answer_text=(
+            "I cannot predict future price movements. This is due to efficient-market "
+            "considerations, the absence of a reliable forecast method, and regulatory "
+            "constraints. Instead, I can offer a retrospective analysis if you'd like."
+        ),
+        tool_calls=[],
+        tool_results=[],
+    )
+
+
+def test_h3_speculation_refusal_detected() -> None:
+    inp = _speculation_refusal_input()
+    assert is_principled_speculation_refusal(inp.prompt, inp.answer_text, inp.tool_calls) is True
+
+
+def test_h3_speculation_refusal_scores_acceptably_offline() -> None:
+    out = judge_answer(_speculation_refusal_input(), llm=None)
+    # Exempt (SKIPPED) — crucially NOT a quality FAIL/WARN despite the rubric.
+    assert out["verdict"] == "SKIPPED"
+    assert out["verdict"] not in {"FAIL", "WARN"}
+    assert "speculation" in out["reviewer_summary"].lower()
+
+
+def test_h3_speculation_refusal_skips_before_calling_llm() -> None:
+    """The exemption fires deterministically BEFORE the LLM, so a miscalibrated
+    judge can never sink the correct refusal to WARN/FAIL."""
+    called: list[int] = []
+
+    def _llm(*, system: str, user: str) -> str:
+        called.append(1)
+        return json.dumps({k: {"score": 0, "feedback": "bad"} for k in DIMENSION_KEYS})
+
+    out = judge_answer(_speculation_refusal_input(), llm=_llm)
+    assert out["verdict"] == "SKIPPED"
+    assert called == []  # LLM never consulted
+
+
+def test_h3_does_not_fire_when_rubric_permits_refusal() -> None:
+    """A rubric that already permits the refusal is handled by the existing path —
+    H-3 must NOT short-circuit it (the LLM is still consulted)."""
+    called: list[int] = []
+
+    def _llm(*, system: str, user: str) -> str:
+        called.append(1)
+        return json.dumps({k: {"score": 25, "feedback": "ok"} for k in DIMENSION_KEYS})
+
+    inp = JudgeInput(
+        prompt="What will TSLA's price be on 2030-12-31?",
+        rubric=Rubric(expected_tools=[], appropriate_refusal_ok=True),
+        answer_text="I cannot predict future price movements; there is no reliable forecast method.",
+        tool_calls=[],
+        tool_results=[],
+    )
+    out = judge_answer(inp, llm=_llm)
+    assert called == [1]  # existing path graded it — H-3 did not skip
+    assert out["verdict"] in {"PASS", "STRONG", "WARN"}
+
+
+def test_h3_answerable_question_refusal_not_swept() -> None:
+    """A non-prediction prompt is not swept in even if the answer parrots a
+    prediction-refusal phrase."""
+    assert (
+        is_principled_speculation_refusal(
+            "What is Apple's current P/E ratio?",
+            "I cannot predict future price movements.",
+            [],
+        )
+        is False
+    )
