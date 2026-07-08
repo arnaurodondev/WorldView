@@ -281,3 +281,16 @@ class TestProductionRegistryToolDefinitions:
         to_date = gph["function"]["parameters"]["properties"]["to_date"]
         assert from_date["type"] == "string" and from_date["format"] == "date"
         assert to_date["type"] == "string" and to_date["format"] == "date"
+
+    def test_get_fundamentals_history_advertises_date_window(self) -> None:
+        """BP-651: the singular fundamentals tool must expose from_date/to_date so
+        the LLM can anchor a past calendar year instead of getting the latest N."""
+        registry = build_default_registry()
+        defs = registry.to_tool_definitions()
+        gfh = next(d for d in defs if d["function"]["name"] == "get_fundamentals_history")
+        props = gfh["function"]["parameters"]["properties"]
+        assert "from_date" in props and "to_date" in props
+        assert props["from_date"]["type"] == "string" and props["from_date"]["format"] == "date"
+        assert props["to_date"]["type"] == "string" and props["to_date"]["format"] == "date"
+        # Neither is required (default behaviour = latest N periods).
+        assert "from_date" not in gfh["function"]["parameters"].get("required", [])

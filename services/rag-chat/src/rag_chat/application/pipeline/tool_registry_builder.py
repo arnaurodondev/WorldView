@@ -175,6 +175,14 @@ def build_default_registry() -> ToolRegistry:
                 "EPS, P/E ratio, market cap) for a SINGLE ticker over N periods. Use when the "
                 "user asks about revenue trends, EPS growth, or multi-quarter financial "
                 "performance for ONE company. "
+                "By default this returns the LATEST N periods (newest first). "
+                "**To answer a question anchored to a SPECIFIC PAST calendar year or quarter "
+                "(e.g. 'each quarter of 2024', 'FY2023 revenue'), you MUST pass `from_date` "
+                "and `to_date` (both, as YYYY-MM-DD) bounding that window** — otherwise you "
+                "will receive the latest quarters (e.g. 2025/2026), NOT the year asked for. "
+                "When a window is given the tool returns ONLY rows whose period_end falls "
+                "inside it, and returns no data if the requested year is unavailable (refuse — "
+                "do not substitute the latest quarters). "
                 "**Do NOT call this in a loop over multiple tickers — use "
                 "`get_fundamentals_history_batch` instead.** Calling this tool N times in "
                 "sequence is 5-10x slower than one batch call and is a tool-selection bug."
@@ -206,11 +214,36 @@ def build_default_registry() -> ToolRegistry:
                     ),
                     required=False,
                 ),
+                # PERIOD-ANCHOR (BP-651): explicit historical window. Both must be
+                # supplied together (a lone bound is ignored). Anchors a past-year
+                # question so it cannot be answered with the latest quarters.
+                ParameterSpec(
+                    name="from_date",
+                    type="date",
+                    description=(
+                        "Inclusive start of a historical window (YYYY-MM-DD). Pass WITH "
+                        "`to_date` to anchor a specific past year/quarter — e.g. for calendar "
+                        "year 2024 use from_date='2024-01-01', to_date='2024-12-31'. Only rows "
+                        "whose period_end falls in [from_date, to_date] are returned. Omit for "
+                        "the latest N periods."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="to_date",
+                    type="date",
+                    description=(
+                        "Inclusive end of a historical window (YYYY-MM-DD). Must be paired with "
+                        "`from_date`. Ignored unless both are provided."
+                    ),
+                    required=False,
+                ),
             ],
             source_type="fundamentals",
             example_queries=[
                 "Show me MSFT's revenue trend over 8 quarters",
                 "What has AAPL's EPS been over the last 2 years?",
+                "Tesla's quarterly revenue for each quarter of 2024",
             ],
         ),
         handler=lambda **_: None,

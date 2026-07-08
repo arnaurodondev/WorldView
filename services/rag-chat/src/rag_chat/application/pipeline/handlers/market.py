@@ -336,6 +336,71 @@ _SCREEN_GROUNDING_MAX_ROWS = 3
 # down-sample (first, last, evenly-spaced interior) covers the endpoints.
 _PRICE_BAR_GROUNDING_MAX_ROWS = 5
 
+# ── PERIOD-ANCHOR (BP-651, 2026-07-08) ────────────────────────────────────────
+# ``get_fundamentals_history`` has NO upstream date filter: market-data's
+# ``/api/v1/fundamentals/history`` returns the LATEST N periods only (see
+# s3_client.get_fundamentals_history_with_snapshot — it forwards ``periods`` /
+# ``period_type`` and nothing else). So a question anchored to a PAST calendar
+# year ("show TSLA revenue for each quarter of 2024") could ONLY ever receive
+# the newest quarters (2025/2026). The LLM then reported those off-target rows
+# as if they answered the 2024 question — the "relabeling" failure in
+# ``da_tsla_revenue_2024_full_year`` / ``da_msft`` that survived the v1.15
+# synthesis-prompt rule (a prompt rule alone does not hold on gpt-oss).
+#
+# The DETERMINISTIC fix (a prompt rule already failed once): when the caller
+# passes an explicit ``[from_date, to_date]`` window we (a) OVER-FETCH enough
+# periods to reach that window and (b) filter the returned rows to the window
+# in code — so a 2025/2026 row can never leak into a 2024-anchored answer. If
+# nothing falls in the window we surface no-data, and the LLM refuses honestly
+# instead of fabricating.
+_WINDOW_MAX_PERIODS = 20
+# ~days per period; used only to size the over-fetch, generously (with margin +
+# a hard cap), so the requested window is guaranteed reachable.
+_DAYS_PER_QUARTER = 91
+_DAYS_PER_YEAR = 365
+
+
+def _parse_iso_date(value: object) -> date | None:
+    """Parse an ISO date (or the date prefix of an ISO datetime) → ``date`` | None.
+
+    Tolerant: accepts ``"2024-12-31"`` and ``"2024-12-31T00:00:00Z"`` alike, and
+    returns ``None`` on anything unparseable so callers can treat a bad value as
+    "no constraint" rather than raising into the tool executor.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _periods_to_cover_window(window_from: date, period_type: str, min_periods: int) -> int:
+    """How many latest periods to fetch so that ``window_from`` is reachable.
+
+    market-data returns only the newest N periods, so to include a historical
+    window we must fetch back far enough to reach its START. We size the fetch
+    from (today - window_from), add a 2-period margin, floor at the caller's
+    requested ``periods``, and cap at ``_WINDOW_MAX_PERIODS`` to bound the
+    upstream payload.
+    """
+    today = datetime.now(UTC).date()
+    days = max((today - window_from).days, 0)
+    span_per = _DAYS_PER_YEAR if period_type == "annual" else _DAYS_PER_QUARTER
+    span = days // span_per + 2
+    return max(min_periods, min(span, _WINDOW_MAX_PERIODS))
+
+
+def _row_period_end(row: object) -> date | None:
+    """Extract a row's period-end ISO date, tolerating model/dict and field aliases.
+
+    The history use case tags rows with ``period_end_date``; ``query_fundamentals``
+    uses ``period_end``; some adapters only carry ``date``. Mirror the tolerance
+    used by ``_format_fundamentals_table``.
+    """
+    d = row.model_dump() if hasattr(row, "model_dump") else (row if isinstance(row, dict) else {})
+    return _parse_iso_date(d.get("period_end_date") or d.get("period_end") or d.get("date"))
+
 
 def _grounding_fields_from_rows(
     rows: list[dict[str, Any]],
@@ -933,6 +998,8 @@ class MarketHandler(ToolHandler):
         ticker: str,
         periods: int = 8,
         period_type: str = "quarterly",
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> RetrievedItem | None:
         """Fetch fundamentals and format as a markdown table RetrievedItem.
 
@@ -942,6 +1009,14 @@ class MarketHandler(ToolHandler):
         warning — the LLM occasionally invents values like "ttm" or
         "trailing", and the safer behaviour is to honour the user-visible
         default rather than 500 on an unknown enum.
+
+        PERIOD-ANCHOR (BP-651, 2026-07-08): ``from_date`` / ``to_date`` bound
+        the answer to a HISTORICAL calendar window (e.g. all of 2024). Because
+        market-data has no upstream date filter (it returns the LATEST N
+        periods), we over-fetch enough periods to reach the window and then
+        filter the returned rows to it DETERMINISTICALLY — so a year-anchored
+        question can never be answered with the latest (wrong-year) quarters.
+        Both bounds must be supplied together; a lone bound is ignored.
         """
         period_type_norm = (period_type or "quarterly").strip().lower()
         if period_type_norm not in {"quarterly", "annual"}:
@@ -953,6 +1028,29 @@ class MarketHandler(ToolHandler):
                 fallback="quarterly",
             )
             period_type_norm = "quarterly"
+
+        # PERIOD-ANCHOR: resolve the optional historical window. A window is
+        # only ACTIVE when both bounds parse and are correctly ordered; a
+        # partial/invalid window degrades to the legacy "latest N" behaviour
+        # (logged) rather than erroring. When active we widen the fetch so the
+        # window's start is reachable in the latest-N stream market-data returns.
+        window_from = _parse_iso_date(from_date)
+        window_to = _parse_iso_date(to_date)
+        window_active = window_from is not None and window_to is not None and window_from <= window_to
+        if (from_date or to_date) and not window_active:
+            log.warning(
+                "tool_invalid_param",
+                tool="get_fundamentals_history",
+                param="date_window",
+                from_date=from_date,
+                to_date=to_date,
+                fallback="latest_n",
+            )
+        fetch_periods = periods
+        if window_active:
+            assert window_from is not None  # narrowed by window_active; for mypy
+            fetch_periods = _periods_to_cover_window(window_from, period_type_norm, periods)
+        periods = fetch_periods
 
         # PLAN-0103 W25 / BP-640: prefer the snapshot-aware accessor when
         # the adapter implements it AND the response is well-formed. Test
@@ -1032,16 +1130,41 @@ class MarketHandler(ToolHandler):
                 continue
             non_phantom.append(row)
 
+        # PERIOD-ANCHOR (BP-651): deterministic date-window filter. When the
+        # caller anchored the question to a historical window, keep ONLY rows
+        # whose period_end falls inside it. Rows with an unparseable period_end
+        # are DROPPED under an active window (we cannot prove they belong, so we
+        # must not let an unanchored row leak into a year-specific answer). If
+        # the window matches nothing we fall through to the no-data branch below
+        # → the LLM refuses honestly instead of relabeling the latest quarters.
+        if window_active:
+            assert window_from is not None and window_to is not None  # window_active guarantees
+            in_window = []
+            for row in non_phantom:
+                pe = _row_period_end(row)
+                if pe is not None and window_from <= pe <= window_to:
+                    in_window.append(row)
+            if not in_window:
+                log.info(
+                    "tool_no_data",
+                    tool="get_fundamentals_history",
+                    ticker=ticker,
+                    reason="window_no_rows",
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+            non_phantom = in_window
+
         if not non_phantom:
-            # All rows were phantoms — surface no-data so the LLM knows to
-            # refuse rather than fabricate. ``item_count=0`` is conveyed by
-            # returning None (the orchestrator increments item_count only for
-            # non-None returns).
+            # All rows were phantoms (or filtered out by the date window) —
+            # surface no-data so the LLM knows to refuse rather than fabricate.
+            # ``item_count=0`` is conveyed by returning None (the orchestrator
+            # increments item_count only for non-None returns).
             log.warning(
                 "tool_no_data",
                 tool="get_fundamentals_history",
                 ticker=ticker,
-                reason="all_rows_phantom",
+                reason="window_no_rows" if window_active else "all_rows_phantom",
             )
             return None
 
