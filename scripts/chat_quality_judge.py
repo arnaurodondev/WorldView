@@ -71,6 +71,21 @@ from prompts.evaluation import CHAT_QUALITY_JUDGE
 _DEFAULT_JUDGE_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
 _DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
 
+# ── Self-consistency judging (2026-07-08, variance-kill) ──────────────────
+# THE PROBLEM. Even at ``temperature=0`` an MoE model on shared infra is not
+# bit-deterministic: the SAME answer graded twice wobbles +/-2-5 per dimension,
+# which flips PASS<->WARN<->FAIL for any answer sitting on a band boundary. A
+# 4-run measurement showed a 50% verdict-flip rate (5/10 boundary answers gave a
+# DIFFERENT verdict across identical re-grades) with total-score sigma up to ~21.
+#
+# THE FIX. Call the judge ``CHAT_JUDGE_SAMPLES`` times and take the MEDIAN score
+# per dimension. The median of an odd sample is itself an observed value (no
+# fabricated half-points) and is robust to a single outlier draw, collapsing the
+# residual temperature-0 non-determinism. Default 3; set to 1 to restore the old
+# single-shot behaviour (byte-identical path) for speed. We accept the N-times
+# judge-call cost — reproducibility is the goal.
+_DEFAULT_JUDGE_SAMPLES = 3
+
 # Dimension keys and the max score each one carries. The runner stores
 # individual scores so we can compute per-dimension averages in the summary.
 DIMENSION_KEYS: tuple[str, ...] = (
@@ -3524,6 +3539,196 @@ def _appropriate_refusal_skip_result(
     }
 
 
+def _configured_judge_samples() -> int:
+    """Read ``CHAT_JUDGE_SAMPLES`` (default 3), clamped to ``>= 1``.
+
+    1 restores the legacy single-shot path (no aggregation); any higher odd
+    value gives a cleaner median. A malformed / non-positive value falls back
+    to the default rather than raising, so a bad env never aborts a run.
+    """
+    raw = os.environ.get("CHAT_JUDGE_SAMPLES")
+    if raw is None:
+        return _DEFAULT_JUDGE_SAMPLES
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_JUDGE_SAMPLES
+    return max(1, n)
+
+
+def _median_int(values: list[int]) -> int:
+    """Integer median of a non-empty list (lower-median on an even count).
+
+    We take the LOWER of the two middle values on an even count rather than the
+    mean so the result is always an OBSERVED integer draw — never a fabricated
+    half-point (a 21.5 that no judge actually emitted, which would then round
+    unpredictably at a band boundary). Odd counts (the default N=3) return the
+    true middle element.
+    """
+    if not values:
+        raise ValueError("median of empty list")
+    ordered = sorted(values)
+    return ordered[(len(ordered) - 1) // 2]
+
+
+def _aggregate_judge_samples(parsed_samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge N parsed judge responses into ONE by per-dimension MEDIAN (self-consistency).
+
+    Each element of ``parsed_samples`` is a per-call parsed judge object
+    (``{dim: {score, feedback}, reviewer_summary}``). For every dimension we take
+    the median score across the samples that graded it; the feedback attached to
+    the merged dimension is taken from the sample whose score for that dimension
+    is CLOSEST to the median (a representative, non-fabricated rationale). The
+    top-level ``reviewer_summary`` is taken from the sample whose dimension-sum is
+    closest to the merged median-sum (the "typical" run's narrative).
+
+    Only dimensions actually present (as a numeric score) in >=1 sample are
+    aggregated; a dimension absent from every sample is omitted, so the downstream
+    clamp in :func:`_finalise_verdict` defaults it to 0 exactly as before.
+    """
+    merged: dict[str, Any] = {}
+    per_dim_scores: dict[str, list[int]] = {}
+    for key in DIMENSION_KEYS:
+        # Collect (score, feedback) from each sample that carries this dimension.
+        pairs: list[tuple[int, str]] = []
+        for sample in parsed_samples:
+            entry = sample.get(key)
+            if isinstance(entry, dict):
+                raw_score = entry.get("score")
+                feedback = str(entry.get("feedback") or entry.get("reason") or "")
+            else:
+                raw_score = entry
+                feedback = ""
+            if raw_score is None:
+                continue
+            try:
+                score = int(raw_score)
+            except (TypeError, ValueError):
+                continue
+            pairs.append((max(0, min(_MAX_PER_DIMENSION, score)), feedback))
+        if not pairs:
+            continue
+        scores = [s for s, _ in pairs]
+        median = _median_int(scores)
+        per_dim_scores[key] = scores
+        # Representative feedback: the sample whose score is nearest the median.
+        rep_feedback = min(pairs, key=lambda p: abs(p[0] - median))[1]
+        merged[key] = {"score": median, "feedback": rep_feedback, "reason": rep_feedback}
+
+    # Pick the reviewer_summary from the sample whose dimension-sum is closest to
+    # the merged median-sum, so the narrative matches the aggregated verdict.
+    median_sum = sum(v["score"] for v in merged.values())
+
+    def _sample_sum(sample: dict[str, Any]) -> int:
+        total = 0
+        for key in DIMENSION_KEYS:
+            entry = sample.get(key)
+            sc = entry.get("score") if isinstance(entry, dict) else entry
+            if sc is None:
+                continue
+            try:
+                total += max(0, min(_MAX_PER_DIMENSION, int(sc)))
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    if parsed_samples:
+        rep_sample = min(parsed_samples, key=lambda s: abs(_sample_sum(s) - median_sum))
+        summary = rep_sample.get("reviewer_summary") or rep_sample.get("notes")
+        if summary is not None:
+            merged["reviewer_summary"] = summary
+    # Record the raw per-dimension score spread so the artefact captures how much
+    # the ensemble disagreed (0 spread => the judge was already stable).
+    merged["_ensemble"] = {
+        "samples": len(parsed_samples),
+        "dimension_scores": per_dim_scores,
+    }
+    return merged
+
+
+def _run_judge_ensemble(
+    llm: JudgeLLM,
+    *,
+    system: str,
+    user: str,
+    n: int,
+) -> tuple[list[dict[str, Any]], str | None, BaseException | None]:
+    """Call the judge ``n`` times; return (parsed_samples, representative_raw, all_failed_exc).
+
+    * ``parsed_samples`` — one parsed dict per call that recovered >=1 gradable
+      dimension. Empty when every call failed to parse.
+    * ``representative_raw`` — a raw response string kept for the artefact
+      (``raw_response``); the LAST successfully-parsed raw, or the last raw
+      string seen when none parsed, or None when every call raised.
+    * ``all_failed_exc`` — the last exception when EVERY call raised (→ the caller
+      emits a single ERROR verdict, matching the pre-ensemble behaviour); None
+      when at least one call returned a response.
+
+    Each call is independent: a single transient failure (already retried inside
+    ``llm``) does not abort the ensemble as long as another call succeeds — the
+    median is computed over whatever samples came back.
+    """
+    parsed_samples: list[dict[str, Any]] = []
+    representative_raw: str | None = None
+    last_exc: BaseException | None = None
+    any_response = False
+    for _ in range(n):
+        try:
+            raw = llm(system=system, user=user)
+        except Exception as exc:  # network error, rate-limit, model 5xx
+            last_exc = exc
+            continue
+        any_response = True
+        representative_raw = raw  # keep the most recent raw for the artefact
+        parsed = _parse_judge_response(raw)
+        if any(k in parsed for k in DIMENSION_KEYS):
+            parsed_samples.append(parsed)
+    # Only surface the exception when NOTHING came back at all.
+    return parsed_samples, representative_raw, (None if any_response else last_exc)
+
+
+def _anchor_grounding_score(llm_grounding: int, check: GroundingCheck) -> int:
+    """Anchor the numeric backbone of the grounding sub-score on the DETERMINISTIC
+    cross-check, blending the LLM's qualitative read for the rest.
+
+    The grounding dimension is the most OBJECTIVE of the four: a numeric claim
+    either matches the sampled tool value or it does not. Leaving it 100% LLM-scored
+    made it the single biggest source of boundary wobble (it drives the
+    GROUNDING_VETO_FLOOR). We replace the NUMERIC part with a reproducible function
+    of the objective match-rate and keep the LLM only for the QUALITATIVE part
+    (entities / relationships / claims with no number).
+
+    Definitions (from the already-computed :class:`GroundingCheck`):
+      * ``matched`` + ``contradicted`` = numeric claims we had EVIDENCE for; of
+        those, ``matched / (matched + contradicted)`` is the objective match-rate.
+        (In the live ``judge_answer`` flow ``contradicted`` is already 0 here — a
+        contradiction hard-FAILs upstream — so this is ``matched``-driven; the
+        function stays general so it is meaningful when unit-tested directly.)
+      * ``unmatched`` = numeric claims with no associated sample (no evidence
+        either way) PLUS the qualitative remainder the LLM must judge.
+
+    Blend weight ``w`` = numeric-with-evidence / all-numeric-claims. A fully
+    checkable answer (w=1) gets a grounding score that is a PURE reproducible
+    function of the match-rate; a purely-qualitative answer (w=0) is unchanged
+    from the LLM. Only active in ``verified`` mode (real samples present);
+    ``presumed`` mode has no objective anchor, so the LLM (median-stabilised)
+    stands. Returns an int in ``[0, _MAX_PER_DIMENSION]``.
+    """
+    if check.evidence_mode != "verified":
+        return llm_grounding
+    with_evidence = check.matched + check.contradicted
+    all_numeric = with_evidence + check.unmatched
+    if all_numeric == 0 or with_evidence == 0:
+        # No checkable number (or none with evidence) → nothing objective to
+        # anchor on; the qualitative LLM read (median-stabilised) decides.
+        return llm_grounding
+    match_rate = check.matched / with_evidence
+    det_numeric = match_rate * _MAX_PER_DIMENSION
+    weight = with_evidence / all_numeric
+    blended = weight * det_numeric + (1.0 - weight) * llm_grounding
+    return max(0, min(_MAX_PER_DIMENSION, int(round(blended))))
+
+
 def judge_answer(
     inp: JudgeInput,
     *,
@@ -3686,10 +3891,16 @@ def judge_answer(
         }
 
     user_prompt = _build_user_prompt(inp)
-    try:
-        raw = llm(system=_SYSTEM_PROMPT, user=user_prompt)
-    except Exception as exc:  # network error, rate-limit, model 5xx
-        _err_note = f"Judge call failed: {exc!r}"
+    # ── Self-consistency ensemble (2026-07-08, variance-kill) ──────────────
+    # Call the judge ``CHAT_JUDGE_SAMPLES`` times and take the per-dimension
+    # MEDIAN, collapsing the residual temperature-0 non-determinism that was
+    # flipping boundary verdicts run-to-run. N=1 restores the legacy single call.
+    n_samples = _configured_judge_samples()
+    parsed_samples, representative_raw, all_failed_exc = _run_judge_ensemble(
+        llm, system=_SYSTEM_PROMPT, user=user_prompt, n=n_samples
+    )
+    if all_failed_exc is not None:  # EVERY call raised → single ERROR verdict
+        _err_note = f"Judge call failed: {all_failed_exc!r}"
         return {
             "verdict": "ERROR",
             "score": None,
@@ -3704,20 +3915,24 @@ def judge_answer(
             "substantiation_check": substantiation_check.to_dict(),
         }
 
-    parsed = _parse_judge_response(raw)
+    raw = representative_raw or ""
     # B1 fix (2026-07-06): a genuinely unparseable judge response is a DISTINCT
     # outcome, NOT an all-zero FAIL. Silently zeroing every dimension fabricated a
     # grounding veto and force-failed 7 answers whose ``raw_response`` actually held
-    # valid non-zero grades (truncated JSON / duplicate ```json fence). When the
-    # tolerant parser recovers NO gradable quality dimension, emit a
-    # ``JUDGE_PARSE_ERROR`` sentinel (score None -> excluded from averages) so the
-    # answer can be re-graded rather than counted as a real failure.
-    if not any(k in parsed for k in DIMENSION_KEYS):
+    # valid non-zero grades (truncated JSON / duplicate ```json fence). When NO
+    # sample recovered a gradable quality dimension, emit a ``JUDGE_PARSE_ERROR``
+    # sentinel (score None -> excluded from averages) so the answer can be re-graded
+    # rather than counted as a real failure.
+    if not parsed_samples:
         return _judge_parse_error_result(
             raw,
             judge_prompt_id=judge_prompt_id,
             substantiation_check=substantiation_check,
         )
+
+    # MEDIAN-aggregate the samples into one parsed object the tiered composition
+    # consumes exactly as it consumed a single response before.
+    parsed = _aggregate_judge_samples(parsed_samples)
     # Pass ``inp`` so the deterministic invariant gate (answer-text + tool-result
     # checks) runs inside the tiered composition — the soft judge alone cannot
     # see leaked tokens / truncation / infra non-answers (PLAN-0110 W1).
@@ -4033,6 +4248,38 @@ def _finalise_verdict(
     # Dual-read + dual-emit for one release.
     reviewer_summary = str(parsed.get("reviewer_summary") or parsed.get("notes", ""))[:800]
 
+    # ── Deterministic numeric-grounding anchor (2026-07-08, variance-kill) ──
+    # Compute the numeric cross-check FIRST so we can ANCHOR the grounding
+    # sub-score on the objective match-rate before it feeds the gate/band. The
+    # grounding dimension is the most objective of the four (a number matches a
+    # sampled value or it does not); leaving it 100% LLM-scored made it the top
+    # driver of the GROUNDING_VETO_FLOOR wobble. In ``verified`` mode we replace
+    # its NUMERIC backbone with a reproducible function of matched/(matched+
+    # contradicted) and keep the LLM only for the qualitative remainder. In
+    # ``presumed`` mode (no samples) the anchor is a no-op — the LLM (now median-
+    # stabilised) stands.
+    if inp is not None:
+        grounding_check = cross_check_grounding(inp.answer_text, inp.tool_results)
+    else:
+        grounding_check = GroundingCheck()
+
+    llm_grounding = dimensions_int.get("grounding", _MAX_PER_DIMENSION)
+    anchored_grounding = _anchor_grounding_score(llm_grounding, grounding_check)
+    if anchored_grounding != llm_grounding:
+        # Re-point the grounding dimension at the anchored value: update the
+        # display dict, the int map, and the additive total so the gate (veto
+        # floor), the band, and the legacy sum all read the deterministic score.
+        total += anchored_grounding - llm_grounding
+        dimensions_int["grounding"] = anchored_grounding
+        _anchor_note = (
+            f" [grounding anchored {llm_grounding}->{anchored_grounding} on "
+            f"deterministic numeric match-rate: matched={grounding_check.matched} "
+            f"unmatched={grounding_check.unmatched} contradicted={grounding_check.contradicted}]"
+        )
+        _prev_fb = str(dimensions["grounding"].get("feedback") or "")
+        _new_fb = (_prev_fb + _anchor_note)[:300]
+        dimensions["grounding"] = {"score": anchored_grounding, "feedback": _new_fb, "reason": _new_fb}
+
     grounding_score = dimensions_int.get("grounding", _MAX_PER_DIMENSION)
 
     # ── NEW tiered composition (PLAN-0110 W1 / AD-1) ──────────────────────
@@ -4042,13 +4289,11 @@ def _finalise_verdict(
     # judge is GROUNDING_FLOOR — but we run the FULL gate so the VerdictDecision
     # carries an accurate, complete ``gate_results`` map (FR-3), and so a future
     # caller invoking ``_finalise_verdict`` directly still gets correct gating.
-    # PLAN-0110 W3 (T-W3-02): the numeric cross-check is now LIVE. We compute the
-    # GroundingCheck from the answer + the W2-captured grounding samples on
-    # ``inp.tool_results``; ``contradicted > 0`` trips GROUNDING_CONTRADICTED in
-    # the gate. With no samples the cross-check returns a zeroed ``presumed``
-    # check (legacy behaviour — never fails for absence).
+    # PLAN-0110 W3 (T-W3-02): the numeric cross-check (computed above) is LIVE;
+    # ``contradicted > 0`` trips GROUNDING_CONTRADICTED in the gate. With no
+    # samples the cross-check is a zeroed ``presumed`` check (never fails for
+    # absence).
     if inp is not None:
-        grounding_check = cross_check_grounding(inp.answer_text, inp.tool_results)
         # PLAN-0110 W1: compute the substantiation check here if the caller did not
         # already (``judge_answer`` passes it in; a direct ``_finalise_verdict``
         # caller may not). With no samples it is ``presumed`` and cannot fire.

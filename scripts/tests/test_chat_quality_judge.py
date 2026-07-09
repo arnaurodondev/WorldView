@@ -36,16 +36,22 @@ if _SCRIPTS_DIR not in sys.path:
 from chat_quality_judge import (  # — sys.path mutation must precede the import
     DIMENSION_KEYS,
     GROUNDING_VETO_FLOOR,
+    GroundingCheck,
     InvariantCode,
     JudgeInput,
     Rubric,
+    _aggregate_judge_samples,
+    _anchor_grounding_score,
     _build_user_prompt,
+    _configured_judge_samples,
     _field_value_matches,
     _flatten_sample_fields,
     _is_appropriate_refusal,
     _is_transient_llm_error,
+    _median_int,
     _offdomain_rate_fires,
     _parse_judge_response,
+    _run_judge_ensemble,
     _with_retry,
     build_input_from_artifact,
     cross_check_grounding,
@@ -219,9 +225,17 @@ def _veto_input() -> JudgeInput:
     Carries a real ``grounding_sample`` so the numeric cross-check runs in
     ``verified`` mode — the mode in which the soft grounding-floor veto is VALID
     (B3, 2026-07-06: the floor veto is suppressed in ``presumed`` mode where the
-    grounding sub-score is only a guess). The sampled ``pe_ratio`` matches the
-    claimed ``37.73x`` so no numeric contradiction fires — the veto under test is
-    purely the low soft grounding sub-score against real evidence.
+    grounding sub-score is only a guess).
+
+    The claimed ``37.73x`` is a RATIO/multiple that does NOT associate to the
+    sampled ``market_cap`` (an absolute field, kind-incompatible), so the numeric
+    cross-check leaves it ``unmatched`` (no evidence either way) — no contradiction
+    fires AND no numeric MATCH exists. This keeps the deterministic grounding
+    ANCHOR (2026-07-08) a no-op (``with_evidence == 0``), so the SOFT grounding-
+    floor veto under test still fires on the low LLM sub-score. (A MATCHING number
+    would legitimately lift the anchored grounding above the floor and suppress the
+    veto — that separate behaviour is covered by
+    ``test_matching_number_anchors_grounding_above_veto_floor``.)
     """
     return JudgeInput(
         prompt="What is the P/E ratio of AAPL?",
@@ -233,7 +247,7 @@ def _veto_input() -> JudgeInput:
                 "tool": "query_fundamentals",
                 "status": "ok",
                 "item_count": 1,
-                "grounding_sample": {"fields": {"pe_ratio": "37.73", "ticker": "AAPL"}},
+                "grounding_sample": {"fields": {"market_cap": "3480000000000", "ticker": "AAPL"}},
             }
         ],
     )
@@ -292,6 +306,94 @@ def test_no_veto_field_on_clean_pass() -> None:
     out = judge_answer(_veto_input(), llm=_llm)
     assert out["verdict"] == "PASS"
     assert out["veto"] is None
+
+
+# --------------------------------------------------------------------------
+# Deterministic numeric-grounding ANCHOR (2026-07-08, variance-kill / Fix 1)
+# --------------------------------------------------------------------------
+
+
+def test_anchor_noop_in_presumed_mode() -> None:
+    """No grounding sample → presumed mode → the anchor returns the LLM score unchanged."""
+    check = GroundingCheck(matched=0, unmatched=3, contradicted=0, evidence_mode="presumed")
+    # Whatever the LLM guessed stands — there is no objective evidence to anchor on.
+    assert _anchor_grounding_score(7, check) == 7
+    assert _anchor_grounding_score(25, check) == 25
+
+
+def test_anchor_noop_when_no_checkable_number() -> None:
+    """Verified samples exist but the answer carries no numeric evidence (all unmatched)
+    → nothing objective to anchor on → the LLM (median-stabilised) score stands."""
+    check = GroundingCheck(matched=0, unmatched=4, contradicted=0, evidence_mode="verified")
+    assert _anchor_grounding_score(9, check) == 9
+
+
+def test_anchor_fully_deterministic_when_all_numeric_checkable() -> None:
+    """Every quantitative claim is checkable (unmatched==0) → the grounding score is a
+    PURE reproducible function of the match-rate, independent of the LLM guess."""
+    # 3/3 matched, no unmatched → weight 1.0, match_rate 1.0 → 25 regardless of LLM.
+    all_match = GroundingCheck(matched=3, unmatched=0, contradicted=0, evidence_mode="verified")
+    assert _anchor_grounding_score(0, all_match) == 25
+    assert _anchor_grounding_score(25, all_match) == 25
+    # 2 matched / 2 contradicted, no unmatched → match_rate 0.5 → round(0.5*25)=12,
+    # deterministic regardless of the LLM's guess.
+    half = GroundingCheck(matched=2, unmatched=0, contradicted=2, evidence_mode="verified")
+    assert _anchor_grounding_score(25, half) == 12
+    assert _anchor_grounding_score(3, half) == 12
+
+
+def test_anchor_blends_numeric_and_qualitative() -> None:
+    """A mix of checkable numbers + qualitative claims blends the deterministic numeric
+    backbone with the LLM's qualitative read, weighted by the numeric share."""
+    # with_evidence=2 (both matched), unmatched=2 → weight 0.5; det_numeric=25.
+    # blended = 0.5*25 + 0.5*llm. For llm=10 → 0.5*25 + 0.5*10 = 17.5 → round 18.
+    check = GroundingCheck(matched=2, unmatched=2, contradicted=0, evidence_mode="verified")
+    assert _anchor_grounding_score(10, check) == 18
+
+
+def test_matching_number_anchors_grounding_above_veto_floor() -> None:
+    """The behaviour that the OLD veto test could not express: when the answer's number
+    MATCHES the sampled value, the deterministic anchor lifts the grounding sub-score
+    above the floor and SUPPRESSES the soft veto — even if the LLM guessed 'fabricated'.
+    This is the whole point of Fix 1: the objective numeric match overrides an LLM
+    grounding wobble."""
+
+    def _fabricating_llm(*, system: str, user: str) -> str:
+        # LLM WRONGLY claims fabrication with grounding=8 — but the number checks out.
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "feedback": "right tool"},
+                "grounding": {"score": 8, "feedback": "looks fabricated"},
+                "framing": {"score": 25, "feedback": "good"},
+                "refusal_judgment": {"score": 25, "feedback": "N/A"},
+                "reviewer_summary": "ok",
+            }
+        )
+
+    inp = JudgeInput(
+        prompt="What is the P/E ratio of AAPL?",
+        rubric=Rubric(expected_tools=["query_fundamentals"], expected_depth="shallow"),
+        answer_text="AAPL P/E is 37.73x as of 2026-06-01 [query_fundamentals row 0].",
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"symbol": "AAPL"}}],
+        tool_results=[
+            {
+                "tool": "query_fundamentals",
+                "status": "ok",
+                "item_count": 1,
+                # pe_ratio MATCHES the claimed 37.73x → matched=1, unmatched=0.
+                "grounding_sample": {"fields": {"pe_ratio": "37.73", "ticker": "AAPL"}},
+            }
+        ],
+    )
+    out = judge_answer(inp, llm=_fabricating_llm)
+    # The matched P/E lifts the anchored grounding ABOVE the LLM's 8 and above the
+    # veto floor (the exact value blends in the answer's unmatched date figures),
+    # so the soft grounding veto is SUPPRESSED → PASS.
+    grounding = out["dimensions"]["grounding"]["score"]
+    assert grounding > 8  # anchored up from the LLM guess
+    assert grounding >= GROUNDING_VETO_FLOOR  # above the floor → no veto
+    assert out["veto"] is None
+    assert out["verdict"] == "PASS"
 
 
 def _presumed_input() -> JudgeInput:
@@ -1625,7 +1727,11 @@ def test_h3_does_not_fire_when_rubric_permits_refusal() -> None:
         tool_results=[],
     )
     out = judge_answer(inp, llm=_llm)
-    assert called == [1]  # existing path graded it — H-3 did not skip
+    # H-3 did not skip → the existing LLM path graded it. Under self-consistency
+    # (2026-07-08) the judge is consulted CHAT_JUDGE_SAMPLES times (default 3), so
+    # we assert the ensemble ran the configured number of calls, not that it was
+    # skipped (called == []).
+    assert len(called) == _configured_judge_samples()
     assert out["verdict"] in {"PASS", "STRONG", "WARN"}
 
 
@@ -1640,3 +1746,108 @@ def test_h3_answerable_question_refusal_not_swept() -> None:
         )
         is False
     )
+
+
+# --------------------------------------------------------------------------
+# Self-consistency ensemble (2026-07-08, variance-kill / Fix 2)
+# --------------------------------------------------------------------------
+
+
+def test_median_int_odd_and_even() -> None:
+    """Median is an OBSERVED integer draw (lower-median on an even count)."""
+    assert _median_int([10, 25, 20]) == 20  # odd → true middle
+    assert _median_int([5]) == 5
+    assert _median_int([10, 20]) == 10  # even → lower of the two middles (no half-point)
+    assert _median_int([0, 10, 10, 25]) == 10
+
+
+def test_aggregate_judge_samples_takes_per_dimension_median() -> None:
+    """Three parsed responses → per-dimension MEDIAN, collapsing the outlier draw."""
+    samples = [
+        {k: {"score": s, "feedback": f"fb{s}"} for k, s in zip(DIMENSION_KEYS, (25, 0, 20, 25), strict=False)}
+        | {"reviewer_summary": "run A"},
+        {k: {"score": s, "feedback": f"fb{s}"} for k, s in zip(DIMENSION_KEYS, (25, 10, 22, 25), strict=False)}
+        | {"reviewer_summary": "run B"},
+        {k: {"score": s, "feedback": f"fb{s}"} for k, s in zip(DIMENSION_KEYS, (25, 10, 21, 25), strict=False)}
+        | {"reviewer_summary": "run C"},
+    ]
+    merged = _aggregate_judge_samples(samples)
+    # grounding: median(0, 10, 10) = 10 (the 0 outlier is discarded).
+    assert merged["grounding"]["score"] == 10
+    assert merged["tool_use"]["score"] == 25
+    assert merged["framing"]["score"] == 21  # median(20, 22, 21)
+    assert merged["refusal_judgment"]["score"] == 25
+    # The representative feedback for grounding comes from a sample AT the median.
+    assert merged["grounding"]["feedback"] == "fb10"
+    # The ensemble spread is recorded for the artefact.
+    assert merged["_ensemble"]["samples"] == 3
+    assert sorted(merged["_ensemble"]["dimension_scores"]["grounding"]) == [0, 10, 10]
+
+
+def test_ensemble_end_to_end_median_stabilises_verdict() -> None:
+    """judge_answer over a wobbling LLM (grounding 0/10/10) takes the median (10),
+    giving ONE deterministic verdict rather than a boundary flip."""
+    draws = iter([0, 10, 10])
+
+    def _wobbling_llm(*, system: str, user: str) -> str:
+        g = next(draws)
+        return json.dumps(
+            {k: {"score": s, "feedback": ""} for k, s in zip(DIMENSION_KEYS, (25, g, 25, 25), strict=False)}
+            | {"reviewer_summary": "x"}
+        )
+
+    # presumed mode (no sample) so the anchor is a no-op and we isolate the median.
+    inp = JudgeInput(
+        prompt="q",
+        rubric=Rubric(expected_tools=[]),
+        answer_text="Some qualitative answer with no numbers.",
+        tool_calls=[],
+        tool_results=[],
+    )
+    out = judge_answer(inp, llm=_wobbling_llm)
+    # median grounding = 10 → total = 25*3 + 10 = 85.
+    assert out["dimensions"]["grounding"]["score"] == 10
+    assert out["score"] == 85
+
+
+def test_ensemble_single_sample_preserves_legacy_behaviour(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CHAT_JUDGE_SAMPLES=1 → exactly one call, no aggregation surprises."""
+    monkeypatch.setenv("CHAT_JUDGE_SAMPLES", "1")
+    called: list[int] = []
+
+    def _llm(*, system: str, user: str) -> str:
+        called.append(1)
+        return json.dumps({k: {"score": 25, "feedback": ""} for k in DIMENSION_KEYS} | {"reviewer_summary": "ok"})
+
+    out = judge_answer(_make_input(), llm=_llm)
+    assert len(called) == 1
+    assert out["verdict"] in {"PASS", "STRONG"}
+
+
+def test_ensemble_tolerates_partial_call_failures() -> None:
+    """One call raises, two succeed → the median is computed over the survivors
+    (no ERROR verdict as long as ANY call returned)."""
+    state = {"n": 0}
+
+    def _flaky_llm(*, system: str, user: str) -> str:
+        state["n"] += 1
+        if state["n"] == 2:
+            raise RuntimeError("transient 503")
+        return json.dumps({k: {"score": 25, "feedback": ""} for k in DIMENSION_KEYS} | {"reviewer_summary": "ok"})
+
+    samples, rep_raw, exc = _run_judge_ensemble(_flaky_llm, system="s", user="u", n=3)
+    assert exc is None  # at least one call returned → not a hard ERROR
+    assert len(samples) == 2  # two parseable responses survived
+    assert rep_raw is not None
+
+
+def test_ensemble_all_calls_fail_surfaces_exception() -> None:
+    """EVERY call raises → the ensemble reports the exception so judge_answer emits ERROR."""
+
+    def _dead_llm(*, system: str, user: str) -> str:
+        raise RuntimeError("model down")
+
+    samples, rep_raw, exc = _run_judge_ensemble(_dead_llm, system="s", user="u", n=3)
+    assert samples == []
+    assert rep_raw is None
+    assert isinstance(exc, RuntimeError)
