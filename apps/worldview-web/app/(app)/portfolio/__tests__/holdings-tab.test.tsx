@@ -595,3 +595,55 @@ describe("HoldingsTab — PRD-0114 W4 empty states + badges", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+// ── PLAN-0122 W-B (T-A-B-03): Simple-mode strip gating ────────────────────────
+// The Simple render is a GATE, not a fork: it hides the analytics power-strips
+// (overview band, concentration, perf chart, sector bar, bottom cluster,
+// detail-pill row, sector-filter chip) while keeping the holdings-first
+// essentials (table chrome + Core table + brokerage sync status). Advanced is
+// unchanged (also guarded by the W-A anti-fork snapshot).
+describe("HoldingsTab — PLAN-0122 W-B Simple-mode gating", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("test_holdingstab_simple_hides_power_strips", () => {
+    render(wrap(<HoldingsTab {...defaultProps()} mode="simple" />));
+
+    // The two most load-bearing power-strips must be gone in Simple…
+    expect(screen.queryByTestId("overview-panel-band")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bottom-strip-cluster")).not.toBeInTheDocument();
+    // …and the detail-pill row (its "Detail:" label anchors the pill strip).
+    expect(screen.queryByText("Detail:")).not.toBeInTheDocument();
+  });
+
+  it("test_holdingstab_simple_keeps_perf_and_brokerage", () => {
+    // Simple keeps the holdings-first essentials: the Core holdings table (AAPL
+    // visible) and — for a brokerage portfolio — the sync-status strip (status,
+    // not analytics; a casual brokerage user still needs "last synced / errors").
+    render(
+      wrap(
+        <HoldingsTab
+          {...defaultProps()}
+          mode="simple"
+          portfolioKind="brokerage"
+        />,
+      ),
+    );
+
+    expect(screen.getByTestId("brokerage-sync-status-strip")).toBeInTheDocument();
+    // The holdings list itself is still rendered (Simple = holdings-only view).
+    expect(screen.getAllByText("AAPL").length).toBeGreaterThan(0);
+    // Sanity: an analytics strip is still hidden even alongside the kept ones.
+    expect(screen.queryByTestId("overview-panel-band")).not.toBeInTheDocument();
+  });
+
+  it("test_holdingstab_advanced_unchanged", () => {
+    // Advanced (explicit) renders all strips — matches the W-A snapshot's shape.
+    render(wrap(<HoldingsTab {...defaultProps()} mode="advanced" />));
+
+    expect(screen.getByTestId("overview-panel-band")).toBeInTheDocument();
+    expect(screen.getByTestId("bottom-strip-cluster")).toBeInTheDocument();
+    expect(screen.getByText("Detail:")).toBeInTheDocument();
+  });
+});

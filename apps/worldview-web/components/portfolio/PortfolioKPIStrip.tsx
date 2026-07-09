@@ -102,6 +102,19 @@ export interface PortfolioKPIStripProps {
    * constantly to avoid over-allocation.
    */
   buyingPower?: number | null;
+  /**
+   * PLAN-0122 W-B (T-A-B-01): the portfolio detail level, driving how many
+   * tiles render.
+   *   • "advanced" (default) → all 8 tiles, EXACTLY today's output — the prop
+   *     default keeps every existing caller/test byte-identical (R19).
+   *   • "simple" → only the 4 casual-investor tiles: Total Value, Day P&L,
+   *     Unrealised P&L (with %), Cash. WHY those four: they answer the casual
+   *     "what's it worth / how'd it do today / total gain / free cash?" question
+   *     (PRD-0122 §6.1, OQ-3) without the expert Realized/Buying-Pwr/Top-mover
+   *     tiles. This is a RENDERING GATE, never a fork: the Advanced arm is
+   *     unchanged and guarded by the W-A anti-fork snapshot.
+   */
+  variant?: "simple" | "advanced";
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -258,7 +271,14 @@ export function PortfolioKPIStrip({
   realizedPnlShortTerm = null,
   cash = null,
   buyingPower = null,
+  // PLAN-0122 W-B: default "advanced" so an un-migrated caller renders all 8
+  // tiles exactly as today. Only the page passes variant={mode}.
+  variant = "advanced",
 }: PortfolioKPIStripProps) {
+  // WHY a single boolean read once: every advanced-only tile below gates on the
+  // SAME value so a reviewer can see the Simple set is precisely {Total Value,
+  // Day P&L, Unrealised P&L, Cash} — the four tiles NOT wrapped in `isAdvanced`.
+  const isAdvanced = variant === "advanced";
   // F-201 fix (PLAN-0048 QA iter-1): formatPercent already prepends "+" for
   // positive values (lib/utils.ts:81). The previous "+${formatPercent()}" wrap
   // produced "++30.92%" in the UNREALISED P&L tile. Just call formatPercent
@@ -342,7 +362,10 @@ export function PortfolioKPIStrip({
             - When the endpoint succeeds, the tooltip surfaces the long-term
               vs short-term breakdown for tax estimation, without spending
               another tile in the tight 7-tile strip. */}
-      {(() => {
+      {/* PLAN-0122 W-B: Realized P&L is an ADVANCED-only tile. Gating it here
+          (rather than after the Cash tile) is what makes the Simple set render
+          in the exact order Total Value → Day P&L → Unrealised → Cash. */}
+      {isAdvanced && (() => {
         // Build the tooltip text once. WHY in-line IIFE: keeps this branchy
         // string-building logic next to the tile it serves — easier to
         // read than a top-of-file helper that's only used once.
@@ -425,38 +448,49 @@ export function PortfolioKPIStrip({
       {/* Tile 6: Buying Power — v1: equals cash (cash accounts only).
           WHY separate tile from Cash: v2 margin accounts will show a different
           value (settled_cash + margin). Keeping them distinct future-proofs the
-          layout so v2 doesn't require a tile restructure. */}
-      <KPITile
-        label="Buying Pwr"
-        value={buyingPower != null ? formatPrice(buyingPower) : "—"}
-        dataTestId="kpi-buying-pwr"
-      />
+          layout so v2 doesn't require a tile restructure.
+          PLAN-0122 W-B: ADVANCED-only — casual users read "Cash" (tile 5), not
+          the margin-oriented buying-power distinction. */}
+      {isAdvanced && (
+        <KPITile
+          label="Buying Pwr"
+          value={buyingPower != null ? formatPrice(buyingPower) : "—"}
+          dataTestId="kpi-buying-pwr"
+        />
+      )}
 
       {/* Tile 7: Top Gainer — best performer in the book; always green when present
           WHY pnlPct / 100: the stored value is already a percentage (e.g. 4.82),
-          so formatPercent (which multiplies by 100) would over-scale it. */}
-      <KPITile
-        label="Top Gain"
-        value={
-          topGainer
-            // WHY no leading "+": formatPercent already prefixes positive values
-            // with "+" (lib/utils.ts:81). Adding another "+" produced "++143.70%".
-            ? `${topGainer.ticker} ${formatPercent(topGainer.pnlPct / 100)}`
-            : "—"
-        }
-        positive={topGainer != null}
-      />
+          so formatPercent (which multiplies by 100) would over-scale it.
+          PLAN-0122 W-B: ADVANCED-only — a single-position highlight is expert
+          signal, not a headline number for the casual overview. */}
+      {isAdvanced && (
+        <KPITile
+          label="Top Gain"
+          value={
+            topGainer
+              // WHY no leading "+": formatPercent already prefixes positive values
+              // with "+" (lib/utils.ts:81). Adding another "+" produced "++143.70%".
+              ? `${topGainer.ticker} ${formatPercent(topGainer.pnlPct / 100)}`
+              : "—"
+          }
+          positive={topGainer != null}
+        />
+      )}
 
-      {/* Tile 8: Top Loser — worst performer; always red when present */}
-      <KPITile
-        label="Top Lose"
-        value={
-          topLoser
-            ? `${topLoser.ticker} ${formatPercent(topLoser.pnlPct / 100)}`
-            : "—"
-        }
-        negative={topLoser != null}
-      />
+      {/* Tile 8: Top Loser — worst performer; always red when present.
+          PLAN-0122 W-B: ADVANCED-only (pairs with Top Gain). */}
+      {isAdvanced && (
+        <KPITile
+          label="Top Lose"
+          value={
+            topLoser
+              ? `${topLoser.ticker} ${formatPercent(topLoser.pnlPct / 100)}`
+              : "—"
+          }
+          negative={topLoser != null}
+        />
+      )}
     </div>
   );
 }

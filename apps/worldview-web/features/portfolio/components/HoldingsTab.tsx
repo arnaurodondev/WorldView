@@ -220,6 +220,17 @@ export function HoldingsTab({
   accessToken,
   onHoldingsRefetch,
 }: HoldingsTabProps) {
+  // ── PLAN-0122 W-B: mode gate ────────────────────────────────────────────────
+  // WHY one boolean read once: every power-user strip below wraps in
+  // `isAdvanced && (…)`. Simple renders ONLY the holdings-first essentials
+  // (table chrome + Core-column table + brokerage sync status); it hides the
+  // analytics strips (overview band, concentration, perf chart, sector bar,
+  // bottom cluster, detail-pill row, sector-filter chip). This is a RENDERING
+  // GATE — the Advanced arm is byte-identical to today (W-A anti-fork snapshot).
+  // WHY brokerage strips STAY in Simple: a casual user who linked a brokerage
+  // still needs to see "last synced / N errors" — that is status, not analytics.
+  const isAdvanced = mode === "advanced";
+
   // ── PerformanceChartPanel state ────────────────────────────────────────────
   // WHY local state (not URL): collapse toggle is ephemeral UI preference.
   // Deep-links to /portfolio don't encode chart open/closed state.
@@ -428,8 +439,9 @@ export function HoldingsTab({
           cluster — panels read as one band, not three floating cards.
           WHY xl:grid-cols-3 (stacked below xl): each panel needs ~420px to
           keep its value columns readable; squeezing three side-by-side under
-          1280px would truncate every number. */}
-      {activePortfolioId && (
+          1280px would truncate every number.
+          PLAN-0122 W-B (render matrix — "Overview panel band"): ADVANCED-only. */}
+      {isAdvanced && activePortfolioId && (
         <div
           data-testid="overview-panel-band"
           className="grid shrink-0 grid-cols-1 xl:grid-cols-3 divide-y xl:divide-y-0 xl:divide-x divide-border border-b border-border"
@@ -450,11 +462,14 @@ export function HoldingsTab({
       {/* ══ 2. ConcentrationSectorTeaseStrip (h-[22px]) ═══════════════════════
           WHY second: after knowing deployment ratio, concentration risk is the
           next most actionable signal. HHI badge + top-3 sectors in one row.
-          bySector comes from usePortfolioData (no extra fetch needed here). */}
-      <ConcentrationSectorTeaseStrip
-        portfolioId={activePortfolioId}
-        bySector={bySector}
-      />
+          bySector comes from usePortfolioData (no extra fetch needed here).
+          PLAN-0122 W-B (render matrix — "Concentration strip"): ADVANCED-only. */}
+      {isAdvanced && (
+        <ConcentrationSectorTeaseStrip
+          portfolioId={activePortfolioId}
+          bySector={bySector}
+        />
+      )}
 
       {/* ══ 3. PerformanceChartPanel (h-[120px] expanded, h-[28px] collapsed) ══
           WHY third: trend context belongs above the table, not below. The PM
@@ -463,8 +478,9 @@ export function HoldingsTab({
           table rows.
           WHY guard on activePortfolioId: the panel fires a useQuery that requires
           a valid portfolioId. With null, the query is disabled but the DOM still
-          mounts — the guard prevents a wasted paint. */}
-      {activePortfolioId && (
+          mounts — the guard prevents a wasted paint.
+          PLAN-0122 W-B (render matrix — "Performance chart"): ADVANCED-only. */}
+      {isAdvanced && activePortfolioId && (
         <PerformanceChartPanel
           portfolioId={activePortfolioId}
           period={perfPeriod}
@@ -478,8 +494,9 @@ export function HoldingsTab({
           WHY fourth: the sector bar is a "where is my money" at-a-glance summary.
           Positioned directly above the table so the PM can see the sector mix
           before scanning holdings. The single stacked bar with top-3 labels
-          replaces the 240px SectorAllocationPanel on this above-fold surface. */}
-      <SectorAllocationBar bySector={bySector} />
+          replaces the 240px SectorAllocationPanel on this above-fold surface.
+          PLAN-0122 W-B (render matrix — "Sector allocation bar"): ADVANCED-only. */}
+      {isAdvanced && <SectorAllocationBar bySector={bySector} />}
 
       {/* ══ 5. HoldingsTableChrome (h-[22px]) ════════════════════════════════
           WHY fifth: the chrome row anchors the table header. It shows position
@@ -494,8 +511,10 @@ export function HoldingsTab({
           row is a shared component used by older layouts; injecting filter
           chrome there would change its contract. A conditional strip keeps
           the unfiltered layout byte-identical. Dismiss via the × button or
-          by re-clicking the donut slice (page-level toggle). */}
-      {sectorFilter && (
+          by re-clicking the donut slice (page-level toggle).
+          PLAN-0122 W-B (render matrix — "Sector-filter chip row"): ADVANCED-only
+          (the donut that sets the filter is itself hidden in Simple). */}
+      {isAdvanced && sectorFilter && (
         <div
           data-testid="sector-filter-chip-row"
           className="flex h-[22px] shrink-0 items-center gap-2 border-b border-border bg-card px-3"
@@ -691,8 +710,9 @@ export function HoldingsTab({
           When no portfolio is selected the cluster is simply absent — the slot
           collapses to zero height, which is fine because the table above (flex-1)
           absorbs the space. topMovers derives contributors/detractors client-side
-          from enrichedHoldings + holdingsQuotes (computed above by useTopMovers). */}
-      {activePortfolioId && (
+          from enrichedHoldings + holdingsQuotes (computed above by useTopMovers).
+          PLAN-0122 W-B (render matrix — "Bottom strip cluster"): ADVANCED-only. */}
+      {isAdvanced && activePortfolioId && (
         <BottomStripCluster
           portfolioId={activePortfolioId}
           contributors={topMovers.contributors}
@@ -704,8 +724,9 @@ export function HoldingsTab({
           WHY preserve from PLAN-0088: the slide-over is orthogonal to the strip
           layout. It adds detail-on-demand for any holding without navigating
           away. The pill row sits AFTER the bottom cluster so it doesn't consume
-          above-fold space when holdings are loaded. */}
-      {enrichedHoldings.length > 0 && (
+          above-fold space when holdings are loaded.
+          PLAN-0122 W-B (render matrix — "Detail-pill row"): ADVANCED-only. */}
+      {isAdvanced && enrichedHoldings.length > 0 && (
         <div className="flex flex-wrap items-center gap-1 px-2 py-1 border-t border-border bg-card shrink-0">
           <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono shrink-0">
             Detail:
@@ -734,8 +755,10 @@ export function HoldingsTab({
         </div>
       )}
 
-      {/* HoldingDetailSlideOver: position:absolute, z-40, anchored to this div. */}
-      {activePortfolioId && (
+      {/* HoldingDetailSlideOver: position:absolute, z-40, anchored to this div.
+          PLAN-0122 W-B (render matrix — "HoldingDetailSlideOver"): ADVANCED-only
+          (its trigger, the detail-pill row, is hidden in Simple). */}
+      {isAdvanced && activePortfolioId && (
         <HoldingDetailSlideOver
           portfolioId={activePortfolioId}
           holding={selectedHolding}

@@ -13,19 +13,23 @@
  * dashboard toggle that could silently change production.
  *
  * ROLLOUT SEQUENCE (PRD-0122 §10):
- *   • W-A (this wave): `false`. An unset user still resolves to **Advanced**
- *     (today's behaviour), so production is byte-identical while we wire the
- *     mode gate and prove parity with `test_advanced_mode_is_todays_layout`.
- *   • W-B: flip to `true` — Simple becomes the public default — but ONLY after
- *     the Advanced-snapshot + Simple specs are green and the existing e2e specs
- *     are forced into Advanced (R19).
+ *   • W-A: `false`. An unset user resolved to **Advanced** (today's behaviour)
+ *     while the mode gate was wired and parity was proven with
+ *     `test_advanced_mode_is_todays_layout`.
+ *   • W-B (this wave — FLIPPED): `true`. Simple is now the PUBLIC DEFAULT: an
+ *     unset user lands on the clean casual overview. This flip was made ONLY
+ *     after (a) the full Simple render matrix landed, (b) the W-A anti-fork
+ *     snapshot stayed green, and (c) every full-layout e2e spec was forced into
+ *     Advanced (R19 — see e2e/utils/forceAdvancedMode.ts). Power users are one
+ *     sticky toggle click away from Advanced.
  *
  * ROLLBACK: set this back to `false`. Because the mode is a pure render gate
  * (localStorage + URL, no data migration), that instantly returns every user
- * who never made an explicit choice to today's Advanced layout.
+ * who never made an explicit choice to today's Advanced layout — no redeploy of
+ * data, no destructive change.
  */
 
 // WHY exported as a top-level const (not inside a function): consumers read it at
 // module scope so bundlers can inline/eliminate branches, and `usePortfolioMode`
 // can use it directly as the default-mode source of truth.
-export const PORTFOLIO_SIMPLE_DEFAULT = false;
+export const PORTFOLIO_SIMPLE_DEFAULT = true;

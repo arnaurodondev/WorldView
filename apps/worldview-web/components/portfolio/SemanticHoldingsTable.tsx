@@ -73,6 +73,19 @@ const VALID_SORT_COL_IDS = new Set([
   "qty", "dayChange", "dayChangePct", "pnl", "pnlPct", "value", "weight",
 ]);
 
+// ── PLAN-0122 W-B: Simple-mode Core column subset (minimal inline guard) ───────
+// WHY here: Simple mode shows ONLY the Core-6 columns (PRD-0122 §6.7). The full
+// Core/Portfolio/Advanced column-group TOGGLE is W-E; this wave applies a minimal
+// guard so Simple already renders a clean 6-column list. `ticker` is pinned/locked
+// and always visible, so it is not in the toggle list. TODO(PLAN-0122 W-E):
+// replace this hard-coded subset with the shared holdings-column-groups module.
+const SIMPLE_CORE_COL_IDS = ["ticker", "qty", "avg_cost", "current", "value", "pnl"];
+// Every non-locked colId the Simple guard may hide/show. Kept explicit so a new
+// column added later must be consciously assigned to Core or non-Core.
+const NON_CORE_COL_IDS = [
+  "name", "dayChange", "dayChangePct", "spark", "pnlPct", "weight", "sector", "asset", "divYld",
+];
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SemanticHoldingsTableProps {
@@ -178,10 +191,8 @@ export function SemanticHoldingsTable({
   portfolioKind,
   accessToken,
   onHoldingsRefetch,
-  // PLAN-0122 W-A: accepted but unused this wave. Prefixed `_` so the repo's
-  // no-unused-vars rule (varsIgnorePattern `^_`) permits the reserved prop —
-  // W-D/W-E give it behaviour without a caller change.
-  mode: _mode = "advanced",
+  // PLAN-0122 W-B: drives the Simple Core-only column guard (see below).
+  mode = "advanced",
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -189,6 +200,76 @@ export function SemanticHoldingsTable({
 
   // ── AG Grid API ref ───────────────────────────────────────────────────────
   const gridApiRef = useRef<GridApi<EnrichedHoldingRow> | null>(null);
+
+  // ── PLAN-0122 W-B: Simple Core-only column guard ────────────────────────────
+  // modeRef mirrors the latest `mode` so the STABLE (empty-dep) persistence
+  // callback below can read it without being re-created. WHY not persist in
+  // Simple: Simple force-hides the non-Core columns; writing that to the shared
+  // `worldview-holdings-cols` key would OVERWRITE the user's saved Advanced layout
+  // (the two are orthogonal — W-E formalises this). So Simple's forced visibility
+  // is view-only and never persisted.
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
+  // restoreSavedColumnState — re-apply the user's persisted Advanced layout, or,
+  // when nothing is saved, reset every column to its defined default (all visible
+  // except `divYld`). WHY the reset branch matters: after a Simple→Advanced toggle
+  // WITHOUT remount, the grid still holds Simple's force-hidden state; with no
+  // saved layout we must un-hide the non-Core columns so Advanced shows them all.
+  const restoreSavedColumnState = useCallback((api: GridApi<EnrichedHoldingRow>) => {
+    try {
+      const saved = localStorage.getItem(HOLDINGS_COLS_KEY);
+      if (saved) {
+        api.applyColumnState({
+          state: JSON.parse(saved) as Parameters<GridApi["applyColumnState"]>[0]["state"],
+          applyOrder: true,
+        });
+      } else {
+        // No saved layout: reset to defaults — everything visible except divYld
+        // (which keeps its column-def `hide:true`, PRD-0122 §6.7 / OQ-5).
+        api.applyColumnState({
+          defaultState: { hide: false },
+          state: [{ colId: "divYld", hide: true }],
+        });
+      }
+    } catch {
+      /* ignore corrupted state */
+    }
+  }, []);
+
+  // applyModeColumnVisibility — the actual Simple/Advanced column gate.
+  const applyModeColumnVisibility = useCallback(
+    (api: GridApi<EnrichedHoldingRow>, m: "simple" | "advanced") => {
+      if (m === "simple") {
+        // Show the Core-6, hide everything else. `ticker` is locked-visible.
+        // WHY the typeof guard: the jsdom AG Grid stub (vitest.setup.ts) provides
+        // a partial GridApi without setColumnsVisible; guarding keeps the Simple
+        // render from crashing under test while the real GridApi (v31+) has it.
+        if (typeof api.setColumnsVisible !== "function") return;
+        api.setColumnsVisible(NON_CORE_COL_IDS, false);
+        api.setColumnsVisible(SIMPLE_CORE_COL_IDS, true);
+      } else {
+        restoreSavedColumnState(api);
+      }
+    },
+    [restoreSavedColumnState],
+  );
+
+  // React to a runtime mode toggle (Advanced↔Simple) without a remount.
+  // WHY skip the FIRST run: handleGridReady owns the INITIAL apply. If this effect
+  // also ran on mount it would (in Advanced) redundantly re-restore column state
+  // and clobber the default sort handleGridReady just set. So we act only on a
+  // genuine mode CHANGE after mount.
+  const modeEffectFirstRun = useRef(true);
+  useEffect(() => {
+    if (modeEffectFirstRun.current) {
+      modeEffectFirstRun.current = false;
+      return;
+    }
+    const api = gridApiRef.current;
+    if (!api) return;
+    applyModeColumnVisibility(api, mode);
+  }, [mode, applyModeColumnVisibility]);
 
   // ── Context menu state ────────────────────────────────────────────────────
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
@@ -256,15 +337,7 @@ export function SemanticHoldingsTable({
       gridApiRef.current = params.api;
 
       // P6-2: Restore saved column state (width, order, visibility) from localStorage.
-      try {
-        const saved = localStorage.getItem(HOLDINGS_COLS_KEY);
-        if (saved) {
-          params.api.applyColumnState({
-            state: JSON.parse(saved) as Parameters<GridApi["applyColumnState"]>[0]["state"],
-            applyOrder: true,
-          });
-        }
-      } catch { /* ignore corrupted state */ }
+      restoreSavedColumnState(params.api);
 
       // F-P-025: restore URL-backed sort on mount.
       const col = searchParams?.get("sort");
@@ -280,6 +353,14 @@ export function SemanticHoldingsTable({
           state: [{ colId: "value", sort: "desc" }],
           defaultState: { sort: null },
         });
+      }
+
+      // PLAN-0122 W-B: apply the Simple Core-only guard LAST so it wins over any
+      // restored Advanced layout. In Advanced this is a no-op — the effect below
+      // owns runtime toggles, so no redundant restore runs here (which would
+      // otherwise clobber the default sort just applied above).
+      if (modeRef.current === "simple") {
+        applyModeColumnVisibility(params.api, "simple");
       }
     },
     // searchParams is stable on mount; this should not re-run on every render.
@@ -314,6 +395,11 @@ export function SemanticHoldingsTable({
   const handleColumnStateChanged = useCallback(() => {
     const api = gridApiRef.current;
     if (!api) return;
+    // PLAN-0122 W-B: never persist while Simple mode has force-hidden the non-Core
+    // columns — doing so would overwrite the user's saved Advanced layout with a
+    // Core-only state. The `setColumnsVisible` calls in applyModeColumnVisibility
+    // fire this handler; the guard makes Simple's visibility view-only.
+    if (modeRef.current === "simple") return;
     try {
       localStorage.setItem(HOLDINGS_COLS_KEY, JSON.stringify(api.getColumnState()));
     } catch (e) {

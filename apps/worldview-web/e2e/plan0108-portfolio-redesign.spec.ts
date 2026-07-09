@@ -26,6 +26,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { forceAdvancedMode } from "./utils/forceAdvancedMode";
 import {
   buildFakeToken,
   collectCriticalErrors,
@@ -334,6 +335,13 @@ async function installHoldingsMock(page: Page): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 // Suite 1: Holdings tab layout
 // ─────────────────────────────────────────────────────────────────────────────
+
+// PLAN-0122 W-B (T-A-B-05): the portfolio page now defaults to SIMPLE. Every
+// spec below asserts the full Advanced layout, so force Advanced before each
+// navigation (R19 — no assertion weakened, only the mode that shows the layout).
+test.beforeEach(async ({ page }) => {
+  await forceAdvancedMode(page);
+});
 
 test.describe("PLAN-0108 W3 — Holdings tab layout strips", () => {
   /**

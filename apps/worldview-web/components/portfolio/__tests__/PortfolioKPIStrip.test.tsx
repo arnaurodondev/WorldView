@@ -112,6 +112,44 @@ describe("PortfolioKPIStrip renders 8 cells", () => {
   });
 });
 
+// ── PLAN-0122 W-B (T-A-B-01): Simple/Advanced variant ────────────────────────
+describe("PortfolioKPIStrip variant (PLAN-0122 W-B)", () => {
+  it("test_kpi_strip_variant_simple_renders_four_tiles", () => {
+    // Simple must render EXACTLY the 4 casual tiles, in order:
+    // Total Value, Day P&L, Unrealised P&L, Cash — and NOTHING else.
+    renderStrip({ variant: "simple" });
+
+    // Each KPITile roots a role="group"; Simple = exactly 4 groups.
+    expect(screen.getAllByRole("group")).toHaveLength(4);
+
+    // The four Simple tiles are present…
+    expect(screen.getByText("Total Value")).toBeInTheDocument();
+    expect(screen.getByText("Day P&L")).toBeInTheDocument();
+    expect(screen.getByText("Unrealised P&L")).toBeInTheDocument();
+    expect(screen.getByText("Cash")).toBeInTheDocument();
+
+    // …and the four Advanced-only tiles are absent (R19: the labels the Advanced
+    // tests still assert must NOT appear in Simple).
+    expect(screen.queryByText("Realized P&L")).not.toBeInTheDocument();
+    expect(screen.queryByText("Buying Pwr")).not.toBeInTheDocument();
+    expect(screen.queryByText("Top Gain")).not.toBeInTheDocument();
+    expect(screen.queryByText("Top Lose")).not.toBeInTheDocument();
+  });
+
+  it("test_kpi_strip_default_variant_renders_eight", () => {
+    // No `variant` prop → default "advanced" → all 8 tiles (backward compat).
+    renderStrip();
+    expect(screen.getAllByRole("group")).toHaveLength(8);
+  });
+
+  it("test_kpi_strip_simple_unrealised_shows_pct", () => {
+    // The Simple Unrealised tile must still carry its % sub-value so a casual
+    // user sees BOTH the dollar gain and the percentage.
+    renderStrip({ variant: "simple", unrealisedPnl: 2500, unrealisedPnlPct: 0.025 });
+    expect(screen.getByText("+$2,500.00 (+2.50%)")).toBeInTheDocument();
+  });
+});
+
 describe("PortfolioKPIStrip renders dash for missing cash", () => {
   it("renders em-dash when cash is undefined", () => {
     // WHY: when the exposure endpoint has not yet returned, cash is not known.
