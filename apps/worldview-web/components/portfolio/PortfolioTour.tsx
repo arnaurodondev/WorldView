@@ -46,7 +46,20 @@
  * (preventScroll so it never scroll-jumps or fights the anchor positioning); the
  * page stays fully interactive and Escape/Skip/× still dismiss. Focus lands on the
  * step that actually renders, including after a missing-anchor self-skip, because
- * the focus effect keys off the resolved `stepIndex` + `rect`.
+ * the focus effect keys off the resolved `stepIndex` (a "previous step" ref
+ * tracks the last-focused step so we move focus only on a REAL step change).
+ *
+ * A11Y — NO FOCUS-STEAL ON SCROLL/RESIZE (Defect 1): the per-step focus effect
+ * MUST NOT depend on `rect`. `rect` is re-set on every scroll/resize by the reflow
+ * listener, so depending on it would re-run the focus effect and yank focus back
+ * to the advance button — stealing it from wherever the user moved it (this is a
+ * non-modal popover). The effect therefore keys strictly off `stepIndex`.
+ *
+ * A11Y — FOCUS RESTORE ON CLOSE (Defect 2): there is no `Popover.Trigger` (the
+ * anchor is an aria-hidden, pointerEvents:none div), so on dismiss Radix would
+ * drop focus to <body>. We capture `document.activeElement` at open time and
+ * restore it in `onCloseAutoFocus` (falling back to a stable page control if the
+ * prior element was unmounted), keeping the keyboard user oriented.
  */
 
 "use client";
@@ -180,6 +193,13 @@ export function PortfolioTour({ hasExistingPortfolio, forceOpenForTest = false }
   // Ref to the primary advance button ("Next"/"Done") so we can move keyboard
   // focus to it on each step (A11Y focus-stepping — see file header).
   const advanceButtonRef = useRef<HTMLButtonElement>(null);
+  // Ref holding the element that had focus at the MOMENT the tour opened, so we
+  // can hand focus back to it on close. WHY: the tour has no `Popover.Trigger`
+  // (its anchor is an aria-hidden, pointerEvents:none div), so when the advance
+  // button unmounts on dismiss Radix has nothing to return focus to and drops it
+  // to <body> — a keyboard/AT user loses their place. We restore it ourselves in
+  // `onCloseAutoFocus` (Defect 2). Captured once, in `onOpenAutoFocus`.
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const totalSteps = STEPS.length;
 
@@ -268,7 +288,7 @@ export function PortfolioTour({ hasExistingPortfolio, forceOpenForTest = false }
     setRect(resolved.rect);
   }, [active, stepIndex, resolveFrom, endTour]);
 
-  // ── Move keyboard focus to the advance button on each rendered step ─────────
+  // ── Move keyboard focus to the advance button on each rendered STEP ─────────
   // WHY: with modal={false} + onOpenAutoFocus prevented, Radix places no focus in
   // the popover, so a keyboard user couldn't reach the controls. We focus the
   // primary advance button ("Next"/"Done") so Enter advances and Tab reaches
@@ -281,20 +301,46 @@ export function PortfolioTour({ hasExistingPortfolio, forceOpenForTest = false }
   //     would run before the portal content commits and miss the ref.
   //   • SUBSEQUENT steps — this effect. The advance button's DOM node is REUSED
   //     across steps (only its label flips Next→Done), so the ref is already
-  //     attached; re-focusing on each `stepIndex` change (incl. after a
+  //     attached; re-focusing on each real `stepIndex` change (incl. after a
   //     missing-anchor self-skip, which lands via the resolved `stepIndex`) keeps
-  //     focus on the live step. Guarded by `didInitialFocusRef` so we don't
-  //     double-focus on the very first render.
+  //     focus on the live step.
+  //
+  // DEFECT 1 FIX — deps are `[active, stepIndex]`, NOT `[active, rect, stepIndex]`.
+  // WHY THE DEPS MATTER: `rect` is re-set on EVERY scroll/resize by the reflow
+  // listener below (`setRect(measure())` allocates a fresh object each time). If
+  // `rect` were a dependency, this effect would re-run on every scroll/resize and
+  // YANK focus back to the advance button — stealing it from wherever the user
+  // (this is a NON-modal popover) had moved it, e.g. a page input they were
+  // typing in. That is a WCAG focus-on-scroll violation and breaks the
+  // non-blocking contract. Keying strictly off `stepIndex` means reflow-driven
+  // `rect` churn can never re-focus; only a genuine step change does.
+  //
+  // `focusedStepRef` records the step we last moved focus to (set here AND in
+  // `onOpenAutoFocus` for the initial step). It guards against double-firing:
+  // when this effect happens to run for the initial step (active flips true,
+  // stepIndex 0) it's a no-op because onOpenAutoFocus already focused + recorded
+  // step 0. It only acts when `stepIndex` differs from the step we last focused.
   const didInitialFocusRef = useRef(false);
+  const focusedStepRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!active || !rect) {
-      // Reset when the tour closes so the next open re-arms the initial-focus path.
+    if (!active) {
+      // Reset when the tour closes so the next open re-arms both the
+      // initial-focus path and the per-step focus tracking.
       didInitialFocusRef.current = false;
+      focusedStepRef.current = null;
       return;
     }
-    if (!didInitialFocusRef.current) return; // first focus is done in onOpenAutoFocus
+    // Initial focus is performed in `onOpenAutoFocus` (fires when Radix mounts the
+    // portaled content, guaranteeing the button ref is attached). Until that has
+    // happened, do nothing here — the button may not even be rendered yet.
+    if (!didInitialFocusRef.current) return;
+    // Only move focus when the STEP actually changed since we last focused. This
+    // is what makes reflow-driven re-renders (which never change `stepIndex`)
+    // no-ops even though the component re-rendered with a new `rect`.
+    if (focusedStepRef.current === stepIndex) return;
+    focusedStepRef.current = stepIndex;
     advanceButtonRef.current?.focus({ preventScroll: true });
-  }, [active, rect, stepIndex]);
+  }, [active, stepIndex]);
 
   // ── Keep the popover glued to its anchor on scroll / resize ─────────────────
   useEffect(() => {
@@ -395,8 +441,46 @@ export function PortfolioTour({ hasExistingPortfolio, forceOpenForTest = false }
         // modal={false} means no focus trap, and Escape/Skip/× still dismiss.
         onOpenAutoFocus={(e) => {
           e.preventDefault();
+          // DEFECT 2: capture where focus was BEFORE we pull it into the tour, so
+          // `onCloseAutoFocus` can hand it back on dismiss (Radix has no Trigger
+          // to restore to). This fires once per tour open (the content stays
+          // mounted across steps), so we only ever record the true pre-tour
+          // element, never the advance button we're about to focus.
+          returnFocusRef.current = (document.activeElement as HTMLElement | null) ?? null;
           advanceButtonRef.current?.focus({ preventScroll: true });
           didInitialFocusRef.current = true;
+          // Record step 0 as already-focused so the per-step effect above does
+          // not double-fire for the initial step (see focusedStepRef note).
+          focusedStepRef.current = stepIndex;
+        }}
+        // DEFECT 2 FIX — restore focus on close. WHY: on dismiss (Escape/Skip/×/
+        // Done) the advance button unmounts and there is no `Popover.Trigger` (our
+        // anchor is an aria-hidden, pointerEvents:none div), so Radix's default
+        // return-focus target is nothing → focus lands on <body> and the keyboard
+        // user loses their place. We restore focus to the element that had it when
+        // the tour opened, falling back to a stable page control if that element
+        // was unmounted while the tour ran.
+        onCloseAutoFocus={(e) => {
+          const prior = returnFocusRef.current;
+          returnFocusRef.current = null;
+          // Prefer the pre-tour element, but only if it is still in the document
+          // (guard against it having been detached/unmounted since open).
+          let restoreTo: HTMLElement | null =
+            prior && prior.isConnected ? prior : null;
+          if (!restoreTo) {
+            // Fallback: a stable, always-relevant control (Add Position / mode
+            // toggle) so focus still lands somewhere sensible, never on <body>.
+            restoreTo =
+              document.querySelector<HTMLElement>('[data-tour-target="add-position"]') ??
+              document.querySelector<HTMLElement>('[data-tour-target="mode-toggle"]');
+          }
+          if (restoreTo && typeof restoreTo.focus === "function") {
+            // Prevent Radix's default (which would drop to <body>) and place focus
+            // ourselves; preventScroll so restoring focus never scroll-jumps.
+            e.preventDefault();
+            restoreTo.focus({ preventScroll: true });
+          }
+          // If nothing suitable exists we let Radix do its default (no throw).
         }}
       >
         <div className="flex items-start justify-between gap-2">

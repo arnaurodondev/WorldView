@@ -19,6 +19,7 @@
  * treated as live and any anchor we omit is treated as missing → skipped.
  */
 
+import { useState } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -223,6 +224,93 @@ describe("PLAN-0122 W-F · PortfolioTour", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByTestId("portfolio-tour")).not.toBeInTheDocument());
     expect(window.localStorage.getItem(PORTFOLIO_TOUR_SEEN_KEY)).toBe("done");
+  });
+
+  // ── A11Y: focus must not be stolen on scroll/resize (Defect 1 regression) ───
+
+  it("test_tour_does_not_steal_focus_on_scroll: reflow (scroll/resize) never yanks focus back to the advance button", async () => {
+    markTourPending();
+    renderTour();
+
+    // The tour opens and focus-steps to its advance button.
+    await waitFor(() => expect(screen.getByTestId("portfolio-tour-next")).toHaveFocus());
+
+    // Move focus to a DIFFERENT focusable element and hold it there. We use the
+    // tour's own "Skip tour" button: it is focusable, and — crucially — it lives
+    // INSIDE the popover, so moving focus to it does NOT trip Radix's
+    // onFocusOutside auto-dismiss (a non-modal Popover closes when focus leaves
+    // its content). That keeps this test a clean, deterministic probe of ONE
+    // thing: does reflow steal focus back onto the advance button? The steal path
+    // is identical whether focus sat on this button or on an external page input.
+    const skip = screen.getByTestId("portfolio-tour-skip");
+    skip.focus();
+    expect(skip).toHaveFocus();
+
+    // A scroll AND a resize each fire the reflow listener, which calls
+    // setRect(measure()) with a FRESH rect object (new reference every time).
+    // Against the pre-fix code (focus effect depending on `rect`) this re-runs the
+    // focus effect and calls advanceButtonRef.focus() → focus is STOLEN from Skip
+    // onto Next → this assertion FAILS. After the fix (effect keyed off stepIndex
+    // only) the rect churn is a no-op for focus, so focus stays put.
+    fireEvent.scroll(document); // capture-phase window "scroll" listener
+    fireEvent.resize(window); // window "resize" listener
+
+    // Give any effects a tick to flush, then assert focus was NOT stolen.
+    await waitFor(() => {
+      expect(skip).toHaveFocus();
+    });
+    // Belt-and-braces: the tour is still open (reflow doesn't dismiss it) and
+    // focus is definitively NOT on the tour's advance button.
+    expect(screen.getByTestId("portfolio-tour")).toBeInTheDocument();
+    expect(screen.getByTestId("portfolio-tour-next")).not.toHaveFocus();
+  });
+
+  // ── A11Y: focus restore on close (Defect 2) ─────────────────────────────────
+
+  it("test_tour_restores_focus_on_close: focus returns to the pre-tour element, not <body>", async () => {
+    const user = userEvent.setup();
+    markTourPending();
+
+    // Harness lets us FOCUS an element BEFORE the tour mounts (the tour auto-opens
+    // on mount and immediately grabs focus, so we defer mounting it behind a
+    // click that also leaves focus on the pre-tour button).
+    function Harness() {
+      const [showTour, setShowTour] = useState(false);
+      return (
+        <div>
+          <div data-tour-target="portfolio-header">Portfolio</div>
+          <button type="button" data-tour-target="mode-toggle">
+            mode
+          </button>
+          <button type="button" data-tour-target="add-position">
+            Add Position
+          </button>
+          <button type="button" data-testid="pre-focus" onClick={() => setShowTour(true)}>
+            before tour
+          </button>
+          {showTour && <PortfolioTour hasExistingPortfolio />}
+        </div>
+      );
+    }
+
+    render(<Harness />);
+    const priorFocus = screen.getByTestId("pre-focus");
+
+    // Clicking focuses the pre-tour button AND mounts the tour. At the moment the
+    // tour's onOpenAutoFocus fires, document.activeElement is this button, so it
+    // is captured as the return-focus target.
+    await user.click(priorFocus);
+
+    // Tour opened and moved focus to its advance button.
+    await waitFor(() => expect(screen.getByTestId("portfolio-tour-next")).toHaveFocus());
+
+    // Dismiss via Escape (also exercises the dismiss path).
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("portfolio-tour")).not.toBeInTheDocument());
+
+    // Focus is restored to the pre-tour element — NOT dropped to document.body.
+    expect(priorFocus).toHaveFocus();
+    expect(document.body).not.toHaveFocus();
   });
 
   it("test_tour_non_blocking: a sibling page action stays clickable while the tour is open", async () => {
