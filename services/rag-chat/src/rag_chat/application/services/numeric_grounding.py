@@ -1326,9 +1326,89 @@ def material_number_spans(response: str) -> list[tuple[int, int]]:
     return _material_number_spans(response)
 
 
+# ── (2026-07-09 Area 2 P4) FUNDAMENTALS-FAMILY tool aliasing ──────────────────
+#
+# WHY the conservative ``resolve_tool_name`` matcher is not enough here: the three
+# fundamentals tools are DISTINCT registered tools with distinct names that all
+# surface the SAME per-quarter fundamentals rows —
+#   * ``query_fundamentals``            (point-in-time snapshot)
+#   * ``get_fundamentals_history``      (single-entity history)
+#   * ``get_fundamentals_history_batch``(multi-entity history)
+# The live gpt-oss-120b model routinely tags a fundamentals figure with
+# ``[query_fundamentals row N]`` even when the tool that actually ran (and
+# returned that exact figure) was ``get_fundamentals_history_batch``. Those names
+# share NO verb-prefix core, NO containment and score far below the difflib typo
+# threshold (``fundamentals`` vs ``fundamentals_history_batch`` ≈ 0.67), so
+# ``resolve_tool_name`` returns ``None`` → the phantom gate refuses the WHOLE
+# grounded answer (run_20260709T064913Z: ``ripple_aapl_shared_suppliers_nvda``
+# scored 0 despite a strong, tool-grounded TSMC fundamentals table).
+#
+# The three names are INTERCHANGEABLE for citation-resolution purposes: a
+# ``[<family tool> row N]`` tag is legitimate when ANY family tool ran this turn
+# AND the cited figure actually appears in a family tool's result. The alias set
+# below is consulted ONLY after every ``resolve_tool_name`` step has already
+# failed, and ONLY when value-gated (see :func:`partition_phantom_tool_citations`)
+# — a citation to a family tool that NEVER ran, or that ran but did NOT return the
+# cited value (empty result / fabricated figure), still resolves to nothing and
+# stays phantom. The numeric-fabrication guarantee is fully preserved.
+_FUNDAMENTALS_FAMILY_TOOLS: frozenset[str] = frozenset(
+    {
+        "query_fundamentals",
+        "get_fundamentals_history",
+        "get_fundamentals_history_batch",
+    }
+)
+
+# Value-membership tolerance for the family-alias gate. The cited figure is the
+# model echoing a fundamentals row value, so it should match up to display
+# rounding only ("$839.25B" for 839.25…e9). 1% is tight enough that a materially
+# different (fabricated) figure never latches onto an unrelated pool value, while
+# absorbing the answer's rounding of the exact tool value.
+_FUNDAMENTALS_FAMILY_VALUE_TOLERANCE = 0.01
+
+
+def fundamentals_family_value_pool(family_tool_results: Iterable[Any]) -> set[float]:
+    """Flatten fundamentals-family tool-result rows to a set of base-unit values.
+
+    Pass the RetrievedItem rows produced by tools in :data:`_FUNDAMENTALS_FAMILY_TOOLS`
+    (and ONLY those — the caller filters by tool name) so the returned set is the
+    exact pool the family-alias gate in :func:`partition_phantom_tool_citations`
+    consults. An EMPTY / never-run family tool yields an empty set, which keeps a
+    fabricated ``[query_fundamentals row N]`` citation phantom. Deterministic.
+    """
+    return {tv.value for tv in _flatten_tool_values(family_tool_results)}
+
+
+def _fundamentals_family_tag_grounded(
+    tag: re.Match[str],
+    material_values: list[tuple[int, int, float]],
+    value_pool: set[float],
+) -> bool:
+    """True when a MATERIAL number adjacent to *tag* appears in *value_pool*.
+
+    Used only for a fundamentals-family phantom tag: the adjacency window mirrors
+    the phantom-material proximity test so the value we check is the one the tag is
+    actually citing. Value membership is tolerance-matched (rounding only) against
+    the fundamentals-family pool. An empty pool (family tool returned nothing) can
+    never match → the tag stays phantom.
+    """
+    if not value_pool or not material_values:
+        return False
+    tag_start, tag_end = tag.start(), tag.end()
+    candidates = list(value_pool)
+    for num_start, num_end, value in material_values:
+        # Same proximity test as the phantom-material overlap check below.
+        if not (tag_end + _PHANTOM_MATERIAL_WINDOW < num_start or num_end + _PHANTOM_MATERIAL_WINDOW < tag_start):
+            matched, _closest = _matches_any(value, candidates, _FUNDAMENTALS_FAMILY_VALUE_TOLERANCE)
+            if matched:
+                return True
+    return False
+
+
 def partition_phantom_tool_citations(
     response: str,
     called_tool_names: Iterable[str],
+    fundamentals_value_pool: set[float] | None = None,
 ) -> tuple[set[str], list[str]]:
     """Split phantom ``[name row N]`` tags into (material, benign).
 
@@ -1349,8 +1429,21 @@ def partition_phantom_tool_citations(
     strict "any phantom → refuse" behaviour it encodes is still exercised by the
     existing regression suite); this function is the P0-aware refinement the
     orchestrator uses at delivery time.
+
+    ``fundamentals_value_pool`` (optional, 2026-07-09 Area 2 P4) is the set of
+    base-unit numeric values returned by fundamentals-family tools this turn (see
+    :func:`fundamentals_family_value_pool`). When supplied it enables
+    FUNDAMENTALS-FAMILY ALIASING: a ``[<family tool> row N]`` tag whose name is not
+    the exact called tool (``[query_fundamentals row 0]`` when
+    ``get_fundamentals_history_batch`` ran) is treated as a real citation — NOT
+    phantom — provided (a) some fundamentals-family tool actually ran AND (b) the
+    material figure the tag cites appears in this pool. The gate is skipped when no
+    pool is supplied, when no family tool ran, or when the cited value is absent
+    from the pool (family tool returned empty / the figure is fabricated) — so the
+    phantom-tool refusal guarantee is never weakened.
     """
     called = {str(t).strip().lower() for t in called_tool_names if t}
+    family_ran = bool(called & _FUNDAMENTALS_FAMILY_TOOLS)
     # Clean citation markers the SAME way _extract_numbers_with_spans does, so the
     # phantom-tag offsets and the material-number spans share one coordinate space.
     cleaned = _CITATION_RE.sub("", response)
@@ -1360,12 +1453,18 @@ def partition_phantom_tool_citations(
     # The row INDEX inside a ``[name row N]`` tag is itself a digit; it must NOT be
     # mistaken for a material numeric claim (otherwise EVERY phantom tag would look
     # "material" because it abuts its own ``row 1``). Drop any extracted number
-    # whose span falls fully inside a tool-row tag.
-    material_spans = [
-        (ns, ne)
-        for (ns, ne) in _material_number_spans(response)
-        if not any(ts <= ns and ne <= te for ts, te in tag_spans)
-    ]
+    # whose span falls fully inside a tool-row tag. We keep the VALUE alongside each
+    # span so the fundamentals-family gate can test the adjacent figure against the
+    # tool-value pool.
+    material_values: list[tuple[int, int, float]] = []
+    for value, raw_token, ctx, ns, ne in _extract_numbers_with_spans(response):
+        kind = classify_number(value, raw_token, ctx)
+        is_material = kind in _MATERIAL_NUMERIC_KINDS or (
+            kind == FieldKind.UNKNOWN and abs(value) >= _MATERIAL_UNKNOWN_MIN
+        )
+        if is_material and not any(ts <= ns and ne <= te for ts, te in tag_spans):
+            material_values.append((ns, ne, value))
+    material_spans = [(ns, ne) for (ns, ne, _v) in material_values]
 
     material_names: set[str] = set()
     benign_tags: list[str] = []
@@ -1380,6 +1479,22 @@ def partition_phantom_tool_citations(
             # (the tool ``get_fundamentals_history_batch`` DID run) — see
             # resolve_tool_name for the conservative matching that keeps a genuinely
             # fabricated tool name (never-called) phantom.
+            continue
+        if (
+            name in _FUNDAMENTALS_FAMILY_TOOLS
+            and family_ran
+            and fundamentals_value_pool is not None
+            and _fundamentals_family_tag_grounded(m, material_values, fundamentals_value_pool)
+        ):
+            # 2026-07-09 Area 2 P4 — fundamentals-family aliasing. The cited family
+            # tool (``query_fundamentals``) is not the exact tool that ran, but a
+            # SIBLING family tool (``get_fundamentals_history_batch``) DID run and
+            # its result contains the material figure this tag cites. The three
+            # fundamentals tools surface the same rows, so this is a legitimate
+            # provenance tag, not a fabrication — do NOT refuse. Recovers the
+            # ripple_aapl_shared_suppliers_nvda phantom-veto. Gated on family-ran +
+            # value-in-pool so a never-run / empty-result / fabricated citation
+            # still falls through to the phantom classification below.
             continue
         if name in _BENIGN_PROSE_TAG_NAMES:
             # Deterministic backstop (2026-07-03): a known-non-tool prose word can
@@ -2661,6 +2776,7 @@ __all__ = [
     "detect_fabricated_series",
     "find_phantom_tool_citations",
     "flatten_tool_values_count",
+    "fundamentals_family_value_pool",
     "material_number_spans",
     "normalize_citation_brackets",
     "normalize_tool_row_citations",

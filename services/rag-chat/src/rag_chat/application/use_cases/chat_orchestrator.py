@@ -5144,11 +5144,30 @@ class ChatOrchestratorUseCase:
                 _grounding_rewrite_model = _RagChatSettings().grounding_rewrite_model  # type: ignore[call-arg]
             except Exception:
                 _grounding_rewrite_model = None
+            # 2026-07-09 Area 2 P4: build the fundamentals-family value pool from the
+            # rows returned by ANY fundamentals-family tool this turn so the phantom
+            # gate can ALIAS a ``[query_fundamentals row N]`` tag onto its sibling
+            # ``get_fundamentals_history[_batch]`` tool that actually ran and returned
+            # the cited figure. Filter ``_tool_row_items`` (keyed by (tool_name, row))
+            # to the family; an empty pool (no family tool ran / empty result) leaves a
+            # fabricated citation phantom, preserving the anti-fabrication guarantee.
+            from rag_chat.application.services.numeric_grounding import (
+                _FUNDAMENTALS_FAMILY_TOOLS as _FUND_FAMILY,
+            )
+            from rag_chat.application.services.numeric_grounding import (
+                fundamentals_family_value_pool as _fund_pool_fn,
+            )
+
+            _fund_family_rows = [
+                _it for (_tn, _row), _it in _tool_row_items.items() if _tn in _FUND_FAMILY and _it is not None
+            ]
+            _fundamentals_value_pool = _fund_pool_fn(_fund_family_rows) if _fund_family_rows else set()
             async with phase("grounding_validation", phases):
                 full_text, grounding_passed = await self._run_combined_grounding_validation(
                     p=p,
                     response=full_text,
                     tool_items=non_none_items,
+                    fundamentals_value_pool=_fundamentals_value_pool,
                     resolved_entities=list(entities),
                     messages=messages,
                     budget=budget,
@@ -5778,6 +5797,7 @@ class ChatOrchestratorUseCase:
         user_id: UUID | None = None,
         analytical_intent: bool = False,
         write_action_succeeded: bool = False,
+        fundamentals_value_pool: set[float] | None = None,
     ) -> tuple[str, bool]:
         """RC-1 — single combined numeric + entity-name grounding pass.
 
@@ -5850,7 +5870,9 @@ class ChatOrchestratorUseCase:
         # flow while preserving the numeric-fabrication guarantee: any fabricated
         # tool-citation attached to a real figure still refuses the whole answer.
         if _have_called_set:
-            _phantom_material, _phantom_benign = partition_phantom_tool_citations(response, _called)
+            _phantom_material, _phantom_benign = partition_phantom_tool_citations(
+                response, _called, fundamentals_value_pool=fundamentals_value_pool
+            )
             if _phantom_material:
                 log.warning(  # type: ignore[no-any-return]
                     "numeric_grounding_phantom_citation_refused",
@@ -6275,7 +6297,9 @@ class ChatOrchestratorUseCase:
         #    only a phantom tag abutting a MATERIAL number refuses; benign prose
         #    labels are stripped (mirrors the pre-rewrite gate above).
         if _have_called_set:
-            _rw_phantom_material, _rw_phantom_benign = partition_phantom_tool_citations(rewritten, _called)
+            _rw_phantom_material, _rw_phantom_benign = partition_phantom_tool_citations(
+                rewritten, _called, fundamentals_value_pool=fundamentals_value_pool
+            )
             if _rw_phantom_material:
                 log.warning(  # type: ignore[no-any-return]
                     "combined_grounding_rewrite_phantom_citation_refused",

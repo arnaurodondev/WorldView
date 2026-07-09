@@ -195,3 +195,106 @@ def test_real_prediction_markets_citation_is_untouched() -> None:
 
     assert material == set(), "a real called-tool citation must never be flagged"
     assert benign == [], "a real called-tool citation must never be stripped"
+
+
+# ── (2026-07-09 Area 2 P4) FUNDAMENTALS-FAMILY tool aliasing ──────────────────
+#
+# The three fundamentals tools (query_fundamentals / get_fundamentals_history /
+# get_fundamentals_history_batch) are DISTINCT registered tools that surface the
+# SAME rows. The live model tags a fundamentals figure as ``[query_fundamentals
+# row 0]`` even when ``get_fundamentals_history_batch`` actually ran and returned
+# it — resolve_tool_name cannot bridge them (no shared prefix/substring/typo), so
+# the phantom gate refused a strong grounded answer (ripple_aapl_shared_suppliers
+# _nvda scored 0). Family aliasing recovers it WITHOUT weakening the guarantee:
+# gated on a family tool having run AND the cited value appearing in that tool's
+# result pool.
+
+# TSMC Q1 2025 revenue as the answer renders it ("$839.25B") in base units, and
+# the matching value the fundamentals-family tool returned.
+_TSMC_REVENUE = 839.25e9
+
+
+def test_ripple_aapl_query_fundamentals_alias_resolves_when_batch_ran() -> None:
+    """RECOVERED CASE: ``[query_fundamentals row 0]`` next to a figure that the
+    sibling ``get_fundamentals_history_batch`` returned is NOT phantom."""
+    response = "| Revenue | $839.25B TWD [query_fundamentals row 0] |"
+    called = ["get_fundamentals_history_batch", "get_entity_news"]
+    pool = {_TSMC_REVENUE}
+
+    material, benign = partition_phantom_tool_citations(response, called, fundamentals_value_pool=pool)
+
+    assert material == set(), "family-aliased citation to a value a sibling tool returned must resolve"
+    assert benign == [], "an aliased family citation is a real citation — not stripped"
+
+
+def test_family_alias_still_phantom_when_no_family_tool_ran() -> None:
+    """A fundamentals-family citation with NO family tool called stays phantom."""
+    response = "Revenue was $839.25B [query_fundamentals row 0]."
+    called = ["get_entity_news"]  # no fundamentals-family tool ran
+    pool: set[float] = set()
+
+    material, _benign = partition_phantom_tool_citations(response, called, fundamentals_value_pool=pool)
+
+    assert material == {"query_fundamentals"}, "never-run family tool citation must stay phantom"
+
+
+def test_family_alias_still_phantom_when_result_empty() -> None:
+    """A family tool that RAN but returned an EMPTY pool cannot ground the tag."""
+    response = "Revenue was $839.25B [query_fundamentals row 0]."
+    called = ["get_fundamentals_history_batch"]  # ran, but returned nothing
+    pool: set[float] = set()
+
+    material, _benign = partition_phantom_tool_citations(response, called, fundamentals_value_pool=pool)
+
+    assert material == {"query_fundamentals"}, "empty-result family citation must stay phantom"
+
+
+def test_family_alias_still_phantom_when_cited_value_absent_from_pool() -> None:
+    """A family tool ran and returned data, but NOT the fabricated figure → phantom."""
+    response = "Revenue was $839.25B [query_fundamentals row 0]."
+    called = ["get_fundamentals_history_batch"]
+    pool = {12.3e9}  # some other real value, not the fabricated $839.25B
+
+    material, _benign = partition_phantom_tool_citations(response, called, fundamentals_value_pool=pool)
+
+    assert material == {"query_fundamentals"}, "fabricated figure absent from pool must stay phantom"
+
+
+def test_family_alias_not_applied_to_non_family_tool() -> None:
+    """A non-fundamentals phantom tag never benefits from the family pool."""
+    response = "The Fed decision moved rates $2.00B [query_macro row 0]."
+    called = ["get_fundamentals_history_batch"]  # a family tool ran…
+    pool = {2.0e9}  # …and the value even happens to be in its pool
+
+    material, _benign = partition_phantom_tool_citations(response, called, fundamentals_value_pool=pool)
+
+    # query_macro is NOT a fundamentals-family tool, so aliasing must not apply.
+    assert material == {"query_macro"}, "non-family phantom tag must stay phantom regardless of pool"
+
+
+def test_family_alias_backward_compatible_without_pool() -> None:
+    """With NO pool supplied, behaviour is unchanged: family tag stays phantom."""
+    response = "Revenue was $839.25B [query_fundamentals row 0]."
+    called = ["get_fundamentals_history_batch"]
+
+    material, _benign = partition_phantom_tool_citations(response, called)
+
+    assert material == {"query_fundamentals"}, "no pool → no aliasing → unchanged phantom behaviour"
+
+
+def test_fundamentals_family_value_pool_flattens_structured_rows() -> None:
+    """The pool builder extracts base-unit values from structured fundamentals rows."""
+    from rag_chat.application.services.numeric_grounding import fundamentals_family_value_pool
+
+    from contracts.numeric_grounding import FieldKind
+
+    class _Row:
+        def __init__(self, value: float, kind: FieldKind) -> None:
+            self.value = value
+            self.field_kind = kind
+
+    rows = [_Row(_TSMC_REVENUE, FieldKind.REVENUE), _Row(0.581, FieldKind.RATIO)]
+    pool = fundamentals_family_value_pool(rows)
+
+    assert _TSMC_REVENUE in pool
+    assert fundamentals_family_value_pool([]) == set(), "empty results → empty pool (keeps citations phantom)"
