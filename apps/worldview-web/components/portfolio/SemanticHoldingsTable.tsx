@@ -147,6 +147,13 @@ export interface SemanticHoldingsTableProps {
   accessToken?: string | null;
   /** Called after a successful Close Position so the parent can refetch holdings. */
   onHoldingsRefetch?: () => void;
+  /**
+   * PLAN-0122 W-A: portfolio detail level. Optional, default "advanced".
+   * UNUSED this wave (thread-only) — reserved for W-E (Simple forces the Core
+   * column group) and W-D (the pinned-right ACTIONS kebab). Declared now so the
+   * prop contract is stable and callers don't change again in later waves.
+   */
+  mode?: "simple" | "advanced";
 }
 
 // ── Context menu overlay ──────────────────────────────────────────────────────
@@ -171,6 +178,10 @@ export function SemanticHoldingsTable({
   portfolioKind,
   accessToken,
   onHoldingsRefetch,
+  // PLAN-0122 W-A: accepted but unused this wave. Prefixed `_` so the repo's
+  // no-unused-vars rule (varsIgnorePattern `^_`) permits the reserved prop —
+  // W-D/W-E give it behaviour without a caller change.
+  mode: _mode = "advanced",
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();

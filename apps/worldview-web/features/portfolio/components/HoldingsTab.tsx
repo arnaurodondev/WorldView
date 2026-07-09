@@ -111,6 +111,13 @@ import type {
 } from "@/features/portfolio/lib/kpi";
 
 interface HoldingsTabProps {
+  /**
+   * PLAN-0122 W-A: portfolio detail level. Optional with default "advanced" so
+   * every existing caller/test renders unchanged (byte-identical to today). This
+   * wave threads it only — no branching yet. W-B wraps each power-strip in
+   * `mode === "advanced" && (…)` so Simple shows a clean holdings-first view.
+   */
+  mode?: "simple" | "advanced";
   activePortfolioId: string | null;
   holdingsLoading: boolean;
   holdingsResp: HoldingsResponse | undefined;
@@ -181,6 +188,10 @@ interface HoldingsTabProps {
 }
 
 export function HoldingsTab({
+  // PLAN-0122 W-A: default "advanced" preserves today's full layout for every
+  // existing caller. `mode` is threaded to SemanticHoldingsTable (reserved for
+  // W-D/W-E); no strip is gated in this wave.
+  mode = "advanced",
   activePortfolioId,
   holdingsLoading,
   holdingsResp,
@@ -631,6 +642,10 @@ export function HoldingsTab({
         ) : (
         // Case 4: holdings present (or portfolioKind is "root" / null).
         <SemanticHoldingsTable
+          // PLAN-0122 W-A: thread the detail level (default "advanced"). Unused
+          // by the table this wave; reserved for W-E (Core-only column group in
+          // Simple) and W-D (row-action kebab entry points).
+          mode={mode}
           // R2 sprint: visibleHoldings = enrichedHoldings when no sector
           // filter (same reference), or the sector subset when filtered.
           holdings={visibleHoldings}

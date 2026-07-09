@@ -9,11 +9,25 @@
  * presentational component that receives all data via props.
  */
 
+import type { ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+// PLAN-0122 W-A: PortfolioPageHeader now calls usePortfolioMode (nuqs) to drive
+// the Simple|Advanced toggle, so every render must be wrapped in a nuqs adapter.
+// This is a test-infra change only — no assertion is weakened or removed (R19).
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 
 import { PortfolioPageHeader } from "../PortfolioPageHeader";
 import type { Portfolio } from "@/types/api";
+
+/** Render helper that supplies the nuqs adapter the header's mode hook needs. */
+function renderHeader(ui: ReactNode) {
+  return render(ui, {
+    wrapper: ({ children }) => (
+      <NuqsTestingAdapter searchParams="">{children}</NuqsTestingAdapter>
+    ),
+  });
+}
 
 // ── Minimal portfolio fixtures ─────────────────────────────────────────────
 
@@ -52,7 +66,7 @@ const BASE_PROPS = {
 describe("PortfolioPageHeader", () => {
   it("shows ROOT inline text when activeIsRoot is true", () => {
     // ARRANGE: render with the aggregate portfolio active
-    render(
+    renderHeader(
       <PortfolioPageHeader
         {...BASE_PROPS}
         activePortfolio={ROOT_PORTFOLIO}
@@ -69,7 +83,7 @@ describe("PortfolioPageHeader", () => {
 
   it("hides ROOT inline text for non-root portfolio", () => {
     // ARRANGE: render with a manual portfolio active
-    render(
+    renderHeader(
       <PortfolioPageHeader
         {...BASE_PROPS}
         activePortfolio={MANUAL_PORTFOLIO}
@@ -84,5 +98,25 @@ describe("PortfolioPageHeader", () => {
         "Select a portfolio to add positions. ALL is read-only.",
       ),
     ).not.toBeInTheDocument();
+  });
+
+  // PLAN-0122 W-A: the header now hosts the Simple|Advanced detail-level toggle
+  // in its action row. Assert its presence (additive coverage — the toggle is a
+  // new header child) so an accidental removal is caught.
+  it("renders the Simple|Advanced mode toggle in the action row", () => {
+    renderHeader(
+      <PortfolioPageHeader
+        {...BASE_PROPS}
+        activePortfolio={MANUAL_PORTFOLIO}
+        activePortfolioId={MANUAL_PORTFOLIO.portfolio_id}
+        activeIsRoot={false}
+      />,
+    );
+
+    const toggle = screen.getByRole("radiogroup", {
+      name: "Portfolio detail level",
+    });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("data-tour-target", "mode-toggle");
   });
 });

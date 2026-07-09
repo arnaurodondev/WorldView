@@ -56,6 +56,10 @@ import Link from "next/link";
 import { Plus, FolderPlus, AlertTriangle, RotateCw } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
+// PLAN-0122 W-A: the single portfolio detail-level value (Simple | Advanced).
+// This wave only THREADS it down (default "advanced" everywhere) so output is
+// byte-identical to today; W-B adds the conditional rendering.
+import { usePortfolioMode } from "@/hooks/usePortfolioMode";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -142,6 +146,14 @@ import { usePortfolioBundle } from "@/features/portfolio/hooks/usePortfolioBundl
 
 export default function PortfolioPage() {
   const { accessToken } = useAuth();
+
+  // ── PLAN-0122 W-A: portfolio detail level ──────────────────────────────
+  // Resolved from URL (?mode) → localStorage → the PORTFOLIO_SIMPLE_DEFAULT
+  // flag default. This wave threads `mode` into HoldingsTab (default "advanced")
+  // WITHOUT any conditional rendering, so the page renders exactly as today; the
+  // Advanced-parity snapshot test guards that invariant. W-B consumes `mode` to
+  // gate the KPI-tile count, the tab bar, the donut, and the power-strips.
+  const { mode } = usePortfolioMode();
 
   // T-B-2-07: KPI strip is hard-locked to "1D". The const stays narrow so
   // queryKey shapes downstream compile unchanged.
@@ -584,6 +596,10 @@ export default function PortfolioPage() {
           className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 bg-background"
         >
           <HoldingsTab
+            // PLAN-0122 W-A: thread the detail level. Default is "advanced" so
+            // this wave is a no-op visually; W-B branches on it to hide the
+            // power-strips in Simple.
+            mode={mode}
             activePortfolioId={activePortfolioId}
             holdingsLoading={holdingsLoading}
             holdingsResp={holdingsResp}

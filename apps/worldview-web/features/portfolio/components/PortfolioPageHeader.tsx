@@ -32,6 +32,12 @@ import { Button } from "@/components/ui/button";
 // to the "All Accounts" label in the selector and header, explaining what the
 // aggregate view is and why it's read-only.
 import { RootPortfolioPopover } from "@/components/portfolio/RootPortfolioPopover";
+// PLAN-0122 W-A: the Simple|Advanced detail-level toggle lives in the header
+// action row. WHY the header owns the hook (not the toggle): usePortfolioMode
+// touches nuqs + localStorage; keeping it here leaves PortfolioModeToggle a pure
+// presentational control that unit-tests without a router.
+import { PortfolioModeToggle } from "@/components/portfolio/PortfolioModeToggle";
+import { usePortfolioMode } from "@/hooks/usePortfolioMode";
 import type { Portfolio } from "@/types/api";
 
 interface PortfolioPageHeaderProps {
@@ -71,6 +77,12 @@ export function PortfolioPageHeader({
   onCreatePortfolio,
   onDeletePortfolio,
 }: PortfolioPageHeaderProps) {
+  // PLAN-0122 W-A: resolve the current detail level (Simple | Advanced). The
+  // header is the single call site of the hook for the page chrome; the value is
+  // threaded to child surfaces as a prop from page.tsx (this instance only drives
+  // the toggle's own checked state + writes on click).
+  const { mode, setMode } = usePortfolioMode();
+
   return (
     <>
       {/* ── Page header ─────────────────────────────────────────────────── */}
@@ -173,6 +185,12 @@ export function PortfolioPageHeader({
         {/* WHY ml-auto: push the action buttons to the right side, matching
             Bloomberg convention of left=labels, right=actions. */}
         <div className="ml-auto flex items-center gap-2">
+          {/* PLAN-0122 W-A: detail-level toggle, positioned at the LEFT of the
+              action cluster (before Add Position) per PRD §6.1. WHY here and not
+              in the empty-portfolio early-return: that branch shows no data, so a
+              Simple/Advanced switch would have nothing to gate. */}
+          <PortfolioModeToggle mode={mode} onModeChange={setMode} />
+
           {/* "Add Position" — only useful when there's an active portfolio.
               PLAN-0046 Wave 3 / T-46-3-04: also disabled when active is ROOT
               (S1 rejects POST /v1/transactions on root portfolios with HTTP

@@ -3,7 +3,12 @@ repos:
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        # Vitest/Jest .snap files serialize rendered DOM whose trailing
+        # whitespace is significant — stripping it permanently breaks the
+        # snapshot (the test regenerates it WITH the whitespace on next run).
+        exclude: "\\.snap$"
       - id: end-of-file-fixer
+        exclude: "\\.snap$"
       - id: check-yaml
         exclude: "infra/compose/docker-compose\\.prod\\.yml"
       - id: check-toml
