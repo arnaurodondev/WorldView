@@ -632,12 +632,21 @@ export function createPortfoliosApi(t: string | undefined) {
      * @param instrumentId - UUID of the instrument (resolved from ticker via searchInstruments)
      * @param quantity     - Number of shares to add (must be > 0)
      * @param averageCost  - Average cost per share (price at which you bought)
+     * @param tradeDate    - OPTIONAL ISO-8601 timestamp for `executed_at` (PRD-0122 §6.3,
+     *                       R-13). WHY optional + trailing: this is an ADDITIVE change — every
+     *                       existing 4-arg caller keeps working and still gets "now". Only the
+     *                       Add-Position dialog (which now has a trade-date picker) passes a
+     *                       5th arg so the user can back-date a manual buy. `executed_at` is
+     *                       already a first-class field on S1's transaction API (PRD §8), so
+     *                       there is NO backend change — the old "always now" behaviour was a
+     *                       pure frontend omission (this function hardcoded new Date()).
      */
     async addPosition(
       portfolioId: string,
       instrumentId: string,
       quantity: number,
       averageCost: number,
+      tradeDate?: string,
     ): Promise<Transaction> {
       // Holdings in S1 are derived from transactions — a BUY creates/grows a holding.
       // We map the S1 RecordTransactionRequest shape directly (same as addTransaction).
@@ -653,7 +662,11 @@ export function createPortfoliosApi(t: string | undefined) {
         price: averageCost,
         fees: 0, // manual entry has no brokerage fee
         currency: "USD", // default; S1 stores per-transaction currency
-        executed_at: new Date().toISOString(), // "now" is the correct timestamp for manual add
+        // WHY tradeDate ?? now: when the caller supplies a chosen trade date (the
+        // Add-Position picker sends `${YYYY-MM-DD}T00:00:00Z`) we honour it; when
+        // omitted we preserve the historical "now is correct for a manual add"
+        // behaviour so no existing 4-arg caller changes (PRD-0122 R-13).
+        executed_at: tradeDate ?? new Date().toISOString(),
         external_ref: null,
       };
 

@@ -191,9 +191,22 @@ export default function BrokerageCallbackPage() {
           <p className="text-[16px] font-semibold text-foreground">
             Brokerage account connected successfully!
           </p>
+          {/* Honest sync-timing copy — PRD-0122 §6.2 (R-9, R-10).
+              WHY THIS COPY: the old "will begin syncing shortly" set a false
+              expectation — the real import cycle can take hours, so users thought the
+              connection was broken when nothing appeared in seconds. The new copy is
+              explicit (minutes → up to a few hours) and gives them a concrete recovery
+              action ("Sync Now" on the connected-brokerages list) instead of leaving
+              them to guess. WHY the timing is qualitative ("up to a few hours"): the
+              exact cycle length is a backend config value; describing it qualitatively
+              means a future cycle-time change never falsifies this string.
+              NOTE: the heading above is intentionally UNCHANGED — e2e/qa specs pin the
+              exact "Brokerage account connected successfully!" string. */}
           <p className="mt-1 text-[14px] text-muted-foreground">
-            Your transaction history will begin syncing shortly.
-            New transactions will be imported automatically.
+            Your first sync has started. Holdings usually appear within a few minutes,
+            but a full import can take up to a few hours. If you don&apos;t see them yet,
+            open the connected brokerage and press <span className="font-medium text-foreground">Sync Now</span> to
+            pull the latest data.
           </p>
         </div>
 
