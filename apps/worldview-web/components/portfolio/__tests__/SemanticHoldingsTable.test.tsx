@@ -29,7 +29,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type React from "react";
 import { holdingsAgColumns, HOLDINGS_AG_COL_WIDTHS } from "../ag-holdings-columns";
 import { SemanticHoldingsTable } from "../SemanticHoldingsTable";
 import type { Holding } from "@/types/api";
@@ -68,7 +70,30 @@ vi.mock("ag-grid-react", async () => {
       onGridReady?.({ api: api.current });
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-    return React.createElement("div", { "data-testid": "ag-grid-mock" });
+    // Expose a proxy for the floating row-action menu (QA items 1 + 2). The real
+    // AG Grid renders per-row cells (incl. the kebab) which jsdom can't lay out;
+    // this button stands in for the kebab, invoking the SAME context.onOpenRowMenu
+    // callback SemanticHoldingsTable wires up. We pass a deliberately off-screen
+    // anchor (99999,99999) so the viewport-clamp path (item 1) is exercised, and
+    // forward the button element as the `trigger` so focus-restore can be tested.
+    const rowData = props.rowData as Array<Record<string, unknown>> | undefined;
+    const context = props.context as
+      | { onOpenRowMenu?: (row: unknown, x: number, y: number, t?: HTMLElement) => void }
+      | undefined;
+    return React.createElement(
+      "div",
+      { "data-testid": "ag-grid-mock" },
+      React.createElement(
+        "button",
+        {
+          "data-testid": "mock-kebab",
+          type: "button",
+          onClick: (e: React.MouseEvent<HTMLButtonElement>) =>
+            context?.onOpenRowMenu?.(rowData?.[0], 99999, 99999, e.currentTarget),
+        },
+        "open-row-menu",
+      ),
+    );
   }
   return { AgGridReact };
 });
@@ -330,5 +355,132 @@ describe("SemanticHoldingsTable · column-group visibility layer (R-25/R-26)", (
     }
     // Advanced group still shown.
     expect(showIds()).toEqual(expect.arrayContaining(["spark", "sector", "asset"]));
+  });
+
+  // ── QA item 7: column-GROUP visibility outranks a restored-VISIBLE column ────
+  it("test_hidden_group_beats_restored_visible_column: a saved-visible col in a disabled group ends hidden", () => {
+    // Seed the AG-Grid widths/order key (worldview-holdings-cols) with a state
+    // that explicitly makes `spark` (an Advanced-group column) VISIBLE. Then
+    // render Advanced with the Advanced GROUP toggled OFF. The two localStorage
+    // keys are orthogonal (widths/order vs. group visibility), and the group
+    // layer runs AFTER the restore — so the group MUST win: spark ends hidden.
+    // This proves precedence, not merely call ordering.
+    window.localStorage.setItem(
+      "worldview-holdings-cols",
+      JSON.stringify([
+        { colId: "spark", hide: false },
+        { colId: "sector", hide: false },
+        { colId: "asset", hide: false },
+      ]),
+    );
+    render(
+      <SemanticHoldingsTable
+        holdings={[H]}
+        quotes={{}}
+        totalValue={1500}
+        mode="advanced"
+        columnGroups={{ core: true, portfolio: true, advanced: false }}
+      />,
+    );
+    // The group "hide" list (last setColumnsVisible false call) must carry the
+    // Advanced columns even though the restore just marked them visible.
+    const hidden = hideIds();
+    for (const id of ["spark", "sector", "asset", "divYld"]) {
+      expect(hidden, `${id} should be force-hidden by the disabled Advanced group`).toContain(id);
+    }
+    // And they must NOT be in the group "show" list — the group decision, not the
+    // restored per-column visibility, is authoritative.
+    expect(showIds()).not.toContain("spark");
+    // The restore (applyColumnState) still ran BEFORE the group layer (ordering
+    // half of the guarantee) — precedence only means anything if restore ran first.
+    const lastRestore = ops.map((o) => o.method).lastIndexOf("applyColumnState");
+    const firstVisible = ops.findIndex((o) => o.method === "setColumnsVisible");
+    expect(firstVisible).toBeGreaterThan(lastRestore);
+  });
+});
+
+// ── QA items 1 + 2: floating row-action menu a11y ────────────────────────────
+describe("SemanticHoldingsTable · floating menu a11y (QA items 1 + 2)", () => {
+  beforeEach(() => {
+    ops.length = 0;
+    window.localStorage.clear();
+  });
+
+  async function openMenu() {
+    const user = userEvent.setup();
+    render(<SemanticHoldingsTable holdings={[H]} quotes={{}} totalValue={1500} mode="advanced" />);
+    await user.click(screen.getByTestId("mock-kebab"));
+    // The menu is announced as a role="menu" region (item 2).
+    const menu = await screen.findByRole("menu");
+    return { user, menu };
+  }
+
+  it("opens a role=menu with role=menuitem children", async () => {
+    const { menu } = await openMenu();
+    expect(menu).toBeInTheDocument();
+    // At least one menuitem exists (the registry always yields row actions).
+    expect(within(menu).getAllByRole("menuitem").length).toBeGreaterThan(0);
+    // aria-label names the position the menu acts on.
+    expect(menu).toHaveAttribute("aria-label", expect.stringMatching(/AAPL/));
+  });
+
+  it("clamps the menu inside the viewport when opened off the right/bottom edge (item 1)", async () => {
+    const { menu } = await openMenu();
+    // The mock anchors the menu at (99999,99999) — far off-screen. The clamp
+    // must pull left/top back inside the jsdom viewport (default 1024×768).
+    await waitFor(() => {
+      const left = parseFloat((menu as HTMLElement).style.left);
+      const top = parseFloat((menu as HTMLElement).style.top);
+      expect(left).toBeLessThan(window.innerWidth);
+      expect(top).toBeLessThan(window.innerHeight);
+      // And never negative (kept at least `margin` in from the edge).
+      expect(left).toBeGreaterThanOrEqual(0);
+      expect(top).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  it("moves focus into the menu on open and closes + restores focus to the kebab on Escape (item 2)", async () => {
+    const { user, menu } = await openMenu();
+    // Focus landed on the first menuitem (not left on the trigger).
+    await waitFor(() =>
+      expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus(),
+    );
+    // Escape closes the menu…
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    // …and returns focus to the kebab that opened it (keyboard users not stranded).
+    expect(screen.getByTestId("mock-kebab")).toHaveFocus();
+  });
+
+  it("Arrow Down/Up rove between menuitems (item 2)", async () => {
+    const { user, menu } = await openMenu();
+    const items = within(menu).getAllByRole("menuitem");
+    await waitFor(() => expect(items[0]).toHaveFocus());
+    if (items.length > 1) {
+      await user.keyboard("{ArrowDown}");
+      expect(items[1]).toHaveFocus();
+      await user.keyboard("{ArrowUp}");
+      expect(items[0]).toHaveFocus();
+    }
+  });
+
+  // ── QA item 3: the pinned-right ACTIONS kebab has a visible focus ring ───────
+  it("ACTIONS kebab renders a focus-visible ring", () => {
+    // Render the REAL actions cellRenderer (the kebab) so we assert on shipped
+    // markup, not a copy. A non-pinned data row → the button is rendered.
+    const ActionsRenderer = holdingsAgColumns.find((c) => c.colId === "actions")!
+      .cellRenderer as (p: unknown) => React.ReactElement | null;
+    const { container } = render(
+      ActionsRenderer({
+        data: { h: H, livePrice: 150, value: 1500 },
+        node: { rowPinned: undefined },
+        context: {},
+      }) as React.ReactElement,
+    );
+    const btn = container.querySelector("button");
+    expect(btn).not.toBeNull();
+    // Matches the ⚙ toggle / tour buttons' ring pattern.
+    expect(btn!.className).toContain("focus-visible:ring-1");
+    expect(btn!.className).toContain("focus-visible:ring-ring");
   });
 });

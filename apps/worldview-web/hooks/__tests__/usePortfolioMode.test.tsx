@@ -103,6 +103,38 @@ describe("usePortfolioMode — precedence", () => {
       expect(screen.getByTestId("mode").textContent).toBe("simple"),
     );
   });
+
+  it("test_mode_ssr_first_render_uses_default_not_localstorage: stored value does not apply before the reconcile effect (QA item 9)", async () => {
+    // SSR-safety invariant: the server render and the FIRST client render must NOT
+    // read localStorage (that would desync the two renders and trigger a hydration
+    // mismatch). Guards against a regression that reads storage during render.
+    //
+    // WHY a render-recorder (not a synchronous DOM read): Testing Library's
+    // `render` wraps in act(), which flushes useEffect before we could query the
+    // DOM — so the post-reconcile value is all we'd see. Instead we record the
+    // resolved mode on EVERY render pass into an external array; index 0 is the
+    // first (pre-effect) render, which must equal the flag default even though a
+    // sticky "simple" is in localStorage.
+    const seen: string[] = [];
+    function RecordingHarness() {
+      const { mode } = usePortfolioMode();
+      seen.push(mode);
+      return <output data-testid="mode">{mode}</output>;
+    }
+    window.localStorage.setItem(PORTFOLIO_MODE_STORAGE_KEY, "simple"); // flag default is "advanced"
+    render(
+      <NuqsTestingAdapter searchParams="">
+        <RecordingHarness />
+      </NuqsTestingAdapter>,
+    );
+    // First render used the default, NOT the sticky localStorage value.
+    expect(seen[0]).toBe("advanced");
+    // The post-paint effect then reconciles to the sticky value.
+    await waitFor(() =>
+      expect(screen.getByTestId("mode").textContent).toBe("simple"),
+    );
+    expect(seen[seen.length - 1]).toBe("simple");
+  });
 });
 
 describe("usePortfolioMode — setMode writes both sinks", () => {

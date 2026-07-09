@@ -112,6 +112,9 @@ export function ClosePositionDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [priceError, setPriceError] = useState<string | null>(null);
   const [quantityError, setQuantityError] = useState<string | null>(null);
+  // Future-date guard error (QA item 5): the date input now also carries a
+  // `max={today}` attribute, but a typed/pasted future value is rejected here.
+  const [dateError, setDateError] = useState<string | null>(null);
 
   // WHY useRef for idempotency key (not useState): we need a stable value for
   // the entire lifecycle of this dialog instance. If the user double-clicks
@@ -120,6 +123,21 @@ export function ClosePositionDialog({
   // transactions from corrupting FIFO cost-basis and holdings. useRef is correct
   // because changing the key should NOT cause a re-render.
   const idempotencyKeyRef = useRef<string>(crypto.randomUUID());
+
+  // attemptedRef + bumpIdempotencyOnEdit (QA item 6): a fixed key protects
+  // against double-clicks, but if the user changes a submittable input (quantity,
+  // sale price, trade date) after a failed/completed attempt and resubmits, that
+  // corrected request must be a DISTINCT idempotency key — otherwise S1 dedupes
+  // it against the stale first attempt and silently drops the correction. We mint
+  // a fresh key the first time an input changes after an attempt, then clear the
+  // flag so further keystrokes reuse the same new key (double-click still safe).
+  const attemptedRef = useRef(false);
+  function bumpIdempotencyOnEdit() {
+    if (attemptedRef.current) {
+      idempotencyKeyRef.current = crypto.randomUUID();
+      attemptedRef.current = false;
+    }
+  }
 
   // ── Validation ────────────────────────────────────────────────────────────
 
@@ -176,7 +194,19 @@ export function ClosePositionDialog({
       return;
     }
     setPriceError(null);
+
+    // Reject a future trade date (QA item 5). Backdating a close is allowed (e.g.
+    // after a market holiday) but a FUTURE close is nonsensical — you cannot have
+    // sold shares tomorrow. String compare is valid for zero-padded ISO dates.
+    if (tradeDateStr > todayStr) {
+      setDateError("Trade date can't be in the future.");
+      return;
+    }
+    setDateError(null);
+
     setIsSubmitting(true);
+    // POSTing with the current key; a later input edit regenerates it (item 6).
+    attemptedRef.current = true;
 
     try {
       // Build the S1 RecordTransactionRequest body.
@@ -326,6 +356,8 @@ export function ClosePositionDialog({
                     setQuantityStr(e.target.value);
                     // Clear the validation error as soon as the user edits.
                     if (quantityError) setQuantityError(null);
+                    // Corrected qty after a prior attempt → fresh idempotency key.
+                    bumpIdempotencyOnEdit();
                   }}
                   className="h-7 flex-1 font-mono text-[12px]"
                 />
@@ -381,6 +413,7 @@ export function ClosePositionDialog({
                   setSalePriceStr(e.target.value);
                   // Clear validation error as soon as the user starts typing again.
                   if (priceError) setPriceError(null);
+                  bumpIdempotencyOnEdit();
                 }}
                 className="h-7 font-mono text-[12px]"
                 autoFocus
@@ -392,7 +425,8 @@ export function ClosePositionDialog({
             </div>
           </div>
 
-          {/* Trade Date — date picker; defaults to today; backdating is allowed */}
+          {/* Trade Date — date picker; defaults to today; backdating is allowed
+              but future dates are blocked (max attr + submit-side guard, item 5). */}
           <div className="grid grid-cols-3 items-center gap-3">
             <Label
               htmlFor="close-date"
@@ -400,13 +434,23 @@ export function ClosePositionDialog({
             >
               Trade Date
             </Label>
-            <Input
-              id="close-date"
-              type="date"
-              value={tradeDateStr}
-              onChange={(e) => setTradeDateStr(e.target.value)}
-              className="col-span-2 h-7 font-mono text-[12px]"
-            />
+            <div className="col-span-2 flex flex-col gap-1">
+              <Input
+                id="close-date"
+                type="date"
+                max={todayStr}
+                value={tradeDateStr}
+                onChange={(e) => {
+                  setTradeDateStr(e.target.value);
+                  if (dateError) setDateError(null);
+                  bumpIdempotencyOnEdit();
+                }}
+                className="h-7 font-mono text-[12px]"
+              />
+              {dateError && (
+                <p className="text-[10px] text-destructive">{dateError}</p>
+              )}
+            </div>
           </div>
         </div>
 

@@ -44,6 +44,7 @@ import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -127,12 +128,31 @@ export function EditPositionDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [qtyError, setQtyError] = useState<string | null>(null);
   const [priceError, setPriceError] = useState<string | null>(null);
+  // Future-date guard error (QA item 5): mirrors AddPositionDialog's authoritative
+  // "can't be in the future" rule on submit, not just the native `max` attribute.
+  const [dateError, setDateError] = useState<string | null>(null);
 
   // WHY useRef for the idempotency key (not useState): a stable value for the
   // whole dialog lifecycle. A double-click / retry carries the SAME key so S1
   // deduplicates and cannot post two adjusting trades. Changing it must NOT
   // trigger a re-render — useRef is correct. Mirrors ClosePositionDialog.
   const idempotencyKeyRef = useRef<string>(crypto.randomUUID());
+
+  // attemptedRef (QA item 6): flips true once we have actually POSTed with the
+  // CURRENT idempotency key. A stable key protects against double-clicks, but if
+  // the user CHANGES a submittable input after a failed/completed attempt and
+  // resubmits, that corrected request must NOT be deduped against the stale first
+  // attempt. `bumpIdempotencyOnEdit` (called from every value onChange) mints a
+  // fresh key the first time an input changes after an attempt, then clears the
+  // flag so subsequent keystrokes keep the SAME new key (double-click protection
+  // preserved). See ClosePositionDialog for the identical guard.
+  const attemptedRef = useRef(false);
+  function bumpIdempotencyOnEdit() {
+    if (attemptedRef.current) {
+      idempotencyKeyRef.current = crypto.randomUUID();
+      attemptedRef.current = false;
+    }
+  }
 
   // ── Derived delta preview (the transparency guarantee, R-17) ────────────────
   // Parse the raw inputs and compute the adjusting trade so we can (a) label the
@@ -183,12 +203,26 @@ export function EditPositionDialog({
     }
     setPriceError(null);
 
+    // Reject a future trade date (QA item 5). The native `max` greys out future
+    // days, but a typed/pasted value can still slip past it — this is the
+    // authoritative guard, mirroring AddPositionDialog's Zod `.refine`. String
+    // comparison is valid for zero-padded ISO dates (chronological == lexical).
+    if (tradeDateStr > todayStr) {
+      setDateError("Trade date can't be in the future.");
+      return;
+    }
+    setDateError(null);
+
     // Compute the honest adjusting trade. `null` = no change → nothing to do
     // (the button is disabled in this state, but we guard defensively).
     const adj = computeAdjustment(holding.quantity, targetQty);
     if (!adj) return;
 
     setIsSubmitting(true);
+    // Mark that we are POSTing with the current key. A later input change will
+    // regenerate the key (bumpIdempotencyOnEdit) so a corrected resubmit is a
+    // distinct request; an unchanged double-click keeps the same key (item 6).
+    attemptedRef.current = true;
     try {
       // Same body shape as Close/Add (PRD §6.4) — no new endpoint. `trade_side`
       // and `quantity` come straight from the pure helper so the request can
@@ -260,6 +294,14 @@ export function EditPositionDialog({
           <DialogTitle className="font-mono text-sm tracking-wide">
             Edit Position — {ticker}
           </DialogTitle>
+          {/* DialogDescription (QA item 4): Radix requires a description (or an
+              explicit aria-describedby) on DialogContent for an accessible name —
+              without one AT users get an unnamed dialog and Radix logs a warning.
+              Copies the ConnectBrokerageModal pattern; the concise summary frames
+              the honest-ledger behaviour the detailed note below expands on. */}
+          <DialogDescription>
+            Record an adjusting trade to change this position&rsquo;s quantity.
+          </DialogDescription>
         </DialogHeader>
 
         {/* ── Current position (read-only reference) ───────────────────────── */}
@@ -302,6 +344,8 @@ export function EditPositionDialog({
                 onChange={(e) => {
                   setTargetQtyStr(e.target.value);
                   if (qtyError) setQtyError(null);
+                  // A corrected value after a prior attempt must not be deduped.
+                  bumpIdempotencyOnEdit();
                 }}
                 className="h-7 font-mono text-[12px]"
                 autoFocus
@@ -331,6 +375,7 @@ export function EditPositionDialog({
                 onChange={(e) => {
                   setPriceStr(e.target.value);
                   if (priceError) setPriceError(null);
+                  bumpIdempotencyOnEdit();
                 }}
                 className="h-7 font-mono text-[12px]"
               />
@@ -340,7 +385,8 @@ export function EditPositionDialog({
             </div>
           </div>
 
-          {/* Trade Date — defaults to today; future dates are blocked (max). */}
+          {/* Trade Date — defaults to today; future dates are blocked (max attr
+              + submit-side guard, QA item 5). */}
           <div className="grid grid-cols-3 items-center gap-3">
             <Label
               htmlFor="edit-date"
@@ -348,14 +394,23 @@ export function EditPositionDialog({
             >
               Trade Date
             </Label>
-            <Input
-              id="edit-date"
-              type="date"
-              max={todayStr}
-              value={tradeDateStr}
-              onChange={(e) => setTradeDateStr(e.target.value)}
-              className="col-span-2 h-7 font-mono text-[12px]"
-            />
+            <div className="col-span-2 flex flex-col gap-1">
+              <Input
+                id="edit-date"
+                type="date"
+                max={todayStr}
+                value={tradeDateStr}
+                onChange={(e) => {
+                  setTradeDateStr(e.target.value);
+                  if (dateError) setDateError(null);
+                  bumpIdempotencyOnEdit();
+                }}
+                className="h-7 font-mono text-[12px]"
+              />
+              {dateError && (
+                <p className="text-[10px] text-destructive">{dateError}</p>
+              )}
+            </div>
           </div>
         </div>
 

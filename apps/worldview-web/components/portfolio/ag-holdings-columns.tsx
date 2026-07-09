@@ -85,8 +85,19 @@ export interface HoldingsGridContext {
    * its open/close state live in SemanticHoldingsTable; the ACTIONS cell only
    * needs to REQUEST that the menu open at the kebab's bounding rect. This reuses
    * the EXACT same menu as the right-click path — no duplicate menu system.
+   *
+   * `trigger` (a11y fix, PLAN-0122 QA item 2): the kebab element that opened the
+   * menu. SemanticHoldingsTable restores focus to it when the menu is dismissed
+   * with the keyboard (Escape), so keyboard users are not stranded at the top of
+   * the document. Optional — the right-click path passes no trigger (focus goes
+   * back to the row that was already focused).
    */
-  onOpenRowMenu?: (row: EnrichedHoldingRow, x: number, y: number) => void;
+  onOpenRowMenu?: (
+    row: EnrichedHoldingRow,
+    x: number,
+    y: number,
+    trigger?: HTMLElement | null,
+  ) => void;
 }
 
 // ── Row-overlap guard (P-1 fix, 2026-06-18 design QA) ─────────────────────────
@@ -403,7 +414,11 @@ function ActionsCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
       // shared AG Grid theme CSS (row-hover reveal) is owned by another surface;
       // keeping the kebab always visible-but-muted is the discoverable, touch-safe
       // choice without reaching into that CSS. It reads as a quiet affordance.
-      className="flex h-full w-full items-center justify-center text-muted-foreground hover:text-foreground"
+      // focus-visible ring (QA item 3): keyboard-tabbing to the kebab now shows a
+      // visible focus ring, matching the ⚙ column-group toggle + tour buttons
+      // (focus-visible:outline-none + ring-1 ring-ring). Without it the only
+      // keyboard entry point to the row actions was invisible when focused.
+      className="flex h-full w-full items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       onClick={(e) => {
         // Stop propagation so the row's onRowClicked (navigate to instrument) does
         // NOT fire, and the document click-outside listener does not immediately
@@ -412,7 +427,8 @@ function ActionsCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
         const rect = e.currentTarget.getBoundingClientRect();
         const ctx = params.context as HoldingsGridContext | undefined;
         // Open the menu at the kebab's bottom-right so it drops below the button.
-        ctx?.onOpenRowMenu?.(params.data!, rect.right, rect.bottom);
+        // Pass the kebab element so the menu can restore focus here on Escape.
+        ctx?.onOpenRowMenu?.(params.data!, rect.right, rect.bottom, e.currentTarget);
       }}
     >
       <MoreVertical className="h-3 w-3" aria-hidden />

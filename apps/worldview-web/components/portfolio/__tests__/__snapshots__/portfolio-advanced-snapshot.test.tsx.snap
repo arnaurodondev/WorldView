@@ -652,7 +652,7 @@ exports[`PLAN-0122 W-A · Advanced-mode parity (anti-fork guard) > test_advanced
                 <td>
                   <button
                     aria-label="Actions for AAPL"
-                    class="flex h-full w-full items-center justify-center text-muted-foreground hover:text-foreground"
+                    class="flex h-full w-full items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     type="button"
                   >
                     <svg

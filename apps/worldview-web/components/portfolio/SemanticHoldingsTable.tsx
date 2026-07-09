@@ -31,7 +31,7 @@
 
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -320,6 +320,29 @@ export function SemanticHoldingsTable({
 
   // ── Context menu state ────────────────────────────────────────────────────
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+
+  // ── Floating-menu a11y refs (QA items 1 + 2) ───────────────────────────────
+  // menuRef: the floating menu container, measured for viewport clamping and
+  // queried for the first focusable item on open.
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  // menuTriggerRef: the kebab that opened the menu (null for the right-click
+  // path). Focus is restored here when the menu is dismissed via the keyboard so
+  // a keyboard user is never stranded (item 2). Cleared each open.
+  const menuTriggerRef = useRef<HTMLElement | null>(null);
+  // menuPos: the CLAMPED on-screen position. Computed in a layout effect from the
+  // raw anchor (ctxMenu.x/y) + the measured menu size so the menu can never open
+  // off-screen at the table's right/bottom edge (item 1). null until measured;
+  // the layout effect runs before paint so the unclamped anchor never shows.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  // closeMenu — single close path. `restoreFocus` returns focus to the kebab
+  // (item 2) ONLY for keyboard dismissal (Escape); pointer/outside-click and
+  // action selections pass false so focus follows the pointer / the dialog that
+  // opens next (Radix dialogs steal focus on mount anyway).
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setCtxMenu(null);
+    if (restoreFocus) menuTriggerRef.current?.focus();
+  }, []);
   // PRD-0114 W5-T06: Close Position dialog state.
   // WHY useState (not URL param): the dialog is transient — it should not persist
   // across page refreshes. Storing the target holding in state keeps the dialog
@@ -350,9 +373,50 @@ export function SemanticHoldingsTable({
   // Close context menu on click outside.
   useEffect(() => {
     if (!ctxMenu) return;
-    const close = () => setCtxMenu(null);
+    const close = () => closeMenu(false);
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
+  }, [ctxMenu, closeMenu]);
+
+  // ── Clamp the floating menu to the viewport (QA item 1) ─────────────────────
+  // The menu is positioned at the raw anchor (mouse coords for right-click, the
+  // kebab's bottom-right for the button). At the table's right/bottom edge that
+  // would push it off-screen — unreachable. useLayoutEffect measures the rendered
+  // menu and shifts it back inside the viewport BEFORE paint (no visible jump):
+  //   • right edge  → shift left so its right side sits `margin` inside innerWidth
+  //   • bottom edge → flip so it opens ABOVE the anchor (kebab drop-ups)
+  // Depends only on `ctxMenu` (the anchor): while the menu is open its size is
+  // stable, so this runs once per open and setMenuPos cannot loop.
+  useLayoutEffect(() => {
+    if (!ctxMenu) {
+      setMenuPos(null);
+      return;
+    }
+    const el = menuRef.current;
+    const margin = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // Fallbacks keep the clamp sane if measurement is unavailable (jsdom): the
+    // min-w-[160px] menu width, and 0 height (no vertical flip until measured).
+    const w = el?.offsetWidth || 160;
+    const h = el?.offsetHeight || 0;
+    let left = ctxMenu.x;
+    let top = ctxMenu.y;
+    if (left + w + margin > vw) left = Math.max(margin, vw - w - margin);
+    if (top + h + margin > vh) top = Math.max(margin, vh - h - margin);
+    setMenuPos({ top, left });
+  }, [ctxMenu]);
+
+  // ── Move focus into the menu on open (QA item 2) ────────────────────────────
+  // A keyboard/AT user who opens the menu should land ON its first actionable
+  // item, not be left at the trigger while an unlabelled overlay appears. We
+  // focus the first enabled menuitem after the menu commits to the DOM.
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const first = menuRef.current?.querySelector<HTMLElement>(
+      '[role="menuitem"]:not([disabled])',
+    );
+    first?.focus();
   }, [ctxMenu]);
 
   // ── Cell flash on live price updates ─────────────────────────────────────
@@ -485,6 +549,9 @@ export function SemanticHoldingsTable({
         name: h.name,
       };
       const mouseEvent = event.event as MouseEvent | undefined;
+      // Right-click has no kebab trigger — clear it so Escape restores focus to
+      // wherever it already was (the row), not a stale prior kebab.
+      menuTriggerRef.current = null;
       setCtxMenu({ row: ctx, x: mouseEvent?.clientX ?? 0, y: mouseEvent?.clientY ?? 0 });
     },
     [],
@@ -496,7 +563,7 @@ export function SemanticHoldingsTable({
   // position; we build the identical HoldingRowContext the right-click path uses
   // and open the menu there. This is purely additive — right-click is unchanged.
   const handleOpenRowMenu = useCallback(
-    (row: EnrichedHoldingRow, x: number, y: number) => {
+    (row: EnrichedHoldingRow, x: number, y: number, trigger?: HTMLElement | null) => {
       const { h } = row;
       const ctx: HoldingRowContext = {
         kind: "holding",
@@ -507,6 +574,8 @@ export function SemanticHoldingsTable({
         ticker: h.ticker,
         name: h.name,
       };
+      // Remember the kebab so an Escape dismissal restores focus to it (item 2).
+      menuTriggerRef.current = trigger ?? null;
       setCtxMenu({ row: ctx, x, y });
     },
     [],
@@ -779,10 +848,45 @@ export function SemanticHoldingsTable({
           useContextMenuActions hook. Click-outside closes via document listener. */}
       {ctxMenu && ctxGroups.length > 0 && (
         <div
+          ref={menuRef}
+          // role="menu" + aria-label (QA item 2): the overlay is now an
+          // announced, named menu instead of an anonymous <div>; its children
+          // carry role="menuitem" below.
+          role="menu"
+          aria-label={`Actions for ${ctxMenu.row.ticker || ctxMenu.row.name || "position"}`}
+          // tabIndex so the container itself can hold focus if an item can't.
+          tabIndex={-1}
           className="fixed z-50 min-w-[160px] overflow-hidden rounded-[2px] border border-border bg-card py-1 shadow-md"
-          style={{ top: ctxMenu.y, left: ctxMenu.x }}
+          // Clamped position (item 1); falls back to the raw anchor until the
+          // layout effect measures the menu (never painted — effect runs pre-paint).
+          style={{ top: menuPos?.top ?? ctxMenu.y, left: menuPos?.left ?? ctxMenu.x }}
           // Stop propagation so the document click listener doesn't immediately close the menu.
           onClick={(e) => e.stopPropagation()}
+          // Keyboard support (item 2): Escape closes + restores focus to the
+          // kebab; Arrow Up/Down roves between enabled menuitems so the menu is
+          // fully operable without a pointer.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              closeMenu(true);
+              return;
+            }
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const items = Array.from(
+                menuRef.current?.querySelectorAll<HTMLElement>(
+                  '[role="menuitem"]:not([disabled])',
+                ) ?? [],
+              );
+              if (items.length === 0) return;
+              const idx = items.indexOf(document.activeElement as HTMLElement);
+              const delta = e.key === "ArrowDown" ? 1 : -1;
+              // Wrap around so Down at the end returns to the top (menu convention).
+              const next = (idx + delta + items.length) % items.length;
+              items[next]?.focus();
+            }
+          }}
         >
           {ctxGroups.map((group, i) => (
             <div key={group.category}>
@@ -795,16 +899,17 @@ export function SemanticHoldingsTable({
                 return (
                   <button
                     key={action.id}
+                    role="menuitem"
                     disabled={!enabled}
                     className={cn(
-                      "flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-foreground",
+                      "flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-foreground focus-visible:outline-none focus-visible:bg-muted/50",
                       enabled
                         ? "hover:bg-muted/50"
                         : "opacity-40 cursor-not-allowed",
                     )}
                     onClick={() => {
                       void action.run(actionCtx);
-                      setCtxMenu(null);
+                      closeMenu(false);
                     }}
                   >
                     <span className="flex-1 text-left">{action.label}</span>
@@ -850,19 +955,21 @@ export function SemanticHoldingsTable({
                 {/* PLAN-0122 W-D: Edit Position → honest adjusting-trade dialog.
                     Gated identically to Close (non-root + qty>0). */}
                 <button
-                  className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-foreground hover:bg-muted/50"
+                  role="menuitem"
+                  className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-foreground hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                   onClick={() => {
                     setEditPosition({ holding, livePrice });
-                    setCtxMenu(null);
+                    closeMenu(false);
                   }}
                 >
                   <span className="flex-1 text-left">Edit Position</span>
                 </button>
                 <button
-                  className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-negative hover:bg-negative/10"
+                  role="menuitem"
+                  className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-negative hover:bg-negative/10 focus-visible:outline-none focus-visible:bg-negative/10"
                   onClick={() => {
                     setClosePositionHolding(holding);
-                    setCtxMenu(null);
+                    closeMenu(false);
                   }}
                 >
                   <span className="flex-1 text-left">Close Position</span>

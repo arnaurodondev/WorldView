@@ -160,7 +160,7 @@ export default function PortfolioPage() {
   // WITHOUT any conditional rendering, so the page renders exactly as today; the
   // Advanced-parity snapshot test guards that invariant. W-B consumes `mode` to
   // gate the KPI-tile count, the tab bar, the donut, and the power-strips.
-  const { mode } = usePortfolioMode();
+  const { mode, hydrated: modeHydrated } = usePortfolioMode();
 
   // T-B-2-07: KPI strip is hard-locked to "1D". The const stays narrow so
   // queryKey shapes downstream compile unchanged.
@@ -294,7 +294,15 @@ export default function PortfolioPage() {
   // PLAN-0122 W-B (T-A-B-02): the skeleton now mirrors the ACTIVE mode's shape —
   // 4 tiles + no donut in Simple, 8 tiles + donut in Advanced — so the first
   // paint matches what the resolved data will render (no layout jump).
-  if (portfoliosLoading || (holdingsLoading && !holdingsResp)) {
+  // PLAN-0122 QA item 12 (mode-hydration flash guard): also hold the skeleton
+  // until `modeHydrated` — before the localStorage reconcile, `mode` is the flag
+  // default, so an Advanced-chooser would briefly resolve to Simple, mount the
+  // lighter Simple layout, then tear it down and mount the heavy Advanced strips
+  // once hydration flips `mode`. Keeping the mode-aware skeleton up until hydrated
+  // means the first real layout paint already matches the sticky choice. The
+  // skeleton reads `mode` so the pre-hydration frame still resembles the default
+  // shape (no jump for the common unset user).
+  if (portfoliosLoading || (holdingsLoading && !holdingsResp) || !modeHydrated) {
     return <PortfolioLoadingSkeleton mode={mode} />;
   }
 

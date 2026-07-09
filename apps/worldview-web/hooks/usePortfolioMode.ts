@@ -61,6 +61,18 @@ export interface UsePortfolioModeResult {
   /** Set the mode; writes BOTH sinks (URL param + localStorage) so the choice
    *  is simultaneously shareable and sticky. */
   setMode: (mode: PortfolioMode) => void;
+  /**
+   * `false` until the localStorage-reconciling effect has run once, `true`
+   * thereafter (QA item 12). WHY expose it: on the first render `mode` is
+   * URL-or-default (localStorage is intentionally NOT read during render, for
+   * SSR-safety). A user whose sticky choice is "advanced" therefore resolves to
+   * the flag default ("simple") on that first paint, and only flips to
+   * "advanced" after this effect runs. Callers can gate a heavy mode-dependent
+   * subtree on `hydrated` (keep showing the mode-aware loading skeleton) so the
+   * Advanced strips don't briefly mount then tear down. It is a hydration-flash
+   * guard, not a correctness gate — `mode` is always usable.
+   */
+  hydrated: boolean;
 }
 
 /**
@@ -86,6 +98,9 @@ export function usePortfolioMode(): UsePortfolioModeResult {
   // `null` = "not yet read" or "nothing stored". We keep it in React state so a
   // reconcile (or a `setMode` call) re-renders with the sticky value.
   const [storageMode, setStorageMode] = useState<PortfolioMode | null>(null);
+  // `hydrated` flips true after the reconcile effect runs (QA item 12). Kept in
+  // state so a caller re-renders when hydration completes.
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     // WHY inside useEffect: effects run only on the client, after paint — so the
@@ -100,6 +115,10 @@ export function usePortfolioMode(): UsePortfolioModeResult {
       // localStorage can throw (private-mode quota, disabled storage). Treat any
       // failure as "no sticky value" — the default still resolves the mode.
       setStorageMode(null);
+    } finally {
+      // Mark hydration complete regardless of outcome — the sticky value (or its
+      // absence) has now been reconciled, so `mode` is stable from here.
+      setHydrated(true);
     }
   }, []);
 
@@ -127,5 +146,5 @@ export function usePortfolioMode(): UsePortfolioModeResult {
     [setUrlMode],
   );
 
-  return { mode, setMode };
+  return { mode, setMode, hydrated };
 }

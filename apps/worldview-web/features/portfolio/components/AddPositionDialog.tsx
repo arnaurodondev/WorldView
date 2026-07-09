@@ -56,6 +56,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { NumberInput } from "@/components/ui/number-input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -530,7 +531,11 @@ export function AddPositionDialog({
                     Trade Date
                   </FormLabel>
                   <FormControl>
-                    <input
+                    {/* DS consistency (QA item 11): the shadcn <Input type="date">
+                        used by Close/Edit dialogs, not a raw <input>. Input
+                        forwards ref + spreads props, so the RHF field wiring
+                        (value/onChange/onBlur/name/ref) is unchanged. */}
+                    <Input
                       type="date"
                       value={field.value}
                       onChange={(e) => {
@@ -547,7 +552,7 @@ export function AddPositionDialog({
                       max={localTodayStr()}
                       disabled={form.formState.isSubmitting}
                       aria-label="Trade date"
-                      className="h-7 w-full rounded-[2px] border border-border bg-background px-2 font-mono text-[12px] text-foreground"
+                      className="h-7 w-full font-mono text-[12px]"
                     />
                   </FormControl>
                   <FormMessage />
