@@ -31,8 +31,13 @@ name: Deploy
 # Trigger: only on push to main (not on PRs — tests run via ci.yml)
 # ─────────────────────────────────────────────────────────────────────────────
 on:
+  # Standard: build+push images on merge to main. The feat branch is included
+  # TEMPORARILY to build images for the first live deploy test from branch code
+  # (REMOVE feat/hetzner-k3s-deploy once merged to main). workflow_dispatch lets us
+  # re-trigger manually.
   push:
-    branches: [main]
+    branches: [main, feat/hetzner-k3s-deploy]
+  workflow_dispatch: {}
 
 env:
   REGISTRY: ghcr.io
