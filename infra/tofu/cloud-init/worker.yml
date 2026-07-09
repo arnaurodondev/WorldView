@@ -66,6 +66,5 @@ runcmd:
       sh -s - agent \
         --kubelet-arg cloud-provider=external \
         --node-ip "$PRIV_IP" \
-        --node-external-ip "$PUBLIC_IP" \
         --flannel-iface "$PRIV_IFACE" \
         --node-label "node-role=${node_role}"
