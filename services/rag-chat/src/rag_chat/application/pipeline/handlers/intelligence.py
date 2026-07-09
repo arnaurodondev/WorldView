@@ -714,6 +714,49 @@ class IntelligenceHandler(ToolHandler):
             entity_name=entity_name,
         )
 
+    def _listing_status_item(self, entity_name: str) -> RetrievedItem | None:
+        """Return a listing-status RetrievedItem for a known non-US/private company.
+
+        Area-3 Phase 0+2 (roadmap 2026-07-09): Samsung/Xiaomi/Tencent (non-US
+        listings) and Huawei/ByteDance (private) are not priceable like US stocks.
+        When the LLM asks a KG intelligence tool about one of these, we ALWAYS
+        surface an explicit listing-status statement so the model discusses the
+        company from KG intelligence + news and NEVER fabricates a US ticker or a
+        wrong entity (the ``iter3_apple_competitors_spanish`` failure mode).
+
+        Returns ``None`` for any entity not in the listing registry (the common
+        case) so the normal KG path is entirely unaffected.
+        """
+        from rag_chat.application.services.listing_status import lookup_listing_status
+
+        status = lookup_listing_status(entity_name)
+        if status is None:
+            return None
+        log.info(
+            "tool_listing_status_annotated",
+            entity_name=entity_name,
+            canonical_name=status.canonical_name,
+            is_public=status.is_public,
+            exchange=status.exchange,
+            us_adr_ticker=status.us_adr_ticker,
+        )
+        return RetrievedItem.create(
+            item_id=f"tool:listing_status:{status.canonical_name}",
+            item_type=ItemType.relation,
+            text=status.describe()[:_TOOL_RESULT_MAX_CHARS],
+            # High score/trust: this is an authoritative, deterministic fact that
+            # must reach the synthesis prompt to suppress ticker fabrication.
+            score=0.90,
+            trust_weight=0.95,
+            citation_meta=CitationMeta(
+                title=f"Listing status: {status.canonical_name}",
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=entity_name,
+            ),
+        )
+
     async def _handle_get_entity_graph(
         self,
         tool_call: ToolUseBlock,
@@ -726,9 +769,17 @@ class IntelligenceHandler(ToolHandler):
             log.warning("tool_handler_missing_port", tool="get_entity_graph", port="s7")
             return []
 
+        # Area-3 Phase 0+2: compute the listing-status note (None for the common
+        # US-listed / unknown case) so it can be surfaced whether or not the KG
+        # has graph data for this entity.
+        listing_item = self._listing_status_item(entity_name)
+
         entity_id = await self._resolve_entity_by_name("get_entity_graph", entity_name)
         if entity_id is None:
-            return []
+            # A known non-US/private company may resolve to no entity_id (e.g. a
+            # private org with no aliases yet). Still answer gracefully with the
+            # listing status rather than [] (empty → the model fabricates).
+            return [listing_item] if listing_item is not None else []
 
         t0 = time.monotonic()
         try:
@@ -746,7 +797,10 @@ class IntelligenceHandler(ToolHandler):
 
         if not graph.nodes and not graph.edges:
             log.warning("tool_no_data", tool="get_entity_graph", entity_name=entity_name)
-            return []
+            # Graceful degradation for a known non-US/private company: surface the
+            # listing status instead of [] so the model states the facts and does
+            # not fabricate a ticker.
+            return [listing_item] if listing_item is not None else []
 
         text = self._format_graph(entity_name, graph)
 
@@ -764,10 +818,16 @@ class IntelligenceHandler(ToolHandler):
                 entity_name=entity_name,
             ),
         )
+        # Prepend the listing-status note (when applicable) so the model reads the
+        # "not US-listed / privately held" fact alongside the graph intelligence.
+        items = [listing_item, item] if listing_item is not None else [item]
         log.info(
-            "tool_executed", tool="get_entity_graph", latency_ms=round((time.monotonic() - t0) * 1000), items_returned=1
+            "tool_executed",
+            tool="get_entity_graph",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=len(items),
         )
-        return [item]
+        return items
 
     async def _handle_traverse_graph(
         self,
@@ -885,9 +945,11 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_entity_relations", port="s7")
             return []
+        # Area-3 Phase 0+2: listing-status note for known non-US/private companies.
+        listing_item = self._listing_status_item(entity_name)
         entity_id = await self._resolve_entity_by_name("search_entity_relations", entity_name)
         if entity_id is None:
-            return []
+            return [listing_item] if listing_item is not None else []
         # PLAN-0093 E-4 T-E-4-01: real query embedding instead of a 1024-dim
         # zero vector. The old placeholder made S7 fall back to a non-ranked
         # entity_id filter — the LLM got back the same top-K regardless of
@@ -918,7 +980,7 @@ class IntelligenceHandler(ToolHandler):
 
         if not relations:
             log.warning("tool_no_data", tool="search_entity_relations", entity_name=entity_name)
-            return []
+            return [listing_item] if listing_item is not None else []
 
         lines = [f"Relations for {entity_name}:"]
         for r in relations:
@@ -941,13 +1003,14 @@ class IntelligenceHandler(ToolHandler):
                 entity_name=entity_name,
             ),
         )
+        items = [listing_item, item] if listing_item is not None else [item]
         log.info(
             "tool_executed",
             tool="search_entity_relations",
             latency_ms=round((time.monotonic() - t0) * 1000),
-            items_returned=1,
+            items_returned=len(items),
         )
-        return [item]
+        return items
 
     async def _handle_search_claims(
         self,
