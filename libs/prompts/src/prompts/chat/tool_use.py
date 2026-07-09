@@ -245,10 +245,31 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          case (A) intact). SOFTENING half of the same regression the synthesis
     #          v1.18 DO-NOT-OPEN-WITH-A-REFUSAL-LINE bullet fixes; additive, no
     #          grounding / refusal rule relaxed.
-    version="1.20",
+    #   1.21 — 2026-07-09 (Area-2 harder projections — P2 light routing rule).
+    #          Companion to chat_synthesis_system v1.19, which resolves the
+    #          ANALYTICAL / WHAT-IF anchor-vs-scenario-parameter conflict on the
+    #          synthesis turn (license a labelled assume-and-range for a scenario
+    #          parameter — TAM / market size / share / cost-share — while keeping
+    #          the anchor-fact anti-fabrication rule intact). This planning-turn
+    #          half adds a PROJECTION / WHAT-IF SCAFFOLD block to the REASONING
+    #          addendum: retrieve the base ANCHOR figures first (a what-if about a
+    #          named entity still needs its fundamentals, per the STRICT-RULES
+    #          WHAT-IF mandate), but recognise that a SCENARIO PARAMETER is a
+    #          MODELLING ASSUMPTION the tools do not carry — so do NOT loop tools
+    #          hunting for it and do NOT refuse on its absence; let the synthesis
+    #          turn supply it as a labelled low-high assumption. Additive + light;
+    #          no grounding / refusal / routing rule relaxed.
+    version="1.21",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.20 SOFTENS the chat-quality two-track hypo regression: adds a WHAT-IF "
+        "(v1.21 adds an Area-2 PROJECTION / WHAT-IF SCAFFOLD to the REASONING "
+        "addendum: retrieve the base ANCHOR figures first, but recognise a "
+        "SCENARIO PARAMETER (TAM / market size / segment share / cost-share) as a "
+        "MODELLING ASSUMPTION the tools do not carry — do NOT loop tools hunting "
+        "for it or refuse on its absence; the synthesis turn (chat_synthesis_system "
+        "v1.19) supplies it as a labelled low-high assumption. Companion to the "
+        "synthesis anchor-vs-parameter split; additive + light. "
+        "v1.20 SOFTENS the chat-quality two-track hypo regression: adds a WHAT-IF "
         "/ PROJECTION ABOUT A NAMED ENTITY => CALL ITS TOOL FIRST rule to STRICT "
         "RULES so a conditional/hypothetical/second-order-impact question about a "
         "named entity retrieves its base figures (query_fundamentals / "
@@ -1133,7 +1154,26 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
     "REASONING": (
         "\n\nREASONING FORMAT:\n"
         "Step N: [Factor] → [Mechanism] → [Outcome]. Each step needs a tool+row "
-        "citation. A cause must precede its effect in calendar time."
+        "citation. A cause must precede its effect in calendar time.\n"
+        # 1.21 (2026-07-09, Area-2 P2 — light projection-scaffold trigger): a
+        # what-if / sensitivity / share-shift / market-sizing question needs its
+        # base ANCHOR figures retrieved BEFORE any scenario can be modelled, but
+        # the model was ALSO looping tools hunting for — or refusing on the
+        # absence of — a SCENARIO PARAMETER (TAM / market size / share /
+        # cost-share) that is a MODELLING ASSUMPTION the platform does not carry.
+        # The synthesis turn owns the 5-step assume-and-range answer shape
+        # (chat_synthesis_system v1.19); the planning turn's only job here is to
+        # make the anchor available and NOT chase an un-retrievable assumption.
+        "PROJECTION / WHAT-IF SCAFFOLD (sensitivity, share-shift, market-sizing):\n"
+        "First RETRIEVE the base ANCHOR figures the projection rests on (revenue, "
+        "margin, EPS, cost) via the entity's fundamentals / intelligence tools — a "
+        "what-if about a named entity still requires its base figures (see the "
+        "WHAT-IF / PROJECTION rule in STRICT RULES). A SCENARIO PARAMETER the "
+        "derivation multiplies by — a TAM, served market size, segment share, or "
+        "cost-share — is a MODELLING ASSUMPTION, NOT a fact the tools carry: do "
+        "NOT loop tools hunting for it, and do NOT treat its absence as a reason "
+        "to refuse. Retrieve the anchor, THEN let the synthesis turn supply the "
+        "missing scenario parameter as a clearly-labelled low-high assumption."
     ),
     "SIGNAL_INTEL": (
         "\n\nSIGNAL INTEL FORMAT:\n"

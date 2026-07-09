@@ -968,3 +968,43 @@ class TestToolUsePromptContract:
         core = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
         assert "wafer prices rise 10%" in core
         assert "SPECULATIVE FORECASTS" in core
+
+    def test_prompt_template_version_bumped_for_projection_scaffold(self) -> None:
+        """v1.21 (Area-2 harder projections) edits the REASONING addendum body
+        (flipping its content hash) and is the planning-turn companion to
+        chat_synthesis_system v1.19, so the semver version MUST advance to >= 1.21.
+        Pinning the floor catches an accidental revert of the projection-scaffold
+        routing rule."""
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 21), f"expected version >= 1.21 for projection scaffold, got {_ver}"
+
+    def test_reasoning_addendum_projection_scaffold_rule(self) -> None:
+        """v1.21 P2 (Area-2 harder projections — light routing rule): the REASONING
+        addendum must add a PROJECTION / WHAT-IF SCAFFOLD block instructing the
+        planner to (a) retrieve the base ANCHOR figures first, and (b) recognise a
+        SCENARIO PARAMETER (TAM / market size / share / cost-share) as a MODELLING
+        ASSUMPTION the tools do not carry — so it does NOT loop tools hunting for it
+        or refuse on its absence; the synthesis turn supplies it as a labelled
+        low-high assumption. Addendum-scoped: it must appear for REASONING and NOT
+        for an unrelated intent.
+        """
+        prompt = get_tool_use_system_prompt(intent="REASONING", today_iso="2026-07-09")
+        flat = " ".join(prompt.split())
+        assert "PROJECTION / WHAT-IF SCAFFOLD" in prompt
+        # (a) retrieve the base ANCHOR figures first.
+        assert "RETRIEVE the base ANCHOR figures" in flat
+        # (b) scenario parameter is a modelling assumption — do not chase / refuse.
+        assert "SCENARIO PARAMETER" in prompt
+        assert "MODELLING ASSUMPTION, NOT a fact the tools carry" in flat
+        assert "do NOT loop tools hunting for it" in flat
+        assert "do NOT treat its absence as a reason to refuse" in flat
+        # The synthesis turn supplies it as a labelled low-high assumption.
+        assert "labelled low-high assumption" in flat
+        # Points back to the STRICT-RULES what-if mandate (retrieve base first).
+        assert "WHAT-IF / PROJECTION rule in STRICT RULES" in flat
+        # The original REASONING format directive is preserved (additive).
+        assert "REASONING FORMAT" in prompt
+        assert "A cause must precede its effect" in prompt
+        # Addendum-scoped: absent for an unrelated intent.
+        other = get_tool_use_system_prompt(intent="MACRO", today_iso="2026-07-09")
+        assert "PROJECTION / WHAT-IF SCAFFOLD" not in other

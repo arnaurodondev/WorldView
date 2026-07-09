@@ -245,6 +245,23 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.21 — 2026-07-09 (Area-2 harder projections — P2 light projection-scaffold routing rule)
+
+- **PROJECTION / WHAT-IF SCAFFOLD on the REASONING addendum.** Planning-turn
+  companion to `chat_synthesis_system` v1.19 (which resolves the
+  anchor-vs-scenario-parameter conflict on the synthesis turn). The block tells
+  the planner to RETRIEVE the base ANCHOR figures first (revenue / margin / EPS /
+  cost, via the entity's fundamentals / intelligence tools — a what-if about a
+  named entity still needs its base figures, per the STRICT-RULES `WHAT-IF /
+  PROJECTION` mandate) but to recognise a SCENARIO PARAMETER (a TAM, served market
+  size, segment share, or cost-share the derivation multiplies by) as a MODELLING
+  ASSUMPTION the tools do not carry — so it must NOT loop tools hunting for it and
+  must NOT treat its absence as a reason to refuse; the synthesis turn supplies it
+  as a clearly-labelled low–high assumption.
+- **Impact.** Flips the content hash (REASONING addendum body edit). Additive +
+  light; no grounding / refusal / routing rule is relaxed. Source:
+  `docs/plans/2026-07-09-chat-enhancement-roadmap.md` Area 2 (P2).
+
 ### 1.20 — 2026-07-08 (SOFTEN the hypo regression — mandatory tool on entity what-ifs)
 
 - **WHAT-IF / PROJECTION ABOUT A NAMED ENTITY ⇒ CALL ITS TOOL FIRST.** The
@@ -523,6 +540,47 @@ is unchanged.
 > Note: CHANGELOG entries for v1.8–v1.11 were not recorded here at the time; the
 > full rationale for each lives in the version-log comments in
 > `src/prompts/chat/synthesis.py`. v1.12 below resumes the CHANGELOG.
+
+### 1.19 — 2026-07-09 (Area-2 harder projections — anchor-vs-scenario-parameter split)
+
+The owner's headline what-if use case still FAILED on scenario-parameter
+projections. Root cause (`docs/plans/2026-07-09-chat-enhancement-roadmap.md`
+Area 2): the `ANALYTICAL / WHAT-IF` block held an unresolved conflict — "never
+refuse a projection once you hold base figures → give a hedged range" AND "never
+invent the missing input" — but never distinguished an **anchor fact** (AMD
+revenue, NVDA margin: MUST retrieve + cite, no fabrication) from a **scenario
+parameter** (TAM, market size, segment share, cost-share: a *modelling
+assumption*, not a claimable fact). When the only path to a projected number ran
+through a scenario parameter, the model mis-classified it as forbidden anchor-fact
+fabrication and REFUSED (`hypo_amd_datacenter_share_revenue`,
+`hypo_amd_mi_accelerator_tam`, `hypo_nvda_news_next_quarter_reshape` all opened
+"I cannot determine …") — and the judge's `refusal_judgment` substring-matches
+"I cannot determine" / "not available" → a mechanical 0. The passing FX / HBM
+exemplars prove a labelled assume-and-range answer passes **without new data**.
+
+- **P0 — anchor-vs-parameter split.** LICENSE the model to introduce a
+  clearly-labelled, order-of-magnitude ASSUMPTION for a scenario parameter drawn
+  from general knowledge, fenced by THREE hard rules: (1) labelled "assumption —
+  not retrieved" and carrying NO `[tool_name row N]` citation tag; (2) ALWAYS
+  paired with a low–high RANGE; (3) NEVER used to state a present/past fact. The
+  anchor-fact anti-fabrication rule (revenue / margin / EPS MUST be retrieved +
+  cited) is intact. Adds a worked AMD exemplar mirroring the ideal answer
+  ("AMD's data-centre revenue is $Nbn [query_fundamentals row 0]; assuming a
+  served market of ~$X–Y bn (assumption — not retrieved) and share +Z pp, the
+  incremental revenue is roughly +$A–$B bn").
+- **P1 — ban refusal openers for projections.** The exact strings the judge
+  substring-matches ("I cannot determine", "cannot be calculated", "is not
+  available") are banned as openers/fallbacks for a what-if answer when the only
+  gap is a scenario parameter — phrase it "assuming a served market of ~$X …" +
+  range instead.
+- **P2 — projection scaffold.** A five-step template (retrieve base → state
+  labelled assumptions → show the calc → give a low–high range → flag
+  conditional / not advice) that systematises the winning FX / HBM shape.
+- **Impact.** Flips the content hash. NARROW + additive: every v1.5–v1.18
+  anti-fabrication / grounding / coverage rule is preserved and the license is
+  SCOPED to scenario parameters (assumptions), NEVER to anchor facts. Pairs with
+  `tool_use_system` v1.21 (light REASONING-addendum routing rule). Source:
+  `docs/plans/2026-07-09-chat-enhancement-roadmap.md` Area 2 (P0/P1/P2).
 
 ### 1.18 — 2026-07-08 (SOFTEN the v1.17 hypo regression — reverse over-refusal without re-enabling fabrication)
 

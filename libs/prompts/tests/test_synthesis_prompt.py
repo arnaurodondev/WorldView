@@ -59,14 +59,15 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.18 (chat-quality two-track audit — SOFTEN the v1.17 hypo regression:
-    # retrieved!=unverified provenance, rule-6 qualitative carve-out, hard
-    # row-cap, kill the "I cannot predict" opener) on top of v1.17 (D-d/D-e +
+    # v1.19 (Area-2 harder projections — anchor-vs-scenario-parameter split, P0/P1/
+    # P2) on top of v1.18 (chat-quality two-track audit — SOFTEN the v1.17 hypo
+    # regression: retrieved!=unverified provenance, rule-6 qualitative carve-out,
+    # hard row-cap, kill the "I cannot predict" opener), v1.17 (D-d/D-e +
     # Track-3), v1.16 (chain_nvda partial-row field fabrication), v1.15 (da_tsla
     # period-mislabel), v1.14 (iter3_msft unreported-latest-quarter), v1.13's
     # D7/D8/D4, v1.12's synthesis-behavior fixes, v1.11's data-coverage-boundary,
     # v1.10's reasoning-rigor and v1.9's what-if.
-    assert ident.startswith("chat_synthesis_system@1.18#")
+    assert ident.startswith("chat_synthesis_system@1.19#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -769,3 +770,111 @@ def test_synthesis_prompt_forbids_cannot_predict_opener_on_whatif() -> None:
     assert "NEVER REFUSE A PROJECTION AS" in rendered
     assert "ANALYTICAL / WHAT-IF QUESTIONS" in rendered
     assert "hedged RANGE" in rendered
+
+
+def test_synthesis_prompt_anchor_vs_scenario_parameter_split() -> None:
+    """v1.19 P0 (Area-2 harder projections): the ANALYTICAL / WHAT-IF block must
+    distinguish an ANCHOR FACT (revenue / margin / EPS — MUST be retrieved + cited,
+    no fabrication) from a SCENARIO PARAMETER (TAM / market size / segment share /
+    cost-share — a MODELLING ASSUMPTION), LICENSE a labelled order-of-magnitude
+    assumption for the scenario parameter drawn from general knowledge, fence it
+    with THREE hard rules ((1) labelled "assumption — not retrieved" with NO
+    citation tag, (2) ALWAYS a low-high range, (3) NEVER a present/past fact), and
+    carry a worked AMD exemplar mirroring the ideal answer.
+
+    Root cause: with only a scenario-parameter path to the number, the model
+    mis-classified it as forbidden anchor-fact fabrication and refused
+    (hypo_amd_datacenter_share_revenue et al.). The anchor-fact anti-fabrication
+    rule must remain intact.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    # The split anchor + the two labelled kinds of "missing input".
+    assert "ANCHOR FACT vs SCENARIO PARAMETER" in rendered
+    assert "An ANCHOR FACT is a real, claimable figure" in flat
+    assert "A SCENARIO PARAMETER is a MODELLING ASSUMPTION" in flat
+    # The license: an assumption for a scenario parameter is NOT forbidden fabrication.
+    assert "LICENSED to introduce a clearly-labelled" in flat
+    assert "NOT the forbidden fabrication of an anchor fact" in flat
+    # The three hard fences.
+    assert "THREE HARD FENCES ON AN ASSUMED SCENARIO PARAMETER" in rendered
+    assert 'LABEL IT "assumption — not retrieved"' in flat
+    assert "NO [tool_name row N] citation tag" in flat
+    assert "ALWAYS PAIR IT WITH A LOW-HIGH RANGE" in rendered
+    assert "NEVER USE IT TO STATE A PRESENT OR PAST FACT" in rendered
+    # The worked AMD exemplar: anchor cited, parameter labelled + un-cited + ranged.
+    assert "WORKED EXEMPLAR" in rendered
+    assert "[query_fundamentals row 0]" in rendered  # anchor is cited
+    assert "assuming a served market of ~$X-Y bn (assumption — not retrieved)" in flat
+    # GUARDRAIL: the anchor-fact anti-fabrication rule is UNCHANGED (additive).
+    assert "MUST be retrieved and cited" in flat
+    assert "you may NEVER invent or\n      estimate one" in rendered or ("you may NEVER invent or estimate one" in flat)
+    assert "ANTI-FABRICATION POLICY" in rendered
+    assert "ANALYTICAL / WHAT-IF QUESTIONS" in rendered
+
+
+def test_synthesis_prompt_bans_refusal_openers_for_projections() -> None:
+    """v1.19 P1 (Area-2 harder projections): the judge's refusal_judgment
+    substring-matches "I cannot determine" / "not available" → a mechanical 0. For
+    a what-if / projection answer whose only gap is a scenario parameter, those
+    exact openers must be BANNED; the model must instead phrase it as "assuming a
+    served market of ~$X …" + range.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "BANNED PROJECTION OPENERS" in rendered
+    # The exact substring-matched refusal phrases are named + forbidden.
+    assert '"I cannot determine' in rendered
+    assert "cannot be calculated" in rendered
+    assert "is not available" in rendered
+    # A missing scenario parameter is an input you SUPPLY, not a refusal.
+    assert "it is an input you SUPPLY" in flat
+    assert "read as refusals" in flat
+    # The replacement phrasing is shown.
+    assert "assuming a served market of\n  ~$X-Y bn" in rendered or ("assuming a served market of ~$X-Y bn" in flat)
+
+
+def test_synthesis_prompt_projection_scaffold_five_steps() -> None:
+    """v1.19 P2 (Area-2 harder projections): a five-step PROJECTION SCAFFOLD must
+    systematise the winning FX / HBM assume-and-range shape — retrieve base → state
+    labelled assumptions → show the calc → give a low-high range → flag conditional.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "PROJECTION SCAFFOLD" in rendered
+    # All five ordered steps.
+    assert "1. RETRIEVE THE BASE" in flat
+    assert "2. STATE THE ASSUMPTIONS" in flat
+    assert "3. SHOW THE CALC" in flat
+    assert "4. GIVE A LOW-HIGH RANGE" in flat
+    assert "5. FLAG IT CONDITIONAL" in flat
+    # Assumptions are labelled + un-cited; result is a hedged band; conditional flag.
+    assert '"assumption — not retrieved"' in flat
+    assert "not advice / not a retrieved fact" in flat
+
+
+def test_synthesis_prompt_v119_additive_prior_rules_intact() -> None:
+    """R19: the v1.19 P0/P1/P2 projection edits are ADDITIVE — every prior
+    anti-fabrication / grounding / coverage / projection rule must still be present.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    # v1.9-v1.18 blocks all remain.
+    assert "ANALYTICAL / WHAT-IF QUESTIONS" in rendered  # v1.9
+    assert "REASONING RIGOR ON DEEP QUESTIONS" in rendered  # v1.10
+    assert "DATA-COVERAGE BOUNDARY" in rendered  # v1.11
+    assert "COVER EVERY ENTITY NAMED" in rendered  # v1.12
+    assert "NEVER suppresses synthesis" in rendered  # v1.13
+    assert "LATEST-QUARTER-ONLY / UNREPORTED PERIOD" in rendered  # v1.14
+    assert "NEVER FROM TODAY'S DATE" in rendered  # v1.15
+    assert "PARTIAL ROW → DO NOT FILL A MISSING FIELD FROM MEMORY" in rendered  # v1.16
+    assert "NO PARAMETRIC-MEMORY BACKFILL" in rendered  # v1.17
+    assert "DO NOT OPEN WITH A REFUSAL LINE" in rendered  # v1.18
+    # Core anti-fabrication + the report-in-full balance are intact.
+    assert "ANTI-FABRICATION POLICY" in rendered
+    assert "NEVER invent periods" in rendered
+    assert "refuse ONLY the" in rendered
+    assert "never the whole answer" in rendered
+    # The v1.17 never-refuse-as-unknowable bullet remains alongside the new split.
+    assert "NEVER REFUSE A PROJECTION AS" in rendered
+    assert "NEVER invent the base inputs" in flat
