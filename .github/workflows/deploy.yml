@@ -77,6 +77,12 @@ jobs:
       postgres_changed: ${{ steps.filter.outputs.postgres }}
       gliner_changed: ${{ steps.filter.outputs.gliner }}
       synthetic_changed: ${{ steps.filter.outputs.synthetic }}
+      # intelligence-migrations is built by its OWN dedicated job (below) because
+      # its Dockerfile COPYs files with SERVICE-LOCAL paths (e.g. `COPY
+      # requirements.txt .`), so it must build with context
+      # services/intelligence-migrations/ — NOT the repo-root context the matrix
+      # uses. It is therefore excluded from the build-and-push matrix.
+      intelligence_migrations_changed: ${{ steps.filter.outputs['intelligence-migrations'] }}
       # api-gateway is the only service whose Dockerfile does
       # `FROM worldview-python-base:latest`, so it needs the shared base image
       # built + pushed to ghcr BEFORE its matrix build runs (see build-python-base
@@ -216,6 +222,11 @@ jobs:
       fail-fast: false  # don't cancel other services if one fails
       matrix:
         service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+        # intelligence-migrations builds in its OWN job (build-intelligence-
+        # migrations) with a service-local context — its Dockerfile uses relative
+        # COPY paths that break under the repo-root context this matrix uses.
+        exclude:
+          - service: intelligence-migrations
     permissions:
       contents: read
       packages: write  # required for ghcr.io push
@@ -238,9 +249,6 @@ jobs:
         id: tag
         run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      # intelligence-migrations has its own Dockerfile but no values/ file
-      # (it runs as a one-off Job, not a Deployment). Build it but skip the
-      # bump-image-tag step below for this service.
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
@@ -346,6 +354,96 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
 
   # ═══════════════════════════════════════════════════════════════════════════
+  # Job 6 (optional): Build + push intelligence-migrations
+  #
+  # WHY a dedicated job (not the build-and-push matrix): its Dockerfile COPYs
+  # files with SERVICE-LOCAL relative paths (`COPY requirements.txt .`,
+  # `COPY alembic/ alembic/`, `COPY entrypoint.sh .`, ...) which only resolve
+  # when the build context is services/intelligence-migrations/ — NOT the
+  # repo-root context the matrix uses. Building it in the matrix fails with
+  # "/entrypoint.sh: not found". This mirrors the docker-compose build (context:
+  # services/intelligence-migrations). No bump-image-tag PR: it runs as a one-off
+  # Job (values/intelligence-migrations.yaml pins :latest), not a Deployment.
+  # Only runs when services/intelligence-migrations/** or libs/** changes.
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-intelligence-migrations:
+    name: Build & Push — intelligence-migrations (custom)
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.intelligence_migrations_changed == 'true'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set image tag
+        id: tag
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: services/intelligence-migrations/
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/worldview-intelligence-migrations:latest
+            ${{ env.IMAGE_PREFIX }}/worldview-intelligence-migrations:${{ steps.tag.outputs.sha }}
+          cache-from: type=gha,scope=intelligence-migrations
+          cache-to: type=gha,mode=max,scope=intelligence-migrations
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 7 (optional): Build + push the GLiNER NER server image
+  #
+  # The GLiNER HTTP server (infra/gliner/server.py) is deployed from
+  # worldview-gitops (image ghcr.io/arnaurodondev/worldview-gliner). It is NOT a
+  # services/<name> hexagonal service, so it needs its own custom-image build,
+  # mirroring build-postgres / build-synthetic-monitor. No bump-image-tag step:
+  # the manifest pins :latest, not a per-SHA tag.
+  # Only runs when infra/gliner/ changes.
+  #
+  # NOTE: this build pre-downloads the ~500 MB GLiNER model into the image layer
+  # and runs validate_batch.py, so it is slower than the other custom images.
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-gliner:
+    name: Build & Push — gliner (custom)
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.gliner_changed == 'true'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set image tag
+        id: tag
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: infra/gliner/
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/worldview-gliner:latest
+            ${{ env.IMAGE_PREFIX }}/worldview-gliner:${{ steps.tag.outputs.sha }}
+          cache-from: type=gha,scope=gliner
+          cache-to: type=gha,mode=max,scope=gliner
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # ═══════════════════════════════════════════════════════════════════════════
   # Job 4: Bump image tags in worldview-gitops — 1 PR per changed service
   #
   # This job runs AFTER all builds complete. For each changed service
@@ -360,6 +458,14 @@ jobs:
   bump-image-tag:
     name: Bump image tag — ${{ matrix.service }}
     runs-on: ubuntu-latest
+    # continue-on-error: this job requires the GITOPS_APP_PRIVATE_KEY / GITOPS_APP_ID
+    # GitHub App secrets to mint a token for worldview-gitops. Until those are
+    # configured, the "Generate GitHub App token" step fails — but that must NOT
+    # fail the overall Deploy workflow or block the image pushes above. The gitops
+    # values/*.yaml pin `tag: latest`, so the `:latest` images pushed by the build
+    # jobs are sufficient for the first deploy WITHOUT this SHA-bump PR automation.
+    # Once the App secrets are set, remove this line to make bump failures fatal.
+    continue-on-error: true
     needs: [detect-changes, build-and-push]
     # Run even if build-and-push had individual failures (fail-fast: false)
     if: >-
