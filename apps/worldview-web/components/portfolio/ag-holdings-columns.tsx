@@ -427,6 +427,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "ticker",
     headerName: "TICKER",
+    group: "core", // W-E: locked-visible anchor (never hideable by the toggle)
     pinned: "left" as const,
     lockPinned: true,
     suppressMovable: true,
@@ -447,6 +448,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "name",
     headerName: "NAME",
+    group: "portfolio", // W-E
     sortable: false,
     flex: 1,
     minWidth: HOLDINGS_AG_COL_WIDTHS.name,
@@ -458,6 +460,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "qty",
     headerName: "QTY",
+    group: "core", // W-E
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.qty,
     cellClass: CELL_CLAMP, // P-1
@@ -469,6 +472,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "avg_cost",
     headerName: "AVG COST",
+    group: "core", // W-E
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.avgCost,
     cellClass: CELL_CLAMP, // P-1
@@ -484,6 +488,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "current",
     headerName: "LAST",
+    group: "core", // W-E
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.current,
     cellClass: CELL_CLAMP, // P-1
@@ -497,6 +502,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "dayChange",
     headerName: "DAY Δ$",
+    group: "portfolio", // W-E
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.dayChange,
     cellClass: CELL_CLAMP, // P-1
@@ -508,6 +514,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "dayChangePct",
     headerName: "DAY Δ%",
+    group: "portfolio", // W-E
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.dayChangePct,
     cellClass: CELL_CLAMP, // P-1
@@ -531,6 +538,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "spark",
     headerName: "SPARK",
+    group: "advanced", // W-E
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.spark,
     headerClass: "!text-center",
@@ -549,6 +557,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "value",
     headerName: "MKT VALUE",
+    group: "core", // W-E
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.value,
     cellClass: CELL_CLAMP, // P-1 (this column showed the "$6$618.24" double-draw)
@@ -564,6 +573,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "pnl",
     headerName: "UNREAL $",
+    group: "core", // W-E
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.pnl,
     cellClass: CELL_CLAMP, // P-1
@@ -576,6 +586,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "pnlPct",
     headerName: "UNREAL %",
+    group: "portfolio", // W-E
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.pnlPct,
     cellClass: CELL_CLAMP, // P-1
@@ -587,6 +598,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "weight",
     headerName: "WEIGHT",
+    group: "portfolio", // W-E
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.weight,
     // P-1: the weight cell renders a 3px bar + % inside a flex row; justify-end
@@ -601,6 +613,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "sector",
     headerName: "SECTOR",
+    group: "advanced", // W-E
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.sector,
     cellClass: CELL_CLAMP, // P-1
@@ -626,6 +639,7 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "asset",
     headerName: "ASSET",
+    group: "advanced", // W-E
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.asset,
     headerClass: "!text-center",
@@ -647,6 +661,10 @@ export const holdingsAgColumns: HoldingColDef[] = [
   {
     colId: "divYld",
     headerName: "DIV YLD",
+    // W-E: Advanced group, but SELF-HIDDEN — keeps its own hide:true and is never
+    // force-shown by the group toggle (individually toggleable via AG-Grid's own
+    // column menu; see holdings-column-groups.ts SELF_HIDDEN_COL_IDS).
+    group: "advanced",
     sortable: false,
     hide: true,
     width: HOLDINGS_AG_COL_WIDTHS.divYld,

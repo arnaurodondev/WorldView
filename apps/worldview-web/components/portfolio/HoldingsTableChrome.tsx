@@ -11,7 +11,7 @@
 "use client";
 // WHY "use client": useEffect attaches document keydown listener; useRef for input focus.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 interface HoldingsTableChromeProps {
   positionCount: number;
@@ -22,6 +22,12 @@ interface HoldingsTableChromeProps {
   onFilterChange: (v: string) => void;
   filterVisible: boolean;
   onFilterVisibleChange: (v: boolean) => void;
+  /**
+   * PLAN-0122 W-E: optional trailing control rendered at the right of the chrome
+   * row (the ⚙ HoldingsColumnGroupToggle). Optional + additive so every existing
+   * caller/snapshot that omits it is byte-identical. Sits left of the filter hint.
+   */
+  columnToggle?: ReactNode;
 }
 
 export function HoldingsTableChrome({
@@ -31,6 +37,7 @@ export function HoldingsTableChrome({
   onFilterChange,
   filterVisible,
   onFilterVisibleChange,
+  columnToggle,
 }: HoldingsTableChromeProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -61,7 +68,7 @@ export function HoldingsTableChrome({
       <div className="flex h-[22px] items-center px-3 gap-3">
         <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground">Positions</span>
         <span className="font-mono text-[11px] tabular-nums text-foreground">{positionCount}</span>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1">
           <button
             type="button"
             onClick={() => {
@@ -72,6 +79,9 @@ export function HoldingsTableChrome({
           >
             ⎵ filter (Ctrl+F)
           </button>
+          {/* W-E: ⚙ column-group toggle (Advanced only — the parent passes it as
+              null in Simple). Kept last so it anchors the row's right edge. */}
+          {columnToggle}
         </div>
       </div>
 

@@ -28,8 +28,77 @@
  * PLAN-0108 W4-T401 | PLAN-0114 W6 divYld (FR-12)
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render } from "@testing-library/react";
 import { holdingsAgColumns, HOLDINGS_AG_COL_WIDTHS } from "../ag-holdings-columns";
+import { SemanticHoldingsTable } from "../SemanticHoldingsTable";
+import type { Holding } from "@/types/api";
+
+// ── PLAN-0122 W-E (T-A-E-02): grid-ready ordering harness ────────────────────
+// WHY a LOCAL enriched ag-grid mock (overrides the global vitest.setup stub for
+// THIS file): the global stub has no `setColumnsVisible`, so the group layer
+// no-ops under it. Here we record every applyColumnState + setColumnsVisible call
+// IN ORDER so we can prove the group-visibility layer runs AFTER the state restore
+// and with the right colIds. `ops` is hoisted so the mock factory can push to it.
+const ops = vi.hoisted(
+  () => [] as Array<{ method: string; ids?: string[]; visible?: boolean }>,
+);
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+  usePathname: () => "/portfolio",
+  useSearchParams: () => new URLSearchParams(),
+}));
+
+vi.mock("ag-grid-react", async () => {
+  const React = await import("react");
+  function AgGridReact(props: Record<string, unknown>) {
+    const onGridReady = props.onGridReady as ((e: unknown) => void) | undefined;
+    const api = React.useRef({
+      // Record restore/sort applyColumnState calls (order-sensitive).
+      applyColumnState: () => ops.push({ method: "applyColumnState" }),
+      // Record the group-visibility layer's calls with their colIds + visibility.
+      setColumnsVisible: (ids: string[], visible: boolean) =>
+        ops.push({ method: "setColumnsVisible", ids, visible }),
+      getColumnState: () => [],
+      flashCells: () => {},
+      forEachNode: () => {},
+    });
+    React.useEffect(() => {
+      onGridReady?.({ api: api.current });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return React.createElement("div", { "data-testid": "ag-grid-mock" });
+  }
+  return { AgGridReact };
+});
+
+const H: Holding = {
+  holding_id: "h-1",
+  portfolio_id: "p-1",
+  instrument_id: "ins-1",
+  entity_id: "ent-1",
+  ticker: "AAPL",
+  name: "Apple",
+  quantity: 10,
+  average_cost: 100,
+  current_price: 150,
+  unrealised_pnl: 500,
+  unrealised_pnl_pct: 0.5,
+};
+
+// The last setColumnsVisible op tagged visible=false (the group "hide" list) and
+// the last tagged visible=true excluding the locked-anchor call.
+function hideIds(): string[] {
+  const op = [...ops].reverse().find((o) => o.method === "setColumnsVisible" && o.visible === false);
+  return op?.ids ?? [];
+}
+function showIds(): string[] {
+  // The first visible=true call is the group "show" list; the final one is the
+  // locked anchors (ticker/actions). We want the group show list.
+  const op = ops.find((o) => o.method === "setColumnsVisible" && o.visible === true);
+  return op?.ids ?? [];
+}
 
 // ── holdingsAgColumns — 15-column spec ───────────────────────────────────────
 
@@ -210,5 +279,56 @@ describe("holdingsAgColumns (16-column spec — PLAN-0122 W-D actions added)", (
       expect(byId[colId], `colId "${colId}" must exist`).toBeDefined();
       expect(byId[colId].headerName).toBe(expectedHeader);
     }
+  });
+});
+
+// ── PLAN-0122 W-E (T-A-E-02): group-visibility applied after restore ─────────
+describe("SemanticHoldingsTable · column-group visibility layer (R-25/R-26)", () => {
+  beforeEach(() => {
+    ops.length = 0;
+    window.localStorage.clear();
+  });
+
+  it("test_group_visibility_applied_after_restore: setColumnsVisible runs after applyColumnState", () => {
+    render(<SemanticHoldingsTable holdings={[H]} quotes={{}} totalValue={1500} mode="advanced" />);
+    const firstVisible = ops.findIndex((o) => o.method === "setColumnsVisible");
+    const lastRestore = ops.map((o) => o.method).lastIndexOf("applyColumnState");
+    // Group visibility must be the LAST layer — every applyColumnState (restore +
+    // sort) precedes the first setColumnsVisible so the group layer wins.
+    expect(firstVisible).toBeGreaterThan(-1);
+    expect(lastRestore).toBeGreaterThan(-1);
+    expect(firstVisible).toBeGreaterThan(lastRestore);
+    // Advanced default shows the portfolio/advanced columns (not divYld).
+    expect(showIds()).toEqual(expect.arrayContaining(["name", "spark", "sector"]));
+    expect(showIds()).not.toContain("divYld");
+  });
+
+  it("test_simple_forces_core_only: mode=simple hides all non-Core columns", () => {
+    render(<SemanticHoldingsTable holdings={[H]} quotes={{}} totalValue={1500} mode="simple" />);
+    const hidden = hideIds();
+    // Portfolio + Advanced groups are all hidden in Simple.
+    for (const id of ["name", "dayChange", "dayChangePct", "pnlPct", "weight", "spark", "sector", "asset", "divYld"]) {
+      expect(hidden).toContain(id);
+    }
+    // Only Core-data columns are force-shown (anchors handled by a separate call).
+    expect(showIds().sort()).toEqual(["avg_cost", "current", "pnl", "qty", "value"].sort());
+  });
+
+  it("test_advanced_uses_saved_group_state: portfolio:false hides Portfolio columns", () => {
+    render(
+      <SemanticHoldingsTable
+        holdings={[H]}
+        quotes={{}}
+        totalValue={1500}
+        mode="advanced"
+        columnGroups={{ core: true, portfolio: false, advanced: true }}
+      />,
+    );
+    const hidden = hideIds();
+    for (const id of ["name", "dayChange", "dayChangePct", "pnlPct", "weight"]) {
+      expect(hidden).toContain(id);
+    }
+    // Advanced group still shown.
+    expect(showIds()).toEqual(expect.arrayContaining(["spark", "sector", "asset"]));
   });
 });

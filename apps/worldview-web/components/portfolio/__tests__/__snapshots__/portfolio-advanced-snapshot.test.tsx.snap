@@ -331,13 +331,55 @@ exports[`PLAN-0122 W-A · Advanced-mode parity (anti-fork guard) > test_advanced
           1
         </span>
         <div
-          class="ml-auto"
+          class="ml-auto flex items-center gap-1"
         >
           <button
             class="text-[10px] font-mono text-muted-foreground hover:text-foreground"
             type="button"
           >
             ⎵ filter (Ctrl+F)
+          </button>
+          <button
+            aria-controls="radix-:r0:"
+            aria-expanded="false"
+            aria-haspopup="dialog"
+            aria-label="Show or hide table columns"
+            class="flex h-7 w-7 items-center justify-center rounded-[2px] text-muted-foreground hover:text-foreground hover:bg-white/[0.04] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            data-state="closed"
+            data-tour-target="column-toggle"
+            title="Show / hide column groups"
+            type="button"
+          >
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-settings2 h-3.5 w-3.5"
+              fill="none"
+              height="24"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              viewBox="0 0 24 24"
+              width="24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M20 7h-9"
+              />
+              <path
+                d="M14 17H5"
+              />
+              <circle
+                cx="17"
+                cy="17"
+                r="3"
+              />
+              <circle
+                cx="7"
+                cy="7"
+                r="3"
+              />
+            </svg>
           </button>
         </div>
       </div>

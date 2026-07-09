@@ -1113,9 +1113,9 @@ All **31 requirements (R-1 … R-31)** are mapped to at least one task. No gaps.
 ### Wave E
 | Task | Title | Status |
 |------|-------|--------|
-| T-A-E-01 | Column-group metadata + config module | pending |
-| T-A-E-02 | Apply group visibility after restore + Simple/Advanced gate | pending |
-| T-A-E-03 | `HoldingsColumnGroupToggle` ⚙ popover + wiring | pending |
+| T-A-E-01 | Column-group metadata + config module | done |
+| T-A-E-02 | Apply group visibility after restore + Simple/Advanced gate | done |
+| T-A-E-03 | `HoldingsColumnGroupToggle` ⚙ popover + wiring | done |
 
 ### Wave F
 | Task | Title | Status |

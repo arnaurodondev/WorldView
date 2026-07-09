@@ -42,6 +42,16 @@ import { EmptyState } from "@/components/primitives/EmptyState";
 import { Wallet } from "lucide-react";
 import { AgGridBase } from "@/components/ui/ag-grid/AgGridBase";
 import { holdingsAgColumns } from "./ag-holdings-columns";
+// PLAN-0122 W-E: the Core/Portfolio/Advanced column-group layer. WHY a shared
+// module (not the W-B inline constants): the ⚙ toggle, the table, and the tests
+// all read the SAME membership + persistence, and the visibility maths (which
+// colIds to show/hide for a group state) is centralised + unit-tested there.
+import {
+  type HoldingsColGroups,
+  LOCKED_COL_IDS,
+  computeGroupVisibility,
+  groupStateForMode,
+} from "@/lib/portfolio/holdings-column-groups";
 import { useContextMenuActions } from "@/hooks/useContextMenuActions";
 import type { HoldingRowContext, ActionContext } from "@/lib/command-actions";
 import type { EnrichedHoldingRow } from "./holdings-columns";
@@ -79,19 +89,6 @@ const HOLDINGS_COLS_KEY = "worldview-holdings-cols";
 const VALID_SORT_COL_IDS = new Set([
   "qty", "dayChange", "dayChangePct", "pnl", "pnlPct", "value", "weight",
 ]);
-
-// ── PLAN-0122 W-B: Simple-mode Core column subset (minimal inline guard) ───────
-// WHY here: Simple mode shows ONLY the Core-6 columns (PRD-0122 §6.7). The full
-// Core/Portfolio/Advanced column-group TOGGLE is W-E; this wave applies a minimal
-// guard so Simple already renders a clean 6-column list. `ticker` is pinned/locked
-// and always visible, so it is not in the toggle list. TODO(PLAN-0122 W-E):
-// replace this hard-coded subset with the shared holdings-column-groups module.
-const SIMPLE_CORE_COL_IDS = ["ticker", "qty", "avg_cost", "current", "value", "pnl"];
-// Every non-locked colId the Simple guard may hide/show. Kept explicit so a new
-// column added later must be consciously assigned to Core or non-Core.
-const NON_CORE_COL_IDS = [
-  "name", "dayChange", "dayChangePct", "spark", "pnlPct", "weight", "sector", "asset", "divYld",
-];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -168,12 +165,18 @@ export interface SemanticHoldingsTableProps {
   /** Called after a successful Close Position so the parent can refetch holdings. */
   onHoldingsRefetch?: () => void;
   /**
-   * PLAN-0122 W-A: portfolio detail level. Optional, default "advanced".
-   * UNUSED this wave (thread-only) — reserved for W-E (Simple forces the Core
-   * column group) and W-D (the pinned-right ACTIONS kebab). Declared now so the
-   * prop contract is stable and callers don't change again in later waves.
+   * PLAN-0122 W-A/W-E: portfolio detail level. Optional, default "advanced".
+   * Simple forces the Core-only column group; Advanced honours `columnGroups`
+   * (the saved toggle state). See applyGroupColumnVisibility below.
    */
   mode?: "simple" | "advanced";
+  /**
+   * PLAN-0122 W-E: the Advanced-mode enabled-groups state from the ⚙
+   * HoldingsColumnGroupToggle (controlled by HoldingsTab). Optional — when
+   * omitted the table falls back to `loadGroupState()` (the persisted default).
+   * Ignored in Simple mode (Simple always forces Core-only).
+   */
+  columnGroups?: HoldingsColGroups;
 }
 
 // ── Context menu overlay ──────────────────────────────────────────────────────
@@ -198,8 +201,10 @@ export function SemanticHoldingsTable({
   portfolioKind,
   accessToken,
   onHoldingsRefetch,
-  // PLAN-0122 W-B: drives the Simple Core-only column guard (see below).
+  // PLAN-0122 W-B/W-E: drives the Simple/Advanced column-group visibility (below).
   mode = "advanced",
+  // PLAN-0122 W-E: Advanced-mode enabled groups (from the ⚙ toggle).
+  columnGroups,
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -208,15 +213,28 @@ export function SemanticHoldingsTable({
   // ── AG Grid API ref ───────────────────────────────────────────────────────
   const gridApiRef = useRef<GridApi<EnrichedHoldingRow> | null>(null);
 
-  // ── PLAN-0122 W-B: Simple Core-only column guard ────────────────────────────
-  // modeRef mirrors the latest `mode` so the STABLE (empty-dep) persistence
-  // callback below can read it without being re-created. WHY not persist in
-  // Simple: Simple force-hides the non-Core columns; writing that to the shared
-  // `worldview-holdings-cols` key would OVERWRITE the user's saved Advanced layout
-  // (the two are orthogonal — W-E formalises this). So Simple's forced visibility
-  // is view-only and never persisted.
+  // ── PLAN-0122 W-B/W-E: Simple/Advanced column-group visibility ──────────────
+  // modeRef mirrors the latest `mode` so the STABLE (empty-dep) persistence +
+  // grid-ready callbacks below can read it without being re-created. WHY not
+  // persist while the group layer is applying: the group toggle force-hides/shows
+  // columns; writing THAT to the shared `worldview-holdings-cols` key would leak
+  // group-visibility into the widths/order key (they must stay ORTHOGONAL, R-25).
+  // So group-driven visibility is view-only and never persisted (the group state
+  // has its own `worldview:holdingsColGroups:v1` key).
   const modeRef = useRef(mode);
   modeRef.current = mode;
+
+  // columnGroupsRef mirrors the latest Advanced-mode enabled-groups prop so the
+  // stable callbacks read the current value without being re-created on each
+  // toggle (the effect below re-applies on a genuine change).
+  const columnGroupsRef = useRef(columnGroups);
+  columnGroupsRef.current = columnGroups;
+
+  // suppressPersistRef: set true WHILE we programmatically apply group visibility
+  // so the resulting onColumnStateChanged events do NOT persist to
+  // `worldview-holdings-cols`. AG-Grid fires those events synchronously inside
+  // setColumnsVisible, so wrapping the calls (below) reliably brackets them.
+  const suppressPersistRef = useRef(false);
 
   // restoreSavedColumnState — re-apply the user's persisted Advanced layout, or,
   // when nothing is saved, reset every column to its defined default (all visible
@@ -244,29 +262,48 @@ export function SemanticHoldingsTable({
     }
   }, []);
 
-  // applyModeColumnVisibility — the actual Simple/Advanced column gate.
-  const applyModeColumnVisibility = useCallback(
+  // applyGroupColumnVisibility — the Core/Portfolio/Advanced visibility layer
+  // (PLAN-0122 W-E, PRD §6.7). This is applied AFTER `restoreSavedColumnState`
+  // (which restores widths/order from `worldview-holdings-cols`) so the GROUP
+  // layer is the higher-level control and always wins on visibility. The two
+  // localStorage keys are ORTHOGONAL: widths/order in `worldview-holdings-cols`,
+  // group visibility in `worldview:holdingsColGroups:v1`.
+  //   • Simple  → force the Core-only set regardless of the saved group state
+  //               (leaving Simple restores the user's Advanced choice — the saved
+  //               blob is never touched).
+  //   • Advanced→ honour `columnGroups` (or the persisted default via
+  //               groupStateForMode → loadGroupState).
+  // `divYld` is never force-shown here (see holdings-column-groups.ts) so it keeps
+  // its own hide:true and stays individually toggleable via AG-Grid's column menu.
+  const applyGroupColumnVisibility = useCallback(
     (api: GridApi<EnrichedHoldingRow>, m: "simple" | "advanced") => {
-      if (m === "simple") {
-        // Show the Core-6, hide everything else. `ticker` is locked-visible.
-        // WHY the typeof guard: the jsdom AG Grid stub (vitest.setup.ts) provides
-        // a partial GridApi without setColumnsVisible; guarding keeps the Simple
-        // render from crashing under test while the real GridApi (v31+) has it.
-        if (typeof api.setColumnsVisible !== "function") return;
-        api.setColumnsVisible(NON_CORE_COL_IDS, false);
-        api.setColumnsVisible(SIMPLE_CORE_COL_IDS, true);
-      } else {
-        restoreSavedColumnState(api);
+      // WHY the typeof guard: the jsdom AG Grid stub (vitest.setup.ts) provides a
+      // partial GridApi without setColumnsVisible; guarding keeps the render from
+      // crashing under test while the real GridApi (v31+) always has it.
+      if (typeof api.setColumnsVisible !== "function") return;
+      const groups = groupStateForMode(m, columnGroupsRef.current);
+      const { show, hide } = computeGroupVisibility(groups);
+      // Bracket the mutations so their onColumnStateChanged events don't persist
+      // into the widths/order key (R-25 orthogonality). AG-Grid dispatches these
+      // synchronously, so the flag is safely reset in the finally.
+      suppressPersistRef.current = true;
+      try {
+        api.setColumnsVisible(hide, false);
+        api.setColumnsVisible(show, true);
+        // Anchors are always visible, even if a corrupt state implied otherwise.
+        api.setColumnsVisible([...LOCKED_COL_IDS], true);
+      } finally {
+        suppressPersistRef.current = false;
       }
     },
-    [restoreSavedColumnState],
+    [],
   );
 
-  // React to a runtime mode toggle (Advanced↔Simple) without a remount.
-  // WHY skip the FIRST run: handleGridReady owns the INITIAL apply. If this effect
-  // also ran on mount it would (in Advanced) redundantly re-restore column state
-  // and clobber the default sort handleGridReady just set. So we act only on a
-  // genuine mode CHANGE after mount.
+  // React to a runtime mode toggle (Advanced↔Simple) OR a group-toggle change
+  // without a remount. WHY skip the FIRST run: handleGridReady owns the INITIAL
+  // apply. If this effect also ran on mount it would redundantly re-apply (and,
+  // via restore, could clobber the default sort handleGridReady just set). So we
+  // act only on a genuine change after mount.
   const modeEffectFirstRun = useRef(true);
   useEffect(() => {
     if (modeEffectFirstRun.current) {
@@ -275,8 +312,11 @@ export function SemanticHoldingsTable({
     }
     const api = gridApiRef.current;
     if (!api) return;
-    applyModeColumnVisibility(api, mode);
-  }, [mode, applyModeColumnVisibility]);
+    // On a Simple→Advanced switch the grid still holds Simple's forced state, so
+    // re-restore widths/order first, then re-apply the (Advanced) group layer.
+    if (mode === "advanced") restoreSavedColumnState(api);
+    applyGroupColumnVisibility(api, mode);
+  }, [mode, columnGroups, applyGroupColumnVisibility, restoreSavedColumnState]);
 
   // ── Context menu state ────────────────────────────────────────────────────
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
@@ -367,13 +407,12 @@ export function SemanticHoldingsTable({
         });
       }
 
-      // PLAN-0122 W-B: apply the Simple Core-only guard LAST so it wins over any
-      // restored Advanced layout. In Advanced this is a no-op — the effect below
-      // owns runtime toggles, so no redundant restore runs here (which would
-      // otherwise clobber the default sort just applied above).
-      if (modeRef.current === "simple") {
-        applyModeColumnVisibility(params.api, "simple");
-      }
+      // PLAN-0122 W-E: apply the Core/Portfolio/Advanced group-visibility layer
+      // LAST — AFTER the per-column state restore + sort — so it is the higher-
+      // level control and wins on visibility (widths/order still came from the
+      // restore above). Runs in BOTH modes: Simple forces Core-only; Advanced
+      // honours the saved/passed group state. `divYld` keeps its own hide.
+      applyGroupColumnVisibility(params.api, modeRef.current);
     },
     // searchParams is stable on mount; this should not re-run on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -407,11 +446,13 @@ export function SemanticHoldingsTable({
   const handleColumnStateChanged = useCallback(() => {
     const api = gridApiRef.current;
     if (!api) return;
-    // PLAN-0122 W-B: never persist while Simple mode has force-hidden the non-Core
-    // columns — doing so would overwrite the user's saved Advanced layout with a
-    // Core-only state. The `setColumnsVisible` calls in applyModeColumnVisibility
-    // fire this handler; the guard makes Simple's visibility view-only.
-    if (modeRef.current === "simple") return;
+    // PLAN-0122 W-B/W-E: never persist while the group layer is applying (or in
+    // Simple mode, which force-hides the non-Core columns). Persisting either
+    // would leak group-visibility into the widths/order key and, in Simple,
+    // overwrite the user's saved Advanced layout with a Core-only state. The
+    // `setColumnsVisible` calls in applyGroupColumnVisibility fire this handler;
+    // the guard makes group-driven visibility view-only (R-25 orthogonality).
+    if (modeRef.current === "simple" || suppressPersistRef.current) return;
     try {
       localStorage.setItem(HOLDINGS_COLS_KEY, JSON.stringify(api.getColumnState()));
     } catch (e) {

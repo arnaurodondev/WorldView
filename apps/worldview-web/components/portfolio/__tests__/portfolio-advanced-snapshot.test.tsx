@@ -23,6 +23,16 @@
  *   with `pnpm vitest run -u` for this and only this reason. Any FURTHER diff must
  *   again be traced to a deliberate Advanced change before you run -u.
  *
+ * ✅ SANCTIONED REGENERATION — PLAN-0122 W-E (the SECOND approved change):
+ *   W-E added the ⚙ HoldingsColumnGroupToggle (a Settings2 gear button) to the
+ *   HoldingsTableChrome row, rendered ONLY in Advanced mode (PRD §6.7 / R-26).
+ *   This is an INTENTIONAL Advanced-layout addition (the plan's W-E tasks
+ *   explicitly authorise the toggle UI), NOT a Simple-mode side effect — Simple
+ *   passes `columnToggle={null}` so its chrome is byte-identical to before. The
+ *   snapshot was regenerated with `pnpm vitest run -u` for this and only this
+ *   reason: the Advanced chrome now carries the extra gear button. Any FURTHER
+ *   diff must again be traced to a deliberate Advanced change before you run -u.
+ *
  * SCOPE NOTE (deviation, documented): the plan's T-A-A-04 lists both HoldingsTab
  * strips AND page-level chrome (8 KPI tiles, the 4-trigger TabsList) in one
  * snapshot. Mounting the whole `page.tsx` would require mocking usePortfolioData

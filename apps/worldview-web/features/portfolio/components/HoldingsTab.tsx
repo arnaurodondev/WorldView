@@ -67,6 +67,12 @@ import type { PerfPeriod } from "@/components/portfolio/PerformanceChartPanel";
 import { SectorAllocationBar } from "@/components/portfolio/SectorAllocationBar";
 import { HoldingsTableChrome } from "@/components/portfolio/HoldingsTableChrome";
 import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTable";
+// PLAN-0122 W-E: the ⚙ column-group toggle + its persisted group state.
+import { HoldingsColumnGroupToggle } from "@/components/portfolio/HoldingsColumnGroupToggle";
+import {
+  type HoldingsColGroups,
+  loadGroupState,
+} from "@/lib/portfolio/holdings-column-groups";
 // ── PRD-0108 W3 SPARK column data hook ────────────────────────────────────────
 import { useHoldingsSeries } from "@/features/portfolio/hooks/useHoldingsSeries";
 // ── PRD-0108 W4 bottom strip cluster ──────────────────────────────────────────
@@ -230,6 +236,15 @@ export function HoldingsTab({
   // WHY brokerage strips STAY in Simple: a casual user who linked a brokerage
   // still needs to see "last synced / N errors" — that is status, not analytics.
   const isAdvanced = mode === "advanced";
+
+  // ── PLAN-0122 W-E: column-group toggle state ───────────────────────────────
+  // WHY state here (not inside the table): the ⚙ toggle lives in the chrome row
+  // and the table needs the SAME enabled-groups value to apply visibility — this
+  // is the shared source of truth. Seeded lazily from localStorage
+  // (`worldview:holdingsColGroups:v1`); corrupt/absent → Advanced default (every
+  // column except divYld, i.e. today's layout). Only meaningful in Advanced;
+  // Simple ignores it (the table forces Core-only, the toggle is hidden).
+  const [colGroups, setColGroups] = useState<HoldingsColGroups>(() => loadGroupState());
 
   // ── PerformanceChartPanel state ────────────────────────────────────────────
   // WHY local state (not URL): collapse toggle is ephemeral UI preference.
@@ -550,6 +565,20 @@ export function HoldingsTab({
         onFilterChange={setFilterText}
         filterVisible={filterVisible}
         onFilterVisibleChange={setFilterVisible}
+        // PLAN-0122 W-E: the ⚙ column-group toggle, Advanced-only. The component
+        // self-gates on `mode` too (returns null in Simple), but passing it only
+        // when Advanced keeps the Simple chrome byte-identical to before.
+        columnToggle={
+          isAdvanced ? (
+            <HoldingsColumnGroupToggle
+              mode={mode}
+              groups={colGroups}
+              // onChange updates the shared state → re-applies table visibility.
+              // The toggle itself persists to localStorage (saveGroupState).
+              onChange={setColGroups}
+            />
+          ) : null
+        }
       />
 
       {/* ══ PRD-0114 W4: brokerage sync-status strip ══════════════════════════
@@ -661,10 +690,14 @@ export function HoldingsTab({
         ) : (
         // Case 4: holdings present (or portfolioKind is "root" / null).
         <SemanticHoldingsTable
-          // PLAN-0122 W-A: thread the detail level (default "advanced"). Unused
-          // by the table this wave; reserved for W-E (Core-only column group in
-          // Simple) and W-D (row-action kebab entry points).
+          // PLAN-0122 W-A/W-E: thread the detail level (default "advanced").
+          // Simple forces the Core-only column group; Advanced honours
+          // columnGroups below.
           mode={mode}
+          // PLAN-0122 W-E: the enabled group state from the ⚙ toggle. The table
+          // applies visibility from this AFTER its own width/order restore (the
+          // two localStorage keys are orthogonal). Ignored in Simple.
+          columnGroups={colGroups}
           // R2 sprint: visibleHoldings = enrichedHoldings when no sector
           // filter (same reference), or the sector subset when filtered.
           holdings={visibleHoldings}
