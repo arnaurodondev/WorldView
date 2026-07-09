@@ -29,15 +29,43 @@ runcmd:
       grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
     fi
 
+  # ── Private NIC (robust) ────────────────────────────────────────────────────
+  # DHCP-configure the Hetzner private NIC BEFORE the wait loop — if cloud-init's
+  # generated netplan omitted it (boot-vs-attach race, observed 2026-07-07), the
+  # node has no 10.0.1.x IP and can never reach the control-plane (B-NIC).
+  - |
+    for IFACE in enp7s0 ens10 enp1s0; do
+      if ip link show "$IFACE" >/dev/null 2>&1; then
+        printf 'network:\n  version: 2\n  ethernets:\n    %s:\n      dhcp4: true\n' "$IFACE" > /etc/netplan/60-private.yaml
+        chmod 600 /etc/netplan/60-private.yaml
+        netplan apply || true
+        break
+      fi
+    done
+    until ip -4 addr show | grep -q "inet 10\.0\."; do sleep 3; done
+
   # Wait until the control-plane API is reachable on the private network
   - until nc -z ${cp_private_ip} 6443; do sleep 5; done
 
   # Join the cluster as an agent (worker), labelled with its node-role so the
   # scheduler can place stateful vs. stateless workloads on the right node.
+  # kubelet cloud-provider=external → the Hetzner CCM sets this node's InternalIP
+  # to its PRIVATE 10.0.1.x address (required: the firewall only allows kubelet
+  # traffic over the private net, and the CCM/LoadBalancer integration needs it).
   - |
+    PUBLIC_IP="$(curl -sf http://169.254.169.254/hetzner/v1/metadata/public-ipv4)"
+    # Pin flannel/k3s to the private NIC/IP (see cp.yml) so the cluster network is up
+    # before the CCM initializes nodes — otherwise flannel has no node-ip and the CCM
+    # can't reach the API server (bootstrap deadlock).
+    PRIV_IFACE="$(ip -4 -o addr show | awk '/inet 10\.0\./{print $2; exit}')"
+    PRIV_IP="$(ip -4 -o addr show | grep -oE '10\.0\.[0-9.]+' | head -1)"
     curl -sfL https://get.k3s.io | \
       INSTALL_K3S_VERSION="v1.31.4+k3s1" \
       K3S_URL="https://${cp_private_ip}:6443" \
       K3S_TOKEN="${k3s_token}" \
       sh -s - agent \
+        --kubelet-arg cloud-provider=external \
+        --node-ip "$PRIV_IP" \
+        --node-external-ip "$PUBLIC_IP" \
+        --flannel-iface "$PRIV_IFACE" \
         --node-label "node-role=${node_role}"

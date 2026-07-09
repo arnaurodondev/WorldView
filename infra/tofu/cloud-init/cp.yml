@@ -20,15 +20,44 @@ packages:
   - netcat-openbsd
 
 runcmd:
+  # ── Private NIC (robust) ────────────────────────────────────────────────────
+  # The Hetzner private network is attached as a second NIC (enp7s0/ens10). If the
+  # server boots before the attachment completes, cloud-init's generated netplan
+  # omits it and the NIC never gets its 10.0.1.x IP (observed race, 2026-07-07).
+  # Explicitly DHCP-configure whichever private NIC exists and wait for the IP —
+  # the CCM + workers depend on the control-plane's private IP (10.0.1.10).
+  - |
+    for IFACE in enp7s0 ens10 enp1s0; do
+      if ip link show "$IFACE" >/dev/null 2>&1; then
+        printf 'network:\n  version: 2\n  ethernets:\n    %s:\n      dhcp4: true\n' "$IFACE" > /etc/netplan/60-private.yaml
+        chmod 600 /etc/netplan/60-private.yaml
+        netplan apply || true
+        break
+      fi
+    done
+    until ip -4 addr show | grep -q "inet 10\.0\."; do sleep 3; done
+
   # Install k3s server (control-plane) with:
   #   - Traefik disabled (we install our own via Helm)
   #   - ServiceLB disabled (we use the Hetzner CCM LoadBalancer)
+  #   - Built-in cloud-controller DISABLED + kubelet cloud-provider=external so the
+  #     Hetzner CCM is the sole cloud provider — it sets node InternalIP to the
+  #     PRIVATE 10.0.1.x address (the firewall only allows kubelet:10250 over the
+  #     private net) and provisions Hetzner LoadBalancers. Without these the node
+  #     keeps its public IP as InternalIP → API↔kubelet 502 → CSI/LB broken.
   #   - TLS SAN = public IP (+ domain if set) so kubeconfig works remotely
   #   - NoSchedule taint on CP (app workloads go to workers)
   # NOTE: each runcmd entry runs in its own shell, so PUBLIC_IP is fetched
   # from the Hetzner metadata service inside every block that needs it.
   - |
     PUBLIC_IP="$(curl -sf http://169.254.169.254/hetzner/v1/metadata/public-ipv4)"
+    # Private IP/iface for flannel + k3s node-ip. cloud-provider=external leaves the
+    # k8s node InternalIP unset until the CCM runs; without --node-ip flannel has no
+    # address to build the VXLAN mesh, so cross-node pod traffic (and thus the CCM's
+    # own path to the API server) deadlocks. Pin flannel to the private NIC/IP so the
+    # cluster network works BEFORE the CCM initializes the nodes.
+    PRIV_IFACE="$(ip -4 -o addr show | awk '/inet 10\.0\./{print $2; exit}')"
+    PRIV_IP="$(ip -4 -o addr show | grep -oE '10\.0\.[0-9.]+' | head -1)"
     TLS_SAN_ARGS="--tls-san $PUBLIC_IP"
     if [ -n "${domain}" ]; then
       TLS_SAN_ARGS="$TLS_SAN_ARGS --tls-san ${domain}"
@@ -39,6 +68,11 @@ runcmd:
       sh -s - server \
         --disable traefik \
         --disable servicelb \
+        --disable-cloud-controller \
+        --kubelet-arg cloud-provider=external \
+        --node-ip "$PRIV_IP" \
+        --node-external-ip "$PUBLIC_IP" \
+        --flannel-iface "$PRIV_IFACE" \
         $TLS_SAN_ARGS \
         --node-label "node-role=control-plane" \
         --node-taint "node-role/control-plane:NoSchedule" \
