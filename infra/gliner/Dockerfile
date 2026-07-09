@@ -54,3 +54,5 @@ RUN useradd --create-home --uid 1001 appuser && \
 USER appuser
 
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+
+# Built + pushed to ghcr.io/arnaurodondev/worldview-gliner by .github/workflows/deploy.yml.

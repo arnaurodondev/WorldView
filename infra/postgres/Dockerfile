@@ -47,3 +47,5 @@ RUN apk add --no-cache --virtual .build-deps \
 
 # Restore non-root user after extension build (F-009)
 USER postgres
+
+# Built + pushed to ghcr.io/arnaurodondev/worldview-postgres by .github/workflows/deploy.yml.
