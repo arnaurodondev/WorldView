@@ -245,6 +245,29 @@ is unchanged.
 
 ## tool_use_system
 
+### 1.20 — 2026-07-08 (SOFTEN the hypo regression — mandatory tool on entity what-ifs)
+
+- **WHAT-IF / PROJECTION ABOUT A NAMED ENTITY ⇒ CALL ITS TOOL FIRST.** The
+  softening re-run `run_20260708T211838Z` showed the projection/what-if bucket
+  dropping to ZERO tool calls (`fx`, `asp` what-ifs): the planner answered a
+  conditional impact question about a named entity straight from parametric
+  memory instead of first retrieving the base figures the projection must rest
+  on. The v1.17 `TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA` rule did not
+  fire because a "what if …" framing does not read as a plain entity-DATA
+  question, and v1.13's ALLOWED conditional-what-if case did not restate the tool
+  obligation. v1.20 adds a `WHAT-IF / PROJECTION ABOUT A NAMED ENTITY ⇒ CALL ITS
+  TOOL FIRST` rule to STRICT RULES: a conditional / hypothetical /
+  second-order-impact question about a named entity (margin, revenue, EPS, cost,
+  ASP, FX exposure under a hypothetical move) MUST call `query_fundamentals` /
+  `get_fundamentals_history(_batch)` / `get_entity_intelligence` FIRST to retrieve
+  the base figures — a zero-tool memory projection is the SAME hard failure as any
+  other zero-tool entity-data answer. Explicitly NOT a licence to forecast the
+  asset's own price direction (hard-refuse case (A) intact).
+- **Impact.** Flips the content hash. SOFTENING half of the same regression the
+  `chat_synthesis_system` v1.18 `DO-NOT-OPEN-WITH-A-REFUSAL-LINE` bullet fixes;
+  additive, no grounding / refusal rule is relaxed. Source:
+  `docs/plans/2026-07-08-chat-quality-two-track-audit.md`, run_20260708T211838Z.
+
 ### 1.19 — 2026-07-08 (chat-quality two-track audit, Track-3 planning fixes — multi-hop traversal + dedup)
 
 - **COMPOUND / MULTI-HOP / RIPPLE routing entry.** Compound, supply-chain, and
@@ -500,6 +523,54 @@ is unchanged.
 > Note: CHANGELOG entries for v1.8–v1.11 were not recorded here at the time; the
 > full rationale for each lives in the version-log comments in
 > `src/prompts/chat/synthesis.py`. v1.12 below resumes the CHANGELOG.
+
+### 1.18 — 2026-07-08 (SOFTEN the v1.17 hypo regression — reverse over-refusal without re-enabling fabrication)
+
+The softening re-run `run_20260708T211838Z` showed v1.17 OVERCORRECTED: the
+hypothetical/projection bucket went 4× PASS→FAIL. v1.18 makes four targeted
+edits that REVERSE the regressions without swinging the pendulum back into
+fabrication.
+
+- **(1) PROVENANCE mis-fired on RETRIEVED data** (`hypo_msft_capex`
+  PASS97→FAIL50). The model tagged its OWN tool-returned capex figures "(source
+  unverified)" and then tripped its own grounding veto → refusal. The PROVENANCE
+  block now states: NEVER tag a retrieved value "(source unverified)" /
+  "(unverified)" — a value that came back FROM a tool IS verified BY that tool;
+  cite it normally with its `[tool_name row N]` / `[N]` tag. "unverified" /
+  "derived" labels belong ONLY on a model-COMPUTED number. **RETRIEVED ≠
+  DERIVED.**
+- **(2) D-d rule 6 no-backfill OVERCORRECTED into refusal on QUALITATIVE
+  questions** (`hypo_tsmc_3nm` PASS95→FAIL55, a full 2,351-char structural answer
+  collapsed to a 376-char refusal). The numeric-fabrication ban bled into
+  qualitative reasoning. Added a QUALITATIVE CARVE-OUT to ANTI-FABRICATION rule 6:
+  for hypothetical / structural / second-order-risk questions — especially when
+  tools return empty/errored — qualitative conditional reasoning from general
+  domain knowledge (causal chains, directional effects) IS allowed and expected,
+  PROVIDED no specific numbers / entities / dated facts are invented and it is
+  labelled conditional / qualitative. The ban is on fabricating VALUES, not on
+  REASONING.
+- **(3) D-d ROW-PADDING still broke** (`iter3_top5` padded 3 screener rows into a
+  "top 5" with memory-sourced ENPH / PATH). Added a HARD ROW-CAP to
+  ANTI-FABRICATION rule 2: NEVER emit MORE rows / entities than the tool returned;
+  if fewer than the requested N came back, state "only N matched" and STOP. This
+  is the one TIGHTENING edit in an otherwise softening release (net-neutral on
+  fabrication).
+- **(4) D-e never-refuse-projection did NOT hold** (`refusal_judgment=0` on all 6
+  hypo; two now LED with "I cannot predict future price movements"). Added a
+  DO-NOT-OPEN-WITH-A-REFUSAL-LINE bullet to the ANALYTICAL / WHAT-IF block:
+  NEVER open a conditional / what-if / projection answer with a forecast
+  disclaimer ("I cannot predict future price movements", "I'm unable to
+  forecast", "predicting … is speculative") — a grounded hedged range is
+  required. The "I cannot predict" line is RESERVED for a bare
+  asset-price-direction question, never a what-if IMPACT question that supplies
+  its own premise.
+- **Impact.** Flips the content hash. SOFTENING + additive: every v1.5–v1.17
+  anti-fabrication / grounding / coverage / projection rule is preserved — edits
+  (1) and (4) reverse over-refusal, (2) carves qualitative reasoning out of the
+  numeric ban, and (3) tightens row-padding. Pairs with `tool_use_system` v1.20
+  (mandatory tool on entity what-ifs — the fx/asp 0-tool-call half of the same
+  regression). Source: `docs/plans/2026-07-08-chat-quality-two-track-audit.md`,
+  run_20260708T211838Z.
 
 ### 1.17 — 2026-07-08 (chat-quality two-track audit — D-d memory-backfill ban, D-e projection/fallback, Track-3 enhancements)
 

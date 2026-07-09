@@ -59,12 +59,14 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.17 (chat-quality two-track audit D-d/D-e + Track-3) on top of v1.16
-    # (chain_nvda partial-row field fabrication — ANTI-FABRICATION rule 5),
-    # v1.15 (da_tsla period-mislabel), v1.14 (iter3_msft unreported-
-    # latest-quarter), v1.13's D7/D8/D4, v1.12's synthesis-behavior fixes,
-    # v1.11's data-coverage-boundary, v1.10's reasoning-rigor and v1.9's what-if.
-    assert ident.startswith("chat_synthesis_system@1.17#")
+    # v1.18 (chat-quality two-track audit — SOFTEN the v1.17 hypo regression:
+    # retrieved!=unverified provenance, rule-6 qualitative carve-out, hard
+    # row-cap, kill the "I cannot predict" opener) on top of v1.17 (D-d/D-e +
+    # Track-3), v1.16 (chain_nvda partial-row field fabrication), v1.15 (da_tsla
+    # period-mislabel), v1.14 (iter3_msft unreported-latest-quarter), v1.13's
+    # D7/D8/D4, v1.12's synthesis-behavior fixes, v1.11's data-coverage-boundary,
+    # v1.10's reasoning-rigor and v1.9's what-if.
+    assert ident.startswith("chat_synthesis_system@1.18#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
@@ -661,3 +663,109 @@ def test_synthesis_prompt_multi_item_synthesis() -> None:
     assert "TREND direction" in rendered
     # Deltas are labelled derived (ties to the PROVENANCE block).
     assert "label the deltas as\n  derived" in rendered or "label the deltas as derived" in flat
+
+
+def test_synthesis_prompt_provenance_retrieved_is_not_unverified() -> None:
+    """v1.18 SOFTENING (1) — PROVENANCE mis-fired on RETRIEVED data
+    (hypo_msft_capex PASS97->FAIL50): the model tagged its OWN tool-returned capex
+    figures "(source unverified)" and tripped its own grounding veto. The
+    PROVENANCE block must now forbid marking a retrieved value unverified — a
+    tool-returned value is verified by that tool and cited normally; only a
+    model-COMPUTED number carries a derived/unverified label. RETRIEVED != DERIVED.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "PROVENANCE" in rendered
+    # Retrieved values must never carry an "unverified" marker.
+    assert "NEVER tag a retrieved value" in flat
+    assert "(source unverified)" in rendered
+    assert "verified BY that tool" in flat
+    # The live failure is named so the softening is not silently reverted.
+    assert "hypo_msft_capex" in rendered
+    assert "RETRIEVED ≠ DERIVED" in rendered or "RETRIEVED != DERIVED" in flat
+    # GUARDRAIL: the derived-figure discipline is preserved (additive softening).
+    assert "DERIVED figure" in rendered
+    assert "every input it rests on is a retrieved, cited value" in flat
+
+
+def test_synthesis_prompt_qualitative_carveout_on_memory_backfill_rule() -> None:
+    """v1.18 SOFTENING (2) — D-d rule-6 no-backfill OVERCORRECTED into refusal on
+    QUALITATIVE questions (hypo_tsmc_3nm PASS95->FAIL55, 2351->376 chars into a
+    refusal). ANTI-FABRICATION rule 6 must add a QUALITATIVE CARVE-OUT: qualitative
+    conditional reasoning (causal chains, directional effects) from general
+    knowledge IS allowed on hypothetical/structural/second-order questions when
+    tools are empty/errored, PROVIDED no specific numbers/entities are invented and
+    it is labelled conditional/qualitative. The ban is on fabricating VALUES, not
+    on REASONING.
+
+    R19: additive on rule 6 — the memory-backfill ban and its examples still hold.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "QUALITATIVE CARVE-OUT" in rendered
+    assert "BANS FABRICATED VALUES, NOT REASONING" in rendered
+    # Allowed: qualitative conditional reasoning on hypothetical/second-order Qs.
+    assert "second-order" in flat
+    assert "causal chains and directional effects" in flat
+    # The proviso: no invented numbers/entities, labelled conditional/qualitative.
+    assert "invent NO specific numbers" in flat
+    assert "directionally" in rendered or "qualitatively" in rendered
+    # The live failure is named.
+    assert "hypo_tsmc_3nm" in rendered
+    # GUARDRAIL: rule 6's memory-backfill ban and its examples are intact.
+    assert "NO PARAMETRIC-MEMORY BACKFILL" in rendered
+    assert "Public knowledge (unverified)" in rendered
+    for token in ("ENPH", "PATH", "Samsung"):
+        assert token in rendered
+
+
+def test_synthesis_prompt_hard_row_cap_on_padding() -> None:
+    """v1.18 SOFTENING (3) — D-d ROW-PADDING still broke (iter3_top5 padded 3
+    screener rows into a "top 5" with ENPH/PATH). ANTI-FABRICATION rule 2 must
+    carry a HARD ROW-CAP: never emit more rows/entities than the tool returned; if
+    fewer than the requested N came back, state "only N matched" and stop. This is
+    a TIGHTENING (anti-fabrication), the one non-softening edit in v1.18.
+
+    R19: additive on rule 2 — the no-off-payload-entities ban still holds.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "HARD ROW-CAP" in rendered
+    assert "NEVER emit MORE result rows / entities than the tool" in flat
+    assert "only 3 matched" in flat
+    # The actual returned count is always the ceiling.
+    assert "ACTUAL returned row count is\n   ALWAYS the ceiling" in rendered or (
+        "ACTUAL returned row count is ALWAYS the ceiling" in flat
+    )
+    # The live failure is named.
+    assert "iter3_top5" in rendered
+    # GUARDRAIL: rule 2's no-padding-with-well-known-names ban is intact.
+    assert "NEVER add entities" in rendered
+    assert "pad" in rendered
+
+
+def test_synthesis_prompt_forbids_cannot_predict_opener_on_whatif() -> None:
+    """v1.18 SOFTENING (4) — D-e never-refuse-projection did NOT hold
+    (refusal_judgment=0 on all 6 hypo; two LED with "I cannot predict future price
+    movements"). The ANALYTICAL / WHAT-IF block must add a bullet forbidding a
+    forecast-disclaimer OPENER on a conditional/what-if answer — a grounded hedged
+    range is required; the "I cannot predict" line is RESERVED for a bare
+    asset-price-direction question, never a what-if impact.
+
+    R19: additive on the v1.17 NEVER-REFUSE-A-PROJECTION-AS-UNKNOWABLE bullet.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    flat = " ".join(rendered.split())
+    assert "DO NOT OPEN WITH A REFUSAL LINE" in rendered
+    # The exact disclaimer openers the live answers used are named + forbidden.
+    assert "NEVER begin a conditional / what-if /\n  projection answer with" in rendered or (
+        "NEVER begin a conditional / what-if / projection answer with" in flat
+    )
+    assert "I cannot predict future price movements" in rendered
+    # The disclaimer is reserved for a bare asset-price-direction question.
+    assert "RESERVED for a bare" in flat
+    assert "what-if IMPACT question" in flat
+    # GUARDRAIL: the v1.17 never-refuse-as-unknowable bullet + what-if block remain.
+    assert "NEVER REFUSE A PROJECTION AS" in rendered
+    assert "ANALYTICAL / WHAT-IF QUESTIONS" in rendered
+    assert "hedged RANGE" in rendered

@@ -225,10 +225,41 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          changed arg or a newly-surfaced entity; an empty/errored call uses
     #          the FALLBACK rule (different tool/args), never an identical retry.
     #          Additive; no grounding / routing / refusal rule relaxed.
-    version="1.19",
+    #   1.20 — 2026-07-08 (chat-quality two-track audit — SOFTEN the hypo
+    #          regression: mandatory tool on entity what-ifs). Companion to
+    #          chat_synthesis_system v1.18. run_20260708T211838Z showed the
+    #          projection/what-if bucket dropping to ZERO tool calls (fx / asp
+    #          what-ifs): the planner answered a conditional impact question about a
+    #          named entity straight from parametric memory instead of first
+    #          retrieving the base figures the projection must rest on. The v1.17
+    #          mandatory-tool rule did not fire because a "what if …" framing does
+    #          not read as a plain entity-DATA question, and v1.13's ALLOWED
+    #          conditional-what-if case did not restate the tool obligation. Added
+    #          the WHAT-IF / PROJECTION ABOUT A NAMED ENTITY => CALL ITS TOOL FIRST
+    #          rule to STRICT RULES: a conditional/hypothetical/second-order-impact
+    #          question about a named entity MUST call query_fundamentals /
+    #          get_fundamentals_history(_batch) / get_entity_intelligence FIRST to
+    #          retrieve the base figures — a zero-tool memory projection is the SAME
+    #          hard failure as any other zero-tool entity-data answer. Explicitly
+    #          NOT a licence to forecast the asset's own price direction (hard-refuse
+    #          case (A) intact). SOFTENING half of the same regression the synthesis
+    #          v1.18 DO-NOT-OPEN-WITH-A-REFUSAL-LINE bullet fixes; additive, no
+    #          grounding / refusal rule relaxed.
+    version="1.20",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.19 adds two Track-3 planning fixes: a COMPOUND / MULTI-HOP / RIPPLE "
+        "(v1.20 SOFTENS the chat-quality two-track hypo regression: adds a WHAT-IF "
+        "/ PROJECTION ABOUT A NAMED ENTITY => CALL ITS TOOL FIRST rule to STRICT "
+        "RULES so a conditional/hypothetical/second-order-impact question about a "
+        "named entity retrieves its base figures (query_fundamentals / "
+        "get_fundamentals_history / get_entity_intelligence) before reasoning — the "
+        "fx/asp what-ifs dropped to ZERO tool calls under v1.19 because the "
+        "'what if …' framing did not read as an entity-DATA question; a zero-tool "
+        "memory projection is the same hard failure as any other zero-tool "
+        "entity-data answer, and this is NOT a licence to forecast the asset's own "
+        "price direction (hard-refuse case (A) intact). Companion to "
+        "chat_synthesis_system v1.18; "
+        "v1.19 adds two Track-3 planning fixes: a COMPOUND / MULTI-HOP / RIPPLE "
         "TOOL ROUTING entry forcing traverse_graph to walk the FULL chain (not "
         "stop one hop short at direct suppliers/customers) for supply-chain / "
         "ripple / second-order questions, and a NO REDUNDANT TOOL CALLS rule in "
@@ -467,6 +498,34 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "  news/event via get_entity_news / search_documents / search_events. A\n"
         "  zero-tool refusal or memory answer to a first-person portfolio-exposure\n"
         "  question is a HARD FAILURE.\n"
+        # 1.20 (2026-07-08, chat-quality two-track audit — fx/asp 0-tool-call
+        # regression): the v1.13 SPECULATIVE-FORECASTS narrowing correctly ALLOWS a
+        # grounded conditional what-if IMPACT question, and synthesis v1.9+ requires
+        # the projection be BUILT ON retrieved base figures — but run_20260708T211838Z
+        # showed the planner dropping to ZERO tool calls on what-if-framed questions
+        # (fx / asp), answering the projection straight from memory. The
+        # mandatory-tool rule above did not fire because a "what if …" framing does
+        # not read as a plain entity-DATA question. This rule closes that gap: a
+        # projection/what-if about a NAMED entity MUST retrieve its base figures
+        # first, exactly like any other entity-data question.
+        "- WHAT-IF / PROJECTION ABOUT A NAMED ENTITY ⇒ CALL ITS TOOL FIRST: A\n"
+        "  conditional / hypothetical / 'what happens to X if …' / second-order-\n"
+        "  impact question about a NAMED entity (its margin, revenue, EPS, cost,\n"
+        "  ASP, FX exposure, or any fundamental under a hypothetical move) MUST call\n"
+        "  that entity's fundamentals / intelligence tool(s) FIRST\n"
+        "  (query_fundamentals / get_fundamentals_history(_batch) /\n"
+        "  get_entity_intelligence) to RETRIEVE the base figures the projection\n"
+        "  rests on — BEFORE you reason. A what-if / 'if … then' framing does NOT\n"
+        "  exempt the question from the mandatory-tool rule: a grounded projection\n"
+        "  is built ON retrieved base figures (see the ALLOWED case (B) in\n"
+        "  SPECULATIVE FORECASTS and synthesis's ANALYTICAL / WHAT-IF block), so\n"
+        "  answering a specific-entity what-if with ZERO tool calls — deriving the\n"
+        "  'impact' straight from memory — is the SAME HARD FAILURE as any other\n"
+        "  zero-tool entity-data answer. Retrieve the base figure(s) FIRST, THEN\n"
+        "  derive the hedged impact. (Live fx / asp what-ifs dropped to 0 tool\n"
+        "  calls under v1.19 — the mandatory-tool rule was not firing on the what-if\n"
+        "  framing.) This is NOT a licence to forecast the asset's own PRICE\n"
+        "  direction — the hard-refuse case (A) still applies to 'will X go up'.\n"
         "- PREMISE CHECK: Before answering, identify any factual claims embedded in\n"
         "  the user's question (e.g. 'Why did X acquire Y last quarter?'). For each\n"
         "  such claim, verify it appears in a tool result before treating it as true.\n"

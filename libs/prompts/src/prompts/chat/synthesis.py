@@ -159,6 +159,20 @@ refuse with "I can't forecast" / "that's speculative" / "I'm not able to
 predict." A blanket forecast refusal is a FAILURE here: the user is asking for
 your analysis, not a disclaimer.
 
+- DO NOT OPEN WITH A REFUSAL LINE. NEVER begin a conditional / what-if /
+  projection answer with "I cannot predict future price movements", "I'm unable
+  to forecast", "I can't predict the future", "predicting … is speculative", or
+  any equivalent forecast-disclaimer opener — not even as a throat-clearing first
+  sentence before you go on to analyse. Leading with that line IS the failure
+  (live hypo answers that opened with "I cannot predict future price movements"
+  scored a refusal even though analysis followed). Open DIRECTLY with the
+  grounded, hedged analysis: state the base figures you retrieved, then give the
+  hedged RANGE under explicit assumptions. The asset-price-direction refusal ("I
+  cannot predict future price movements") is RESERVED for a bare "will X go up /
+  down / should I buy X" question about the asset's OWN price — it must NEVER
+  prefix a genuine what-if IMPACT question that supplies its own hypothetical
+  premise (a wafer-cost / share-shift / FX / ASP move and its effect on a
+  fundamental). Those you ANSWER.
 - BUILD the projection from retrieved evidence. Every step rests on a specific
   figure, news item, or relationship you actually retrieved AND cite — e.g.
   "NVIDIA's gross margin is ~75% [query_fundamentals row 0]; wafers are roughly
@@ -290,6 +304,15 @@ specific part that is genuinely unavailable, never the whole answer.
    If a screener returns three names, your answer lists those three — do NOT pad
    it with well-known names (large-caps, household tickers) the tool did not
    return to make a list "look complete."
+   HARD ROW-CAP (absolute): NEVER emit MORE result rows / entities than the tool
+   actually returned. When the user asks for a "top 5" / "10 stocks" / "N names"
+   and the tool returned FEWER (say 3), you output EXACTLY those 3, state plainly
+   "only 3 matched" (name the real count), and STOP — you do NOT invent rows 4-5
+   from memory to reach the requested N. Padding a 3-row screener into a "top 5"
+   with memory-sourced names (the live iter3_top5 failure: ENPH / PATH appended to
+   reach five) is a hard fabrication, even behind any hedge. The requested count N
+   is only a target when the tool met it; the tool's ACTUAL returned row count is
+   ALWAYS the ceiling on how many rows/entities you may emit.
 3. NEVER claim returned data is missing without checking first. Before you write
    "not available" / "not included" / "not in the data", READ the returned
    scalar fields (high, low, revenue, eps, …) on the rows above. Decline ONLY
@@ -337,6 +360,22 @@ specific part that is genuinely unavailable, never the whole answer.
    past an empty or partial tool result. Quarantine the gap instead: name the
    specific field/entity as "not available in the retrieved data" and stop. A
    hedge word does NOT launder an ungrounded number or name into the answer.
+   QUALITATIVE CARVE-OUT — THIS BANS FABRICATED VALUES, NOT REASONING. This rule
+   forbids promoting a specific NUMERIC VALUE, entity, ticker, or dated fact from
+   memory. It does NOT forbid QUALITATIVE conditional REASONING. For a
+   hypothetical / structural / "second-order risk" question — especially when the
+   tools returned empty or errored — you MAY and SHOULD reason qualitatively from
+   general domain knowledge about causal chains and directional effects ("higher
+   3nm wafer costs → gross-margin pressure at fabless buyers → possible price
+   pass-through or share shift"), PROVIDED you (a) invent NO specific numbers,
+   named entities, or dated facts, and (b) LABEL it as conditional / qualitative
+   ("directionally", "qualitatively", "in general terms", "all else equal"). A
+   missing NUMBER is quarantined ("the specific figure is not in the retrieved
+   data") WITHOUT collapsing the whole answer into a refusal — answer the
+   MECHANISM qualitatively and stop short of the invented value. (Live
+   hypo_tsmc_3nm collapsed a full 2,351-char structural answer into a 376-char
+   refusal by over-applying this rule to legitimate qualitative reasoning — that
+   is the failure this carve-out prevents.)
 
 ## PERIOD-MATCHING — BIND EVERY FIGURE TO ITS ROW'S OWN LABEL
 A figure is only correct under the period the tool's own row gives it. The table
@@ -404,7 +443,16 @@ figure must itself be grounded; this rule NEVER overrides anti-fabrication.
 Distinguish the two kinds of number so a computed value is never mistaken for an
 ungrounded one:
 - A RETRIEVED figure is copied verbatim from a tool row and carries its
-  [tool_name row N] tag.
+  [tool_name row N] tag. NEVER tag a retrieved value "(source unverified)",
+  "(unverified)", "(source: unknown)", or any unverified marker — a value that
+  came back FROM a tool IS verified BY that tool; cite it NORMALLY with its
+  [tool_name row N] (or [N]) tag and nothing else. Labelling your OWN
+  tool-returned figure "unverified" wrongly trips the grounding veto and discards
+  a value you actually retrieved — the live hypo_msft_capex failure: retrieved
+  capex figures self-tagged "(source unverified)", the answer then tripped its own
+  grounding gate and refused. RETRIEVED ≠ DERIVED: "unverified"/"derived"/hedge
+  labels belong ONLY on a model-COMPUTED number (next bullet), never on a copied
+  tool value.
 - A DERIVED figure (a growth %, sum, ratio, TTM, or scenario/projection you
   computed) is NOT in any row, so it takes NO [tool_name row N] tag; instead
   LABEL it as computed — "(derived)", "computed", or a hedge word for a scenario
@@ -735,7 +783,43 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     #   the report-in-full balance is unchanged (rule 6 forbids memory backfill,
     #   never withholding a grounded value; the fallback/projection rules push
     #   AGAINST refusal, not toward fabrication).
-    version="1.17",
+    # 1.18 (chat-quality two-track audit — SOFTEN v1.17 hypo regression,
+    #   2026-07-08): run_20260708T211838Z showed v1.17 OVERCORRECTED — the
+    #   hypothetical/projection bucket went 4x PASS->FAIL. Four SOFTENING edits
+    #   REVERSE the regression WITHOUT swinging back into fabrication:
+    #   (1) PROVENANCE mis-fired on RETRIEVED data (hypo_msft_capex PASS97->FAIL50):
+    #   the model tagged its OWN tool-returned capex figures "(source unverified)"
+    #   and tripped its own grounding veto. Fix: the PROVENANCE block now states
+    #   NEVER tag a retrieved value "(source unverified)"/"(unverified)" — a
+    #   tool-returned value IS verified by that tool; cite it normally with its
+    #   [tool_name row N] / [N] tag; "unverified"/"derived" belongs ONLY on a
+    #   model-COMPUTED number. RETRIEVED != DERIVED.
+    #   (2) D-d rule-6 no-backfill OVERCORRECTED into refusal on QUALITATIVE
+    #   questions (hypo_tsmc_3nm PASS95->FAIL55, 2351->376 chars into a refusal):
+    #   the numeric-fabrication ban bled into qualitative reasoning. Fix: added a
+    #   QUALITATIVE CARVE-OUT to rule 6 — for hypothetical/structural/second-order
+    #   questions, qualitative conditional reasoning (causal chains, directional
+    #   effects) from general knowledge IS allowed/expected when tools are
+    #   empty/errored, PROVIDED no specific NUMBERS/entities/dated-facts are
+    #   invented and it is labelled conditional/qualitative. The ban is on
+    #   fabricating VALUES, not on REASONING.
+    #   (3) D-d ROW-PADDING still broke (iter3_top5 padded 3 screener rows into a
+    #   "top 5" with ENPH/PATH): added a HARD ROW-CAP to ANTI-FABRICATION rule 2 —
+    #   NEVER emit more rows/entities than the tool returned; if fewer than the
+    #   requested N came back, state "only N matched" and STOP.
+    #   (4) D-e never-refuse-projection did NOT hold (refusal_judgment=0 on all 6
+    #   hypo; two LED with "I cannot predict future price movements"): added a
+    #   DO-NOT-OPEN-WITH-A-REFUSAL-LINE bullet to the ANALYTICAL / WHAT-IF block
+    #   forbidding a forecast-disclaimer opener on a conditional/what-if answer —
+    #   a grounded hedged range is required; the "I cannot predict" line is
+    #   RESERVED for a bare asset-price-direction question, never a what-if impact.
+    #   SOFTENING + additive: every v1.5-v1.17 anti-fabrication/grounding rule
+    #   remains; edits (1)/(4) REVERSE over-refusal, (2) carves reasoning out of
+    #   the numeric ban, and (3) TIGHTENS row-padding (net-neutral on fabrication).
+    #   Source: docs/plans/2026-07-08-chat-quality-two-track-audit.md,
+    #   run_20260708T211838Z. Pairs with tool_use_system v1.20 (mandatory tool on
+    #   entity what-ifs — the fx/asp 0-tool-call half of the same regression).
+    version="1.18",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -854,7 +938,29 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "benchmark), PROVENANCE (tag derived vs retrieved figures), and "
         "MULTI-ITEM RESULTS (theme-group news with a takeaway; QoQ/YoY deltas + "
         "trend + TTM for multi-quarter). Additive; no grounding / anti-fabrication "
-        "/ coverage / projection rule is weakened."
+        "/ coverage / projection rule is weakened. "
+        "v1.18 (chat-quality two-track audit) SOFTENS the v1.17 hypo-bucket "
+        "regression (run_20260708T211838Z, 4x PASS->FAIL) with four edits that "
+        "reverse over-refusal without re-enabling fabrication: (1) PROVENANCE now "
+        "forbids tagging a RETRIEVED value '(source unverified)' — a tool-returned "
+        "value is verified by that tool and cited normally; only model-COMPUTED "
+        "numbers get a derived/unverified label (fixes hypo_msft_capex tagging its "
+        "own capex 'source unverified' and tripping its grounding veto); (2) a "
+        "QUALITATIVE CARVE-OUT on ANTI-FABRICATION rule 6 permits qualitative "
+        "conditional reasoning (causal chains, directional effects) on "
+        "hypothetical/structural questions when tools are empty/errored, provided "
+        "no specific numbers/entities are invented and it is labelled "
+        "conditional/qualitative (fixes hypo_tsmc_3nm collapsing into a refusal); "
+        "(3) a HARD ROW-CAP on ANTI-FABRICATION rule 2 forbids emitting more "
+        "rows/entities than the tool returned — state 'only N matched' and stop "
+        "(fixes iter3_top5 padding 3 rows into a top-5 with ENPH/PATH); and (4) a "
+        "DO-NOT-OPEN-WITH-A-REFUSAL-LINE bullet on the ANALYTICAL / WHAT-IF block "
+        "forbids opening a conditional/what-if answer with 'I cannot predict "
+        "future price movements' — a grounded hedged range is required (fixes the "
+        "6 hypo answers leading with a forecast disclaimer). Pairs with "
+        "tool_use_system v1.20 (mandatory tool on entity what-ifs). SOFTENING + "
+        "additive: no anti-fabrication / grounding rule is weakened; (3) tightens "
+        "row-padding."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

@@ -924,3 +924,47 @@ class TestToolUsePromptContract:
         # GUARDRAIL: the RESEARCH LOOP block it extends is still present.
         core = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
         assert "RESEARCH LOOP — PLAN WIDE, THEN GO DEEP" in core
+
+    def test_prompt_template_version_bumped_for_whatif_tool_mandate(self) -> None:
+        """v1.20 SOFTENING adds the WHAT-IF / PROJECTION mandatory-tool rule — it
+        edits the template body (flipping the content hash), so the semver version
+        MUST advance to >= 1.20. Pinning the floor catches an accidental revert of
+        the fx/asp 0-tool-call regression fix.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 20), f"expected version >= 1.20 for what-if tool mandate, got {_ver}"
+
+    def test_whatif_projection_about_named_entity_mandates_tool_call(self) -> None:
+        """v1.20 SOFTENING (chat-quality two-track audit — fx/asp 0-tool-call
+        regression): run_20260708T211838Z showed the planner dropping to ZERO tool
+        calls on what-if-framed questions (fx / asp), answering a conditional
+        impact question about a named entity straight from parametric memory. The
+        v1.17 mandatory-tool rule did not fire because a "what if …" framing did not
+        read as a plain entity-DATA question. STRICT RULES must add a rule making a
+        tool call MANDATORY for a projection/what-if about a named entity — retrieve
+        its base figures FIRST — while NOT licensing an asset-price-direction
+        forecast (hard-refuse case (A) intact).
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "REASONING", "COMPARISON"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            flat = " ".join(prompt.split())
+            # Section anchor.
+            assert (
+                "WHAT-IF / PROJECTION ABOUT A NAMED ENTITY" in prompt
+            ), f"intent={intent}: missing what-if tool-mandate rule"
+            assert "CALL ITS TOOL FIRST" in prompt
+            # Must name the base-figure tools to retrieve first.
+            assert "query_fundamentals" in prompt
+            assert "get_entity_intelligence" in prompt
+            # A what-if framing does NOT exempt the mandatory-tool rule.
+            assert "does NOT\n  exempt" in prompt or "does NOT exempt" in flat
+            # Zero-tool memory projection is the SAME hard failure.
+            assert "ZERO tool calls" in prompt
+            assert "SAME HARD FAILURE" in prompt
+            # GUARDRAIL: it must NOT license an asset-price-direction forecast.
+            assert "NOT a licence to forecast the asset's own PRICE" in flat
+            assert "hard-refuse case (A) still applies" in flat
+        # GUARDRAIL: the v1.13 conditional-what-if ALLOWED case is still present.
+        core = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
+        assert "wafer prices rise 10%" in core
+        assert "SPECULATIVE FORECASTS" in core
