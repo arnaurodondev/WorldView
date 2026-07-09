@@ -37,6 +37,7 @@ Design choices:
 
 from __future__ import annotations
 
+import difflib
 import math
 import re
 from collections import Counter
@@ -864,6 +865,101 @@ _TOOL_ROW_CITATION_RE = re.compile(
 )
 
 
+# ── (2026-07-08 Track-1 D-a follow-up) informal tool-name resolver ────────────
+#
+# The live gpt-oss-120b model overwhelmingly emits ``[tool_name row N]`` provenance
+# tags, but its ``tool_name`` is frequently an INFORMAL variant of the real
+# registered tool that ran this turn:
+#   * a dropped verb prefix        — ``[fundamentals_history_batch row 2]`` for the
+#                                     tool ``get_fundamentals_history_batch``;
+#   * a namespace prefix           — ``[functions.query_fundamentals row 0]``;
+#   * a spelling typo              — ``[query_fundmamentals row 0]``.
+# Under an EXACT tool-name match these tags look like citations to a NEVER-CALLED
+# tool → the phantom-citation gate refuses the WHOLE (otherwise fully-grounded)
+# answer (run_20260708T211838Z: chain_top_mover_fundamentals + chain_portfolio_
+# worst_fundamentals — grounded drafts DISCARDED). These are LEGITIMATE tool-row
+# references, so we resolve the informal name back to the real called tool before
+# the gate/normaliser run.
+#
+# The resolution is deliberately CONSERVATIVE so the numeric-fabrication guarantee
+# survives — a genuinely fabricated tool name (``[query_fundamentals row 4]`` when
+# only ``get_entity_news`` ran) must NOT resolve to anything and stays phantom:
+#   1. exact (lower-cased) match;
+#   2. verb-prefix-insensitive equality — stripping a leading ``get_`` / ``query_``
+#      / ``search_`` / … verb from BOTH sides and comparing the cores (this is the
+#      ``fundamentals_history_batch`` ↔ ``get_fundamentals_history_batch`` case);
+#   3. full-containment substring (min core length 4) — one name fully contains the
+#      other on a token boundary;
+#   4. typo tolerance — difflib ratio on the prefix-stripped cores ≥ 0.85.
+# Steps 3/4 only match tightly-related names; unrelated tools score far below the
+# threshold (``fundamentals`` vs ``entity_news`` ≈ 0.4), so a fabricated tool name
+# never resolves into validity.
+_TOOL_VERB_PREFIXES = (
+    "get_",
+    "query_",
+    "fetch_",
+    "search_",
+    "list_",
+    "screen_",
+    "lookup_",
+    "retrieve_",
+    "find_",
+)
+_RESOLVE_TYPO_RATIO_MIN = 0.85
+
+
+def _strip_tool_verb_prefix(name: str) -> str:
+    """Drop one leading tool verb prefix (``get_`` / ``query_`` / …) if present."""
+    for pfx in _TOOL_VERB_PREFIXES:
+        if name.startswith(pfx) and len(name) > len(pfx):
+            return name[len(pfx) :]
+    return name
+
+
+def resolve_tool_name(name: str, called_tool_names: Iterable[str]) -> str | None:
+    """Map an INFORMAL ``[tool row N]`` tool name to the real called tool, or ``None``.
+
+    Returns the lower-cased real tool name (as it appears in *called_tool_names*)
+    that *name* references, or ``None`` when *name* does not resolve to any tool
+    that actually ran this turn. Conservative by design — see the module comment:
+    exact → verb-prefix-insensitive → full-containment substring → difflib typo
+    tolerance. Deterministic and side-effect free so the phantom gate, the
+    normaliser and the tests share ONE definition.
+    """
+    name = (name or "").strip().lower()
+    if "." in name:  # strip a ``functions.`` / ``tool.`` namespace prefix
+        name = name.rsplit(".", 1)[-1]
+    called = [str(c).strip().lower() for c in called_tool_names if c and str(c).strip()]
+    if not name or not called:
+        return None
+    # 1. exact.
+    if name in called:
+        return name
+    # 2. verb-prefix-insensitive equality (get_/query_ added or dropped).
+    core = _strip_tool_verb_prefix(name)
+    prefix_matches = [c for c in called if _strip_tool_verb_prefix(c) == core]
+    if prefix_matches:
+        # Deterministic: the shortest real name (fewest extra chars) wins a tie.
+        return min(prefix_matches, key=len)
+    # 3. full-containment substring, both directions, min core length 4 so a tiny
+    #    fragment can never latch onto an unrelated tool.
+    subs = [c for c in called if (name in c or c in name) and min(len(name), len(c)) >= 4]
+    if len(subs) == 1:
+        return subs[0]
+    if subs:
+        return min(subs, key=len)
+    # 4. typo tolerance on the prefix-stripped cores.
+    best: str | None = None
+    best_ratio = 0.0
+    for c in called:
+        ratio = difflib.SequenceMatcher(None, core, _strip_tool_verb_prefix(c)).ratio()
+        if ratio > best_ratio:
+            best_ratio, best = ratio, c
+    if best is not None and best_ratio >= _RESOLVE_TYPO_RATIO_MIN:
+        return best
+    return None
+
+
 def find_phantom_tool_citations(
     response: str,
     called_tool_names: Iterable[str],
@@ -950,6 +1046,7 @@ def normalize_tool_row_citations(
     response: str,
     position_resolver: Callable[[str, int], int | None],
     row_count_resolver: Callable[[str], int | None] | None = None,
+    name_resolver: Callable[[str], str | None] | None = None,
 ) -> str:
     """Rewrite ``[tool_name row N]`` provenance tags to ``[<pos>]`` citation markers.
 
@@ -994,14 +1091,26 @@ def normalize_tool_row_citations(
         except ValueError:  # pragma: no cover — regex guarantees digits
             return m.group(0)
         pos = position_resolver(tool, row)
+        # 2026-07-08: when the exact bare name maps to no item, try the INFORMAL
+        # tool-name resolver (dropped ``get_`` prefix / spelling typo). It returns
+        # the real called tool name, which the position/count resolvers key on —
+        # so ``[fundamentals_history_batch row 2]`` promotes to the real citation
+        # for ``get_fundamentals_history_batch`` instead of surviving to the strip
+        # guards. A genuinely fabricated tool name resolves to None → left verbatim.
+        canon = tool
+        if pos is None and name_resolver is not None:
+            alt = name_resolver(tool)
+            if alt is not None and alt != tool:
+                canon = alt
+                pos = position_resolver(canon, row)
         if pos is None and row_count_resolver is not None:
             # Out-of-range clamp — ONLY for a tool that was actually called and
             # returned rows. count is None/0 for a phantom tool → no clamp.
-            count = row_count_resolver(tool)
+            count = row_count_resolver(canon)
             if count is not None and count > 0:
                 clamped = 0 if row < 0 else min(row, count - 1)
                 if clamped != row:
-                    pos = position_resolver(tool, clamped)
+                    pos = position_resolver(canon, clamped)
         if pos is None:
             return m.group(0)
         return f"[{pos}]"
@@ -1204,6 +1313,19 @@ def _material_number_spans(response: str) -> list[tuple[int, int]]:
     return spans
 
 
+def material_number_spans(response: str) -> list[tuple[int, int]]:
+    """Public wrapper over :func:`_material_number_spans`.
+
+    Returns the (start, end) char spans of MATERIAL numeric claims
+    (revenue/EPS/price/market-cap/ratio/return/shares/headcount, or a large
+    unclassified magnitude) in *response*. Incidental numbers — years, ordinals,
+    dates, small counts — are NOT included. Used by the orchestrator's caveat-
+    suppression gate so a stray uncited YEAR / ordinal never forces the
+    "some figures could not be matched" banner onto a bracket-cited answer.
+    """
+    return _material_number_spans(response)
+
+
 def partition_phantom_tool_citations(
     response: str,
     called_tool_names: Iterable[str],
@@ -1249,8 +1371,16 @@ def partition_phantom_tool_citations(
     benign_tags: list[str] = []
     for m in tag_matches:
         name = m.group("tool").lower()
-        if name in called:
-            continue  # a real called tool — not phantom, handled by other guards
+        if name in called or resolve_tool_name(name, called) is not None:
+            # A real called tool — OR an INFORMAL variant of one (dropped ``get_``
+            # prefix / ``functions.`` namespace / spelling typo). Not phantom: the
+            # normaliser rewrites it to a real ``[n]`` citation and the out-of-range
+            # / D-a guards handle any residual. This is the fix that stops a
+            # grounded draft being refused over ``[fundamentals_history_batch row 2]``
+            # (the tool ``get_fundamentals_history_batch`` DID run) — see
+            # resolve_tool_name for the conservative matching that keeps a genuinely
+            # fabricated tool name (never-called) phantom.
+            continue
         if name in _BENIGN_PROSE_TAG_NAMES:
             # Deterministic backstop (2026-07-03): a known-non-tool prose word can
             # NEVER be a fabricated tool citation, so it is benign REGARDLESS of
@@ -2531,10 +2661,12 @@ __all__ = [
     "detect_fabricated_series",
     "find_phantom_tool_citations",
     "flatten_tool_values_count",
+    "material_number_spans",
     "normalize_citation_brackets",
     "normalize_tool_row_citations",
     "partition_phantom_tool_citations",
     "pin_numbers_to_tool_values",
+    "resolve_tool_name",
     "response_has_numeric_claims",
     "strip_tool_row_tags",
 ]

@@ -1272,32 +1272,59 @@ _TRACK3_BRACKET_CITATION_RE = re.compile(
 )
 
 
-def _answer_has_bracket_citation_coverage(text: str) -> bool:
-    """Return True if every material number is near a REAL bracket citation.
+# Track-3 (2026-07-08 tighten): a bracket-cited answer suppresses the trailing
+# "some figures could not be matched" caveat when EITHER most of its MATERIAL
+# figures are near a citation OR it carries only a handful of material figures (a
+# mostly-qualitative / news / macro answer). A citation-bearing draft with MANY
+# material numbers yet poor coverage is a genuine fabrication risk → keep caveat.
+_CAVEAT_MATERIAL_COVERAGE_MIN = 0.5
+_CAVEAT_FEW_MATERIAL_MAX = 3
 
-    Track-3 caveat-suppression gate — see the module comment above. Stricter
-    than :func:`_answer_has_full_citation_coverage` (bracket citations only, no
-    prose provenance). Returns False when there are no bracket citations or no
-    numeric tokens, so a prose-only draft never suppresses the caveat.
+
+def _answer_has_bracket_citation_coverage(text: str) -> bool:
+    """Return True when a bracket-cited answer is grounded enough to drop the caveat.
+
+    Track-3 caveat-suppression gate — see the module comment above. Counts REAL
+    bracket citations only (``[n]`` / ``[tool]`` / ``[tool row N]``), never prose
+    provenance, so an ungrounded "according to the latest filing" draft still gets
+    the caveat (BP-648).
+
+    Tightened 2026-07-08: the prior implementation required EVERY numeric token —
+    INCLUDING incidental years/ordinals/dates — to sit within the window of a
+    citation, so a single uncited "2026" or list ordinal on an otherwise
+    fully-cited table/macro answer flipped it to False and the banner leaked onto
+    23 grounded answers (run_20260708T211838Z: tc_batch_fundamentals_mag5,
+    agg_q5_tsla_macro, ru_mstr_news). We now score only MATERIAL numbers
+    (revenue/EPS/price/… — :func:`material_number_spans`) and suppress the caveat
+    when the answer is bracket-cited AND either coverage is adequate OR only a few
+    material figures exist. Returns False when there are NO bracket citations so a
+    genuinely uncited prose answer still gets the caveat.
     """
     if not text:
         return False
+    from rag_chat.application.services.numeric_grounding import material_number_spans
+
     citation_spans: list[tuple[int, int]] = [m.span() for m in _TRACK3_BRACKET_CITATION_RE.finditer(text)]
     if not citation_spans:
+        # No real bracket citation → not a cited answer → keep the caveat.
         return False
-    numeric_matches = list(_W50_NUMERIC_TOKEN_RE.finditer(text))
-    if not numeric_matches:
-        return False
-    for nm in numeric_matches:
-        n_start, n_end = nm.span()
+    material_spans = material_number_spans(text)
+    if not material_spans:
+        # A bracket-cited answer with no material figures (news / qualitative):
+        # "figures could not be matched" is self-contradictory → suppress.
+        return True
+    covered = 0
+    for n_start, n_end in material_spans:
         n_centre = (n_start + n_end) // 2
         if any(c_start <= n_centre < c_end for c_start, c_end in citation_spans):
+            covered += 1
             continue
         lo = n_start - _W50_CITATION_WINDOW
         hi = n_end + _W50_CITATION_WINDOW
-        if not any(c_end > lo and c_start < hi for c_start, c_end in citation_spans):
-            return False
-    return True
+        if any(c_end > lo and c_start < hi for c_start, c_end in citation_spans):
+            covered += 1
+    frac = covered / len(material_spans)
+    return frac >= _CAVEAT_MATERIAL_COVERAGE_MIN or len(material_spans) <= _CAVEAT_FEW_MATERIAL_MAX
 
 
 # ── BP-671 — re-synthesis divergence guard ───────────────────────────────────
@@ -5363,6 +5390,7 @@ class ChatOrchestratorUseCase:
         if _tool_row_items and prompt_items:
             from rag_chat.application.services.numeric_grounding import (
                 normalize_tool_row_citations,
+                resolve_tool_name,
             )
 
             # Match by object identity first (fast, exact); fall back to
@@ -5394,8 +5422,22 @@ class ChatOrchestratorUseCase:
             def _resolve_row_count(tool_name: str) -> int | None:
                 return _tool_row_counts.get(tool_name)
 
+            # 2026-07-08: resolve an INFORMAL tool name in a ``[tool row N]`` tag
+            # (dropped ``get_`` prefix / ``functions.`` namespace / spelling typo)
+            # back to the REAL called tool so the position/count resolvers — which
+            # key on the real name — can promote it to a numbered citation instead
+            # of leaving it for the strip guards to delete. Resolves only against
+            # tools that ACTUALLY ran this turn; a fabricated name → None.
+            def _resolve_tool_name(tool_name: str) -> str | None:
+                return resolve_tool_name(tool_name, _executed_tool_names)
+
             _pre_norm = full_text
-            full_text = normalize_tool_row_citations(full_text, _resolve_row_position, _resolve_row_count)
+            full_text = normalize_tool_row_citations(
+                full_text,
+                _resolve_row_position,
+                _resolve_row_count,
+                _resolve_tool_name,
+            )
             if full_text != _pre_norm:
                 log.info("tool_row_citations_normalized", request_id=str(getattr(audit, "turn_id", "") or ""))  # type: ignore[no-any-return]
 
