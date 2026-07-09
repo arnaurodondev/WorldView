@@ -106,6 +106,17 @@ class RecordTransactionUseCase:
                     # Decimals are compared by numeric value (Decimal("1.0") ==
                     # Decimal("1.00")) so trailing-zero differences do NOT
                     # produce false mismatches.
+                    #
+                    # DELIBERATELY EXCLUDED from the guard: executed_at (and the
+                    # broker-metadata fields amount/description/settlement_date).
+                    # `executed_at` is left out on purpose — comparing datetimes by
+                    # equality risks FALSE 409s from tz-awareness/precision round-trip
+                    # drift, and the trade-date is not part of the honest-ledger value
+                    # tuple. The residual (same key + identical body but a different
+                    # executed_at → silent replay) requires a client to violate the
+                    # key contract by reusing one key for two distinct entries; the
+                    # web client regenerates the idempotency key on any date change,
+                    # so this is an accepted, intentional residual — not an oversight.
                     if (
                         existing.instrument_id != cmd.instrument_id
                         or existing.transaction_type != cmd.transaction_type
