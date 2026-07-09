@@ -479,6 +479,12 @@ exports[`PLAN-0122 W-A · Advanced-mode parity (anti-fork guard) > test_advanced
                     DIV YLD
                   </span>
                 </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span />
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -600,6 +606,43 @@ exports[`PLAN-0122 W-A · Advanced-mode parity (anti-fork guard) > test_advanced
                   >
                     —
                   </span>
+                </td>
+                <td>
+                  <button
+                    aria-label="Actions for AAPL"
+                    class="flex h-full w-full items-center justify-center text-muted-foreground hover:text-foreground"
+                    type="button"
+                  >
+                    <svg
+                      aria-hidden="true"
+                      class="lucide lucide-ellipsis-vertical h-3 w-3"
+                      fill="none"
+                      height="24"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      viewBox="0 0 24 24"
+                      width="24"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="1"
+                      />
+                      <circle
+                        cx="12"
+                        cy="5"
+                        r="1"
+                      />
+                      <circle
+                        cx="12"
+                        cy="19"
+                        r="1"
+                      />
+                    </svg>
+                  </button>
                 </td>
               </tr>
             </tbody>

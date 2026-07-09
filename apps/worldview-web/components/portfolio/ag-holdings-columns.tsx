@@ -35,6 +35,7 @@
  */
 
 import type { ColDef, ICellRendererParams } from "ag-grid-community";
+import { MoreVertical } from "lucide-react";
 import type { EnrichedHoldingRow } from "./holdings-columns";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
@@ -46,6 +47,47 @@ import { formatStalenessAwarePrice, fmtPnl } from "./holdings-columns";
 // registration while the renderers remain independently testable.
 import { SparklineCellRenderer } from "./cells/SparklineCellRenderer";
 import { AssetTypeCellRenderer } from "./cells/AssetTypeCellRenderer";
+
+// ── Column-group metadata (PLAN-0122 W-D + W-E) ───────────────────────────────
+// WHY a `group` field on each colId: the Simple/Advanced dual-mode page and the
+// forthcoming ⚙ column-group toggle (W-E) gate column visibility by GROUP, not by
+// individual colId. W-D introduces the field on the `actions` column (always
+// "core", so it can never be hidden away from the row it anchors); W-E assigns a
+// group to every remaining colId. Declared here (not a separate map) so the group
+// travels with the ColDef it belongs to.
+export type HoldingsColGroup = "core" | "portfolio" | "advanced";
+
+/**
+ * HoldingColDef — a holdings ColDef that MAY carry column-group metadata.
+ * WHY extend ColDef: AG Grid's ColDef has no `group` field; adding one to a plain
+ * ColDef object literal would trip TypeScript's excess-property check. This alias
+ * makes `group` an optional, type-checked extra so W-D/W-E can annotate columns
+ * without fighting the compiler. `group` is inert to AG Grid (it ignores unknown
+ * keys) — only OUR code reads it (holdings-column-groups.ts, W-E).
+ */
+export type HoldingColDef = ColDef<EnrichedHoldingRow> & {
+  group?: HoldingsColGroup;
+};
+
+/**
+ * HoldingsGridContext — the shape SemanticHoldingsTable injects via AG Grid's
+ * `context` prop, consumed by cell renderers. Extends the existing context used
+ * by the SPARK/ASSET renderers with the W-D row-action callback.
+ */
+export interface HoldingsGridContext {
+  /** 14-day close series keyed by instrument_id → SPARK column. */
+  holdingsSeries?: Record<string, number[]>;
+  /** Asset class keyed by instrument_id → ASSET column. */
+  assetClasses?: Record<string, string | null>;
+  /**
+   * PLAN-0122 W-D: open the row-action menu for a holding at a screen position.
+   * WHY a callback through context (not a per-ColDef param): the floating menu +
+   * its open/close state live in SemanticHoldingsTable; the ACTIONS cell only
+   * needs to REQUEST that the menu open at the kebab's bounding rect. This reuses
+   * the EXACT same menu as the right-click path — no duplicate menu system.
+   */
+  onOpenRowMenu?: (row: EnrichedHoldingRow, x: number, y: number) => void;
+}
 
 // ── Row-overlap guard (P-1 fix, 2026-06-18 design QA) ─────────────────────────
 // SYMPTOM (DESIGN-QA P-1): in the deployed 22px-row holdings table, rows 4–6
@@ -339,9 +381,48 @@ function SectorCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   );
 }
 
+// ── ACTIONS cell (PLAN-0122 W-D §6.6) ─────────────────────────────────────────
+// WHY a visible row affordance: today the Edit/Close actions are reachable ONLY
+// via right-click — invisible on touch/trackpad. This pinned-right kebab (⋮) is
+// the discoverable, additive entry point; clicking it opens the SAME floating
+// menu as the right-click path (via context.onOpenRowMenu), so there is no
+// duplicated menu logic.
+function ActionsCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  // The pinned TOTAL row has no per-row actions — render nothing (R-22).
+  if (isPinnedBottom(params) || !params.data) return null;
+
+  const ticker = params.data.h.ticker || params.data.h.name || "position";
+
+  return (
+    <button
+      type="button"
+      // aria-label names the row so screen-reader users know which position the
+      // menu will act on.
+      aria-label={`Actions for ${ticker}`}
+      // WHY text-muted → hover:foreground (always visible, not hover-only): the
+      // shared AG Grid theme CSS (row-hover reveal) is owned by another surface;
+      // keeping the kebab always visible-but-muted is the discoverable, touch-safe
+      // choice without reaching into that CSS. It reads as a quiet affordance.
+      className="flex h-full w-full items-center justify-center text-muted-foreground hover:text-foreground"
+      onClick={(e) => {
+        // Stop propagation so the row's onRowClicked (navigate to instrument) does
+        // NOT fire, and the document click-outside listener does not immediately
+        // close the menu we are about to open.
+        e.stopPropagation();
+        const rect = e.currentTarget.getBoundingClientRect();
+        const ctx = params.context as HoldingsGridContext | undefined;
+        // Open the menu at the kebab's bottom-right so it drops below the button.
+        ctx?.onOpenRowMenu?.(params.data!, rect.right, rect.bottom);
+      }}
+    >
+      <MoreVertical className="h-3 w-3" aria-hidden />
+    </button>
+  );
+}
+
 // ── Column definitions ────────────────────────────────────────────────────────
 
-export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
+export const holdingsAgColumns: HoldingColDef[] = [
   // ── 1. TICKER — pinned left, not movable ───────────────────────────────────
   {
     colId: "ticker",
@@ -581,5 +662,32 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
         </span>
       );
     },
+  },
+
+  // ── PLAN-0122 W-D: ACTIONS — pinned right, locked, non-movable ──────────────
+  // WHY pinned right + lockPinned + suppressMovable + sortable:false: the kebab
+  // must anchor the row's right edge and never drift, sort, or be dragged away —
+  // it is chrome, not data. `group:"core"` (W-E) marks it always-present: it can
+  // never be hidden by the column-group toggle (it, like `ticker`, anchors the
+  // row). Appended LAST so any saved `worldview-holdings-cols` state that predates
+  // this column keeps it at this defined position (AG Grid appends columns unknown
+  // to the saved state). Cell renders the kebab; the TOTAL row renders empty.
+  {
+    colId: "actions",
+    headerName: "",
+    group: "core",
+    // WHY pinned:"right" + lockPinned:true (not lockPinned:"right"): AG Grid's
+    // `pinned` sets the SIDE ("right") while `lockPinned` is a BOOLEAN that stops
+    // the user un-pinning it. The plan's shorthand "lockPinned:right" maps to
+    // this correct pair (mirrors the `ticker` column's pinned:"left"+lockPinned).
+    pinned: "right" as const,
+    lockPinned: true,
+    suppressMovable: true,
+    sortable: false,
+    resizable: false,
+    width: 40,
+    // P-1: same clamp so the button box never spills into the row below.
+    cellClass: `${CELL_CLAMP} justify-center`,
+    cellRenderer: ActionsCellRenderer,
   },
 ];

@@ -8,9 +8,13 @@
  * minimum-friction path for exiting a position without navigating to the
  * Add Position form and manually choosing SELL.
  *
- * FIELDS (per PRD §7.2):
+ * FIELDS (per PRD §7.2, quantity un-locked in PLAN-0122 W-D §6.5):
  *   - Ticker: read-only — so the user knows which position they're closing
- *   - Quantity: read-only — pre-filled from the holding (full close by default)
+ *   - Quantity: EDITABLE — pre-filled with the FULL holding quantity so a full
+ *     close stays one click, but the user may enter a smaller quantity for a
+ *     PARTIAL close (0 < qty ≤ holding.quantity). A "Sell all" link resets it to
+ *     the full holding. The backend already accepts any positive SELL quantity
+ *     (PRD-0122 §1.2.3), so partial close is a pure frontend un-lock.
  *   - Sale Price: user-entered, required, > 0
  *   - Trade Date: date picker, defaults to today; user can change it for
  *     a backdated close (e.g. after a market holiday)
@@ -98,9 +102,16 @@ export function ClosePositionDialog({
   })();
   const [tradeDateStr, setTradeDateStr] = useState(todayStr);
 
+  // PLAN-0122 W-D (§6.5): quantity is now EDITABLE for partial closes. Default to
+  // the FULL holding quantity so the historical "full close in one click"
+  // behaviour is preserved — the user only changes it when they want to sell part.
+  // WHY string (not number): controlled inputs need strings; parsed on submit.
+  const [quantityStr, setQuantityStr] = useState(String(holding.quantity));
+
   // Loading + error state for the submit action.
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [priceError, setPriceError] = useState<string | null>(null);
+  const [quantityError, setQuantityError] = useState<string | null>(null);
 
   // WHY useRef for idempotency key (not useState): we need a stable value for
   // the entire lifecycle of this dialog instance. If the user double-clicks
@@ -118,10 +129,45 @@ export function ClosePositionDialog({
     return n;
   }
 
+  // PLAN-0122 W-D (§6.5): validate the (now editable) quantity. Returns the
+  // parsed quantity, or null with a specific error message set. Rules:
+  //   - must be > 0 ("Quantity must be greater than 0.")
+  //   - must be ≤ the holding quantity ("You only hold {n} shares.") — a
+  //     client-side over-sell guard (S1 would still record it, but we prevent the
+  //     confusing derived-recompute an over-sell would produce).
+  function validateQuantity(raw: string): number | null {
+    const n = parseFloat(raw);
+    if (!isFinite(n) || n <= 0) {
+      setQuantityError("Quantity must be greater than 0.");
+      return null;
+    }
+    if (n > holding.quantity) {
+      setQuantityError(`You only hold ${holding.quantity.toLocaleString()} shares.`);
+      return null;
+    }
+    setQuantityError(null);
+    return n;
+  }
+
+  // Derived full/partial state for the labels + "Sell all" affordance. A parse
+  // failure is treated as "not partial" so an in-progress edit doesn't flicker
+  // the title; the real validation happens on submit.
+  const parsedQty = parseFloat(quantityStr);
+  const isPartial =
+    Number.isFinite(parsedQty) && parsedQty > 0 && parsedQty < holding.quantity;
+
   // ── Submit ────────────────────────────────────────────────────────────────
 
   async function handleConfirm() {
     if (isSubmitting) return;
+
+    // Validate the (editable) quantity first — a partial close must be a
+    // positive quantity no larger than the holding (PLAN-0122 W-D §6.5).
+    const sellQuantity = validateQuantity(quantityStr);
+    if (sellQuantity === null) {
+      // validateQuantity already set the specific error message.
+      return;
+    }
 
     // Validate the sale price before hitting the API.
     const salePrice = validatePrice(salePriceStr);
@@ -152,7 +198,9 @@ export function ClosePositionDialog({
         instrument_id: holding.instrument_id,
         transaction_type: "TRADE",
         trade_side: "SELL",
-        quantity: holding.quantity,
+        // PLAN-0122 W-D: the entered quantity (full holding by default, or a
+        // smaller partial-close amount). Validated 0 < qty ≤ holding.quantity.
+        quantity: sellQuantity,
         price: salePrice,
         fees: 0,                     // manual close has no brokerage fee
         // WHY "USD" default: the Holding type does not carry a currency field
@@ -254,11 +302,11 @@ export function ClosePositionDialog({
             />
           </div>
 
-          {/* Quantity — read-only: pre-filled with the full holding quantity */}
-          {/* WHY not editable: "Close Position" means closing the FULL position.
-              Partial closes can be achieved by recording a SELL transaction
-              through the normal Add Position dialog. Locking quantity here
-              prevents accidental partial closes when the intent is a full exit. */}
+          {/* Quantity — EDITABLE (PLAN-0122 W-D §6.5): defaults to the full
+              holding quantity (full close in one click) but the user may enter a
+              smaller amount for a partial close. A "Sell all" link resets it to
+              the full holding. The backend already accepts any positive SELL
+              quantity, so this is a pure frontend un-lock (no backend change). */}
           <div className="grid grid-cols-3 items-center gap-3">
             <Label
               htmlFor="close-qty"
@@ -266,13 +314,51 @@ export function ClosePositionDialog({
             >
               Quantity
             </Label>
-            <Input
-              id="close-qty"
-              readOnly
-              value={holding.quantity.toLocaleString()}
-              className="col-span-2 h-7 font-mono text-[12px] bg-muted/30 cursor-default"
-              tabIndex={-1}
-            />
+            <div className="col-span-2 flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <Input
+                  id="close-qty"
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={quantityStr}
+                  onChange={(e) => {
+                    setQuantityStr(e.target.value);
+                    // Clear the validation error as soon as the user edits.
+                    if (quantityError) setQuantityError(null);
+                  }}
+                  className="h-7 flex-1 font-mono text-[12px]"
+                />
+                {/* "Sell all" resets to the full holding — the Full/Partial
+                    affordance (R-21). Shown only when the field is not already
+                    at the full amount so it doesn't read as a redundant control. */}
+                {isPartial && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuantityStr(String(holding.quantity));
+                      setQuantityError(null);
+                    }}
+                    className="shrink-0 text-[10px] uppercase tracking-wide text-primary hover:underline"
+                  >
+                    Sell all
+                  </button>
+                )}
+              </div>
+              {/* Full/Partial intent label (R-21): the header stays "Close
+                  Position — {ticker}"; this line makes the effect explicit. */}
+              <p
+                data-testid="close-mode-label"
+                className="text-[10px] text-muted-foreground"
+              >
+                {isPartial
+                  ? `Sell ${parsedQty.toLocaleString()} of ${holding.quantity.toLocaleString()}`
+                  : "Close Position"}
+              </p>
+              {quantityError && (
+                <p className="text-[10px] text-destructive">{quantityError}</p>
+              )}
+            </div>
           </div>
 
           {/* Sale Price — user-entered; required; must be > 0 */}
@@ -343,7 +429,13 @@ export function ClosePositionDialog({
             onClick={() => void handleConfirm()}
             disabled={isSubmitting}
           >
-            {isSubmitting ? "Closing…" : "Close Position"}
+            {/* Label reflects full vs partial intent (R-21). Full close keeps the
+                "Close Position" label existing tests + muscle-memory rely on. */}
+            {isSubmitting
+              ? "Closing…"
+              : isPartial
+                ? `Sell ${parsedQty.toLocaleString()} of ${holding.quantity.toLocaleString()}`
+                : "Close Position"}
           </Button>
         </DialogFooter>
       </DialogContent>

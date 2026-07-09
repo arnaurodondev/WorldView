@@ -33,13 +33,14 @@ import { holdingsAgColumns, HOLDINGS_AG_COL_WIDTHS } from "../ag-holdings-column
 
 // ── holdingsAgColumns — 15-column spec ───────────────────────────────────────
 
-describe("holdingsAgColumns (15-column spec — PLAN-0114 W6 divYld added)", () => {
-  it("SemanticHoldingsTable has 15 columns", () => {
-    // WHY 15: PLAN-0108 W4-T401 added SPARK (col 8) and ASSET (col 14) to the
+describe("holdingsAgColumns (16-column spec — PLAN-0122 W-D actions added)", () => {
+  it("SemanticHoldingsTable has 16 columns", () => {
+    // WHY 16: PLAN-0108 W4-T401 added SPARK (col 8) and ASSET (col 14) to the
     // original 12-column table (14 total). PLAN-0114 W6 FR-12 added divYld
-    // (col 15). Any deviation means a column was accidentally dropped or added
-    // without updating this test.
-    expect(holdingsAgColumns).toHaveLength(15);
+    // (col 15). PLAN-0122 W-D added the pinned-right ACTIONS kebab (col 16). Any
+    // deviation means a column was accidentally dropped or added without updating
+    // this test.
+    expect(holdingsAgColumns).toHaveLength(16);
   });
 
   it("SemanticHoldingsTable renders SPARK column header", () => {
@@ -57,10 +58,10 @@ describe("holdingsAgColumns (15-column spec — PLAN-0114 W6 divYld added)", () 
     expect(assetCol?.headerName).toBe("ASSET");
   });
 
-  it("column order matches the 15-column spec — PLAN-0114 W6 divYld added", () => {
+  it("column order matches the 16-column spec — PLAN-0122 W-D actions added", () => {
     // WHY explicit order check: order matters for the trader's eye-scan path.
     // SPARK must come after DAY Δ% (col 7) and before MKT VALUE (col 9).
-    // ASSET must be second-to-last (col 14); DIV YLD is last (col 15, FR-12).
+    // ASSET must be col 14; DIV YLD col 15; ACTIONS is last (col 16, pinned right).
     const ids = holdingsAgColumns.map((c) => c.colId);
     expect(ids).toEqual([
       "ticker",      // 1
@@ -70,15 +71,32 @@ describe("holdingsAgColumns (15-column spec — PLAN-0114 W6 divYld added)", () 
       "current",     // 5  — header: LAST
       "dayChange",   // 6  — header: DAY Δ$
       "dayChangePct",// 7  — header: DAY Δ%
-      "spark",       // 8  — NEW: SPARK
+      "spark",       // 8  — SPARK
       "value",       // 9  — header: MKT VALUE
       "pnl",         // 10 — header: UNREAL $
       "pnlPct",      // 11 — header: UNREAL %
       "weight",      // 12
       "sector",      // 13
-      "asset",       // 14 — NEW: ASSET
-      "divYld",      // 15 — NEW: DIV YLD (PLAN-0114 W6 FR-12)
+      "asset",       // 14 — ASSET
+      "divYld",      // 15 — DIV YLD (PLAN-0114 W6 FR-12)
+      "actions",     // 16 — NEW: ACTIONS kebab (PLAN-0122 W-D, pinned right)
     ]);
+  });
+
+  // ── PLAN-0122 W-D: ACTIONS column ─────────────────────────────────────────
+  it("ACTIONS column is pinned right, locked, non-movable, non-sortable, group=core", () => {
+    const actions = holdingsAgColumns.find((c) => c.colId === "actions");
+    expect(actions, "actions column must exist").toBeDefined();
+    // Pinned right + lockPinned true (AG Grid: `pinned` = side, `lockPinned`
+    // boolean = user can't unpin) so the kebab anchors the row's right edge.
+    expect(actions?.pinned).toBe("right");
+    expect(actions?.lockPinned).toBe(true);
+    expect(actions?.suppressMovable).toBe(true);
+    expect(actions?.sortable).toBe(false);
+    expect(actions?.width).toBe(40);
+    // group "core" (W-E) → always present, never hideable by the column toggle.
+    expect(actions?.group).toBe("core");
+    expect(typeof actions?.cellRenderer).toBe("function");
   });
 
   it("SPARK column is not sortable", () => {

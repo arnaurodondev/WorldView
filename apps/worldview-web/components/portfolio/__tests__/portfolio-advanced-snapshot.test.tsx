@@ -14,6 +14,15 @@
  * `pnpm vitest -u` changes this file because of a Simple-mode edit, that is a
  * real fork bug: fix the code, do not update the snapshot.
  *
+ * ✅ SANCTIONED REGENERATION — PLAN-0122 W-D (the ONE approved change so far):
+ *   W-D added a pinned-right ACTIONS kebab column to the holdings table
+ *   (`ag-holdings-columns.tsx` → colId "actions"). This is an INTENTIONAL
+ *   Advanced-layout change (the plan's W-D Break Impact table explicitly
+ *   authorises it), NOT a Simple-mode side effect: the Advanced table now carries
+ *   an extra empty header cell + a per-row ⋮ button. The snapshot was regenerated
+ *   with `pnpm vitest run -u` for this and only this reason. Any FURTHER diff must
+ *   again be traced to a deliberate Advanced change before you run -u.
+ *
  * SCOPE NOTE (deviation, documented): the plan's T-A-A-04 lists both HoldingsTab
  * strips AND page-level chrome (8 KPI tiles, the 4-trigger TabsList) in one
  * snapshot. Mounting the whole `page.tsx` would require mocking usePortfolioData

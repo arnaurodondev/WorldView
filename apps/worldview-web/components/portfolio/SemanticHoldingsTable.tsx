@@ -64,6 +64,13 @@ const ClosePositionDialog = lazy(() =>
   import("./ClosePositionDialog").then((m) => ({ default: m.ClosePositionDialog }))
 );
 
+// PLAN-0122 W-D: the honest adjusting-trade Edit Position dialog. Lazy for the
+// same reason as ClosePositionDialog — it only mounts when the user picks
+// "Edit Position" from the row-kebab / right-click menu.
+const EditPositionDialog = lazy(() =>
+  import("./EditPositionDialog").then((m) => ({ default: m.EditPositionDialog }))
+);
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const HOLDINGS_COLS_KEY = "worldview-holdings-cols";
@@ -279,6 +286,11 @@ export function SemanticHoldingsTable({
   // lifecycle tied to the current component mount.
   const [closePositionHolding, setClosePositionHolding] = useState<Holding | null>(null);
 
+  // PLAN-0122 W-D: Edit Position dialog state. We store the target holding plus
+  // the live price captured at open time (so EditPositionDialog can default its
+  // adjustment price to the live quote, PRD §6.4). null = dialog closed.
+  const [editPosition, setEditPosition] = useState<{ holding: Holding; livePrice: number } | null>(null);
+
   // useContextMenuActions must be called unconditionally at the top.
   // When ctxMenu is null, row is undefined → groups will be empty.
   const { groups: ctxGroups } = useContextMenuActions(ctxMenu?.row);
@@ -433,6 +445,28 @@ export function SemanticHoldingsTable({
       };
       const mouseEvent = event.event as MouseEvent | undefined;
       setCtxMenu({ row: ctx, x: mouseEvent?.clientX ?? 0, y: mouseEvent?.clientY ?? 0 });
+    },
+    [],
+  );
+
+  // PLAN-0122 W-D: open the SAME floating menu from the pinned-right ACTIONS
+  // kebab. The ACTIONS cell renderer (ag-holdings-columns.tsx) calls this via AG
+  // Grid `context.onOpenRowMenu` with the enriched row + the kebab's screen
+  // position; we build the identical HoldingRowContext the right-click path uses
+  // and open the menu there. This is purely additive — right-click is unchanged.
+  const handleOpenRowMenu = useCallback(
+    (row: EnrichedHoldingRow, x: number, y: number) => {
+      const { h } = row;
+      const ctx: HoldingRowContext = {
+        kind: "holding",
+        holdingId: h.holding_id,
+        portfolioId: h.portfolio_id,
+        instrumentId: h.instrument_id,
+        entityId: h.entity_id,
+        ticker: h.ticker,
+        name: h.name,
+      };
+      setCtxMenu({ row: ctx, x, y });
     },
     [],
   );
@@ -690,6 +724,10 @@ export function SemanticHoldingsTable({
           // Keyed by instrument_id — matches AssetTypeCellRenderer's lookup
           // key. Empty map (no transactions yet) → renderer shows "—".
           assetClasses: assetClasses ?? {},
+          // PLAN-0122 W-D: the ACTIONS kebab calls this to open the row menu at
+          // its bounding rect. Stable (useCallback) so AG Grid's cached context
+          // stays valid across renders.
+          onOpenRowMenu: handleOpenRowMenu,
         }}
       />
 
@@ -756,12 +794,29 @@ export function SemanticHoldingsTable({
               (h) => h.holding_id === ctxMenu.row.holdingId
             );
             if (!holding || holding.quantity <= 0) return null;
+            // PLAN-0122 W-D: capture the live price now so EditPositionDialog can
+            // default the adjustment price to the current quote (else avg cost).
+            const livePrice =
+              quotes[holding.instrument_id]?.price ??
+              holding.current_price ??
+              holding.average_cost;
             return (
               <>
                 <div className="my-1 h-px bg-border" />
                 <div className="px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                   Position
                 </div>
+                {/* PLAN-0122 W-D: Edit Position → honest adjusting-trade dialog.
+                    Gated identically to Close (non-root + qty>0). */}
+                <button
+                  className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-foreground hover:bg-muted/50"
+                  onClick={() => {
+                    setEditPosition({ holding, livePrice });
+                    setCtxMenu(null);
+                  }}
+                >
+                  <span className="flex-1 text-left">Edit Position</span>
+                </button>
                 <button
                   className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-negative hover:bg-negative/10"
                   onClick={() => {
@@ -793,6 +848,25 @@ export function SemanticHoldingsTable({
               onHoldingsRefetch?.();
             }}
             onClose={() => setClosePositionHolding(null)}
+          />
+        </Suspense>
+      )}
+
+      {/* PLAN-0122 W-D: EditPositionDialog — lazy-loaded, only mounts when the
+          user picks "Edit Position". Records an honest adjusting BUY/SELL trade
+          (never mutates the derived holding). Gated on non-root + portfolioId
+          the same way the menu item is. */}
+      {editPosition && portfolioId && (
+        <Suspense fallback={null}>
+          <EditPositionDialog
+            holding={editPosition.holding}
+            portfolioId={portfolioId}
+            currentPrice={editPosition.livePrice}
+            accessToken={accessToken}
+            onSuccess={() => {
+              onHoldingsRefetch?.();
+            }}
+            onClose={() => setEditPosition(null)}
           />
         </Suspense>
       )}
