@@ -178,6 +178,53 @@ describe("PLAN-0122 W-F · PortfolioTour", () => {
     expect(window.localStorage.getItem(PORTFOLIO_TOUR_SEEN_KEY)).toBe("done");
   });
 
+  // ── A11Y: keyboard focus-stepping ──────────────────────────────────────────
+
+  it("test_tour_focuses_advance_button_on_open: keyboard user lands on Next", async () => {
+    markTourPending();
+    renderTour();
+
+    // Once the step renders, focus is moved to the primary advance button so a
+    // keyboard user can press Enter to advance (non-blocking focus, not a trap).
+    await waitFor(() => {
+      expect(screen.getByTestId("portfolio-tour-next")).toHaveFocus();
+    });
+    // On the first step the advance button reads "Next".
+    expect(screen.getByTestId("portfolio-tour-next")).toHaveTextContent(/next/i);
+  });
+
+  it("test_tour_focuses_done_on_final_step: focus follows to the Done button", async () => {
+    const user = userEvent.setup();
+    markTourPending();
+    // No column-toggle → Connect-brokerage (step 3) is the final live step.
+    renderTour({ withColumnToggle: false });
+
+    await waitFor(() => expect(screen.getByTestId("portfolio-tour-next")).toHaveFocus());
+
+    // Walk to the final live step (index 3).
+    await user.click(screen.getByTestId("portfolio-tour-next")); // → Detail level
+    await user.click(screen.getByTestId("portfolio-tour-next")); // → Add a position
+    await user.click(screen.getByTestId("portfolio-tour-next")); // → Connect a brokerage (last)
+
+    expect(await screen.findByText(/Or connect a brokerage/i)).toBeInTheDocument();
+    const advance = screen.getByTestId("portfolio-tour-next");
+    // Final step: the advance button reads "Done" and receives focus.
+    expect(advance).toHaveTextContent(/done/i);
+    await waitFor(() => expect(advance).toHaveFocus());
+  });
+
+  it("test_tour_focus_stepping_does_not_break_escape_dismiss: Escape still ends", async () => {
+    markTourPending();
+    renderTour();
+    // Focus-stepping put focus inside the popover…
+    await waitFor(() => expect(screen.getByTestId("portfolio-tour-next")).toHaveFocus());
+
+    // …but Escape must still dismiss + persist "done" (non-blocking preserved).
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("portfolio-tour")).not.toBeInTheDocument());
+    expect(window.localStorage.getItem(PORTFOLIO_TOUR_SEEN_KEY)).toBe("done");
+  });
+
   it("test_tour_non_blocking: a sibling page action stays clickable while the tour is open", async () => {
     const user = userEvent.setup();
     const onClick = vi.fn();

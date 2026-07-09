@@ -49,4 +49,89 @@ describe("PortfolioModeToggle", () => {
     });
     expect(group).toHaveAttribute("data-tour-target", "mode-toggle");
   });
+
+  // ── A11Y: WAI-ARIA radiogroup keyboard pattern ─────────────────────────────
+
+  it("test_toggle_roving_tabindex: only the checked radio is a tab stop", () => {
+    // With mode=simple, Simple is checked (tabIndex 0) and Advanced is not (-1).
+    render(<PortfolioModeToggle mode="simple" onModeChange={() => {}} />);
+
+    const simple = screen.getByRole("radio", { name: "Simple" });
+    const advanced = screen.getByRole("radio", { name: "Advanced" });
+
+    // Roving tabindex: the group is a single tab stop on the checked radio.
+    expect(simple).toHaveAttribute("tabindex", "0");
+    expect(advanced).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("test_toggle_roving_tabindex_reflects_mode: checked side flips with mode", () => {
+    render(<PortfolioModeToggle mode="advanced" onModeChange={() => {}} />);
+
+    expect(screen.getByRole("radio", { name: "Advanced" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("radio", { name: "Simple" })).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("test_toggle_arrow_right_selects_next_and_fires_onchange", async () => {
+    const onModeChange = vi.fn();
+    render(<PortfolioModeToggle mode="simple" onModeChange={onModeChange} />);
+
+    const simple = screen.getByRole("radio", { name: "Simple" });
+    // Focus the checked radio (the roving tab stop), then press ArrowRight.
+    simple.focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    // Arrow immediately selects the next segment (radiogroup pattern).
+    expect(onModeChange).toHaveBeenCalledTimes(1);
+    expect(onModeChange).toHaveBeenCalledWith("advanced");
+    // Focus follows selection → the newly selected radio is focused.
+    expect(screen.getByRole("radio", { name: "Advanced" })).toHaveFocus();
+  });
+
+  it("test_toggle_arrow_down_selects_next: ArrowDown behaves like ArrowRight", async () => {
+    const onModeChange = vi.fn();
+    render(<PortfolioModeToggle mode="simple" onModeChange={onModeChange} />);
+
+    screen.getByRole("radio", { name: "Simple" }).focus();
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(onModeChange).toHaveBeenCalledWith("advanced");
+  });
+
+  it("test_toggle_arrow_left_selects_previous_and_fires_onchange", async () => {
+    const onModeChange = vi.fn();
+    // Start on Advanced so ArrowLeft moves back to Simple.
+    render(<PortfolioModeToggle mode="advanced" onModeChange={onModeChange} />);
+
+    screen.getByRole("radio", { name: "Advanced" }).focus();
+    await userEvent.keyboard("{ArrowLeft}");
+
+    expect(onModeChange).toHaveBeenCalledTimes(1);
+    expect(onModeChange).toHaveBeenCalledWith("simple");
+    expect(screen.getByRole("radio", { name: "Simple" })).toHaveFocus();
+  });
+
+  it("test_toggle_arrow_wraps: ArrowRight on the last segment wraps to the first", async () => {
+    const onModeChange = vi.fn();
+    render(<PortfolioModeToggle mode="advanced" onModeChange={onModeChange} />);
+
+    screen.getByRole("radio", { name: "Advanced" }).focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    // Wraps from Advanced (last) back to Simple (first).
+    expect(onModeChange).toHaveBeenCalledWith("simple");
+    expect(screen.getByRole("radio", { name: "Simple" })).toHaveFocus();
+  });
+
+  it("test_toggle_home_end_select_first_and_last", async () => {
+    const onModeChange = vi.fn();
+    render(<PortfolioModeToggle mode="simple" onModeChange={onModeChange} />);
+
+    const simple = screen.getByRole("radio", { name: "Simple" });
+    simple.focus();
+
+    // End → last segment (Advanced).
+    await userEvent.keyboard("{End}");
+    expect(onModeChange).toHaveBeenCalledWith("advanced");
+    expect(screen.getByRole("radio", { name: "Advanced" })).toHaveFocus();
+  });
 });

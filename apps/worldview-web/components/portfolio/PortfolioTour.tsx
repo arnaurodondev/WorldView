@@ -35,6 +35,18 @@
  *
  * SSR-SAFETY: client-only ("use client"); localStorage + querySelector are touched
  * only inside effects, never during render.
+ *
+ * A11Y — KEYBOARD FOCUS-STEPPING (W-F deferred item): because the tour is
+ * non-blocking (`modal={false}` + `onOpenAutoFocus` prevented so we never yank
+ * focus on open), Radix places NO focus inside the popover. That left a keyboard
+ * user unable to conveniently reach Next / Back / Skip. FIX: on each rendered
+ * step we move focus to the primary advance button ("Next", or "Done" on the last
+ * step) via a ref, so the user can press Enter to advance and Tab to Back/Skip.
+ * This is deliberately NOT a focus trap — we do a one-shot `.focus({preventScroll})`
+ * (preventScroll so it never scroll-jumps or fights the anchor positioning); the
+ * page stays fully interactive and Escape/Skip/× still dismiss. Focus lands on the
+ * step that actually renders, including after a missing-anchor self-skip, because
+ * the focus effect keys off the resolved `stepIndex` + `rect`.
  */
 
 "use client";
@@ -165,6 +177,9 @@ export function PortfolioTour({ hasExistingPortfolio, forceOpenForTest = false }
   const [rect, setRect] = useState<Rect>(null);
   // Guard so the auto-start / backfill effect runs its decision exactly once.
   const decidedRef = useRef(false);
+  // Ref to the primary advance button ("Next"/"Done") so we can move keyboard
+  // focus to it on each step (A11Y focus-stepping — see file header).
+  const advanceButtonRef = useRef<HTMLButtonElement>(null);
 
   const totalSteps = STEPS.length;
 
@@ -252,6 +267,34 @@ export function PortfolioTour({ hasExistingPortfolio, forceOpenForTest = false }
     }
     setRect(resolved.rect);
   }, [active, stepIndex, resolveFrom, endTour]);
+
+  // ── Move keyboard focus to the advance button on each rendered step ─────────
+  // WHY: with modal={false} + onOpenAutoFocus prevented, Radix places no focus in
+  // the popover, so a keyboard user couldn't reach the controls. We focus the
+  // primary advance button ("Next"/"Done") so Enter advances and Tab reaches
+  // Back/Skip. preventScroll avoids scroll-jump / fighting the anchor. This is a
+  // one-shot focus move, NOT a trap: the page stays interactive.
+  //
+  // Two hooks, because the timing differs:
+  //   • INITIAL step — handled in `onOpenAutoFocus` below (fires right after Radix
+  //     mounts the portaled content, when the ref is attached). An effect here
+  //     would run before the portal content commits and miss the ref.
+  //   • SUBSEQUENT steps — this effect. The advance button's DOM node is REUSED
+  //     across steps (only its label flips Next→Done), so the ref is already
+  //     attached; re-focusing on each `stepIndex` change (incl. after a
+  //     missing-anchor self-skip, which lands via the resolved `stepIndex`) keeps
+  //     focus on the live step. Guarded by `didInitialFocusRef` so we don't
+  //     double-focus on the very first render.
+  const didInitialFocusRef = useRef(false);
+  useEffect(() => {
+    if (!active || !rect) {
+      // Reset when the tour closes so the next open re-arms the initial-focus path.
+      didInitialFocusRef.current = false;
+      return;
+    }
+    if (!didInitialFocusRef.current) return; // first focus is done in onOpenAutoFocus
+    advanceButtonRef.current?.focus({ preventScroll: true });
+  }, [active, rect, stepIndex]);
 
   // ── Keep the popover glued to its anchor on scroll / resize ─────────────────
   useEffect(() => {
@@ -342,9 +385,19 @@ export function PortfolioTour({ hasExistingPortfolio, forceOpenForTest = false }
         role="dialog"
         aria-label={`Onboarding tour — ${step.title}`}
         className="w-72 p-3"
-        // WHY onOpenAutoFocus preventDefault: do not yank focus from whatever the
-        // user was doing — reinforces the non-blocking contract (R-31).
-        onOpenAutoFocus={(e) => e.preventDefault()}
+        // WHY onOpenAutoFocus preventDefault: stop Radix's default FocusScope
+        // auto-focus (which would grab the first focusable / the content root).
+        // We then deliberately place focus on the primary advance button so a
+        // keyboard user can immediately press Enter to advance and Tab to
+        // Back/Skip — see the focus-stepping note in the file header. Doing it
+        // here (not in an effect) guarantees the button ref is attached, because
+        // this fires right after the portaled content mounts. Still non-blocking:
+        // modal={false} means no focus trap, and Escape/Skip/× still dismiss.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          advanceButtonRef.current?.focus({ preventScroll: true });
+          didInitialFocusRef.current = true;
+        }}
       >
         <div className="flex items-start justify-between gap-2">
           <h3 className="font-mono text-[11px] uppercase tracking-[0.06em] text-primary">
@@ -390,6 +443,8 @@ export function PortfolioTour({ hasExistingPortfolio, forceOpenForTest = false }
               </Button>
             )}
             <Button
+              // Focus target for keyboard focus-stepping (see file header A11Y note).
+              ref={advanceButtonRef}
               type="button"
               size="sm"
               data-testid="portfolio-tour-next"
