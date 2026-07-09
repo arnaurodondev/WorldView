@@ -8,7 +8,7 @@
 | **Status** | DRAFT (ready for /plan) |
 | **Supersedes** | Extends PRD-0019 (Polymarket Wave 1, shipped) |
 | **Drives** | PLAN-0056 (to be regenerated against this re-scope) |
-| **Affects services** | S3 market-data (owns prediction storage — extended with price-history / trades / OI + polarity + delta signals), S4 content-ingestion (new adapters for the 4 deeper streams + synthetic-document emitter), S6 nlp-pipeline (unchanged — reused via synthetic docs), S7 knowledge-graph (new `prediction_market` / `prediction_event` entity types, `references` relations with polarity, `EventType.PREDICTION` temporal events), alert service (new `prediction` signal subtype), S9 api-gateway (new read endpoints + brief leg), worldview-web (enhanced `/prediction-markets` page + chat) |
+| **Affects services** | S3 market-data (owns prediction storage — extended with price-history / trades / OI + polarity + delta signals), S4 content-ingestion (new adapters for the 4 deeper streams + synthetic-document emitter), S6 nlp-pipeline (unchanged — reused via synthetic docs), S7 knowledge-graph (`EventType.PREDICTION` temporal events + `entity_event_exposures` carrying polarity — no new entity nodes), alert service (new `prediction` signal subtype), S9 api-gateway (new read endpoints + brief leg), worldview-web (enhanced `/prediction-markets` page + chat) |
 | **Doesn't affect** | S1 portfolio (read-only consumer of signals via existing alert surface), S2 market-ingestion, S5 content-store, S8 rag-chat internals (tool already exists; only grounding metadata extended) |
 
 ---
@@ -108,7 +108,7 @@ market metadata. What we have is a **read-only ornament**: it is displayed but n
 ### 2.1 Goals
 
 - **G1 — Merge prediction markets into the KG.** Every ingested market is entity-linked via S6 NER;
-  `prediction_market -[:references]-> entity` relations carry a per-entity **polarity**.
+  `entity_event_exposures` link each market to referenced entities, carrying a per-entity **polarity**.
 - **G2 — Prediction markets as temporal events.** Each linked market becomes an
   `EventType.PREDICTION` row on the entity timeline, carrying current implied probability.
 - **G3 — Three signal types, score-gated, routed through the existing alert engine:**
@@ -134,8 +134,8 @@ market metadata. What we have is a **read-only ornament**: it is displayed but n
 | # | Requirement |
 |---|---|
 | FR-1 | S4 emits one **synthetic document** (`content.article.raw.v1`, `source_type='prediction_market'`) per market on first-sight and one on resolution; S6 NER links entities unchanged. |
-| FR-2 | S7 creates `prediction_market` and `prediction_event` entity nodes and `references` / `belongs_to_event` / `resolved_to` relations. |
-| FR-3 | At link time, an LLM step classifies each `(market, referenced-entity)` polarity (`bullish/bearish/neutral`) and stores it on the `references` relation. |
+| FR-2 | S7 creates one `temporal_events(event_type='prediction')` row per entity-linked market and one `entity_event_exposures` row per referenced entity (earnings pattern) — no new entity nodes. |
+| FR-3 | At link time, an LLM step (`MarketPolarityClassifier`) classifies each `(market, referenced-entity)` polarity (`bullish/bearish/neutral`) and stores it on the `entity_event_exposures` row. |
 | FR-4 | S7 upserts each entity-linked market as an `EventType.PREDICTION` `temporal_events` row (current implied probability + close date), mirroring the `EarningsCalendarDatasetConsumer` pattern. |
 | FR-5 | S3 ingests the 4 deeper streams (CLOB prices-history, Gamma events, Data trades, Data OI) into new S3 tables co-located with `prediction_markets`; `liquidity` is exposed in S3+S9 schemas. |
 | FR-6 | A **delta-signal worker** computes new-market / material-move / resolution signals, gated on entity-link + liquidity/volume floor + Δ threshold + polarity, and emits them to the alert engine as `signal_type='prediction'`. |
@@ -199,7 +199,7 @@ snapshots) that makes a **material-move** trigger first-class.
                                           └─► nlp.article.enriched.v1
                                                 └─► S7 knowledge-graph:
                                                       • prediction_market/-event nodes
-                                                      • references relation + POLARITY (LLM)
+                                                      • temporal_events(prediction) + exposures + POLARITY (LLM)
                                                       • EventType.PREDICTION temporal_events
                                                                     │
                         S3 snapshots (price time-series) ───────────┤
@@ -215,8 +215,8 @@ snapshots) that makes a **material-move** trigger first-class.
 **Ownership split:**
 - **S3 market-data** owns all raw prediction data (markets, snapshots, prices, events, trades, OI)
   and the move-signal computation (it has the time-series).
-- **S7 knowledge-graph** owns the *graph projection*: entity nodes, `references` relations (with
-  polarity), `belongs_to_event`, `resolved_to`, and `EventType.PREDICTION` temporal events.
+- **S7 knowledge-graph** owns the *graph projection*: `EventType.PREDICTION` temporal events +
+  `entity_event_exposures` (carrying polarity) linking each market to referenced entities.
 - **alert service** owns signal routing/gating/dedup as an existing surface.
 
 ---
@@ -238,29 +238,41 @@ snapshots) that makes a **material-move** trigger first-class.
 Add `event_id` (nullable FK) to the existing `prediction_markets` row (filled from Gamma `/events`).
 Partitioning mirrors the existing `ohlcv_bars` hypertable pattern in S3.
 
-### 6.2 S7 knowledge-graph — NEW entity types, relations, temporal events
+### 6.2 S7 knowledge-graph — PREDICTION temporal events (NOT new entity nodes)
 
-- `EntityType` (verified at `services/knowledge-graph/src/knowledge_graph/domain/enums.py:86`) gains
-  `prediction_market` and `prediction_event`.
-- `EventType` gains `PREDICTION` (alongside the `CORPORATE` value PLAN-0068 added; update the
-  `ck_temporal_event_type` CHECK constraint via `intelligence-migrations`, mirroring PLAN-0068 Wave A-1).
-- Relations (existing `relations` table — no new columns except polarity storage, see §6.3):
-  `belongs_to_event` (market→event), `references` (market/event→entity, via NER), `resolved_to`.
+> **Model correction (from PLAN-0056 recon, 2026-07-09):** markets are modelled as **temporal events**,
+> mirroring the shipped earnings pattern (`EarningsCalendarDatasetConsumer` + `EventType.CORPORATE`),
+> **not** as new canonical-entity nodes. This avoids bloating `canonical_entities` with ~30k market
+> rows and needs no entity-kind CHECK widening. (An earlier draft proposed `EntityType.prediction_market`
+> / `prediction_event`; withdrawn — S7 entity kinds are a fixed DB CHECK of 11 values, and a market is
+> an *event*, not an entity.)
 
-### 6.3 Polarity on the `references` relation (the one genuinely new modelling piece)
+- `EventType` (verified at `services/knowledge-graph/src/knowledge_graph/domain/enums.py:86`) gains
+  `PREDICTION` (alongside `CORPORATE`; widen the `ck_temporal_event_type` CHECK via
+  `intelligence-migrations`, mirroring `0018_add_corporate_event_type`).
+- Each entity-linked market → one `temporal_events(event_type='prediction')` row (title = question,
+  `active_until` = close_time, `confidence` = implied probability), plus one
+  **`entity_event_exposures`** row per referenced entity (`exposure_type=DIRECTLY_AFFECTED`) — the exact
+  earnings linkage mechanism. Gamma `/events` groupings are stored in S3 (`prediction_events` table),
+  not as KG nodes; the temporal event carries the group id as metadata.
 
-Each `prediction_market -[:references]-> entity` relation stores a **polarity** for that entity:
-`bullish | bearish | neutral`, plus the winning-outcome token it is keyed to and a confidence.
-If the existing `relations` schema has a metadata/attributes column, store it there; otherwise add a
-nullable `polarity` + `polarity_confidence` (forward-compatible, defaulted). Polarity is computed
-**once at link time** by an LLM classification step (§8.2) and reused by every downstream signal —
-never recomputed per price tick.
+### 6.3 Polarity on the exposure (the one genuinely new modelling piece)
+
+Each `entity_event_exposures` row (market ↔ entity) stores a **polarity** for that entity:
+`bullish | bearish | neutral` + `polarity_confidence`. Two nullable columns are added to
+`entity_event_exposures` (forward-compatible, defaulted) — **not** to the hot `relations` table, which
+has no metadata column (its polarity lives on `relation_evidence_raw`). Polarity is computed **once at
+link time** by an LLM classification step (§8.2, `MarketPolarityClassifier`) and reused by every
+downstream signal — never recomputed per price tick.
 
 ### 6.4 Avro topics (envelope pattern identical to existing `market.prediction.v1`)
 
-`market.prediction.history.v1`, `market.prediction.event.v1`, `market.prediction.trade.v1`,
-`market.prediction.oi.v1` — all produced by S4, consumed by S3. Full schemas in PLAN-0056. Existing
-`market.prediction.v1` is kept as-is (no schema break); S4 additionally feeds the synthetic-doc path.
+Six new topics. **Ingestion (produced by S4, consumed by S3):** `market.prediction.history.v1`,
+`market.prediction.event.v1`, `market.prediction.trade.v1`, `market.prediction.oi.v1`. **Signals:**
+`market.prediction.move.v1` (produced by S3 move detector, consumed by S7) and
+`market.prediction.signal.v1` (produced by S7, consumed by the alert `IntelligenceConsumer`). Full
+schemas in PLAN-0056 (§Z1). Existing `market.prediction.v1` is kept as-is (no schema break); S4
+additionally feeds the synthetic-doc path via `content.article.raw.v1`.
 
 ---
 
@@ -296,8 +308,8 @@ route to the alert engine. Idempotency: `(condition_id, signal_type, window)` de
 
 Direction is a property of the `(market-outcome, entity)` pair and cannot come from price alone
 ("Will X miss earnings?" ↑ = bearish for X; "Will X's drug be approved?" ↑ = bullish). At link time,
-an LLM step labels each referenced entity's polarity per outcome and stores it on the `references`
-relation (§6.3). The **material-move** signal then reads polarity to classify the move as **adverse**
+an LLM step labels each referenced entity's polarity per outcome and stores it on the
+`entity_event_exposures` row (§6.3). The **material-move** signal then reads polarity to classify the move as **adverse**
 (bearish outcome rising, or bullish outcome falling for a held entity) vs favorable, and the alert
 copy/severity reflects direction. This reuses the platform's existing news market-impact/sentiment
 mental model (and may reuse the same relevance/impact worker infrastructure).
@@ -341,15 +353,17 @@ Env vars (new): `CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS=14`,
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/v1/predictions/markets` | list; filter `category`, `event_id`, `status`, `q`; **now includes `liquidity`** |
-| GET | `/api/v1/predictions/markets/{condition_id}` | market + outcomes + OI + latest flow |
-| GET | `/api/v1/predictions/markets/{condition_id}/history?interval=1h&since=` | price time-series |
-| GET | `/api/v1/predictions/markets/{condition_id}/trades?since=&limit=` | recent trades |
-| GET | `/api/v1/predictions/events` / `/events/{event_id}` | event groupings + child markets |
-| GET | `/api/v1/entities/{entity_id}/predictions` | markets/events referencing this entity (+ polarity) |
+| GET | `/v1/signals/prediction-markets` | list; filter `category`, `event_id`, `status`, `q`; **now includes `liquidity`** |
+| GET | `/v1/signals/prediction-markets/{condition_id}` | market + outcomes + OI + latest flow |
+| GET | `/v1/signals/prediction-markets/{condition_id}/history?interval=1h&since=` | price time-series |
+| GET | `/v1/signals/prediction-markets/{condition_id}/trades?since=&limit=` | recent trades |
+| GET | `/v1/signals/prediction-markets/events` / `/events/{event_id}` | event groupings + child markets |
+| GET | `/v1/entities/{entity_id}/predictions` | markets referencing this entity (+ polarity), proxied to S7 |
 
-> These extend the **existing** `/prediction-markets` S3 routes rather than replacing them; the
-> existing paths remain for the shipped frontend during migration.
+> These **extend the shipped S9 `/v1/signals/prediction-markets/*` namespace** (do not introduce a
+> parallel `/v1/predictions/*`). S9 proxies to the existing S3 `/api/v1/prediction-markets/*` routes;
+> the entity-predictions route proxies to the new S7 endpoint (§6.2). Existing paths remain unchanged
+> for the shipped frontend.
 
 ---
 
@@ -359,8 +373,8 @@ Env vars (new): `CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS=14`,
   fallback; synthetic-doc emitted once per market (dedup), once on resolution.
 - **S6 (no code change):** GLiNER extracts entities from question → `nlp.article.enriched.v1` carries
   mentions.
-- **S7:** `prediction_market`/`-event` nodes; `references` + `belongs_to_event` + `resolved_to`;
-  polarity persisted; `EventType.PREDICTION` temporal-event upsert idempotent.
+- **S7:** `EventType.PREDICTION` temporal-event upsert idempotent; one `entity_event_exposures` row per
+  referenced entity; polarity persisted on the exposure.
 - **Polarity classifier:** "Will X miss earnings?" → bearish-for-X; "Will X drug approved?" →
   bullish-for-X; unrelated entity → neutral.
 - **Signal worker:** new-market fires only when entity tracked + above floor; material-move respects
@@ -425,6 +439,6 @@ None are blocking; `/plan` can proceed and finalize.
   (liquidity/slug precedent).
 - `services/market-data/.claude-context.md`: 4 new tables + 4 new consumers + signal worker.
 - `services/knowledge-graph/.claude-context.md`: 2 new entity types, `PREDICTION` event type,
-  polarity on `references`.
+  polarity on `entity_event_exposures`.
 - `docs/services/market-data.md`, `docs/services/knowledge-graph.md`, `docs/apps/worldview-web.md`.
 - `docs/MASTER_PLAN.md`: prediction-market signal flow diagram.
