@@ -181,9 +181,10 @@ def upgrade() -> None:
             f"FROM (VALUES {','.join(alias_rows)}) "
             "AS v(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
             "WHERE EXISTS (SELECT 1 FROM canonical_entities ce WHERE ce.entity_id = v.entity_id::uuid) "
-            "ON CONFLICT (entity_id, normalized_alias_text, alias_type) "
-            "WHERE is_active = true "
-            "DO NOTHING"
+            # No-target DO NOTHING: catches BOTH the per-entity index and the global
+            # uidx_entity_aliases_normalized (a normalized alias may already map to
+            # another entity from news extraction — skip it, don't fail the seed).
+            "ON CONFLICT DO NOTHING"
         )
 
 
