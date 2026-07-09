@@ -5,6 +5,14 @@
 **Severity**: HIGH (UX blockers, not correctness/data-loss)
 **Status**: Root causes identified; ready for `/prd` (dual-mode) + `/fix-bug` (quick wins)
 
+> **UPDATE 2026-07-09 — Tier 0 + Tier 1 scoped by [PRD-0122](../specs/0122-portfolio-public-ux.md)
+> / [PLAN-0122](../plans/0122-portfolio-public-ux-plan.md)** (frontend-only, shipped W-A…W-F):
+> dual-mode `/portfolio` (Simple default + Advanced opt-in render gate), brokerage
+> trust + honest timing copy, Add-Position trade-date + debounced typeahead, Edit
+> Position (adjusting trade), partial close, pinned-right ACTIONS kebab, Core/Portfolio/
+> Advanced column-group toggle, and the dismissible onboarding tour. Tier 2 / Tier 3
+> items (§5) remain out of scope (see PRD-0122 §2 Non-Goals + §14 open questions).
+
 ## 1. Issue Summary
 
 The owner is making the portfolio product **public** and is concerned the portfolio page is

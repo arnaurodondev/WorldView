@@ -473,6 +473,10 @@ Pure SVG, 18px tall, full column width via `preserveAspectRatio="none"`. No char
 
 shadcn `Dialog` with `Tabs` for Save/Load. Save tab: text input + Save button (disabled when empty). Load tab: scrollable list of `<DataTimestamp>`-stamped rows with Load + Trash buttons; Trash always passes through `window.confirm` because localStorage deletes are unrecoverable. Persistence: `lib/saved-screens.ts` (key `worldview:savedScreens:v1`, UUIDv4 client-side ids via `crypto.randomUUID()`). Reference: `components/screener/SavedScreensDialog.tsx`.
 
+### 6.5g Column-Group Toggle (PLAN-0122 W-E)
+
+A coarser sibling of §6.5d for the holdings table: instead of per-column checkboxes, the ⚙ `Settings2` button (h-7 w-7) opens a ~14rem `Popover` with three checkboxes for **column GROUPS** — **Core** (checked + disabled — it anchors the row: `ticker` + `actions` + the six essentials), **Portfolio detail**, **Advanced metrics** — plus a "Reset to default" that restores the Advanced default (all groups on = every column except `divYld`). Group visibility is applied via `api.setColumnsVisible(colIds, visible)` **after** the AG-Grid `applyColumnState` width/order restore, so the two persistence layers are orthogonal: widths/order in `worldview-holdings-cols`, group visibility in `worldview:holdingsColGroups:v1`. The toggle self-gates on mode (returns `null` in Simple, which always forces Core-only). Reference: `components/portfolio/HoldingsColumnGroupToggle.tsx` + `lib/portfolio/holdings-column-groups.ts`.
+
 ### 6.5c Totals Row
 
 Render OUTSIDE the table when virtualisation may be active (FixedSizeList rejects `<tr>` children with `position: absolute`). Pattern: a 28 px tall flex row with `border-t-2 border-border bg-card`, label "Totals" in 10 px ALL CAPS muted, then per-bucket `<span>label <span className="text-foreground">value</span></span>` pairs. Each value carries a `data-testid` for unit testing.
@@ -761,6 +765,50 @@ Pinned by the source-contract test `__tests__/toast-config.test.ts`.
   IS the undo window (a functional timer, not styling).
 - Errors that block a workflow belong in inline `<ErrorCard>` / form errors, not toasts;
   toasts are for fire-and-forget outcomes (saved, queued, dismissed, undone).
+
+### 6.17 Progressive-Disclosure / Dual-Mode Pattern (PLAN-0122)
+
+For a surface that must serve **both** a casual first-time audience and power users,
+prefer a **Simple default + Advanced opt-in rendering gate** over a separate route
+or duplicated component tree. Rules:
+
+- **One codebase, prop-driven.** A single `mode: "simple" | "advanced"` value is
+  resolved once (URL param → localStorage → a build-time default flag) and threaded
+  down as a prop; each surface *conditionally renders* its power-user chrome. Never
+  fork into `page.simple.tsx` / `page.advanced.tsx` — a fork guarantees drift + feature
+  loss.
+- **Advanced === today, provably.** Guard the Advanced render with a snapshot test
+  (`test_advanced_mode_is_todays_layout`) as a merge gate; a diff there is a real fork
+  bug, never a Simple-mode side effect to "fix" by regenerating the snapshot.
+- **Persist both sinks.** Write the choice to a `?mode=` URL param (shareable) AND
+  localStorage (sticky). URL wins for a given render so shared links render as intended.
+- **Stage the default flip.** Keep the default behind a literal build-time constant
+  (e.g. `PORTFOLIO_SIMPLE_DEFAULT`) so production is unchanged until parity is proven;
+  the flip is a one-line, reviewed edit and the rollback.
+- **Force old-default e2e.** Flipping a page's default view breaks every e2e asserting
+  the old layout — seed the old mode via `page.addInitScript` for ALL affected specs
+  (grep the suite; don't trust a named list). Reference: the `/portfolio` dual mode
+  (`hooks/usePortfolioMode.ts`, `components/portfolio/PortfolioModeToggle.tsx`).
+
+### 6.18 Onboarding-Tour Popover Pattern (PLAN-0122 W-F)
+
+A lightweight guided tour is built as a **custom shadcn `Popover` state machine — no
+new dependency** (react-joyride / shepherd.js are rejected: DS is shadcn-only +
+`pnpm audit` 0 CVEs). Contract:
+
+- **Anchoring**: each step points at an existing element tagged
+  `data-tour-target="…"`; the tour measures its `getBoundingClientRect()` and renders a
+  zero-size `PopoverAnchor` (a `fixed`, `pointer-events:none` div) there, so Radix
+  positions the step popover beside the real element. A missing anchor → the step is
+  **skipped**, never a crash.
+- **Non-blocking (mandatory)**: open the `Popover` with `modal={false}` so Radix does
+  NOT trap focus or block outside clicks — the page stays fully interactive. Prevent
+  `onOpenAutoFocus` from stealing focus.
+- **Dismissible**: ×, "Skip tour", Escape, and outside-click all end the tour.
+- **Trigger-once**: a localStorage flag (`…:v1` = `pending` → `done`) armed on the
+  first meaningful event; set `done` the moment the tour STARTS (not on completion) so
+  an abandoned tour never re-shows; backfill existing users to `done`. Reference:
+  `components/portfolio/PortfolioTour.tsx`.
 
 ### 6.6 Empty State Pattern
 

@@ -13,6 +13,11 @@ import { cn } from "@/lib/utils";
 
 const Popover = PopoverPrimitive.Root;
 const PopoverTrigger = PopoverPrimitive.Trigger;
+// PLAN-0122 W-F: PopoverAnchor lets a Popover position its content relative to an
+// element OTHER than its trigger. The onboarding tour uses it to pin each step's
+// popover to an arbitrary `data-tour-target` element elsewhere in the tree (there
+// is no trigger button — the tour is driven by a state machine, not a click).
+const PopoverAnchor = PopoverPrimitive.Anchor;
 
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
@@ -38,4 +43,4 @@ const PopoverContent = React.forwardRef<
 ));
 PopoverContent.displayName = PopoverPrimitive.Content.displayName;
 
-export { Popover, PopoverTrigger, PopoverContent };
+export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor };

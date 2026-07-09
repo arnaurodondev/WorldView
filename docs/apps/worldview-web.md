@@ -382,10 +382,35 @@ apps/worldview-web/
 
 | Component | Purpose |
 |-----------|---------|
-| `SemanticHoldingsTable` | Holdings with P&L, heat cells, sparklines |
+| `SemanticHoldingsTable` | Holdings with P&L, heat cells, sparklines; pinned-right ACTIONS kebab (Edit/Close + view) that reuses the right-click floating menu (PLAN-0122 W-D); mode/column-group aware |
 | `ExposureBreakdown` | Cash vs Invested visual (colour-blind safe: pattern + label) |
 | `SectorAllocationPanel` | Sector bars with `aria-label` + diagonal-stripe pattern |
 | `TransactionsTable` | Paginated transactions with filter bar (date, type, ticker, amount range) |
+| `PortfolioModeToggle` | Simple \| Advanced segmented control (`role="radiogroup"`, `data-tour-target="mode-toggle"`) driving the dual-mode render gate (PLAN-0122 W-A) |
+| `HoldingsColumnGroupToggle` | ⚙ Popover to show/hide the Core/Portfolio/Advanced column groups (Advanced only; PLAN-0122 W-E) |
+| `EditPositionDialog` | Honest **adjusting-trade** edit — records a BUY/SELL of the delta via `POST /v1/transactions`; never mutates a holding or rewrites history (PLAN-0122 W-D) |
+| `ClosePositionDialog` | Full **or partial** close — editable quantity (default full), "Sell all" reset, validated `0 < qty ≤ holding` (PLAN-0122 W-D) |
+| `PortfolioTour` | Dismissible, non-blocking onboarding tour — custom shadcn `Popover` state machine (no new dependency) anchored to `data-tour-target` attrs; auto-starts once after first portfolio create (PLAN-0122 W-F) |
+
+> **Dual-mode portfolio page (PLAN-0122, PRD-0122).** `/portfolio` renders in two
+> detail levels driven by a single value from `hooks/usePortfolioMode.ts` — a
+> **rendering gate, never a fork** (one `page.tsx` / `HoldingsTab` /
+> `SemanticHoldingsTable`; each surface conditionally renders its power-user chrome).
+> - **Simple** (public default): 4 KPI tiles (Total Value / Day P&L / Unrealised P&L / Cash),
+>   no tab bar (Holdings body rendered directly), no donut/overview/concentration/
+>   perf-chart/sector-bar/bottom-cluster/detail-pills, Core-only holdings columns.
+>   Brokerage sync strips + `PerformanceStrip` stay shown.
+> - **Advanced** (opt-in, byte-for-byte today's layout; guarded by the
+>   `test_advanced_mode_is_todays_layout` snapshot): 8 tiles + donut + all strips +
+>   4 tabs + column-group toggle.
+> - **State**: `usePortfolioMode` resolves URL `?mode=` → localStorage
+>   `worldview:portfolioMode:v1` → the `PORTFOLIO_SIMPLE_DEFAULT` flag default
+>   (`lib/portfolio/mode-flag.ts`, now `true`). Selecting a mode writes both sinks
+>   (sticky + shareable). Rollback = flip the flag back to `false`.
+> - **Onboarding tour**: `CreatePortfolioDialog.onSuccess` arms
+>   `worldview:portfolioTourSeen:v1="pending"` on a first-ever create;
+>   `PortfolioTour` auto-starts once and immediately writes `"done"` (never re-shows);
+>   existing users are backfilled to `"done"`. ×/Skip/Escape/outside-click dismiss.
 
 ### Alert Components (`components/alerts/`)
 
@@ -646,6 +671,10 @@ All colors use CSS custom properties. Never use hardcoded hex in components.
 | Screener columns | `localStorage` | key `worldview:screenerColumns:v1` |
 | Saved screens | `localStorage` | key `worldview:savedScreens:v1` |
 | Symbol linking | `localStorage` | key `worldview:symbolLinks:v1` |
+| Portfolio detail level | `localStorage` + `nuqs` `?mode=` | key `worldview:portfolioMode:v1` (Simple\|Advanced; `hooks/usePortfolioMode.ts`) |
+| Holdings column widths/order | `localStorage` | key `worldview-holdings-cols` (AG-Grid column state) |
+| Holdings column groups | `localStorage` | key `worldview:holdingsColGroups:v1` (Core/Portfolio/Advanced visibility; `lib/portfolio/holdings-column-groups.ts`) |
+| Onboarding tour seen | `localStorage` | key `worldview:portfolioTourSeen:v1` (`pending`\|`done`; `components/portfolio/PortfolioTour.tsx`) |
 | Notification prefs | `localStorage` | Managed by `lib/notification-prefs.ts` |
 | Local UI state | `useState` / `useReducer` | Filters, modals, selections |
 

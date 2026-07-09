@@ -77,6 +77,12 @@ import type { PeriodLabel } from "@/components/portfolio/EquityCurveChart";
 
 // ── Brokerage modal ─────────────────────────────────────────────────────────
 import { ConnectBrokerageModal } from "@/components/brokerage/ConnectBrokerageModal";
+// PLAN-0122 W-F: the dismissible, non-blocking onboarding tour. Mounted in the
+// main render path (never the empty-portfolio branch) so its anchors — the
+// header, mode toggle, Add Position button, column toggle — all exist. It
+// auto-starts once from the "pending" flag CreatePortfolioDialog sets on a
+// first-ever create, and backfills existing users to "done".
+import { PortfolioTour } from "@/components/portfolio/PortfolioTour";
 
 // ── Terminal primitives ─────────────────────────────────────────────────────
 // R3 polish (DS §15.12): shared EmptyState primitive — the no-portfolio
@@ -753,6 +759,16 @@ export default function PortfolioPage() {
           }}
         />
       )}
+
+      {/* ── PLAN-0122 W-F: Onboarding tour ──────────────────────────────── */}
+      {/* WHY here (main render, not the empty branch): every anchor the tour
+          points at — the header, the mode toggle, the Add Position button, the
+          column toggle — only exists once the page has ≥1 portfolio and mounts
+          this tree. hasExistingPortfolio drives the backfill so users who created
+          a portfolio before this feature shipped are marked "done", never shown
+          a tour they didn't ask for. The tour reads its own "pending"/"done"
+          flag in an effect and renders nothing unless it auto-starts. */}
+      <PortfolioTour hasExistingPortfolio={(sortedPortfolios?.length ?? 0) > 0} />
 
       {/* ── Add Position Dialog ─────────────────────────────────────────── */}
       {activePortfolioId && (

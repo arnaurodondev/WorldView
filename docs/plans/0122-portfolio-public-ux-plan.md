@@ -2,7 +2,7 @@
 id: PLAN-0122
 title: "Portfolio Public-Launch UX — Dual-Mode Page, Trusted Brokerage Connect, and Manual-Position Editing"
 prd: PRD-0122
-status: draft
+status: done
 created: 2026-07-09
 updated: 2026-07-09
 ---
@@ -1080,35 +1080,35 @@ All **31 requirements (R-1 … R-31)** are mapped to at least one task. No gaps.
 ### Wave A
 | Task | Title | Status |
 |------|-------|--------|
-| T-A-A-01 | `PORTFOLIO_SIMPLE_DEFAULT` flag + `usePortfolioMode` hook | pending |
-| T-A-A-02 | `PortfolioModeToggle` + header mount | pending |
-| T-A-A-03 | Thread `mode` through page → HoldingsTab → table | pending |
-| T-A-A-04 | Advanced-mode snapshot parity test | pending |
+| T-A-A-01 | `PORTFOLIO_SIMPLE_DEFAULT` flag + `usePortfolioMode` hook | done |
+| T-A-A-02 | `PortfolioModeToggle` + header mount | done |
+| T-A-A-03 | Thread `mode` through page → HoldingsTab → table | done |
+| T-A-A-04 | Advanced-mode snapshot parity test | done |
 
 ### Wave B
 | Task | Title | Status |
 |------|-------|--------|
-| T-A-B-01 | `PortfolioKPIStrip` `variant` (Simple = 4 tiles) | pending |
-| T-A-B-02 | Gate tab bar + donut + strips in page.tsx; 4-tile skeleton | pending |
-| T-A-B-03 | Gate power-strips inside HoldingsTab | pending |
-| T-A-B-04 | Flip `PORTFOLIO_SIMPLE_DEFAULT` to `true` | pending |
-| T-A-B-05 | Force the 5 existing e2e specs into Advanced (R19) | pending |
+| T-A-B-01 | `PortfolioKPIStrip` `variant` (Simple = 4 tiles) | done |
+| T-A-B-02 | Gate tab bar + donut + strips in page.tsx; 4-tile skeleton | done |
+| T-A-B-03 | Gate power-strips inside HoldingsTab | done |
+| T-A-B-04 | Flip `PORTFOLIO_SIMPLE_DEFAULT` to `true` | done |
+| T-A-B-05 | Force the 5 existing e2e specs into Advanced (R19) | done |
 
 ### Wave C
 | Task | Title | Status |
 |------|-------|--------|
-| T-A-C-01 | Brokerage trust block | pending |
-| T-A-C-02 | Honest callback timing copy | pending |
-| T-A-C-03 | Gateway `addPosition` optional `tradeDate` | pending |
-| T-A-C-04 | Add-Position trade-date + debounced typeahead | pending |
+| T-A-C-01 | Brokerage trust block | done |
+| T-A-C-02 | Honest callback timing copy | done |
+| T-A-C-03 | Gateway `addPosition` optional `tradeDate` | done |
+| T-A-C-04 | Add-Position trade-date + debounced typeahead | done |
 
 ### Wave D
 | Task | Title | Status |
 |------|-------|--------|
-| T-A-D-01 | `computeAdjustment` pure helper | pending |
-| T-A-D-02 | `EditPositionDialog` (adjusting trade) | pending |
-| T-A-D-03 | Partial close — un-lock the Close quantity | pending |
-| T-A-D-04 | Pinned-right ACTIONS kebab column | pending |
+| T-A-D-01 | `computeAdjustment` pure helper | done |
+| T-A-D-02 | `EditPositionDialog` (adjusting trade) | done |
+| T-A-D-03 | Partial close — un-lock the Close quantity | done |
+| T-A-D-04 | Pinned-right ACTIONS kebab column | done |
 
 ### Wave E
 | Task | Title | Status |
@@ -1120,25 +1120,25 @@ All **31 requirements (R-1 … R-31)** are mapped to at least one task. No gaps.
 ### Wave F
 | Task | Title | Status |
 |------|-------|--------|
-| T-A-F-01 | `PortfolioTour` custom popover state machine | pending |
-| T-A-F-02 | Create-dialog trigger + first-visit flag backfill | pending |
-| T-A-F-03 | New + hardened e2e specs | pending |
-| T-A-F-04 | Documentation updates (§12) | pending |
+| T-A-F-01 | `PortfolioTour` custom popover state machine | done |
+| T-A-F-02 | Create-dialog trigger + first-visit flag backfill | done |
+| T-A-F-03 | New + hardened e2e specs | done |
+| T-A-F-04 | Documentation updates (§12) | done |
 
 **Total: 24 tasks across 6 waves.**
 
 ## Final QA Gate (before marking PLAN-0122 complete)
 
-- [ ] All 6 waves' validation gates green (`pnpm lint` + `pnpm typecheck` + `pnpm vitest run` + `pnpm playwright test` per wave).
-- [ ] `test_advanced_mode_is_todays_layout` green — Advanced === today's layout (the one intentional change: the W-D pinned-right ACTIONS column, documented).
-- [ ] Default flips to Simple only with the e2e Advanced-hardening landed in the same wave (W-B); no portfolio e2e observes Simple unexpectedly.
-- [ ] Edit Position records a visible adjusting BUY/SELL (never mutates a holding); ledger note present (R-17).
-- [ ] Partial close validated `0 < q ≤ holding`; full close still one click.
-- [ ] Add-Position typeahead debounced 250 ms, dual-handler, `instrument_id` stash/clear, submit-time fallback intact; trade-date → `executed_at`.
-- [ ] Column groups: Advanced default = all-except-`divYld`; Simple forces Core-only; two localStorage keys orthogonal.
-- [ ] Tour triggers once after first create, non-blocking, dismissible, backfilled for existing users; no new dependency (`pnpm audit` 0 CVEs).
-- [ ] Zero backend/S9/migration/Kafka change (R14; PRD §8) — confirmed by diff scope = `apps/worldview-web` only.
-- [ ] All §12 docs + TRACKING.md updated; consider a `/qa` frontend pass given the page-shell blast radius.
+- [x] All 6 waves' validation gates green (`pnpm lint` + `pnpm typecheck` + `pnpm vitest run` + `pnpm playwright test` per wave).
+- [x] `test_advanced_mode_is_todays_layout` green — Advanced === today's layout (the one intentional change: the W-D pinned-right ACTIONS column, documented).
+- [x] Default flips to Simple only with the e2e Advanced-hardening landed in the same wave (W-B); no portfolio e2e observes Simple unexpectedly.
+- [x] Edit Position records a visible adjusting BUY/SELL (never mutates a holding); ledger note present (R-17).
+- [x] Partial close validated `0 < q ≤ holding`; full close still one click.
+- [x] Add-Position typeahead debounced 250 ms, dual-handler, `instrument_id` stash/clear, submit-time fallback intact; trade-date → `executed_at`.
+- [x] Column groups: Advanced default = all-except-`divYld`; Simple forces Core-only; two localStorage keys orthogonal.
+- [x] Tour triggers once after first create, non-blocking, dismissible, backfilled for existing users; no new dependency (`pnpm audit` 0 CVEs).
+- [x] Zero backend/S9/migration/Kafka change (R14; PRD §8) — confirmed by diff scope = `apps/worldview-web` only.
+- [x] All §12 docs + TRACKING.md updated; consider a `/qa` frontend pass given the page-shell blast radius.
 
 ## Compounding check
 

@@ -92,7 +92,13 @@ export function PortfolioPageHeader({
           header needs the panel tone (#111113) to read as the chrome row
           at the top of the workspace. */}
       <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-3 bg-card">
-        <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
+        <h1
+          className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono"
+          // PLAN-0122 W-F: onboarding-tour anchor for the Welcome + Connect steps.
+          // The header is present in both Simple and Advanced, so these steps
+          // always resolve an anchor (never skipped).
+          data-tour-target="portfolio-header"
+        >
           Portfolio
         </h1>
 
@@ -211,6 +217,10 @@ export function PortfolioPageHeader({
                 if (!activeIsRoot) onAddPosition();
               }}
               disabled={activeIsRoot}
+              // PLAN-0122 W-F: onboarding-tour anchor for the "Add a position"
+              // step (W-C's plan left this for W-F). Absent on root portfolios
+              // (the button isn't rendered) → that tour step self-skips.
+              data-tour-target="add-position"
               className={cn(
                 "h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] flex items-center gap-1 transition-colors",
                 activeIsRoot

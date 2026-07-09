@@ -209,6 +209,7 @@ Mark N/A for pure backend changes.
 - [ ] **Every data-dependent component handles all 3 states**: loading skeleton, error card with retry, empty state (HR-034)
 - [ ] Skeletons match the shape of loaded content
 - [ ] Error states include a recovery action (retry button, navigation link)
+- [ ] **New public-facing UI surfaces define a casual-user default + progressive disclosure** before public exposure (PRD-0122 / audit §7). A Simple/Advanced (or any progressive-disclosure) split MUST be a prop-driven **render gate guarded by an Advanced-parity snapshot test**, never a duplicated component tree; flipping the default forces every old-default e2e to seed the old mode (DS §6.17)
 
 ### 10e. Security
 - [ ] **No `dangerouslySetInnerHTML` without DOMPurify sanitization** (HR-031)

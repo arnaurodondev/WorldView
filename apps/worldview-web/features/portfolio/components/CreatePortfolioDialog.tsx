@@ -31,6 +31,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createGateway } from "@/lib/gateway";
 import type { Portfolio } from "@/types/api";
+// PLAN-0122 W-F (T-A-F-02): queue the onboarding tour on a user's first-ever
+// portfolio create. markTourPending is a no-op if the flag already exists, so
+// only the FIRST create arms the tour (R-28).
+import { markTourPending } from "@/components/portfolio/PortfolioTour";
 import {
   Dialog,
   DialogContent,
@@ -160,6 +164,11 @@ export function CreatePortfolioDialog({
         values.cost_basis_method,
       );
       form.reset();
+      // PLAN-0122 W-F: arm the onboarding tour BEFORE notifying the parent. The
+      // parent's onSuccess refetches the portfolio list and re-renders /portfolio,
+      // where PortfolioTour reads this "pending" flag and auto-starts. Setting it
+      // here (only-if-unset) means it fires exactly once, on the first-ever create.
+      markTourPending();
       onSuccess(newPortfolio);
     } catch (err) {
       const message =
