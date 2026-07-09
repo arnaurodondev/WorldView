@@ -95,6 +95,32 @@ class RecordTransactionUseCase:
                     cmd.idempotency_key,
                 )
                 if existing is not None:
+                    # ── Idempotency body-guard ────────────────────────────────
+                    # Dedup on the key ALONE silently drops the new body when the
+                    # SAME key is reused with a DIFFERENT request (concurrent
+                    # tabs, non-browser clients, TOCTOU races) — a silent
+                    # data-corruption path against the honest-ledger guarantee.
+                    # Mirror CreatePortfolioUseCase: on a materially different
+                    # body raise a 409 conflict; on an exact match keep true
+                    # idempotent-replay semantics (return the stored row).
+                    # Decimals are compared by numeric value (Decimal("1.0") ==
+                    # Decimal("1.00")) so trailing-zero differences do NOT
+                    # produce false mismatches.
+                    if (
+                        existing.instrument_id != cmd.instrument_id
+                        or existing.transaction_type != cmd.transaction_type
+                        or existing.direction != cmd.direction
+                        or existing.quantity != cmd.quantity
+                        or existing.price != cmd.price
+                        or existing.fees != cmd.fees
+                        or existing.currency != cmd.currency
+                        or existing.trade_side != cmd.trade_side
+                    ):
+                        raise IdempotencyConflictError(
+                            f"Idempotency key {cmd.idempotency_key!r} already used with a "
+                            "different transaction body; refusing to silently drop the new "
+                            "values. Retry with a fresh idempotency key.",
+                        )
                     return RecordTransactionResult(transaction=existing)
                 # F-DS-002: idempotency key recorded but transaction missing — inconsistent state.
                 # This can happen if a previous request committed the idempotency row but then

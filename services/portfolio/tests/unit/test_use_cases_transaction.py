@@ -609,6 +609,170 @@ async def test_idempotency_same_key_twice_returns_first(uow, cmd) -> None:
 
 
 @pytest.mark.asyncio
+async def test_idempotency_same_key_identical_body_replays(uow, cmd) -> None:
+    """Idempotency body-guard: same key + IDENTICAL body → replay original, no 409.
+
+    A genuine retry (network flake, client re-send) must still succeed and return
+    the originally-committed transaction — the strict body check must NOT reject it.
+    """
+    idem_key = str(uuid4())
+    cmd_with_key = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": idem_key})
+
+    uc = RecordTransactionUseCase()
+    result1 = await uc.execute(cmd_with_key, uow)
+    # Re-submit an IDENTICAL command (new object, same field values).
+    replay_cmd = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": idem_key})
+    result2 = await uc.execute(replay_cmd, uow)
+
+    assert result1.transaction.id == result2.transaction.id
+    assert len(uow._transactions.saved) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotency_same_key_identical_body_trailing_zero_replays(uow, cmd) -> None:
+    """Decimal values differing only by trailing zeros are NOT a mismatch.
+
+    Guards against a false-positive 409 where Decimal('150.00') vs Decimal('150.0')
+    would spuriously look different if compared as strings instead of by value.
+    """
+    idem_key = str(uuid4())
+    first = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": idem_key})
+    uc = RecordTransactionUseCase()
+    result1 = await uc.execute(first, uow)
+
+    # Same numeric values but different Decimal scale / trailing zeros.
+    replay = RecordTransactionCommand(
+        **{
+            **cmd.__dict__,
+            "idempotency_key": idem_key,
+            "quantity": Decimal("10.0"),
+            "price": Decimal("150.000"),
+            "fees": Decimal("0.00"),
+        },
+    )
+    result2 = await uc.execute(replay, uow)
+    assert result1.transaction.id == result2.transaction.id
+    assert len(uow._transactions.saved) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotency_same_key_different_quantity_raises_conflict(uow, cmd) -> None:
+    """Same key + DIFFERENT quantity → IdempotencyConflictError (409), no silent drop."""
+    from portfolio.domain.errors import IdempotencyConflictError
+
+    idem_key = str(uuid4())
+    first = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": idem_key})
+    uc = RecordTransactionUseCase()
+    await uc.execute(first, uow)
+
+    reused = RecordTransactionCommand(
+        **{**cmd.__dict__, "idempotency_key": idem_key, "quantity": Decimal(99)},
+    )
+    with pytest.raises(IdempotencyConflictError, match="different transaction body"):
+        await uc.execute(reused, uow)
+    # The new (dropped) body must NOT have been persisted.
+    assert len(uow._transactions.saved) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotency_same_key_different_price_raises_conflict(uow, cmd) -> None:
+    """Same key + DIFFERENT price → 409 conflict."""
+    from portfolio.domain.errors import IdempotencyConflictError
+
+    idem_key = str(uuid4())
+    await RecordTransactionUseCase().execute(
+        RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": idem_key}),
+        uow,
+    )
+    reused = RecordTransactionCommand(
+        **{**cmd.__dict__, "idempotency_key": idem_key, "price": Decimal("999.99")},
+    )
+    with pytest.raises(IdempotencyConflictError, match="different transaction body"):
+        await RecordTransactionUseCase().execute(reused, uow)
+
+
+@pytest.mark.asyncio
+async def test_idempotency_same_key_different_instrument_raises_conflict(
+    tenant,
+    user,
+    portfolio,
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
+) -> None:
+    """Same key + DIFFERENT instrument → 409 conflict.
+
+    Two instruments are registered so both the original and the reused body
+    resolve to a real instrument — the mismatch is purely the instrument_id.
+    """
+    from portfolio.domain.errors import IdempotencyConflictError
+
+    other_instrument_id = uuid4()
+
+    # Instrument repo that knows about BOTH instruments.
+    class _TwoInstrumentUoW(FakeUoW):
+        def __init__(self) -> None:
+            super().__init__(tenant=tenant, user=user, portfolio=portfolio, instrument=None)
+
+            class _Repo(InstrumentRepository):
+                async def get(self, iid):
+                    if iid in (instrument_id, other_instrument_id):
+                        return InstrumentRef(id=iid, symbol="X", exchange="NASDAQ", source_event_id=uuid4())
+                    return None
+
+                async def list_by_ids(self, ids):
+                    return []
+
+                async def get_by_symbol_exchange(self, symbol, exchange):
+                    return None
+
+                async def get_by_symbol(self, symbol):
+                    return None
+
+                async def list_all(self):
+                    return []
+
+                async def upsert(self, instrument): ...
+
+            self._instruments = _Repo()
+
+    uow = _TwoInstrumentUoW()
+    idem_key = str(uuid4())
+    base = {
+        "tenant_id": tenant_id,
+        "portfolio_id": portfolio_id,
+        "owner_id": owner_id,
+        "transaction_type": TransactionType.BUY,
+        "direction": TransactionDirection.INFLOW,
+        "quantity": Decimal(10),
+        "price": Decimal("150.00"),
+        "currency": "USD",
+        "executed_at": _NOW,
+        "idempotency_key": idem_key,
+    }
+    await RecordTransactionUseCase().execute(
+        RecordTransactionCommand(instrument_id=instrument_id, **base),
+        uow,
+    )
+    with pytest.raises(IdempotencyConflictError, match="different transaction body"):
+        await RecordTransactionUseCase().execute(
+            RecordTransactionCommand(instrument_id=other_instrument_id, **base),
+            uow,
+        )
+
+
+@pytest.mark.asyncio
+async def test_idempotency_new_key_creates_normally(uow, cmd) -> None:
+    """A genuinely new (unseen) idempotency key follows the normal create path."""
+    idem_key = str(uuid4())
+    cmd_with_key = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": idem_key})
+    result = await RecordTransactionUseCase().execute(cmd_with_key, uow)
+    assert result.transaction is not None
+    assert len(uow._transactions.saved) == 1
+
+
+@pytest.mark.asyncio
 async def test_record_transaction_invalid_idempotency_key_raises(uow, cmd) -> None:
     """Malformed idempotency key raises IdempotencyKeyInvalidError (D-007)."""
     bad_cmd = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": "not-a-uuid"})

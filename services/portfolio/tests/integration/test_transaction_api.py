@@ -90,6 +90,43 @@ async def test_idempotency_replay_no_duplicate(integration_client, db_session) -
     assert count_after - count_before == 1
 
 
+async def test_idempotency_reused_key_different_body_returns_409(integration_client, db_session) -> None:
+    """Reusing an Idempotency-Key with a DIFFERENT body must 409, not silently drop.
+
+    Guards the honest-ledger invariant: a key-reuse-with-different-values from any
+    client (concurrent tabs, non-browser callers, TOCTOU races) must surface a
+    conflict instead of returning the original row and dropping the new values.
+    """
+    portfolio_id = await _create_portfolio(integration_client)
+    instrument_id = await _seed_instrument(db_session, "GOOG", "NASDAQ")
+    idem_key = str(uuid.uuid4())
+
+    body = {
+        "portfolio_id": portfolio_id,
+        "instrument_id": str(instrument_id),
+        "transaction_type": "BUY",
+        "direction": "INFLOW",
+        "quantity": "5",
+        "price": "200.00",
+        "currency": "USD",
+        "executed_at": _EXECUTED_AT,
+    }
+    headers = {"Idempotency-Key": idem_key}
+
+    resp1 = await integration_client.post("/api/v1/transactions", json=body, headers=headers)
+    assert resp1.status_code == 201
+
+    # Same key, different quantity → conflict.
+    different_body = {**body, "quantity": "999"}
+    resp2 = await integration_client.post("/api/v1/transactions", json=different_body, headers=headers)
+    assert resp2.status_code == 409
+
+    # An identical retry still replays successfully (idempotency preserved).
+    resp3 = await integration_client.post("/api/v1/transactions", json=body, headers=headers)
+    assert resp3.status_code == 201
+    assert resp3.json()["id"] == resp1.json()["id"]
+
+
 async def test_list_transactions(integration_client, db_session) -> None:
     """GET /api/v1/transactions returns all transactions for a portfolio."""
     portfolio_id = await _create_portfolio(integration_client)
