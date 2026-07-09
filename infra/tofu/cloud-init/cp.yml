@@ -51,7 +51,11 @@ runcmd:
   # from the Hetzner metadata service inside every block that needs it.
   - |
     PUBLIC_IP="$(curl -sf http://169.254.169.254/hetzner/v1/metadata/public-ipv4)"
-    # Private IP/iface for flannel + k3s node-ip. cloud-provider=external leaves the
+    # Private IP/iface for flannel + k3s node-ip. NOTE: do NOT pass --node-external-ip:
+    # k3s ties flannel's advertised VXLAN endpoint to the external IP, so peers would
+    # send UDP/8472 to the PUBLIC IP, which the firewall (10.0.0.0/8 only) drops → the
+    # overlay never forms (k3s #12056). The CCM sets ExternalIP from the Hetzner API
+    # anyway. cloud-provider=external leaves the
     # k8s node InternalIP unset until the CCM runs; without --node-ip flannel has no
     # address to build the VXLAN mesh, so cross-node pod traffic (and thus the CCM's
     # own path to the API server) deadlocks. Pin flannel to the private NIC/IP so the
@@ -71,7 +75,6 @@ runcmd:
         --disable-cloud-controller \
         --kubelet-arg cloud-provider=external \
         --node-ip "$PRIV_IP" \
-        --node-external-ip "$PUBLIC_IP" \
         --flannel-iface "$PRIV_IFACE" \
         $TLS_SAN_ARGS \
         --node-label "node-role=control-plane" \
