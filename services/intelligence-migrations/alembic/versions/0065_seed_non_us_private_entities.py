@@ -158,20 +158,29 @@ def upgrade() -> None:
 
     if canonical_rows:
         op.execute(
-            "-- Area-3 non-US/private entity seed: canonicals\n"
+            "-- Area-3 non-US/private entity seed: canonicals.\n"
+            "-- ON CONFLICT DO NOTHING (no target) so BOTH the entity_id PK and the\n"
+            "-- lower(canonical_name) unique index are skipped — some names (Huawei,\n"
+            "-- ByteDance) already exist from news extraction with different ids.\n"
             "INSERT INTO canonical_entities "
             "(entity_id, canonical_name, entity_type, ticker, exchange, description, metadata) "
             f"VALUES {','.join(canonical_rows)} "
-            "ON CONFLICT (entity_id) DO NOTHING"
+            "ON CONFLICT DO NOTHING"
         )
 
     if alias_rows:
         # Pin to the partial unique index from migration 0008 (order-independent).
         op.execute(
-            "-- Area-3 non-US/private entity seed: aliases\n"
+            "-- Area-3 non-US/private entity seed: aliases — only for canonicals that\n"
+            "-- actually exist (a name-dupe canonical above was skipped, so its\n"
+            "-- deterministic entity_id has no row; guard against orphan aliases).\n"
             "INSERT INTO entity_aliases "
             "(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
-            f"VALUES {','.join(alias_rows)} "
+            "SELECT v.entity_id::uuid, v.alias_text, v.normalized_alias_text, v.alias_type, "
+            "v.is_active, v.source "
+            f"FROM (VALUES {','.join(alias_rows)}) "
+            "AS v(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+            "WHERE EXISTS (SELECT 1 FROM canonical_entities ce WHERE ce.entity_id = v.entity_id::uuid) "
             "ON CONFLICT (entity_id, normalized_alias_text, alias_type) "
             "WHERE is_active = true "
             "DO NOTHING"
