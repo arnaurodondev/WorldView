@@ -239,6 +239,12 @@ Retention defaults to the Kafka cluster default (7d) unless overridden by the in
 | `entity.refresh.v1` | 1 | 7d (default) | S7 Knowledge Graph | S7 async workers (re-enrich trigger) | `entity_id` |
 | `alert.delivered.v1` | 1 | 7d (default) | S10 Alert | (audit/analytics) | `alert_id` |
 | `market.prediction.v1` | 1 | 30d | S4 Content Ingestion (Polymarket adapter) | S3 Market Data | `market_id` |
+| `market.prediction.history.v1` | 1 | 30d | S4 Content Ingestion (CLOB /prices-history) | S3 Market Data | `market_id` |
+| `market.prediction.event.v1` | 1 | 30d | S4 Content Ingestion (Gamma /events) | S3 Market Data | `group_id` |
+| `market.prediction.trade.v1` | 1 | 30d | S4 Content Ingestion (Data /trades) | S3 Market Data | `market_id` |
+| `market.prediction.oi.v1` | 1 | 30d | S4 Content Ingestion (Data /oi) | S3 Market Data | `market_id` |
+| `market.prediction.move.v1` | 1 | 7d | S3 Market Data (PredictionMoveDetector) | S7 Knowledge Graph | `market_id` |
+| `market.prediction.signal.v1` | 1 | 7d | S7 Knowledge Graph (PredictionSignalEmitter) | alert (IntelligenceConsumer) | `subject_entity_id` |
 | `kg.dead-letter.v1` | 1 | 7d (default) | S7 Knowledge Graph (DLQ) | (ops) | -- |
 | `alert.dead-letter.v1` | 1 | 7d (default) | S10 Alert (DLQ) | (ops) | -- |
 | `nlp.dead-letter.v1` | 1 | 7d (default) | S6 NLP Pipeline (DLQ) | (ops) | -- |

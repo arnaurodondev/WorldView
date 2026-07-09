@@ -42,6 +42,13 @@ EXPECTED_FIELD_COUNTS: dict[str, int] = {
     # + 6 data (instrument_id, symbol, exchange, entity_id, correlation_id, causation_id).
     "market.instrument.discovered.v1": 10,
     "market.dataset.fetched": 27,  # Existing mature schema: 27 fields (claim-check pattern)
+    # PLAN-0056 Wave Z1 — prediction-market Wave 2 topics (6 new). Envelope(4) + payload.
+    "market.prediction.history.v1": 13,
+    "market.prediction.event.v1": 11,
+    "market.prediction.trade.v1": 12,
+    "market.prediction.oi.v1": 9,
+    "market.prediction.move.v1": 17,
+    "market.prediction.signal.v1": 12,
     "portfolio.events.v1": 10,  # 10 record types in multi-record schema file
     "portfolio.watchlist.updated.v1": 9,
     "watchlist.item_added": 13,
@@ -438,3 +445,123 @@ class TestMarketInstrumentDiscoveredV1Schema:
         rows = list(fastavro.reader(buf))
         assert rows[0]["entity_id"] == sample["entity_id"]
         assert rows[0]["correlation_id"] == "corr-1"
+
+
+@pytest.mark.contract
+class TestPredictionWave2Schemas:
+    """PLAN-0056 Wave Z1: the 6 new prediction-market Wave 2 topics.
+
+    Each must parse, carry the standard envelope, and round-trip through fastavro
+    with both a minimal payload (optional fields fall back to defaults — R5
+    forward-compat) and a fully-populated payload.
+    """
+
+    _ENVELOPE: ClassVar[dict] = {
+        "event_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9cf",
+        "occurred_at": "2026-07-09T12:00:00Z",
+    }
+
+    # (schema stem, minimal required payload beyond envelope) — optional fields omitted on purpose.
+    _MINIMAL: ClassVar[dict[str, dict]] = {
+        "market.prediction.history.v1": {
+            "market_id": "0xcond",
+            "token_id": "0xtok",
+            "interval": "1h",
+            "window_start_ts": "2026-07-09T11:00:00Z",
+            "price": 0.63,
+        },
+        "market.prediction.event.v1": {
+            "group_id": "evt-123",
+            "name": "2028 US Presidential Election",
+        },
+        "market.prediction.trade.v1": {
+            "market_id": "0xcond",
+            "trade_id": "t-1",
+            "token_id": "0xtok",
+            "price": 0.63,
+            "size_usd": 250.0,
+            "side": "buy",
+            "ts": "2026-07-09T11:30:00Z",
+        },
+        "market.prediction.oi.v1": {
+            "market_id": "0xcond",
+            "snapshot_date": "2026-07-09",
+            "total_oi_usd": 10000.0,
+            "total_volume_24h_usd": 5000.0,
+        },
+        "market.prediction.move.v1": {
+            "market_id": "0xcond",
+            "token_id": "0xtok",
+            "interval": "1h",
+            "prev_price": 0.50,
+            "new_price": 0.66,
+            "delta": 0.16,
+            "direction": "up",
+            "window_start_ts": "2026-07-09T11:00:00Z",
+        },
+        "market.prediction.signal.v1": {
+            "subject_entity_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9d0",
+            "market_id": "0xcond",
+            "trigger": "material_move",
+            "question": "Will Company X miss Q3 earnings?",
+        },
+    }
+
+    # Fields whose Avro default must apply when omitted (forward-compat proof).
+    _DEFAULTED: ClassVar[dict[str, dict]] = {
+        "market.prediction.history.v1": {
+            "outcome_name": None,
+            "source": "polymarket_clob",
+            "is_backfill": False,
+            "correlation_id": None,
+        },
+        "market.prediction.event.v1": {
+            "category": None,
+            "start_date": None,
+            "end_date": None,
+            "market_count": 0,
+            "correlation_id": None,
+        },
+        "market.prediction.trade.v1": {"correlation_id": None},
+        "market.prediction.oi.v1": {"correlation_id": None},
+        "market.prediction.move.v1": {
+            "outcome_name": None,
+            "liquidity": None,
+            "volume_24h": None,
+            "is_backfill": False,
+            "correlation_id": None,
+        },
+        "market.prediction.signal.v1": {
+            "market_impact_score": 0.0,
+            "polarity": "neutral",
+            "url": None,
+            "correlation_id": None,
+        },
+    }
+
+    @pytest.mark.parametrize("schema_name", list(_MINIMAL.keys()))
+    def test_parses_and_has_envelope(self, schema_name: str) -> None:
+        schema = _load_schema(SCHEMA_DIR / f"{schema_name}.avsc")
+        assert fastavro.parse_schema(schema) is not None
+        field_names = {f["name"] for f in schema["fields"]}
+        assert ENVELOPE_FIELDS <= field_names, f"{schema_name} missing envelope fields"
+
+    @pytest.mark.parametrize("schema_name", list(_MINIMAL.keys()))
+    def test_minimal_payload_roundtrip_applies_defaults(self, schema_name: str) -> None:
+        import io
+
+        schema = _load_schema(SCHEMA_DIR / f"{schema_name}.avsc")
+        parsed = fastavro.parse_schema(schema)
+        record = {**self._ENVELOPE, **self._MINIMAL[schema_name]}
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [record])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert len(rows) == 1
+        # Envelope round-trips; event_type/schema_version defaults are applied.
+        assert rows[0]["event_id"] == record["event_id"]
+        assert rows[0]["schema_version"] == 1
+        assert rows[0]["event_type"].startswith("market.prediction.")
+        # Every omitted optional field must fall back to its declared default.
+        for field_name, expected in self._DEFAULTED[schema_name].items():
+            assert rows[0][field_name] == expected, f"{schema_name}.{field_name} default not applied"

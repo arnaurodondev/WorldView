@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "PredictionMarketSignal",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S7 Knowledge Graph (PredictionSignalEmitter) — one signal per (tracked entity, trigger) after joining a prediction market to its entity exposures + polarity. Consumed by the alert service IntelligenceConsumer → AlertFanoutUseCase (watchlist-gated). PLAN-0056 Wave Z1/D2.",
+  "fields": [
+    {"name": "event_id",            "type": "string",           "doc": "UUIDv7 envelope event identifier"},
+    {"name": "event_type",          "type": "string",           "default": "market.prediction.signal", "doc": "Event type discriminator"},
+    {"name": "schema_version",      "type": "int",              "default": 1},
+    {"name": "occurred_at",         "type": "string",           "default": "1970-01-01T00:00:00Z", "doc": "ISO-8601 UTC timestamp. Default is epoch sentinel — callers MUST always supply a real value."},
+    {"name": "subject_entity_id",   "type": "string",           "doc": "UUID of the referenced canonical entity this signal is about (fanout watchlist key)"},
+    {"name": "market_id",           "type": "string",           "doc": "Polymarket conditionId"},
+    {"name": "trigger",             "type": "string",           "doc": "new_market | material_move | resolution"},
+    {"name": "market_impact_score", "type": "double",           "default": 0.0, "doc": "Gating score [0.0, 1.0] → severity via SeverityThresholds"},
+    {"name": "polarity",            "type": "string",           "default": "neutral", "doc": "bullish | bearish | neutral — direction for the subject entity"},
+    {"name": "question",            "type": "string",           "doc": "Market question text (for alert copy)"},
+    {"name": "url",                 "type": ["null", "string"], "default": null, "doc": "Canonical Polymarket /event/{slug} URL"},
+    {"name": "correlation_id",      "type": ["null", "string"], "default": null}
+  ]
+}

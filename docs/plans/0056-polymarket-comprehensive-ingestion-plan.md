@@ -2,7 +2,7 @@
 id: PLAN-0056
 title: "Prediction Markets: Activation, Signals & Enrichment (Wave 2)"
 prd: PRD-0033
-status: draft
+status: in-progress
 created: 2026-05-01
 updated: 2026-07-09
 supersedes: PLAN-0056 (original ingestion-first draft, withdrawn 2026-07-09)
@@ -117,8 +117,12 @@ Row updated in `docs/plans/TRACKING.md` (status `draft`, 0/18). Branch `feat/pre
 **Goal**: define every new Kafka topic, Avro schema, and enum value that A/B/C/D depend on, so
 producers and consumers compile against a shared contract. **Depends on**: none.
 
-### Wave Z1 — enums, topics, Avro schemas
+### Wave Z1 — enums, topics, Avro schemas ✅
 **Architecture layer**: contracts. **Effort**: 45–60m.
+**Status**: **DONE** — 2026-07-09 · 6 Avro schemas + 4 enum values + 6 topics · 30 new contract
+tests pass (parse + envelope + field-count + minimal-payload forward-compat round-trip) · ruff +
+mypy clean · 5 pre-existing unrelated contract failures logged (market.dataset.fetched count drift,
+content.article.* counts, entity.narrative/refresh envelope — untouched by this wave).
 
 #### Tasks
 - **T-Z-1-01 (schema)** — Add 4 values to `ContentSourceType` (`libs/contracts/src/contracts/enums.py`):

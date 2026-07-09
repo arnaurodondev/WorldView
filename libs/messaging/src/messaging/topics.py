@@ -39,8 +39,16 @@ GRAPH_STATE_CHANGED = "graph.state.changed.v1"
 #   to trigger immediate narrative embedding refresh without waiting for hourly poll.
 ENTITY_NARRATIVE_GENERATED = "entity.narrative.generated.v1"
 
-# ── Prediction market domain (S4 / S3) ────────────────────────────────────────
+# ── Prediction market domain (S4 / S3 / S7 / alert) ───────────────────────────
 MARKET_PREDICTION = "market.prediction.v1"
+# PLAN-0056 Wave Z1 — deeper-stream ingestion (produced by S4, consumed by S3):
+MARKET_PREDICTION_HISTORY = "market.prediction.history.v1"  # CLOB /prices-history → prediction_market_prices
+MARKET_PREDICTION_EVENT = "market.prediction.event.v1"  # Gamma /events → prediction_events
+MARKET_PREDICTION_TRADE = "market.prediction.trade.v1"  # Data /trades → prediction_market_trades
+MARKET_PREDICTION_OI = "market.prediction.oi.v1"  # Data /oi → prediction_market_oi
+# PLAN-0056 Wave Z1 — signal path:
+MARKET_PREDICTION_MOVE = "market.prediction.move.v1"  # S3 move detector → S7 signal emitter
+MARKET_PREDICTION_SIGNAL = "market.prediction.signal.v1"  # S7 → alert IntelligenceConsumer
 
 # ── Dead-letter queues (platform standard — D-05) ─────────────────────────────
 # Every service that routes unprocessable Kafka events MUST publish to one of
