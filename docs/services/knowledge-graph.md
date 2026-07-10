@@ -94,6 +94,7 @@ knowledge_graph/
 | `knowledge-graph-provisional-queued-consumer` | `consumers/provisional_queued_consumer_main.py` | Consumes `entity.provisional.queued.v1` (hot-path 13E) |
 | `knowledge-graph-structured-enrichment-consumer` | `consumers/structured_enrichment_consumer_main.py` | Consumes `nlp.article.enriched.v1` for structured enrichment |
 | `knowledge-graph-{economic-events,macro-indicator,insider-transactions,earnings-calendar}-dataset-consumer` | `consumers/*_dataset_consumer_main.py` | Consume `market.dataset.fetched` (one consumer group per dataset type) |
+| `knowledge-graph-prediction-enriched-consumer` | `consumers/prediction_enriched_consumer_main.py` | Consumes `nlp.article.enriched.v1` (own group `kg-prediction-enriched-group`), filters `source_type=='polymarket'` → writes `temporal_events(prediction)` + `entity_event_exposures` (PLAN-0056 C2) |
 | `knowledge-graph-path-insight-worker` | `workers/path_insight_worker_main.py` | Pre-computes multi-hop paths |
 
 ---
@@ -302,7 +303,7 @@ Returns 0.0 when confidence is null.
 
 | Topic | Consumer Group | Purpose |
 |-------|----------------|---------|
-| `nlp.article.enriched.v1` | `kg-service-group-enriched` + `kg-structured-enrichment-group` | Hot-path Block 11→12 pipeline (enriched consumer) and structured-enrichment consumer; at-least-once with Valkey dedup (24h TTL) |
+| `nlp.article.enriched.v1` | `kg-service-group-enriched` + `kg-structured-enrichment-group` + `kg-prediction-enriched-group` | Hot-path Block 11→12 pipeline (enriched consumer), structured-enrichment consumer, and the PredictionEnrichedConsumer (filters `source_type=='polymarket'` → prediction temporal events + exposures, PLAN-0056 C2); at-least-once with Valkey dedup |
 | `entity.canonical.created.v1` | `kg-service-group-entity` | Unblock `relation_evidence_raw` rows with `entity_provisional=true` |
 | `market.instrument.created` | `kg-service-group-instrument` | Worker 13D-4: create canonical entity + full alias suite |
 | `market.instrument.discovered.v1` | `kg-service-group-instrument-discovered` | Lightweight placeholder canonical seeder (13D-4b) |
@@ -350,7 +351,7 @@ marks it dispatched without re-delivering.
 | `SemanticMode` | `RELATION_STATE` (active state, e.g. employs) \| `TEMPORAL_CLAIM` (historical record) |
 | `DecayClass` | `STANDARD` \| `TEMPORAL` |
 | `RelationType` | 16 code-level values; more total in `relation_type_registry` DB seeds |
-| `EventType` | `geopolitical`, `regulatory`, `macro`, `sanctions`, `natural_disaster`, `corporate`, `other`; `prediction` accepted by the DB CHECK as of migration 0066 — the code-level `EventType.PREDICTION` value lands in PLAN-0056 Wave C2 |
+| `EventType` | `geopolitical`, `regulatory`, `macro`, `sanctions`, `natural_disaster`, `corporate`, `other`, `prediction` (added PLAN-0056 Wave C2; DB CHECK widened in migration 0066 — written by the PredictionEnrichedConsumer for Polymarket synthetic docs) |
 | `EventScope` | `LOCAL`, `REGIONAL`, `NATIONAL`, `GLOBAL` |
 | `ExposureType` | `directly_affected`, `operationally_impacted`, `supply_chain`, `revenue_geography`, `sector_exposure` |
 

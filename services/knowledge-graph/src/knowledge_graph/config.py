@@ -289,6 +289,8 @@ class Settings(BaseSettings):
     kafka_instrument_discovered_consumer_instance_id: str = ""
     kafka_temporal_event_consumer_instance_id: str = ""
     kafka_earnings_calendar_dataset_consumer_instance_id: str = ""
+    # PLAN-0056 Wave C2 — PredictionEnrichedConsumer (own group on nlp.article.enriched.v1).
+    kafka_prediction_enriched_consumer_instance_id: str = ""
     kafka_economic_events_dataset_consumer_instance_id: str = ""
     kafka_insider_transactions_dataset_consumer_instance_id: str = ""
     kafka_macro_indicator_dataset_consumer_instance_id: str = ""

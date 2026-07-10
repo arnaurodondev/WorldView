@@ -502,6 +502,46 @@ async def test_earnings_calendar_consumer_wires_liveness_probe() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_prediction_enriched_consumer_wires_liveness_probe() -> None:
+    """PredictionEnrichedConsumer main wires a liveness probe (PLAN-0056 Wave C2)."""
+    mock_engine = AsyncMock()
+    mock_valkey = AsyncMock()
+    mock_consumer = _make_supervised_consumer()
+    mock_probe = MagicMock()
+    module = "knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer_main"
+
+    with (
+        patch("knowledge_graph.config.Settings", return_value=_mock_settings()),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch(
+            "knowledge_graph.infrastructure.intelligence_db.session._build_factories",
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
+        ),
+        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
+        patch(
+            "knowledge_graph.infrastructure.messaging.consumers."
+            "prediction_enriched_consumer.PredictionEnrichedConsumer",
+            return_value=mock_consumer,
+        ),
+        patch(f"{module}.make_liveness_probe", return_value=mock_probe) as mock_make_probe,
+        patch(f"{module}.start_metrics_server", return_value=AsyncMock()) as mock_metrics,
+        patch("messaging.kafka.consumer.supervisor.run_consumer_supervised", new=AsyncMock()),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        from knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer_main import (
+            main,
+        )
+
+        await main()
+
+    mock_make_probe.assert_called_once()
+    mock_metrics.assert_called_once()
+    assert mock_metrics.call_args.kwargs.get("liveness_probe") is mock_probe
+    mock_probe.bind.assert_called_once_with(mock_consumer)
+
+
+@pytest.mark.asyncio()
 async def test_narrative_refresh_consumer_starts_metrics_with_probe() -> None:
     """narrative_refresh consumer NOW exposes /healthz (was MISSING — F-005 fix).
 
@@ -570,8 +610,7 @@ async def test_structured_enrichment_consumer_starts_metrics_with_probe() -> Non
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch(
-            "knowledge_graph.infrastructure.intelligence_db.adapters."
-            "entity_enrichment_adapter.EntityEnrichmentAdapter",
+            "knowledge_graph.infrastructure.intelligence_db.adapters.entity_enrichment_adapter.EntityEnrichmentAdapter",
             return_value=MagicMock(),
         ),
         patch(

@@ -250,6 +250,8 @@ class EntityEventExposureRepository(EntityEventExposureRepositoryPort):
         exposure_type: str,
         confidence: float,
         evidence_text: str | None = None,
+        polarity: str | None = None,
+        polarity_confidence: float | None = None,
     ) -> UUID:
         """Insert an entity-event exposure link — ON CONFLICT DO NOTHING.
 
@@ -258,13 +260,21 @@ class EntityEventExposureRepository(EntityEventExposureRepositoryPort):
         The existing row's exposure_id is not returned from the DB on conflict
         to keep the query simple; callers that need the pre-existing ID should
         query separately.
+
+        ``polarity`` / ``polarity_confidence`` (PLAN-0056 Wave C2, migration
+        0066) carry a directional signal for prediction-event exposures. Both
+        default to None so existing non-directional callers (earnings, macro,
+        geopolitical) keep NULL polarity — the ``ck_exposure_polarity`` CHECK
+        allows NULL. The Wave C3 classifier supplies 'bullish'/'bearish'/'neutral'.
         """
         await self._session.execute(
             text("""
 INSERT INTO entity_event_exposures (
-    exposure_id, event_id, entity_id, exposure_type, confidence, evidence_text
+    exposure_id, event_id, entity_id, exposure_type, confidence, evidence_text,
+    polarity, polarity_confidence
 ) VALUES (
-    :exposure_id, :event_id, :entity_id, :exposure_type, :confidence, :evidence_text
+    :exposure_id, :event_id, :entity_id, :exposure_type, :confidence, :evidence_text,
+    :polarity, :polarity_confidence
 )
 ON CONFLICT (event_id, entity_id, exposure_type) DO NOTHING
 """),
@@ -275,6 +285,8 @@ ON CONFLICT (event_id, entity_id, exposure_type) DO NOTHING
                 "exposure_type": exposure_type,
                 "confidence": confidence,
                 "evidence_text": evidence_text,
+                "polarity": polarity,
+                "polarity_confidence": polarity_confidence,
             },
         )
         return exposure_id

@@ -4,7 +4,7 @@ title: "Prediction Markets: Activation, Signals & Enrichment (Wave 2)"
 prd: PRD-0033
 status: in-progress
 created: 2026-05-01
-updated: 2026-07-09
+updated: 2026-07-10
 supersedes: PLAN-0056 (original ingestion-first draft, withdrawn 2026-07-09)
 branch: feat/prediction-data-activation
 ---
@@ -372,7 +372,31 @@ integration/apply/rollback tests NOT run (no Postgres in env).
 **Tests**: migration up/down; CHECK accepts 'prediction'; columns present (≥3). **Guardrails**: R24
 (intelligence_db DDL only via intelligence-migrations; S7 `ALEMBIC_ENABLED=false`), R32, ⚠️0066 collision note.
 
-### Wave C2 — EventType.PREDICTION + PredictionEnrichedConsumer
+### Wave C2 — EventType.PREDICTION + PredictionEnrichedConsumer ✅
+**Status**: **DONE** — 2026-07-10 · 15 new consumer tests + 1 entrypoint test · full KG suite green (1692 pass, 0 fail) · ruff + mypy + import-guards clean.
+**IMPLEMENTATION NOTES (source-of-truth corrections vs the task text below)**:
+- **Filter is `source_type == 'polymarket'`**, NOT `'prediction_market'`. Wave B2 stamps
+  `ContentSourceType.POLYMARKET` (= `"polymarket"`) and S6 passes it through verbatim; `'prediction_market'`
+  is never emitted (prompt-input-vs-lookup guardrail). A regression test asserts `'prediction_market'` is skipped.
+- **The enriched event carries NO title / source_url / condition_id** (verified against the S6 producer +
+  `nlp.article.enriched.v1.avsc`). It only carries `doc_id`, `source_type`, `resolved_entity_ids`,
+  `published_at`, `occurred_at`. So the question text and condition_id are NOT recoverable here (an nlp_db read
+  would violate R7). The temporal event therefore uses `region="prediction"` (constant category) and
+  `title=f"Prediction market {doc_id}"` — doc_id is the only stable per-market key (B2 emits one doc/market),
+  giving idempotency via the `(event_type, region, title, active_from::day)` natural key. `active_from` =
+  published_at||occurred_at||now; `active_until=None` (close_time unavailable); `residual_impact_days=30`;
+  `confidence=0.5`. Wave E/C4 can enrich the title/region if S6 starts carrying the question through.
+- **Polarity**: `EntityEventExposureRepository.upsert` (+ its port) extended with optional
+  `polarity`/`polarity_confidence` (default None → NULL, allowed by 0066's `ck_exposure_polarity`). The consumer
+  exposes a `polarity_classifier` injection seam (`_resolve_polarity`) that returns (None, None) today; Wave C3
+  drops in the LLM classifier without touching the write path.
+- **Benign-overlap CONFIRMED**: `materialize_graph` only writes inside `for` loops over relations/events/claims;
+  a Polymarket question yields empty arrays → `EnrichedArticleConsumer` produces 0 evidence rows / 0 edges /
+  0 dirtied entities for these docs. No junk relations.
+- **R26 commit**: consumer owns an explicit `session.commit()` (tested) — no HTTP200-but-rollback.
+- Files: `domain/enums.py` (PREDICTION), `infrastructure/messaging/consumers/prediction_enriched_consumer.py` +
+  `_main.py`, `application/ports/temporal_event_repository.py` + `infrastructure/.../temporal_event_repository.py`
+  (polarity params), `config.py` (instance-id), `docker-compose.yml` (new service).
 **Layer**: application/infrastructure. **Effort**: 90m. **depends_on**: C1.
 - **T-C-2-01 (impl)** — Add `PREDICTION="prediction"` to `EventType` (`domain/enums.py`).
 - **T-C-2-02 (impl)** — `PredictionEnrichedConsumer` (NEW) + `_main.py`, own consumer group on

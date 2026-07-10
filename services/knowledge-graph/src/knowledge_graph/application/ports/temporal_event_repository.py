@@ -120,6 +120,8 @@ class EntityEventExposureRepositoryPort(ABC):
         exposure_type: str,
         confidence: float,
         evidence_text: str | None = None,
+        polarity: str | None = None,
+        polarity_confidence: float | None = None,
     ) -> UUID:
         """Upsert an entity-event exposure link — ON CONFLICT DO NOTHING.
 
@@ -136,6 +138,12 @@ class EntityEventExposureRepositoryPort(ABC):
                            supply_chain/revenue_geography/sector_exposure.
             confidence:    0.0-1.0.
             evidence_text: Optional extracted evidence snippet.
+            polarity:      Directional signal for prediction-event exposures —
+                           one of 'bullish'/'bearish'/'neutral', or None for
+                           non-directional exposures (earnings/corporate). Added
+                           by PLAN-0056 Wave C2 on top of migration 0066;
+                           populated by the Wave C3 polarity classifier.
+            polarity_confidence: Confidence [0,1] of the polarity, or None.
 
         Returns:
         -------
