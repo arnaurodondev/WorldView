@@ -29,7 +29,7 @@ interface DocsTabsProps {
   storeKey?: string;
 }
 
-export function DocsTabs({ items, children, storeKey }: DocsTabsProps) {
+export function DocsTabs({ items = [], children, storeKey }: DocsTabsProps) {
   // Lazy initial state reads localStorage only on first render to avoid
   // SSR mismatch — the value is applied after hydration via useEffect-free
   // pattern (we accept a 1-frame default-tab flash as a non-issue).
