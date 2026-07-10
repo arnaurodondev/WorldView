@@ -83,8 +83,15 @@ def _make_uow(
     *,
     markets: list[PredictionMarket],
     snapshots: list[PredictionMarketSnapshot],
+    earliest: PredictionMarketSnapshot | None | object = ...,
 ) -> MagicMock:
-    """Build a fully-mocked UoW returning ``markets`` then an empty page."""
+    """Build a fully-mocked UoW returning ``markets`` then an empty page.
+
+    ``earliest`` is what ``get_earliest_snapshot_at_or_after`` returns (the true
+    window-start baseline, FIX 2). Defaults (``...``) to ``snapshots[-1]`` — the
+    genuine earliest for a short list — so existing 2-snapshot tests keep their
+    semantics; pass an explicit value to simulate a LIMIT-truncated scan.
+    """
     uow = MagicMock()
     uow.__aenter__ = AsyncMock(return_value=uow)
     uow.__aexit__ = AsyncMock(return_value=None)
@@ -100,8 +107,13 @@ def _make_uow(
     uow.prediction_markets_read = MagicMock()
     uow.prediction_markets_read.list_markets = AsyncMock(side_effect=_list_markets)
 
+    resolved_earliest = (snapshots[-1] if snapshots else None) if earliest is ... else earliest
+
     uow.prediction_market_snapshots_read = MagicMock()
     uow.prediction_market_snapshots_read.list_snapshots = AsyncMock(return_value=snapshots)
+    uow.prediction_market_snapshots_read.get_earliest_snapshot_at_or_after = AsyncMock(
+        return_value=resolved_earliest,
+    )
 
     uow.outbox_events = MagicMock()
     uow.outbox_events.create = AsyncMock(return_value="outbox-row-1")
@@ -122,30 +134,31 @@ def _two_snapshots(*, yes_start: float, yes_end: float, **kw: object) -> list[Pr
 
 
 class TestEmitsOnMaterialMove:
-    """Move above threshold + sufficient liquidity/volume → 1 event."""
+    """Move above threshold + sufficient liquidity/volume → exactly 1 (affirmative) event."""
 
     @pytest.mark.asyncio
-    async def test_emits_single_move_with_correct_fields(self) -> None:
-        # Yes 0.40 → 0.65 = +0.25 (above 0.15). No 0.60 → 0.35 = -0.25 (also above).
+    async def test_emits_single_affirmative_move_with_correct_fields(self) -> None:
+        # FIX-1 regression: a binary market where BOTH outcomes clear the gate
+        # (Yes 0.40→0.65 = +0.25; No 0.60→0.35 = -0.25) must emit exactly ONE
+        # event — for the affirmative (Yes) token — NEVER a second No event.
         snaps = _two_snapshots(yes_start=0.40, yes_end=0.65)
         uow = _make_uow(markets=[_market()], snapshots=snaps)
         detector = PredictionMoveDetector(uow_factory=lambda: uow, settings=_settings())
 
         emitted = await detector.run_cycle()
 
-        # Both outcomes cleared the gate → 2 events (Yes up, No down).
-        assert emitted == 2
-        assert uow.outbox_events.create.await_count == 2
+        # Affirmative-only → exactly one event, never the complementary No event.
+        assert emitted == 1
+        assert uow.outbox_events.create.await_count == 1
         uow.commit.assert_awaited_once()
 
-        # Inspect the Yes-outcome event payload.
-        calls = uow.outbox_events.create.await_args_list
-        payloads = {c.kwargs["payload"]["token_id"]: c.kwargs for c in calls}
-        yes_call = payloads[_TOK_YES]
-        assert yes_call["event_type"] == "market.prediction.move"
-        assert yes_call["topic"] == "market.prediction.move.v1"
-        assert yes_call["partition_key"] == _MARKET_ID
-        p = yes_call["payload"]
+        call = uow.outbox_events.create.await_args_list[0]
+        assert call.kwargs["event_type"] == "market.prediction.move"
+        assert call.kwargs["topic"] == "market.prediction.move.v1"
+        assert call.kwargs["partition_key"] == _MARKET_ID
+        p = call.kwargs["payload"]
+        # The single event is the affirmative (Yes) token, NOT the No token.
+        assert p["token_id"] == _TOK_YES
         assert p["market_id"] == _MARKET_ID
         assert p["outcome_name"] == "Yes"
         assert p["direction"] == "up"
@@ -156,22 +169,64 @@ class TestEmitsOnMaterialMove:
         assert p["volume_24h"] == pytest.approx(5_000.0)
         assert p["is_backfill"] is False
 
+        # Explicitly assert the No token was never emitted (complementary-collapse
+        # eliminated at the source).
+        emitted_tokens = {c.kwargs["payload"]["token_id"] for c in uow.outbox_events.create.await_args_list}
+        assert _TOK_NO not in emitted_tokens
+
     @pytest.mark.asyncio
     async def test_direction_down_and_token_resolution(self) -> None:
-        # Yes 0.80 → 0.50 = -0.30 (down). Verify token_id resolved from outcomes.
+        # Yes 0.80 → 0.50 = -0.30 (down). Affirmative-only → one Yes event.
         snaps = _two_snapshots(yes_start=0.80, yes_end=0.50)
         uow = _make_uow(markets=[_market()], snapshots=snaps)
         detector = PredictionMoveDetector(uow_factory=lambda: uow, settings=_settings())
 
-        await detector.run_cycle()
+        emitted = await detector.run_cycle()
 
-        calls = {
-            c.kwargs["payload"]["outcome_name"]: c.kwargs["payload"] for c in uow.outbox_events.create.await_args_list
-        }
-        assert calls["Yes"]["direction"] == "down"
-        assert calls["Yes"]["token_id"] == _TOK_YES
-        assert calls["No"]["direction"] == "up"
-        assert calls["No"]["token_id"] == _TOK_NO
+        assert emitted == 1
+        p = uow.outbox_events.create.await_args_list[0].kwargs["payload"]
+        assert p["outcome_name"] == "Yes"
+        assert p["direction"] == "down"
+        assert p["token_id"] == _TOK_YES
+
+    @pytest.mark.asyncio
+    async def test_no_yes_outcome_falls_back_to_first_outcome(self) -> None:
+        # No outcome named "yes" → the FIRST outcome (list order) is the
+        # affirmative. "Trump" 0.40 → 0.65 = +0.25 clears; "Biden" is ignored.
+        market = _market(
+            outcomes=[
+                {"name": "Trump", "token_id": "tok_trump"},
+                {"name": "Biden", "token_id": "tok_biden"},
+            ],
+        )
+        # Snapshot prices are keyed by the market's outcome names (frozen entity,
+        # so build with the right keys directly rather than mutating).
+        earliest = PredictionMarketSnapshot(
+            market_id=_MARKET_ID,
+            snapshot_at=_NOW - timedelta(hours=20),
+            outcomes_prices={"Trump": 0.40, "Biden": 0.60},
+            source_event_id="evt-1",
+            liquidity=Decimal("10000"),
+            volume_24h=Decimal("5000"),
+        )
+        latest = PredictionMarketSnapshot(
+            market_id=_MARKET_ID,
+            snapshot_at=_NOW,
+            outcomes_prices={"Trump": 0.65, "Biden": 0.35},
+            source_event_id="evt-1",
+            liquidity=Decimal("10000"),
+            volume_24h=Decimal("5000"),
+        )
+        uow = _make_uow(markets=[market], snapshots=[latest, earliest])
+        detector = PredictionMoveDetector(uow_factory=lambda: uow, settings=_settings())
+
+        emitted = await detector.run_cycle()
+
+        assert emitted == 1
+        p = uow.outbox_events.create.await_args_list[0].kwargs["payload"]
+        assert p["outcome_name"] == "Trump"
+        assert p["token_id"] == "tok_trump"  # noqa: S105 — test fixture token id, not a secret
+        assert p["direction"] == "up"
 
 
 class TestGates:
@@ -236,7 +291,7 @@ class TestDedup:
         detector = PredictionMoveDetector(uow_factory=lambda: uow, settings=_settings())
 
         first = await detector.run_cycle()
-        assert first == 2
+        assert first == 1
 
         # Re-run over the identical snapshots (same latest.snapshot_at) → dedup.
         uow.outbox_events.create.reset_mock()
@@ -255,14 +310,61 @@ class TestDedup:
         snaps1 = _two_snapshots(yes_start=0.40, yes_end=0.65)
         uow1 = _make_uow(markets=[_market()], snapshots=snaps1)
         detector._uow_factory = lambda: uow1  # type: ignore[assignment]
-        assert await detector.run_cycle() == 2
+        assert await detector.run_cycle() == 1
 
         # Cycle 2 — a strictly-newer latest snapshot still material → re-emits.
         newer_latest = _snapshot(snapshot_at=_NOW + timedelta(hours=1), yes=0.66, no=0.34)
         earliest = _snapshot(snapshot_at=_NOW - timedelta(hours=19), yes=0.40, no=0.60)
         uow2 = _make_uow(markets=[_market()], snapshots=[newer_latest, earliest])
         detector._uow_factory = lambda: uow2  # type: ignore[assignment]
-        assert await detector.run_cycle() == 2
+        assert await detector.run_cycle() == 1
+
+
+class TestWindowStartBaseline:
+    """FIX 2: Δ is measured from the TRUE window start, not the LIMIT-truncated one."""
+
+    @pytest.mark.asyncio
+    async def test_slow_move_over_full_window_clears_threshold(self) -> None:
+        # Simulate a market with MORE than ``snapshot_limit`` snapshots in the
+        # window: ``list_snapshots`` returns only the newest page, whose OLDEST
+        # element (``snapshots[-1]``) is a mid-window price (0.55). Measuring Δ
+        # from there (the OLD bug) gives +0.10 < 0.15 → suppressed. The detector
+        # instead uses ``get_earliest_snapshot_at_or_after`` → the true window
+        # start (0.40), giving +0.25 which clears τ.
+        latest = _snapshot(snapshot_at=_NOW, yes=0.65, no=0.35)
+        truncated_oldest = _snapshot(snapshot_at=_NOW - timedelta(hours=2), yes=0.55, no=0.45)
+        true_window_start = _snapshot(snapshot_at=_NOW - timedelta(hours=23), yes=0.40, no=0.60)
+
+        uow = _make_uow(
+            markets=[_market()],
+            snapshots=[latest, truncated_oldest],  # LIMIT-truncated page
+            earliest=true_window_start,  # what the new repo read returns
+        )
+        detector = PredictionMoveDetector(uow_factory=lambda: uow, settings=_settings())
+
+        emitted = await detector.run_cycle()
+
+        # The full-window Δ (0.40 → 0.65 = +0.25) clears the 0.15 threshold.
+        assert emitted == 1
+        p = uow.outbox_events.create.await_args_list[0].kwargs["payload"]
+        assert p["prev_price"] == pytest.approx(0.40)  # true window start, not 0.55
+        assert p["new_price"] == pytest.approx(0.65)
+        assert p["delta"] == pytest.approx(0.25)
+        # The new repo read was consulted for the window-start baseline.
+        uow.prediction_market_snapshots_read.get_earliest_snapshot_at_or_after.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_window_start_snapshot_skipped(self) -> None:
+        # The window-start read returns None (no snapshot at/after window_start) →
+        # cannot measure Δ → skip.
+        latest = _snapshot(snapshot_at=_NOW, yes=0.65, no=0.35)
+        uow = _make_uow(markets=[_market()], snapshots=[latest], earliest=None)
+        detector = PredictionMoveDetector(uow_factory=lambda: uow, settings=_settings())
+
+        emitted = await detector.run_cycle()
+
+        assert emitted == 0
+        uow.outbox_events.create.assert_not_awaited()
 
 
 class TestSkips:

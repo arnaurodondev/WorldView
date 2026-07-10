@@ -24,16 +24,40 @@ Design invariants
 * **No hardcoded thresholds** — the Δ threshold, liquidity/volume floors, window
   length, page/snapshot caps and cadence all come from ``Settings`` (env vars).
 
+Affirmative-outcome only (why we emit ONE move per market)
+----------------------------------------------------------
+A Polymarket prediction market is overwhelmingly **binary** (Yes / No). The two
+outcome tokens move in lock-step, equal-and-opposite: a +0.25 Yes swing is a
+-0.25 No swing over the same window. Emitting a move for *every* outcome
+therefore produced two events per market with the same ``(market_id, window)``.
+The S7 ``PredictionSignalEmitter`` dedups on ``uuid5`` keyed on
+``(condition_id, trigger, window)`` **without** ``token_id``, so the two
+complementary events collapsed and an *arbitrary* one won — for the No token the
+downstream polarity/adverseness (which is framed against the affirmative / YES
+resolution) was then computed backwards.
+
+We fix this at the source: emit **at most one** move per market per cycle, for
+the **affirmative** outcome only. The affirmative token is selected as:
+
+1. the outcome whose name equals ``"yes"`` (case-insensitive); else
+2. the **first** outcome in the market's static ``outcomes`` list — we iterate
+   the JSONB list order (stable / deterministic), never dict iteration order.
+
+This ties the emitted move to the exact frame the polarity classifier reasons
+about, eliminates the complementary-collapse, and makes ``_is_adverse``
+downstream correct as written. Non-binary markets (rare on Polymarket) are
+tracked by their affirmative/first outcome only — an accepted simplification.
+
 Gating (noise floor)
 --------------------
-An outcome move is emitted only when ALL hold, using the **latest** snapshot's
-liquidity/volume:
+The affirmative move is emitted only when ALL hold, using the **latest**
+snapshot's liquidity/volume:
 
 1. ``abs(delta) >= prediction_move_delta_threshold``
 2. ``liquidity >= prediction_move_min_liquidity_usd``
 3. ``volume_24h >= prediction_move_min_volume_usd``
 
-where ``delta = latest_price - window_start_price`` for that outcome.
+where ``delta = latest_price - window_start_price`` for the affirmative outcome.
 
 Dedup
 -----
@@ -174,30 +198,61 @@ class PredictionMoveDetector:
         if market.resolution_status != "open":
             return 0
 
-        # Static outcome descriptors: [{"name", "token_id"}]. Build name→token_id
-        # so we can resolve the moving outcome to its CLOB token.
-        name_to_token: dict[str, str] = {}
+        # Static outcome descriptors: [{"name", "token_id"}] in JSONB (insertion)
+        # order — deterministic, unlike dict iteration over a prices map. We keep
+        # the order so the affirmative fallback (first outcome) is stable.
+        ordered_outcomes: list[tuple[str, str]] = []
         for outcome in market.outcomes or []:
             if not isinstance(outcome, dict):
                 continue
             name = outcome.get("name")
             token_id = outcome.get("token_id")
             if name and token_id:
-                name_to_token[str(name)] = str(token_id)
+                ordered_outcomes.append((str(name), str(token_id)))
 
-        # R27: snapshot scan via the read replica; DESC by snapshot_at.
+        if not ordered_outcomes:
+            # No outcome resolves to a CLOB token — cannot emit a usable move
+            # (S7 joins on token_id). Skip rather than emit with an empty token.
+            self._log.debug(
+                "prediction_move_unresolved_token",
+                market_id=market.market_id,
+            )
+            return 0
+
+        # AFFIRMATIVE-OUTCOME selection (see module docstring): prefer the outcome
+        # literally named "yes" (case-insensitive); else fall back to the FIRST
+        # outcome in the static list. We emit at most ONE move per market — for
+        # this token — so the S7 polarity frame is never inverted.
+        affirmative_name, affirmative_token = next(
+            (pair for pair in ordered_outcomes if pair[0].strip().lower() == "yes"),
+            ordered_outcomes[0],
+        )
+
+        # R27: snapshot scan via the read replica; DESC by snapshot_at. Used for
+        # the LATEST snapshot (window end) + its liquidity/volume conviction.
         snapshots = await uow.prediction_market_snapshots_read.list_snapshots(
             market.market_id,
             from_dt=window_start,
             to_dt=None,
             limit=self._snapshot_limit,
         )
-        if len(snapshots) < 2:
-            # Need at least a window-start and a window-end price to measure Δ.
+        if not snapshots:
             return 0
-
         latest = snapshots[0]  # newest (window end)
-        window_start_snap = snapshots[-1]  # oldest within the window (window start)
+
+        # FIX (window-start truncation): the LATEST ``limit`` DESC rows do NOT
+        # contain the true window start once a market has more than ``limit``
+        # snapshots in the window — ``snapshots[-1]`` would then be the
+        # ``limit``-th newest, shrinking the measured window and letting slow
+        # moves fall silently under τ. Fetch the true earliest-in-window row
+        # explicitly (R27: read replica).
+        window_start_snap = await uow.prediction_market_snapshots_read.get_earliest_snapshot_at_or_after(
+            market.market_id,
+            window_start,
+        )
+        if window_start_snap is None or window_start_snap.snapshot_at >= latest.snapshot_at:
+            # Need a distinct window-start and window-end to measure Δ.
+            return 0
 
         # Liquidity/volume gate uses the LATEST snapshot's conviction fields. A
         # missing (None) value fails the gate — we never treat "unknown" as
@@ -209,70 +264,56 @@ class PredictionMoveDetector:
         if volume_24h is None or volume_24h < self._min_volume:
             return 0
 
-        emitted = 0
-        for outcome_name, new_price in latest.outcomes_prices.items():
-            prev_price = window_start_snap.outcomes_prices.get(outcome_name)
-            if prev_price is None:
-                # Outcome not present at window start — cannot measure Δ.
-                continue
+        new_price = latest.outcomes_prices.get(affirmative_name)
+        prev_price = window_start_snap.outcomes_prices.get(affirmative_name)
+        if new_price is None or prev_price is None:
+            # Affirmative outcome not priced at both ends — cannot measure Δ.
+            return 0
 
-            delta = float(new_price) - float(prev_price)
-            if abs(delta) < self._delta_threshold:
-                continue  # Δ gate
+        delta = float(new_price) - float(prev_price)
+        if abs(delta) < self._delta_threshold:
+            return 0  # Δ gate
 
-            token_id = name_to_token.get(outcome_name)
-            if not token_id:
-                # Cannot resolve the outcome to a token — skip rather than emit a
-                # move with an unusable token_id (S7 joins on it).
-                self._log.debug(
-                    "prediction_move_unresolved_token",
-                    market_id=market.market_id,
-                    outcome_name=outcome_name,
-                )
-                continue
+        # Dedup watermark: only emit when this snapshot is strictly newer than the
+        # last one we emitted for this (market, affirmative token).
+        dedup_key = (market.market_id, affirmative_token)
+        watermark = self._last_emitted.get(dedup_key)
+        if watermark is not None and latest.snapshot_at <= watermark:
+            return 0
 
-            # Dedup watermark: only emit when this snapshot is strictly newer
-            # than the last one we emitted for this (market, token).
-            dedup_key = (market.market_id, token_id)
-            watermark = self._last_emitted.get(dedup_key)
-            if watermark is not None and latest.snapshot_at <= watermark:
-                continue
-
-            direction = "up" if delta > 0 else "down"
-            event = PredictionMarketMove(
-                market_id=market.market_id,
-                token_id=token_id,
-                outcome_name=outcome_name,
-                interval=self._interval_label,
-                prev_price=float(prev_price),
-                new_price=float(new_price),
-                delta=delta,
-                direction=direction,
-                liquidity=liquidity,
-                volume_24h=volume_24h,
-                window_start_ts=to_iso8601(window_start_snap.snapshot_at),
-                is_backfill=False,
-            )
-            # R8: write to the outbox (not Kafka). ``partition_key=market_id``
-            # pins every move for a market to one partition so S7 observes them
-            # in causal order.
-            await uow.outbox_events.create(
-                event_type=event.event_type,
-                topic=EVENT_TOPIC_MAP[event.event_type],
-                payload=event_to_outbox_payload(event),
-                partition_key=market.market_id,
-            )
-            self._last_emitted[dedup_key] = latest.snapshot_at
-            emitted += 1
-            self._log.info(
-                "prediction_move_emitted",
-                market_id=market.market_id,
-                token_id=token_id,
-                outcome_name=outcome_name,
-                delta=round(delta, 4),
-                direction=direction,
-                liquidity=liquidity,
-                volume_24h=volume_24h,
-            )
-
-        return emitted
+        direction = "up" if delta > 0 else "down"
+        event = PredictionMarketMove(
+            market_id=market.market_id,
+            token_id=affirmative_token,
+            outcome_name=affirmative_name,
+            interval=self._interval_label,
+            prev_price=float(prev_price),
+            new_price=float(new_price),
+            delta=delta,
+            direction=direction,
+            liquidity=liquidity,
+            volume_24h=volume_24h,
+            window_start_ts=to_iso8601(window_start_snap.snapshot_at),
+            is_backfill=False,
+        )
+        # R8: write to the outbox (not Kafka). ``partition_key=market_id`` pins
+        # every move for a market to one partition so S7 observes them in causal
+        # order.
+        await uow.outbox_events.create(
+            event_type=event.event_type,
+            topic=EVENT_TOPIC_MAP[event.event_type],
+            payload=event_to_outbox_payload(event),
+            partition_key=market.market_id,
+        )
+        self._last_emitted[dedup_key] = latest.snapshot_at
+        self._log.info(
+            "prediction_move_emitted",
+            market_id=market.market_id,
+            token_id=affirmative_token,
+            outcome_name=affirmative_name,
+            delta=round(delta, 4),
+            direction=direction,
+            liquidity=liquidity,
+            volume_24h=volume_24h,
+        )
+        return 1

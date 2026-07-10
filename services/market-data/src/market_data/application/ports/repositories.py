@@ -740,6 +740,22 @@ class PredictionMarketSnapshotRepository(ABC):
         """Return snapshots for ``market_id``, ordered by ``snapshot_at DESC``."""
 
     @abstractmethod
+    async def get_earliest_snapshot_at_or_after(
+        self,
+        market_id: str,
+        at_or_after: datetime,
+    ) -> PredictionMarketSnapshot | None:
+        """Return the earliest snapshot for ``market_id`` with ``snapshot_at >= at_or_after``.
+
+        Used by the move detector to obtain the TRUE window-start baseline: a
+        ``list_snapshots(limit=N)`` scan only returns the newest ``N`` rows, so
+        its oldest element is not the window start once a market has more than
+        ``N`` snapshots in the window. This single ``ORDER BY snapshot_at ASC
+        LIMIT 1`` read returns the genuine earliest-in-window row (or ``None`` if
+        the market has no snapshot in the window).
+        """
+
+    @abstractmethod
     async def get_latest_prices_batch(
         self,
         market_ids: list[str],

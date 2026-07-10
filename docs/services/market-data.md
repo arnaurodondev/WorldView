@@ -129,12 +129,29 @@ or articles, perform NLP processing, manage portfolios.
 | `market.prediction.move.v1` | `PredictionMarketMove` (`market.prediction.move`) | `market_id` |
 
 PLAN-0056 Wave D1: the `PredictionMoveDetector` periodic worker emits
-`market.prediction.move.v1` when an open market's implied probability for an
-outcome moves materially over a lookback window — gated on `|Δ| ≥ τ` AND
-`liquidity ≥ floor` AND `volume_24h ≥ floor` (all env-driven) so noise never
-fires. Payload carries `market_id` (Polymarket conditionId), `token_id`,
-`outcome_name`, `interval`, `prev_price`, `new_price`, `delta`, `direction`
-(up/down), `liquidity`, `volume_24h`, `window_start_ts`, `is_backfill=false`.
+`market.prediction.move.v1` when an open market's implied probability moves
+materially over a lookback window — gated on `|Δ| ≥ τ` AND `liquidity ≥ floor`
+AND `volume_24h ≥ floor` (all env-driven) so noise never fires. Payload carries
+`market_id` (Polymarket conditionId), `token_id`, `outcome_name`, `interval`,
+`prev_price`, `new_price`, `delta`, `direction` (up/down), `liquidity`,
+`volume_24h`, `window_start_ts`, `is_backfill=false`.
+
+**QA fix (2026-07-10) — affirmative-outcome move only.** A Polymarket market is
+binary (Yes/No) and the two tokens move equal-and-opposite, so emitting a move
+per outcome produced two complementary events per `(market_id, window)`. S7's
+signal emitter dedups on a `uuid5` that omits `token_id`, so the two collapsed
+and an arbitrary one won — inverting polarity/adverseness for the No token. The
+detector now emits **at most one** move per market per cycle, for the
+**affirmative** outcome: the outcome named `"yes"` (case-insensitive), else the
+**first** outcome in the market's static `outcomes` list (JSONB order —
+deterministic). This ties the move to the exact frame the polarity classifier
+reasons about. Non-binary markets are tracked by their affirmative/first outcome
+only (accepted simplification). **Window-start fix:** Δ is now measured from the
+true window-start snapshot (`get_earliest_snapshot_at_or_after`, an
+`ORDER BY snapshot_at ASC LIMIT 1` read-replica read) instead of the oldest row
+of the LIMIT-capped `list_snapshots` page — which was only the true start when a
+market had ≤`snapshot_limit` snapshots in the window, otherwise silently
+shrinking the window and dropping slow moves below τ.
 Emitted through the outbox (R8, `partition_key=market_id`) and dispatched by
 `market-data-dispatcher`. Consumed by S7's `PredictionSignalEmitter` (Wave D2)
 which joins `market_id` to entity exposures + polarity and fans a per-entity
@@ -379,6 +396,18 @@ CREATE TABLE prediction_events (
     updated_at   TIMESTAMPTZ DEFAULT now(),
     CONSTRAINT uq_prediction_events_event_id UNIQUE (event_id)
 );
+
+-- QA fix (migration 044, 2026-07-10): partial index supporting event_id lookups
+-- (the event consumer + entity-predictions API join/filter markets by event).
+CREATE INDEX ix_prediction_markets_event_id
+    ON prediction_markets (event_id) WHERE event_id IS NOT NULL;
+
+-- QA fix (migration 044): 180-day retention on the two prediction hypertables
+-- (trades is unbounded; prices grows per token/interval). Registered only when
+-- the timescaledb extension is present (guarded DO block) so a plain-Postgres DB
+-- is a no-op; add_retention_policy(..., if_not_exists => true) is idempotent.
+SELECT add_retention_policy('prediction_market_trades', INTERVAL '180 days');
+SELECT add_retention_policy('prediction_market_prices',  INTERVAL '180 days');
 ```
 
 ### PLAN-0056 A2 — deeper-stream repositories, ports & UoW wiring (no DDL)

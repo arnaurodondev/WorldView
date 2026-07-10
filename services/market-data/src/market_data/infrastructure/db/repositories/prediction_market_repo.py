@@ -517,6 +517,30 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
         result = await self._session.execute(text(full_sql).bindparams(**params))
         return [_row_to_snapshot(row) for row in result.fetchall()]
 
+    async def get_earliest_snapshot_at_or_after(
+        self,
+        market_id: str,
+        at_or_after: datetime,
+    ) -> PredictionMarketSnapshot | None:
+        """Return the earliest in-window snapshot (``ORDER BY snapshot_at ASC LIMIT 1``).
+
+        This is the authoritative window-start baseline for the move detector — it
+        is NOT bounded by the ``list_snapshots`` LIMIT, so a slow move measured
+        over the full configured window is not silently truncated.
+        """
+        # F-101: static SQL; user values bound via named parameters.
+        sql = text(
+            "SELECT id, market_id, snapshot_at, outcomes_prices, "
+            "volume_24h, liquidity, source_event_id "
+            "FROM prediction_market_snapshots "
+            "WHERE market_id = :market_id AND snapshot_at >= :at_or_after "
+            "ORDER BY snapshot_at ASC "
+            "LIMIT 1"
+        ).bindparams(market_id=market_id, at_or_after=at_or_after)
+        result = await self._session.execute(sql)
+        row = result.fetchone()
+        return _row_to_snapshot(row) if row is not None else None
+
     async def get_latest_prices_batch(
         self,
         market_ids: list[str],

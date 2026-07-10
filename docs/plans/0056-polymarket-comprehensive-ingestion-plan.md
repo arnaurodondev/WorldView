@@ -678,3 +678,30 @@ Two blockers found during local Docker validation of the code-complete branch, b
   the column. The live content_ingestion_db had a deploy-time `ALTER COLUMN … varchar(255)` workaround
   + the old 34-char id recorded — reconciled to the shortened id and reverted the column to varchar(32).
   Verified: `content-ingestion-migrate` sidecar exits 0 on the rebuilt image.
+
+# QA fixes (2026-07-10) — Wave D1 correctness + prediction-data hygiene
+
+Post-D1 QA of `PredictionMoveDetector` + the A1 prediction schema (market-data only; no wave-count change):
+
+- **FIX 1 (HIGH, correctness) — affirmative-outcome move only.** The detector emitted one move per
+  outcome; a binary Yes/No market cleared τ on BOTH tokens (equal-and-opposite Δ) → two events with the
+  same `(market_id, window)`. S7's `PredictionSignalEmitter` dedups on a `uuid5` that omits `token_id`, so
+  the pair collapsed to an arbitrary winner → for the No token, adverseness/polarity was computed
+  backwards. Now emits **at most one** move per market per cycle, for the affirmative outcome (name
+  `"yes"` case-insensitive, else the FIRST outcome in `market.outcomes` JSONB order — deterministic),
+  tying the move to the exact frame the polarity classifier uses. Non-binary markets track only the
+  affirmative/first outcome (accepted — Polymarket is overwhelmingly binary).
+- **FIX 2 (MED, correctness) — true window-start baseline.** Δ was measured from `snapshots[-1]`, the
+  oldest row of the `list_snapshots(limit=snapshot_limit)` DESC page — only the true window start when a
+  market has ≤`snapshot_limit` in-window snapshots; beyond that the window silently shrank and slow moves
+  fell under τ. New read-replica port+Pg method `get_earliest_snapshot_at_or_after(market_id, window_start)`
+  (`ORDER BY snapshot_at ASC LIMIT 1`) supplies the authoritative baseline.
+- **FIX 3 (LOW, data) — `prediction_markets.event_id` index.** Migration `044` (→043) adds partial index
+  `ix_prediction_markets_event_id ON prediction_markets(event_id) WHERE event_id IS NOT NULL`.
+- **FIX 4 (LOW, data) — hypertable retention.** `044` also registers a **180-day** `add_retention_policy`
+  on `prediction_market_trades` (unbounded) + `prediction_market_prices`, guarded behind a
+  timescaledb-extension check (no-op on plain Postgres) + `if_not_exists`; downgrade removes both.
+- **Tests:** extended `test_prediction_move_detector.py` (binary→one affirmative event with No NOT emitted;
+  no-"yes"→first outcome; >LIMIT window-start correctness; None window-start skip) + new
+  `test_migration_044_*`. Validation: ruff + `mypy services/market-data/src` clean; full market-data suite
+  1498 passed / 33 pre-existing e2e+integration+live errors (need live DB — `market_data_db` absent).
