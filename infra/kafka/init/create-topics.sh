@@ -56,6 +56,16 @@ TOPICS=(
     "entity.refresh.v1:1:1"
     "alert.delivered.v1:1:1"
     "market.prediction.v1:1:1"
+    # PLAN-0056: deeper-stream + derived prediction topics (schemas exist in
+    # infra/kafka/schemas but were never provisioned here — consumers logged
+    # UNKNOWN_TOPIC_OR_PART and the alert IntelligenceConsumer went unhealthy
+    # because market.prediction.signal.v1 was missing).
+    "market.prediction.event.v1:1:1"
+    "market.prediction.history.v1:3:1"
+    "market.prediction.trade.v1:3:1"
+    "market.prediction.oi.v1:1:1"
+    "market.prediction.move.v1:1:1"
+    "market.prediction.signal.v1:1:1"
     "kg.dead-letter.v1:1:1"
     "alert.dead-letter.v1:1:1"
     "nlp.dead-letter.v1:1:1"
