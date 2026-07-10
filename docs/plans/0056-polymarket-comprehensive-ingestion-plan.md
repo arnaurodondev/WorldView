@@ -500,7 +500,8 @@ read side C4) is fully wired; Sub-Plan D (signals) and E (gateway/frontend/chat)
 **Goal**: fire score-gated prediction signals through the existing alert engine. **Depends on**: A
 (snapshots/prices), C (exposures + polarity).
 
-### Wave D1 — S3 PredictionMoveDetector worker
+### Wave D1 — S3 PredictionMoveDetector worker ✅
+**Status**: **DONE** — 2026-07-10 · 11 new unit tests · ruff + mypy clean (173 files) · full market-data suite: 1490 passed / 34 pre-existing e2e+integration+live errors (need live DB/Kafka). Delivered `PredictionMoveDetector` (`infrastructure/workers/prediction_move_detector.py`) + `_main.py` entrypoint + docker-compose service `market-data-prediction-move-detector`; new `PredictionMarketMove` domain event + `EVENT_TOPIC_MAP`/`_AVSC_MAP` wiring (`market.prediction.move` → `market.prediction.move.v1`); 9 env-driven `prediction_move_*` settings (NO hardcoded gates) in `config.py` + `dev.local.env.example`. Reads open markets + snapshots via the read replica (R27), emits via the outbox (R8, `partition_key=market_id`). Gate: `|Δ| ≥ τ` AND latest-snapshot `liquidity ≥ floor` AND `volume_24h ≥ floor` (missing liquidity/volume fails the gate). **Dedup**: in-memory watermark per `(market_id, token_id)` = latest emitted `snapshot_at`; re-emit only when the latest snapshot is strictly newer (same snapshots re-observed → no re-emit); cross-restart dup absorbed by S7's per-`(condition_id, trigger, window)` idempotency (D2).
 **Layer**: infrastructure. **Effort**: 75m. **depends_on**: A3.
 - **T-D-1-01 (impl)** — `PredictionMoveDetector` (NEW) worker + `_main.py` in market-data: periodically
   scan `prediction_market_snapshots`/`_prices` per open market, compute Δ implied-probability over a

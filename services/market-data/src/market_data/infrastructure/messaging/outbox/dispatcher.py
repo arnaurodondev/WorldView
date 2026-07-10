@@ -60,6 +60,10 @@ EVENT_TOPIC_MAP: dict[str, str] = {
     # PLAN-0057 Wave D-2: lightweight discovery event emitted by ohlcv/quotes
     # consumers; topic is suffixed ``.v1`` for explicit version namespacing.
     "market.instrument.discovered": "market.instrument.discovered.v1",
+    # PLAN-0056 Wave D1: material implied-probability move on a prediction
+    # market, emitted by the ``PredictionMoveDetector`` worker and consumed by
+    # the S7 ``PredictionSignalEmitter``.
+    "market.prediction.move": "market.prediction.move.v1",
 }
 
 # ── Event-type → Avro schema file mapping ─────────────────────────────────────
@@ -68,6 +72,8 @@ _AVSC_MAP: dict[str, str] = {
     "market.instrument.created": "market.instrument.created.avsc",
     "market.instrument.updated": "market.instrument.updated.avsc",
     "market.instrument.discovered": "market.instrument.discovered.v1.avsc",
+    # PLAN-0056 Wave D1 — prediction-market move signal.
+    "market.prediction.move": "market.prediction.move.v1.avsc",
 }
 
 

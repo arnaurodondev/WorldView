@@ -50,6 +50,36 @@ class Settings(BaseSettings):
     kafka_prediction_trade_consumer_instance_id: str = ""
     kafka_prediction_oi_consumer_instance_id: str = ""
 
+    # ── PLAN-0056 Wave D1: PredictionMoveDetector worker ───────────────────────
+    # Periodic worker that scans ``prediction_market_snapshots`` per open market
+    # and emits ``market.prediction.move.v1`` when an outcome's implied
+    # probability moves materially over a lookback window.  Every threshold is
+    # env-driven (NO hardcoded gates) so the noise floor can be re-tuned without
+    # a redeploy.  All env vars carry the ``MARKET_DATA_`` prefix.
+    #
+    # Run cadence (seconds between cycles). 900 s = 15 min: frequent enough to
+    # catch fresh moves, sparse enough that the read-replica scan is cheap.
+    prediction_move_detector_interval_seconds: int = 900
+    # Lookback window (hours) over which Δ implied-probability is measured. The
+    # window-start snapshot is the oldest snapshot within this span; the latest
+    # snapshot is the window end. Default 24 h pairs with the ``1d`` label.
+    prediction_move_window_hours: int = 24
+    # Free-form window granularity label written to the event ``interval`` field
+    # (Avro allows 1h | 1d | 1w). Kept in lock-step with ``window_hours`` by
+    # convention — no PG enum (BP-007).
+    prediction_move_interval_label: str = "1d"
+    # Δ gate: only emit when ``abs(new_price - prev_price) >= τ``. Prices are
+    # implied probabilities in [0,1], so 0.15 = a 15-percentage-point swing.
+    prediction_move_delta_threshold: float = 0.15
+    # Liquidity floor (USD) on the latest snapshot — thin markets are noise.
+    prediction_move_min_liquidity_usd: float = 5_000.0
+    # 24h-volume floor (USD) on the latest snapshot — untraded markets are noise.
+    prediction_move_min_volume_usd: float = 1_000.0
+    # Safety cap on markets scanned per page and snapshots pulled per market so a
+    # runaway market count / snapshot fan-out can never blow up a single cycle.
+    prediction_move_market_page_size: int = 200
+    prediction_move_snapshot_limit: int = 500
+
     # ── Outbox dispatcher (BUG-4 / BP-612) ─────────────────────────────────────
     # These tune the ``DispatcherConfig`` built in ``dispatcher_main`` /
     # ``create_dispatcher``. Historically market-data built ``DispatcherConfig()``

@@ -126,6 +126,22 @@ or articles, perform NLP processing, manage portfolios.
 | `market.instrument.created` | `InstrumentCreated` (v3) | `instrument_id` |
 | `market.instrument.updated` | `InstrumentUpdated` | `instrument_id` |
 | `market.instrument.discovered.v1` | `InstrumentDiscovered` | `instrument_id` |
+| `market.prediction.move.v1` | `PredictionMarketMove` (`market.prediction.move`) | `market_id` |
+
+PLAN-0056 Wave D1: the `PredictionMoveDetector` periodic worker emits
+`market.prediction.move.v1` when an open market's implied probability for an
+outcome moves materially over a lookback window — gated on `|Δ| ≥ τ` AND
+`liquidity ≥ floor` AND `volume_24h ≥ floor` (all env-driven) so noise never
+fires. Payload carries `market_id` (Polymarket conditionId), `token_id`,
+`outcome_name`, `interval`, `prev_price`, `new_price`, `delta`, `direction`
+(up/down), `liquidity`, `volume_24h`, `window_start_ts`, `is_backfill=false`.
+Emitted through the outbox (R8, `partition_key=market_id`) and dispatched by
+`market-data-dispatcher`. Consumed by S7's `PredictionSignalEmitter` (Wave D2)
+which joins `market_id` to entity exposures + polarity and fans a per-entity
+signal out to the alert pipeline. Dedup: an in-memory watermark per
+`(market_id, token_id)` re-emits only when the latest snapshot is strictly
+newer than the last emitted; cross-restart duplicates are absorbed by S7's
+per-`(condition_id, trigger, window)` idempotency.
 
 PLAN-0057 Wave D-2: ohlcv/quotes consumers emit `market.instrument.discovered.v1`
 on first-seen symbols (lightweight: just `instrument_id` + `symbol` + `exchange`).
@@ -380,7 +396,7 @@ Wave A2 adds the persistence layer for the A1 tables (consumers/API/use cases la
 
 ---
 
-## Runtime Processes (8)
+## Runtime Processes (13)
 
 | Process | Purpose |
 |---------|---------|
@@ -389,7 +405,8 @@ Wave A2 adds the persistence layer for the A1 tables (consumers/API/use cases la
 | Quotes Consumer | Materialize latest quotes; emit `InstrumentDiscovered` on first-seen symbols |
 | Fundamentals Consumer | Materialize all 18 fundamentals sections + derived snapshot; emit `InstrumentCreated` v3 |
 | Intraday Resampling Consumer | Consume 1m bars and derive 5m/15m/30m/1h/4h/1d derived bars (`IntradayResamplingWorker`) |
-| Outbox Dispatcher | Publish instrument lifecycle events (`InstrumentCreated`, `InstrumentUpdated`, `InstrumentDiscovered`) |
+| Outbox Dispatcher | Publish instrument lifecycle events (`InstrumentCreated`, `InstrumentUpdated`, `InstrumentDiscovered`) + `market.prediction.move.v1` |
+| Prediction Move Detector | Periodic worker (`infrastructure/workers/prediction_move_detector_main.py`, docker-compose `market-data-prediction-move-detector`) — scans open markets' snapshots, emits `market.prediction.move.v1` on gated material moves (PLAN-0056 D1) |
 | Prediction Market Consumer | Materialize `market.prediction.v1` events into `prediction_markets` + `prediction_market_snapshots` |
 | Prediction History Consumer | Materialize `market.prediction.history.v1` per-token interval bars into `prediction_market_prices` (PLAN-0056 A3) |
 | Prediction Event Consumer | Upsert `market.prediction.event.v1` groups into `prediction_events` (group_id→event_id; market linkage set S4-side later) (PLAN-0056 A3) |
@@ -579,6 +596,14 @@ All variables are prefixed with `MARKET_DATA_`.
 | `MARKET_DATA_DISPATCHER_LEASE_SECONDS` | `30` | No | Outbox row lease duration. |
 | `MARKET_DATA_DISPATCHER_BATCH_SIZE` | `100` | No | Outbox dispatch batch size. |
 | `MARKET_DATA_DISPATCHER_MAX_ATTEMPTS` | `20` | No | Max outbox publish attempts before dead-letter. |
+| `MARKET_DATA_PREDICTION_MOVE_DETECTOR_INTERVAL_SECONDS` | `900` | No | PLAN-0056 D1 — `PredictionMoveDetector` cycle cadence (seconds). |
+| `MARKET_DATA_PREDICTION_MOVE_WINDOW_HOURS` | `24` | No | Lookback window (hours) over which Δ implied-probability is measured. |
+| `MARKET_DATA_PREDICTION_MOVE_INTERVAL_LABEL` | `1d` | No | Free-form window label written to the event `interval` field (1h/1d/1w). |
+| `MARKET_DATA_PREDICTION_MOVE_DELTA_THRESHOLD` | `0.15` | No | Δ gate: min absolute implied-probability swing (0-1) to emit a move. |
+| `MARKET_DATA_PREDICTION_MOVE_MIN_LIQUIDITY_USD` | `5000` | No | Liquidity floor (USD, latest snapshot) — thin markets suppressed. |
+| `MARKET_DATA_PREDICTION_MOVE_MIN_VOLUME_USD` | `1000` | No | 24h-volume floor (USD, latest snapshot) — untraded markets suppressed. |
+| `MARKET_DATA_PREDICTION_MOVE_MARKET_PAGE_SIZE` | `200` | No | Per-cycle safety cap on open markets scanned per page. |
+| `MARKET_DATA_PREDICTION_MOVE_SNAPSHOT_LIMIT` | `500` | No | Per-cycle safety cap on snapshots pulled per market. |
 | `MARKET_DATA_KAFKA_*_CONSUMER_INSTANCE_ID` | `""` | No | Static group-instance IDs for the 6 consumers (ohlcv/quotes/fundamentals/insider_transactions/intraday_resampling/prediction_market) — enables Kafka static membership. |
 | `MARKET_DATA_NLP_PIPELINE_URL` / `MARKET_DATA_CONTENT_STORE_URL` / `MARKET_DATA_KNOWLEDGE_GRAPH_URL` / `MARKET_DATA_ALERT_SERVICE_URL` / `MARKET_DATA_RAG_CHAT_URL` | service DNS defaults | No | Intelligence-rollup client targets (`application/ports/intelligence_clients.py`). |
 | `MARKET_DATA_INTERNAL_JWT_PRIVATE_KEY` | `""` | No | RS256 private key for signing internal service-to-service JWTs (intelligence-rollup outbound calls). |
@@ -632,8 +657,11 @@ python -m market_data.infrastructure.messaging.consumers.quotes_consumer_main
 # Fundamentals consumer (group: market-data-fundamentals)
 python -m market_data.infrastructure.messaging.consumers.fundamentals_consumer_main
 
-# Outbox dispatcher (instrument lifecycle events)
+# Outbox dispatcher (instrument lifecycle events + prediction-move events)
 python -m market_data.infrastructure.messaging.outbox.dispatcher_main
+
+# Prediction move detector (periodic worker — PLAN-0056 D1)
+python -m market_data.infrastructure.workers.prediction_move_detector_main
 ```
 
 ---
