@@ -46,6 +46,7 @@ def _make_market(
 def _make_snapshot(
     market_id: str = "mkt-001",
     outcomes_prices: dict[str, float] | None = None,
+    liquidity: Decimal | None = None,
 ) -> PredictionMarketSnapshot:
     return PredictionMarketSnapshot(
         market_id=market_id,
@@ -53,6 +54,7 @@ def _make_snapshot(
         outcomes_prices=outcomes_prices or {"Yes": 0.72, "No": 0.28},
         source_event_id="evt-001",
         volume_24h=Decimal("1500.0"),
+        liquidity=liquidity,
     )
 
 
@@ -264,6 +266,27 @@ def test_get_history_endpoint_200() -> None:
     assert "snapshot_at" in first
     assert "outcomes_prices" in first
     assert first["outcomes_prices"]["Yes"] == pytest.approx(0.72)
+
+
+def test_get_history_exposes_liquidity() -> None:
+    """PLAN-0056 A1: each history snapshot surfaces liquidity on the wire.
+
+    A snapshot carrying a Decimal liquidity round-trips into the response as a
+    float; a snapshot without liquidity serialises as ``liquidity: null``.
+    """
+    snaps = [
+        _make_snapshot(liquidity=Decimal("12345.67")),
+        _make_snapshot(liquidity=None),
+    ]
+    uc = _make_history_uc(snapshots=snaps)
+    _, client = _make_app(history_uc=uc)
+
+    resp = client.get("/api/v1/prediction-markets/mkt-001/history")
+
+    assert resp.status_code == 200
+    snapshots = resp.json()["snapshots"]
+    assert snapshots[0]["liquidity"] == pytest.approx(12345.67)
+    assert snapshots[1]["liquidity"] is None
 
 
 def test_get_history_endpoint_404() -> None:

@@ -70,7 +70,7 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
 | GET | `/api/v1/prediction-markets` | List prediction markets — query params: `status` (`open`/`resolved`/`cancelled`/`all`), `limit`, `offset` | — |
 | GET | `/api/v1/prediction-markets/{market_id}` | Prediction market detail with latest snapshot | — |
-| GET | `/api/v1/prediction-markets/{market_id}/history` | Prediction market price history — query params: `from_dt`, `to_dt` (HTTP 400 if `from_dt >= to_dt`) | — |
+| GET | `/api/v1/prediction-markets/{market_id}/history` | Prediction market price history — query params: `from_dt`, `to_dt` (HTTP 400 if `from_dt >= to_dt`). Each snapshot now includes `liquidity` (PLAN-0056 A1) | — |
 | GET | `/api/v1/market/sector-returns` | Sector heatmap data — query param: `period` (`1D`, `1W`, `1M`). Returns average period return per GICS sector from OHLCV bars. | — |
 | GET | `/api/v1/market/period-movers` | Top gainers or losers — query params: `period` (`1W`/`1M`), `type` (`gainers`/`losers`), `limit` (1–50, default 10). Returns instruments sorted by period_return_pct. | — |
 | GET | `/internal/v1/price/{instrument_id}` | Price snapshot for a single instrument — cache-aside: Valkey → Quote → OHLCV fallback. Returns 404 if no data available. **Internal endpoint — S9 only.** | Valkey |
@@ -285,6 +285,76 @@ CREATE TABLE prediction_market_snapshots (
 );
 CREATE INDEX ix_pms_market_time ON prediction_market_snapshots (market_id, snapshot_at DESC);
 SELECT create_hypertable('prediction_market_snapshots', 'snapshot_at', if_not_exists => TRUE);
+
+-- PLAN-0056 A1 (PRD-0033 §6.1): prediction deeper streams (models + schema this wave;
+-- adapters/consumers/read-routes land in Waves A2–A4). ``event_id`` links a market to
+-- its Polymarket event group (backfilled by the event consumer in A3).
+ALTER TABLE prediction_markets ADD COLUMN event_id TEXT;
+
+-- Per-token interval price history — TimescaleDB hypertable on window_start_ts.
+-- interval is VARCHAR not a PG enum (BP-007) so new interval tokens need no DDL.
+CREATE TABLE prediction_market_prices (
+    id              UUID NOT NULL DEFAULT gen_random_uuid(),
+    market_id       TEXT NOT NULL,
+    token_id        TEXT NOT NULL,
+    outcome_name    TEXT,
+    interval        VARCHAR(4) NOT NULL,
+    window_start_ts TIMESTAMPTZ NOT NULL,
+    price           NUMERIC(12, 6) NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'polymarket_clob',
+    is_backfill     BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (id, window_start_ts)
+);
+CREATE UNIQUE INDEX uq_pmp_market_token_interval_window
+    ON prediction_market_prices (market_id, token_id, interval, window_start_ts);
+CREATE INDEX ix_pmp_market_window ON prediction_market_prices (market_id, window_start_ts DESC);
+SELECT create_hypertable('prediction_market_prices', 'window_start_ts',
+    migrate_data => true, chunk_time_interval => INTERVAL '1 month');
+
+-- Individual trades/fills — TimescaleDB hypertable on ts. side is VARCHAR (BP-007).
+CREATE TABLE prediction_market_trades (
+    id         UUID NOT NULL DEFAULT gen_random_uuid(),
+    market_id  TEXT NOT NULL,
+    trade_id   TEXT NOT NULL,
+    token_id   TEXT NOT NULL,
+    price      NUMERIC(12, 6) NOT NULL,
+    size_usd   NUMERIC(20, 4),
+    side       VARCHAR(8) NOT NULL,
+    ts         TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (id, ts)
+);
+-- ts is included because TimescaleDB requires every UNIQUE index on a hypertable
+-- to contain the partition column; a trade's ts is immutable so dedup is unchanged.
+CREATE UNIQUE INDEX uq_pmt_market_trade ON prediction_market_trades (market_id, trade_id, ts);
+CREATE INDEX ix_pmt_market_ts ON prediction_market_trades (market_id, ts DESC);
+SELECT create_hypertable('prediction_market_trades', 'ts',
+    migrate_data => true, chunk_time_interval => INTERVAL '1 month');
+
+-- Daily open-interest / 24h-volume roll-up — NOT a hypertable (one row per market/day).
+CREATE TABLE prediction_market_oi (
+    id                   UUID NOT NULL DEFAULT gen_random_uuid(),
+    market_id            TEXT NOT NULL,
+    snapshot_date        DATE NOT NULL,
+    total_oi_usd         NUMERIC(20, 4),
+    total_volume_24h_usd NUMERIC(20, 4),
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    updated_at           TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (market_id, snapshot_date)
+);
+
+-- Polymarket "event" groups (a set of related markets) — NOT a hypertable.
+CREATE TABLE prediction_events (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id     TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    category     VARCHAR(50),
+    start_date   TIMESTAMPTZ,
+    end_date     TIMESTAMPTZ,
+    market_count INTEGER NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ DEFAULT now(),
+    updated_at   TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_prediction_events_event_id UNIQUE (event_id)
+);
 ```
 
 ---

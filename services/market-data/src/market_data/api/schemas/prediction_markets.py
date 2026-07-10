@@ -58,6 +58,11 @@ class SnapshotPointResponse(BaseModel):
     snapshot_at: datetime
     outcomes_prices: dict[str, float]
     volume_24h: float | None
+    # PLAN-0056 A1: the domain snapshot already carries ``liquidity`` (Decimal)
+    # and the repo already maps + selects it — it was simply not surfaced on the
+    # wire. Default None so historical rows / markets without a liquidity value
+    # serialise cleanly as ``liquidity: null``.
+    liquidity: float | None = None
 
 
 class PredictionMarketHistoryResponse(BaseModel):

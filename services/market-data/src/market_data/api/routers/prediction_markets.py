@@ -200,6 +200,9 @@ async def get_prediction_market_history(
                 snapshot_at=snap.snapshot_at,
                 outcomes_prices=snap.outcomes_prices,
                 volume_24h=float(snap.volume_24h) if snap.volume_24h is not None else None,
+                # PLAN-0056 A1: expose per-snapshot liquidity. The domain entity
+                # already carries it as Decimal|None; None survives unchanged.
+                liquidity=float(snap.liquidity) if snap.liquidity is not None else None,
             )
             for snap in snapshots
         ],

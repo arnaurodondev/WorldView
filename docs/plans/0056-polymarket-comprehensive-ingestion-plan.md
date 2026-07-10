@@ -167,7 +167,8 @@ content.article.* counts, entity.narrative/refresh envelope — untouched by thi
 expose `liquidity`. **Depends on**: Z. Mirrors `PredictionMarketSnapshotModel` + OHLCV hypertable +
 `PredictionMarketConsumer` patterns throughout.
 
-### Wave A1 — models + migration 043 + expose liquidity
+### Wave A1 — models + migration 043 + expose liquidity ✅
+**Status**: **DONE** — 2026-07-09 · 79 targeted + 1264 unit tests pass · ruff+mypy clean
 **Layer**: schema. **Effort**: 60m. **depends_on**: Z1.
 - **T-A-1-01 (schema)** — Migration `043_prediction_deeper_streams.py` (`revision="043"`,
   `down_revision="042"`) creating (NEW): `prediction_market_prices` (cols `id` uuid, `market_id` text,
