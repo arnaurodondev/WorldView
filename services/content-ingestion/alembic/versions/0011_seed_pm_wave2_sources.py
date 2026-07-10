@@ -1,6 +1,6 @@
 """Seed the 4 deeper Polymarket-stream sources (PLAN-0056 Wave B3).
 
-Revision ID: 0011_seed_polymarket_wave2_sources
+Revision ID: 0011_seed_pm_wave2_sources
 Revises: 0010_sec_edgar_cik_watchlist
 Create Date: 2026-07-09
 
@@ -38,7 +38,12 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers
-revision: str = "0011_seed_polymarket_wave2_sources"
+# NOTE: the revision id is deliberately SHORT ("0011_seed_pm_wave2_sources", 26
+# chars). Alembic stores it in ``alembic_version.version_num varchar(32)``; the
+# original id "0011_seed_polymarket_wave2_sources" was 34 chars → a fresh-DB
+# ``alembic upgrade head`` raised StringDataRightTruncationError and rolled the
+# whole migration back (PLAN-0056 deploy-fix). Keep any future id ≤ 32 chars.
+revision: str = "0011_seed_pm_wave2_sources"
 down_revision: str = "0010_sec_edgar_cik_watchlist"
 branch_labels = None
 depends_on = None

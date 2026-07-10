@@ -15,7 +15,7 @@ def _load_migration() -> Any:
     import importlib.util
     from pathlib import Path
 
-    path = Path(__file__).parent.parent.parent / "alembic" / "versions" / "0011_seed_polymarket_wave2_sources.py"
+    path = Path(__file__).parent.parent.parent / "alembic" / "versions" / "0011_seed_pm_wave2_sources.py"
     spec = importlib.util.spec_from_file_location("migration_0011", path)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
@@ -27,7 +27,9 @@ def _load_migration() -> Any:
 class TestRevisionChain:
     def test_revision_and_down_revision(self) -> None:
         m = _load_migration()
-        assert m.revision == "0011_seed_polymarket_wave2_sources"
+        # Deploy-fix: id shortened to ≤32 chars to fit alembic_version varchar(32).
+        assert m.revision == "0011_seed_pm_wave2_sources"
+        assert len(m.revision) <= 32
         # R32: chained from the verified 0010 head.
         assert m.down_revision == "0010_sec_edgar_cik_watchlist"
 

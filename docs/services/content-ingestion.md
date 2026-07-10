@@ -339,9 +339,9 @@ CREATE INDEX idx_tdu_uploaded_at ON tenant_document_uploads (tenant_id, uploaded
 | `0008_seed_default_sources` | Seed the canonical default content sources (idempotent via `uq_sources_dedup`) — PLAN-0106 Wave B-1 |
 | `0009_remove_finnhub_global_news` | Remove the `finnhub` source seeded with no `symbol` (Finnhub `company-news` requires a symbol); per-ticker `Finnhub-<SYM>` sources are kept |
 | `0010_sec_edgar_cik_watchlist` | Scope the `sec-edgar-filings` source to a per-CIK watchlist (`config["ciks"]`) so watched mega-caps are always ingested (R1 Fix ②) |
-| `0011_seed_polymarket_wave2_sources` | Seed the 4 deeper Polymarket-stream sources (`polymarket_gamma_events`/`polymarket_clob`/`polymarket_data_trades`/`polymarket_data_oi`) — PLAN-0056 Wave B3. **B4**: CLOB + trades seed reshaped to `{"markets": []}` (a `{condition_id, token_ids}` work-list); OI keeps `condition_ids` |
+| `0011_seed_pm_wave2_sources` | Seed the 4 deeper Polymarket-stream sources (`polymarket_gamma_events`/`polymarket_clob`/`polymarket_data_trades`/`polymarket_data_oi`) — PLAN-0056 Wave B3. **B4**: CLOB + trades seed reshaped to `{"markets": []}` (a `{condition_id, token_ids}` work-list); OI keeps `condition_ids` |
 
-**Latest head:** `0011_seed_polymarket_wave2_sources`.
+**Latest head:** `0011_seed_pm_wave2_sources`.
 
 ---
 
