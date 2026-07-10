@@ -61,6 +61,10 @@ class RawArticleEvent:
     # tenant_id propagated from content.article.raw.v1 (PLAN-0086 Wave A-1)
     # None = public/global news; non-None = private tenant content
     tenant_id: str | None = None
+    # PLAN-0056 Wave C2b: stable upstream market/source identity (e.g.
+    # "polymarket:<condition_id>") copied verbatim from the raw event and re-emitted
+    # on content.article.stored.v1 so S6 can ride it onto the enriched event.
+    external_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -424,6 +428,9 @@ def _build_stored_payload(doc: CanonicalDocument, article: RawArticleEvent) -> d
         "dedup_result": doc.dedup_result,
         "minio_silver_key": doc.minio_silver_key,
         "source_type": doc.source_type,
+        # PLAN-0056 Wave C2b: copied verbatim from the raw event so the market
+        # identity survives S5 into S6 (which rides it onto the enriched event).
+        "external_id": article.external_id,
         "title": doc.title,
         "word_count": doc.word_count,
         "published_at": article.published_at,

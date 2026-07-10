@@ -57,6 +57,13 @@ class CanonicalNlpArticleEnriched:
     # guaranteed UndefinedTableError because the table only lives in nlp_db.
     # Nullable + default None keeps the schema forward-compatible (R5).
     source_name: str | None = None
+    # PLAN-0056 Wave C2b (2026-07-10): stable upstream market/source identity
+    # threaded S4→S5→S6 verbatim (e.g. "polymarket:<condition_id>").  Nullable +
+    # default None keeps the schema forward-compatible (R5); legacy producers
+    # that pre-date the field decode to None.  KG PredictionEnrichedConsumer
+    # parses the condition_id out of it so temporal events resolve to a real
+    # market instead of an anonymous doc_id.
+    external_id: str | None = None
     published_at: str | None = None
     is_backfill: bool = False
     relation_count: int = 0
@@ -89,6 +96,9 @@ class CanonicalNlpArticleEnriched:
             # D-INIT-6: source_name is optional on the wire (Avro default=null) and on
             # legacy events that pre-date the field; cast only when actually present.
             source_name=(str(d["source_name"]) if d.get("source_name") is not None else None),
+            # PLAN-0056 Wave C2b: optional on the wire (Avro default=null) and on
+            # legacy events; cast only when present.
+            external_id=(str(d["external_id"]) if d.get("external_id") is not None else None),
             published_at=(str(d["published_at"]) if d.get("published_at") is not None else None),
             is_backfill=bool(d.get("is_backfill", False)),
             relation_count=int(d.get("relation_count", 0)),
@@ -117,6 +127,9 @@ class CanonicalNlpArticleEnriched:
             # D-INIT-6: emit source_name even when None so the Avro union picks the
             # null branch rather than complaining about a missing field.
             "source_name": self.source_name,
+            # PLAN-0056 Wave C2b: emit external_id even when None so the Avro union
+            # picks the null branch rather than complaining about a missing field.
+            "external_id": self.external_id,
             "published_at": self.published_at,
             "is_backfill": self.is_backfill,
             "routing_tier": self.routing_tier,

@@ -20,13 +20,20 @@ ENVELOPE_FIELDS = {"event_id", "event_type", "schema_version", "occurred_at"}
 
 # Expected field counts per schema (from PRD-0001 §6.3.2)
 EXPECTED_FIELD_COUNTS: dict[str, int] = {
-    "content.article.raw.v1": 14,
-    "content.article.stored.v1": 15,
+    # PLAN-0056 Wave C2b (2026-07-10): external_id added (nullable passthrough).
+    # NOTE: the prior expected value of 14 was stale — the schema already carried
+    # 15 fields (tenant_id was added without bumping this count); the true actual
+    # is now 16 with external_id.
+    "content.article.raw.v1": 16,
+    # PLAN-0056 Wave C2b: external_id added. Prior value 15 was likewise stale
+    # (tenant_id already made it 16); true actual is now 17 with external_id.
+    "content.article.stored.v1": 17,
     # PLAN-0084: added raw_relations_json, raw_events_json, raw_claims_json + correlation_id
     # PLAN-0086 (?): tenant_id added (24 fields).
     # PLAN-0087 D-INIT-6 (2026-05-09): source_name added so KG enriched_consumer
     # can stamp evidence-row provenance without an R7 cross-DB query (25 fields).
-    "nlp.article.enriched.v1": 25,
+    # PLAN-0056 Wave C2b (2026-07-10): external_id added (26 fields).
+    "nlp.article.enriched.v1": 26,
     "nlp.signal.detected.v1": 14,
     "graph.state.changed.v1": 12,
     "intelligence.contradiction.v1": 12,
@@ -565,3 +572,85 @@ class TestPredictionWave2Schemas:
         # Every omitted optional field must fall back to its declared default.
         for field_name, expected in self._DEFAULTED[schema_name].items():
             assert rows[0][field_name] == expected, f"{schema_name}.{field_name} default not applied"
+
+
+@pytest.mark.contract
+class TestExternalIdPassthroughC2b:
+    """PLAN-0056 Wave C2b: the ``external_id`` passthrough field.
+
+    The field carries the upstream market/source identity
+    ("polymarket:<condition_id>") verbatim through
+    content.article.raw.v1 → content.article.stored.v1 → nlp.article.enriched.v1.
+    It MUST be nullable (union [null, string]) with a null default so old
+    producers/consumers that pre-date the field stay forward-compatible (R5).
+    """
+
+    _SCHEMAS = (
+        "content.article.raw.v1",
+        "content.article.stored.v1",
+        "nlp.article.enriched.v1",
+    )
+
+    @pytest.mark.parametrize("schema_name", _SCHEMAS)
+    def test_external_id_is_nullable_with_null_default(self, schema_name: str) -> None:
+        schema = _load_schema(SCHEMA_DIR / f"{schema_name}.avsc")
+        fields_by_name = {f["name"]: f for f in schema["fields"]}
+        assert "external_id" in fields_by_name, f"{schema_name} missing external_id"
+        field = fields_by_name["external_id"]
+        assert field["type"] == ["null", "string"], f"{schema_name}.external_id must be union [null, string]"
+        assert field.get("default", "MISSING") is None, f"{schema_name}.external_id must default to null (R5)"
+
+    def test_raw_round_trips_with_and_without_external_id(self) -> None:
+        """A producer that sets external_id AND a legacy one that omits it both decode."""
+        import io
+
+        schema = _load_schema(SCHEMA_DIR / "content.article.raw.v1.avsc")
+        parsed = fastavro.parse_schema(schema)
+
+        base = {
+            "event_id": "018f4a00-0000-7000-0000-000000000010",
+            "event_type": "content.article.raw",
+            "schema_version": 1,
+            "occurred_at": "2026-07-10T12:00:00Z",
+            "doc_id": "018f4a00-0000-7000-0000-000000000011",
+            "source_type": "polymarket",
+            "minio_bronze_key": "bronze/key",
+            "content_hash": "abc",
+            "fetch_id": "018f4a00-0000-7000-0000-000000000012",
+        }
+        # New producer: external_id populated.
+        with_ext = {**base, "external_id": "polymarket:0xcond"}
+        # Legacy producer: external_id omitted → Avro null default applies.
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [with_ext, base])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert rows[0]["external_id"] == "polymarket:0xcond"
+        assert rows[1]["external_id"] is None
+
+    def test_enriched_round_trips_with_and_without_external_id(self) -> None:
+        import io
+
+        schema = _load_schema(SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        parsed = fastavro.parse_schema(schema)
+
+        base = {
+            "event_id": "018f4a00-0000-7000-0000-000000000020",
+            "event_type": "nlp.article.enriched",
+            "schema_version": 1,
+            "occurred_at": "2026-07-10T12:00:00Z",
+            "doc_id": "018f4a00-0000-7000-0000-000000000021",
+            "source_type": "polymarket",
+            "routing_tier": "medium",
+            "routing_score": 0.55,
+            "section_count": 1,
+            "chunk_count": 1,
+            "mention_count": 0,
+        }
+        with_ext = {**base, "external_id": "polymarket:0xcond"}
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [with_ext, base])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert rows[0]["external_id"] == "polymarket:0xcond"
+        assert rows[1]["external_id"] is None

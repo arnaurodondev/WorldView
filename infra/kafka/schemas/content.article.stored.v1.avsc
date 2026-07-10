@@ -14,6 +14,7 @@
     {"name": "dedup_result",    "type": "string",                  "doc": "unique | corroborating | semantic_near_duplicate | same_source_duplicate | duplicate_exact | duplicate_normalized"},
     {"name": "minio_silver_key","type": "string",                  "doc": "MinIO silver layer clean text key"},
     {"name": "source_type",     "type": "string"},
+    {"name": "external_id",     "type": ["null", "string"],        "default": null, "doc": "PLAN-0056 Wave C2b: copied verbatim from content.article.raw.v1 so S6 can ride it onto nlp.article.enriched.v1 (e.g. 'polymarket:<condition_id>'). Forward-compat null default per R5."},
     {"name": "title",           "type": ["null", "string"],        "default": null},
     {"name": "word_count",      "type": ["null", "int"],           "default": null},
     {"name": "published_at",    "type": ["null", "string"],        "default": null, "doc": "Copied verbatim from raw event"},

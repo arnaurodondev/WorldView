@@ -79,9 +79,14 @@ def _make_message(
     doc_id: str = _DOC_ID,
     resolved_entity_ids: list[str] | None = None,
     published_at: str | None = "2026-07-09T12:00:00+00:00",
+    external_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build a decoded nlp.article.enriched.v1 dict."""
-    return {
+    """Build a decoded nlp.article.enriched.v1 dict.
+
+    ``external_id`` (PLAN-0056 Wave C2b) is omitted from the payload when None so
+    the default fixtures exercise the legacy anonymous fallback path.
+    """
+    msg: dict[str, Any] = {
         "event_id": str(uuid4()),
         "doc_id": doc_id,
         "source_type": source_type,
@@ -89,6 +94,9 @@ def _make_message(
         "published_at": published_at,
         "occurred_at": "2026-07-09T12:00:01+00:00",
     }
+    if external_id is not None:
+        msg["external_id"] = external_id
+    return msg
 
 
 # ── EventType.PREDICTION enum value ──────────────────────────────────────────
@@ -108,7 +116,13 @@ class TestEventTypePrediction:
 
 class TestPredictionEnrichedConsumerHappyPath:
     def test_polymarket_doc_creates_one_prediction_event(self) -> None:
-        """polymarket enriched doc → 1 temporal event with PREDICTION/LOCAL, region='prediction'."""
+        """Legacy fallback (no external_id): 1 temporal event PREDICTION/LOCAL, region='prediction'.
+
+        PLAN-0056 Wave C2b: this fixture omits external_id, so it deliberately
+        exercises the backward-compatible anonymous path (region='prediction',
+        doc_id in the title). The condition_id path is covered by
+        ``TestPredictionEnrichedConsumerExternalId``.
+        """
         consumer, event_repo, exposure_repo, _ = _make_consumer()
         with (
             patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
@@ -273,6 +287,119 @@ class TestPredictionEnrichedConsumerMalformed:
             )
         event_repo.upsert_by_natural_key.assert_awaited_once()
         assert exposure_repo.upsert.await_count == 1
+
+
+# ── PLAN-0056 Wave C2b: external_id → condition_id market identity ────────────
+
+
+_CONDITION_ID = "0xabc123def456"
+
+
+class TestParseConditionId:
+    """Unit tests for the ``_parse_condition_id`` helper (C2b)."""
+
+    def test_parses_polymarket_prefix(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer import (
+            _parse_condition_id,
+        )
+
+        assert _parse_condition_id(f"polymarket:{_CONDITION_ID}") == _CONDITION_ID
+
+    def test_none_when_absent(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer import (
+            _parse_condition_id,
+        )
+
+        assert _parse_condition_id(None) is None
+
+    def test_none_when_wrong_prefix(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer import (
+            _parse_condition_id,
+        )
+
+        # Malformed: not the polymarket: prefix → fall back to anonymous behaviour.
+        assert _parse_condition_id("kalshi:XYZ") is None
+        assert _parse_condition_id(_CONDITION_ID) is None
+
+    def test_none_when_empty_after_prefix(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer import (
+            _parse_condition_id,
+        )
+
+        assert _parse_condition_id("polymarket:") is None
+        assert _parse_condition_id("polymarket:   ") is None
+
+    def test_none_when_non_string(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer import (
+            _parse_condition_id,
+        )
+
+        assert _parse_condition_id(12345) is None
+
+
+class TestPredictionEnrichedConsumerExternalId:
+    """C2b: a polymarket doc carrying external_id resolves to the real market."""
+
+    def test_condition_id_becomes_region_and_title(self) -> None:
+        """external_id='polymarket:<cid>' → region==condition_id, title keyed on condition_id."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(external_id=f"polymarket:{_CONDITION_ID}"),
+                    {},
+                ),
+            )
+
+        kwargs = event_repo.upsert_by_natural_key.call_args.kwargs
+        assert kwargs["region"] == _CONDITION_ID
+        assert kwargs["title"] == f"Prediction market {_CONDITION_ID}"
+
+    def test_malformed_external_id_falls_back_to_anonymous(self) -> None:
+        """A malformed external_id → old anonymous behaviour (region='prediction', doc_id title)."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+        ):
+            asyncio.run(
+                consumer.process_message(None, _make_message(external_id="not-a-polymarket-id"), {}),
+            )
+
+        kwargs = event_repo.upsert_by_natural_key.call_args.kwargs
+        assert kwargs["region"] == "prediction"
+        assert kwargs["title"] == f"Prediction market {_DOC_ID}"
+
+    def test_idempotent_per_condition_id_across_distinct_docs(self) -> None:
+        """First-sight + resolution docs (distinct doc_ids, same market) collapse to ONE key.
+
+        The two synthetic docs of a market have DIFFERENT doc_ids but the SAME
+        condition_id; keying region+title on the condition_id makes the natural
+        key identical, so the repo upsert is idempotent per market.
+        """
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        ext = f"polymarket:{_CONDITION_ID}"
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+        ):
+            asyncio.run(
+                consumer.process_message(None, _make_message(doc_id=_DOC_ID, external_id=ext), {}),
+            )
+            other_doc = "01920000-0000-7000-8000-0000000000dd"
+            asyncio.run(
+                consumer.process_message(None, _make_message(doc_id=other_doc, external_id=ext), {}),
+            )
+
+        first = event_repo.upsert_by_natural_key.call_args_list[0].kwargs
+        second = event_repo.upsert_by_natural_key.call_args_list[1].kwargs
+        # Same market → identical natural-key components despite different doc_ids.
+        assert first["region"] == second["region"] == _CONDITION_ID
+        assert first["title"] == second["title"] == f"Prediction market {_CONDITION_ID}"
 
 
 # ── Plumbing ─────────────────────────────────────────────────────────────────

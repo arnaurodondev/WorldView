@@ -50,6 +50,12 @@ async def _enqueue_enriched(
     # directly working; the production caller in _run_pipeline always supplies
     # the value pulled off the inbound event.
     source_name: str | None = None,
+    # PLAN-0056 Wave C2b: upstream market/source identity (e.g.
+    # "polymarket:<condition_id>") threaded verbatim from the inbound stored event.
+    # Rides along in the enriched payload so the KG PredictionEnrichedConsumer can
+    # resolve the doc back to its real market.  Default None keeps direct-call unit
+    # tests working; the production caller always supplies the value off the event.
+    external_id: str | None = None,
     published_at: datetime | None,
     is_backfill: bool,
     routing_decision: RoutingDecision,
@@ -217,6 +223,8 @@ async def _enqueue_enriched(
         "source_type": source_type,
         # D-INIT-6: ride-along provenance label
         "source_name": source_name,
+        # PLAN-0056 Wave C2b: ride-along market/source identity for the KG.
+        "external_id": external_id,
         "published_at": published_at.isoformat() if published_at else None,
         "is_backfill": is_backfill,
         "routing_tier": effective_tier.value,

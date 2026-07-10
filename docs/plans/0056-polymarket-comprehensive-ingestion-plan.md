@@ -22,7 +22,7 @@ synthetic-doc emitter), S6 nlp-pipeline (UNCHANGED — reused via synthetic docs
 via existing fanout), S9 api-gateway (read + brief leg), worldview-web (page + chat), plus
 libs/messaging + libs/contracts + libs/prompts + intelligence-migrations.
 
-**Total: 6 sub-plans, 19 waves.** Keystone = Sub-Plan C (KG linking); signals (D) depend on it.
+**Total: 6 sub-plans, 20 waves.** Keystone = Sub-Plan C (KG linking); signals (D) depend on it.
 (Wave B4 added 2026-07-10 as a corrective wave under Sub-Plan B.)
 
 ### Model decisions from recon (2026-07-09) — supersede PRD first-draft wording (reconcile in /revise-prd)
@@ -411,6 +411,18 @@ integration/apply/rollback tests NOT run (no Postgres in env).
 **Tests**: prediction doc → 1 temporal event + N exposures; re-delivery idempotent; non-prediction docs
 ignored (≥6). **Guardrails**: BP-034/035 idempotency; R26 use-cases-commit (no HTTP200-but-rollback,
 per KG-relation-growth memory); entity-noise gate.
+
+### Wave C2b — external_id passthrough (corrective) ✅
+**Status**: **DONE** — 2026-07-10 · 15 new tests (5 KG parse + 3 KG condition_id path + 1 S6 enriched-event ×2 + 3 S5 passthrough + 2 S4 payload + 3 schema round-trip) across contracts/S4/S5/S6/S7 · ruff + mypy clean · affected unit suites green (content-ingestion 1011, content-store 382, nlp consumers 147, kg consumer 281, contracts 197 — only unrelated pre-existing `ContentSourceType`/`SourceType` enum-drift + `market.dataset.fetched`/`entity.narrative`/`entity.refresh` field-count failures remain).
+**PROBLEM**: Wave C2's temporal events were **anonymous** — the `nlp.article.enriched.v1` event dropped the market's identity, so C2 used `region="prediction"` + `title="Prediction market {doc_id}"`. C4 (entity page) and D2 (move-signal) could not resolve exposures to a real market, and the two synthetic docs per market (first-sight + resolution) produced two rows.
+**FIX**: added a nullable `external_id` passthrough field (`["null","string"]`, default null, R5 forward-compat) carrying `"polymarket:<condition_id>"`, threaded verbatim **S4 → S5 → S6 → S7**:
+- **Contracts/schemas**: `external_id` added to `content.article.raw.v1.avsc` (+ its content-ingestion service-local copy), `content.article.stored.v1.avsc`, `nlp.article.enriched.v1.avsc`, and the `CanonicalNlpArticleEnriched` model (to_dict/from_dict). Field-count test bumped (raw 14→16, stored 15→17, enriched 25→26 — the raw/stored priors were pre-existing stale drift, noted in-line).
+- **S4 (content-ingestion)**: `build_raw_article_payload` gained an `external_id` param (default None for normal articles); the synthetic emitter sets `external_id=f"polymarket:{result.market_id}"`. `source_url` kept as the real URL (not overloaded).
+- **S5 (content-store) — BLAST-RADIUS HOP (not in original task scope, but required)**: S6 consumes `content.article.stored.v1`, NOT raw — so S5 must copy `external_id` through or it never reaches S6. `RawArticleEvent` + `_parse_raw_event` + `_build_stored_payload` extended (mirrors the `tenant_id` PLAN-0086 pattern exactly).
+- **S6 (nlp-pipeline)**: pure in-memory passthrough (NO DB persist/re-read → **no migration**). `process_message` reads `value.get("external_id")` → `_run_pipeline` → `_enqueue_enriched` → `payload["external_id"]`. Zero NER/extraction change.
+- **S7 (knowledge-graph)**: `PredictionEnrichedConsumer` parses the condition_id via `_parse_condition_id` (strips `polymarket:` prefix). When present → `region=<condition_id>`, `title=f"Prediction market {condition_id}"` (natural key now unique **per market** → first-sight + resolution collapse to ONE row, idempotent per condition_id). Absent/malformed → old anonymous doc_id behaviour (backward-compatible).
+**Files**: 4 avsc + `article_enriched.py`; `fetch_and_write.py`, `emit_synthetic_prediction_document.py`; `process_article.py`, content-store `article_consumer.py`; nlp `article_consumer.py`, `blocks/enriched_event.py`; `prediction_enriched_consumer.py`; `tests/contract/test_avro_schemas.py` + 5 test files.
+**Layer**: contracts/application/infrastructure. **depends_on**: C2.
 
 ### Wave C3 — MarketPolarityClassifier (LLM at link time)
 **Layer**: infrastructure. **Effort**: 60m. **depends_on**: C2.

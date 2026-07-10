@@ -148,6 +148,7 @@ curl -X POST http://localhost:8004/api/v1/documents/upload \
 | `doc_id` | string | UUIDv7 document identifier |
 | `source_type` | string | `eodhd` / `sec_edgar` / `finnhub` / `newsapi` / `manual` |
 | `source_url` | string? | Original article URL |
+| `external_id` | string? | Upstream market/source identity (PLAN-0056 Wave C2b). `null` for normal articles; the synthetic prediction emitter sets `"polymarket:<condition_id>"`. Carried verbatim through S5→S6→KG so a prediction doc resolves to its real market. Nullable, default null (R5). |
 | `minio_bronze_key` | string | MinIO bronze layer object key |
 | `content_hash` | string | SHA-256 hex of raw bytes |
 | `fetch_id` | string | UUIDv7 of `article_fetch_log` row |

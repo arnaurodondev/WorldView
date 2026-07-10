@@ -11,6 +11,7 @@
     {"name": "doc_id",            "type": "string",                "doc": "Source document ID"},
     {"name": "source_type",       "type": "string"},
     {"name": "source_name",       "type": ["null", "string"],      "default": null, "doc": "Human-readable source label (RSS feed name, EODHD provider, etc.). Forward-compat null default per R5. Added 2026-05-09 (D-INIT-6) so KG enriched_consumer can stamp evidence rows with source provenance without an R7 cross-DB query."},
+    {"name": "external_id",       "type": ["null", "string"],      "default": null, "doc": "PLAN-0056 Wave C2b: stable upstream market/source identity threaded S4→S5→S6 verbatim (e.g. 'polymarket:<condition_id>'). Forward-compat null default per R5. PredictionEnrichedConsumer parses the condition_id out of this so temporal events resolve to a real market instead of an anonymous doc_id."},
     {"name": "published_at",      "type": ["null", "string"],      "default": null},
     {"name": "is_backfill",       "type": "boolean",               "default": false},
     {"name": "routing_tier",      "type": "string",                "doc": "suppress | light | medium | deep"},

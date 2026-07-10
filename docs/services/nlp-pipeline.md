@@ -390,6 +390,7 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
   "doc_id": "UUID string",
   "source_type": "string",
   "source_name": "string | null",
+  "external_id": "string | null",
   "published_at": "ISO-8601 | null",
   "routing_tier": "suppress | light | medium | deep",
   "routing_score": "float [0,1]",
@@ -401,6 +402,14 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
   "tenant_id": "UUID string | null"
 }
 ```
+
+> **`external_id` passthrough (PLAN-0056 Wave C2b)**: `external_id` is a pure, in-memory
+> passthrough — S6 reads it off the inbound `content.article.stored.v1` event
+> (`process_message` → `_run_pipeline` → `_enqueue_enriched`) and rides it verbatim onto
+> `nlp.article.enriched.v1`. It is NOT persisted to `nlp_db` and NOT re-read; there is no
+> NER/extraction change and no migration. Absent on non-prediction / legacy events → null.
+> The KG `PredictionEnrichedConsumer` parses the `condition_id` out of it to resolve a
+> synthetic prediction doc to its real Polymarket market.
 
 ---
 

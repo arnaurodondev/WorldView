@@ -248,6 +248,11 @@ class SyntheticDocumentEmitter:
                 published_at=published_at,
                 is_backfill=False,
                 title=result.question,
+                # PLAN-0056 Wave C2b: carry the market identity so the KG
+                # PredictionEnrichedConsumer can resolve this synthetic doc back
+                # to its real Polymarket market (condition_id) instead of an
+                # anonymous doc_id.  source_url above stays the human URL.
+                external_id=f"polymarket:{result.market_id}",
             )
             await self._outbox.append(
                 aggregate_type="article",

@@ -94,7 +94,7 @@ knowledge_graph/
 | `knowledge-graph-provisional-queued-consumer` | `consumers/provisional_queued_consumer_main.py` | Consumes `entity.provisional.queued.v1` (hot-path 13E) |
 | `knowledge-graph-structured-enrichment-consumer` | `consumers/structured_enrichment_consumer_main.py` | Consumes `nlp.article.enriched.v1` for structured enrichment |
 | `knowledge-graph-{economic-events,macro-indicator,insider-transactions,earnings-calendar}-dataset-consumer` | `consumers/*_dataset_consumer_main.py` | Consume `market.dataset.fetched` (one consumer group per dataset type) |
-| `knowledge-graph-prediction-enriched-consumer` | `consumers/prediction_enriched_consumer_main.py` | Consumes `nlp.article.enriched.v1` (own group `kg-prediction-enriched-group`), filters `source_type=='polymarket'` → writes `temporal_events(prediction)` + `entity_event_exposures` (PLAN-0056 C2) |
+| `knowledge-graph-prediction-enriched-consumer` | `consumers/prediction_enriched_consumer_main.py` | Consumes `nlp.article.enriched.v1` (own group `kg-prediction-enriched-group`), filters `source_type=='polymarket'` → writes `temporal_events(prediction)` + `entity_event_exposures` (PLAN-0056 C2). **C2b**: parses the market `condition_id` from the event's `external_id` (`"polymarket:<condition_id>"`) and stores it as `temporal_events.region` + `title="Prediction market {condition_id}"`, so the natural key is unique per market (first-sight + resolution docs collapse to ONE idempotent row and C4/D2 can join on condition_id). Falls back to `region='prediction'` + doc_id title when `external_id` is absent/malformed. |
 | `knowledge-graph-path-insight-worker` | `workers/path_insight_worker_main.py` | Pre-computes multi-hop paths |
 
 ---

@@ -149,6 +149,9 @@ def _parse_raw_event(value: dict[str, Any]) -> RawArticleEvent:
         # PLAN-0086 Wave C-1: propagate tenant_id from the Avro event envelope.
         # None = public/global news; non-None = private tenant content.
         tenant_id=value.get("tenant_id") or None,
+        # PLAN-0056 Wave C2b: pass the upstream market/source identity through so
+        # it can be re-emitted on content.article.stored.v1 (S6 rides it onward).
+        external_id=value.get("external_id") or None,
     )
 
 

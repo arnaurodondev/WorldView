@@ -791,6 +791,12 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         is_backfill = bool(value.get("is_backfill", False))
         correlation_id: str | None = value.get("correlation_id") or None
         source_name: str | None = value.get("source_name")
+        # PLAN-0056 Wave C2b: upstream market/source identity (e.g.
+        # "polymarket:<condition_id>"), threaded verbatim from content.article.stored.v1
+        # onto the enriched event so the KG can resolve prediction docs to a real
+        # market.  Absent on legacy/non-prediction events → None (pure passthrough,
+        # no NER/extraction change).
+        external_id: str | None = value.get("external_id") or None
 
         # ── Tenant resolution with legacy-passthrough sentinel (PLAN-0096 W4) ──
         # Pre-PLAN-0086 Avro payloads have no ``tenant_id`` field.  Migration
@@ -861,6 +867,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 minio_key=minio_key,
                 source_type=source_type,
                 source_name=source_name,
+                external_id=external_id,
                 published_at=published_at,
                 extracted_at=extracted_at,
                 is_backfill=is_backfill,
@@ -1101,6 +1108,9 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         minio_key: str,
         source_type: str,
         source_name: str | None = None,
+        # PLAN-0056 Wave C2b: upstream market/source identity, threaded verbatim to
+        # the enriched event (default None keeps existing direct-call unit tests green).
+        external_id: str | None = None,
         published_at: datetime | None,
         extracted_at: datetime,
         is_backfill: bool,
@@ -1463,6 +1473,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     doc_id=doc_id,
                     source_type=source_type,
                     source_name=source_name,
+                    external_id=external_id,
                     published_at=published_at,
                     is_backfill=is_backfill,
                     routing_decision=routing_decision,

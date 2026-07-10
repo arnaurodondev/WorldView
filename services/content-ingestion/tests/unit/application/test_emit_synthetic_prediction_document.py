@@ -138,6 +138,30 @@ class TestSyntheticDocumentEmitter:
         assert payload["title"] == "Will X win the 2026 election?"
         # published_at maps to the market close time.
         assert payload["published_at"].startswith("2026-11-03")
+        # PLAN-0056 Wave C2b: the raw payload carries the market identity so the KG
+        # can resolve this synthetic doc back to its real Polymarket market.
+        assert payload["external_id"] == "polymarket:cond_abc"
+        # source_url stays the human URL — external_id is NOT overloaded onto it.
+        assert payload["external_id"] != payload["source_url"]
+
+    async def test_normal_article_payload_has_null_external_id(self) -> None:
+        """PLAN-0056 Wave C2b: the ordinary article path leaves external_id=None."""
+        from content_ingestion.application.use_cases.fetch_and_write import build_raw_article_payload
+
+        import common.ids
+
+        payload = build_raw_article_payload(
+            doc_id=common.ids.new_uuid7(),
+            source_type="eodhd",
+            source_url="https://example.com/news/1",
+            minio_bronze_key="bronze/key",
+            raw_bytes=b"body",
+            fetch_id=common.ids.new_uuid7(),
+            published_at=None,
+            is_backfill=False,
+            title="Some news",
+        )
+        assert payload["external_id"] is None
 
     async def test_fetch_log_written_with_first_sight_url_hash(self) -> None:
         """The fetch_log row uses the polymarket:<condition_id> dedup hash."""

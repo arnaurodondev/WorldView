@@ -23,17 +23,20 @@ Idempotency (BP-034/035):
     temporal-event write idempotent even without Valkey; the exposure upsert is
     ``ON CONFLICT (event_id, entity_id, exposure_type) DO NOTHING``.
 
-WHY doc_id in the title, region='prediction':
-  The ``nlp.article.enriched.v1`` event carries NO title, NO source_url and NO
-  condition_id (verified against the S6 producer + Avro schema — it only carries
-  doc_id, source_type, resolved_entity_ids, published_at, occurred_at). So the
-  question text and Polymarket condition_id are NOT recoverable here without an
-  R7 cross-service DB read of nlp_db (forbidden). ``doc_id`` is the only stable,
-  per-market identifier available (Wave B2 emits one synthetic doc per market),
-  so it anchors the natural key: region is the constant category ``'prediction'``
-  and the title is ``f"Prediction market {doc_id}"`` — unique per market doc and
-  stable across re-delivery. Wave C4's read API surfaces these rows; a later wave
-  can enrich the title/region if S6 starts carrying the question through.
+Market identity (PLAN-0056 Wave C2b):
+  The ``nlp.article.enriched.v1`` event now carries an ``external_id`` field
+  ("polymarket:<condition_id>") threaded verbatim S4→S5→S6, so the real market
+  identity IS recoverable here without any R7 cross-service DB read. The normal
+  path stores the bare ``condition_id`` in ``temporal_events.region`` and titles
+  the event ``f"Prediction market {condition_id}"`` — this makes the natural key
+  ``(event_type, region, title, active_from::day)`` unique *per market* rather than
+  per synthetic doc, so the first-sight and resolution docs of the same market
+  (distinct doc_ids) collapse to ONE row (idempotent per condition_id), and Wave C4
+  / Sub-Plan D can join exposures back to a real Polymarket market.
+
+  Fallback: legacy/pre-C2b events (no external_id) keep the old anonymous behaviour
+  — region is the constant ``'prediction'`` and the title embeds ``doc_id`` — so
+  nothing regresses if the field is absent or malformed.
 
 R9: writes only to its own DB (intelligence_db) + reads Kafka. R10/R11 via
 ``new_uuid7`` / ``utc_now``. structlog only.
@@ -77,9 +80,34 @@ _ARTICLE_ENRICHED_SCHEMA_PATH = get_schema_path("nlp.article.enriched.v1.avsc")
 # (prompt-input-vs-lookup-mismatch guardrail).
 _POLYMARKET_SOURCE_TYPE = ContentSourceType.POLYMARKET.value
 
-# Category tag stored in temporal_events.region. condition_id is NOT recoverable
-# from the enriched event (see module docstring), so region is this constant.
+# Fallback category tag stored in temporal_events.region when the market identity
+# is NOT recoverable (legacy events with no external_id). PLAN-0056 Wave C2b made
+# the condition_id recoverable via the enriched event's external_id, so the normal
+# path now stores the condition_id in region instead of this constant.
 _PREDICTION_REGION = "prediction"
+
+# PLAN-0056 Wave C2b: the synthetic prediction doc's external_id is stamped by S4
+# as "polymarket:<condition_id>" and threaded verbatim S4→S5→S6→here.
+_EXTERNAL_ID_PREFIX = "polymarket:"
+
+
+def _parse_condition_id(external_id: Any) -> str | None:
+    """Extract the Polymarket condition_id from an ``external_id`` value.
+
+    The synthetic-document emitter (S4 Wave B2) stamps
+    ``external_id = "polymarket:<condition_id>"``.  Returns the bare condition_id,
+    or ``None`` when the value is absent/empty/malformed (not a string, wrong
+    prefix, or empty after the prefix) so the caller can fall back to the old
+    anonymous doc_id-based behaviour (backward-compatible).
+    """
+    if not isinstance(external_id, str):
+        return None
+    stripped = external_id.strip()
+    if not stripped.startswith(_EXTERNAL_ID_PREFIX):
+        return None
+    condition_id = stripped[len(_EXTERNAL_ID_PREFIX) :].strip()
+    return condition_id or None
+
 
 # Prediction markets influence linked entities for a bounded window after the
 # market resolves/moves; 30 days mirrors the TEMPORAL decay half-life default.
@@ -204,7 +232,20 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # Resolved entity ids the market question mentions (may be empty).
         raw_entity_ids: list[Any] = list(value.get("resolved_entity_ids") or [])
 
-        title = f"Prediction market {doc_id}"
+        # PLAN-0056 Wave C2b: prefer the real market identity (condition_id) carried
+        # on the enriched event's external_id.  When present, the temporal event is
+        # keyed on the condition_id — so the first-sight and resolution docs of the
+        # SAME market (distinct doc_ids) collapse to ONE row (idempotent per market),
+        # and Wave C4/D2 can join exposures back to a real Polymarket market. When
+        # absent/malformed (legacy events) we fall back to the old anonymous
+        # doc_id-based key so nothing regresses.
+        condition_id = _parse_condition_id(value.get("external_id"))
+        if condition_id is not None:
+            region = condition_id
+            title = f"Prediction market {condition_id}"
+        else:
+            region = _PREDICTION_REGION
+            title = f"Prediction market {doc_id}"
 
         from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
             EntityEventExposureRepository,
@@ -221,7 +262,7 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 event_id=new_uuid7(),
                 event_type=EventType.PREDICTION,
                 scope=EventScope.LOCAL,
-                region=_PREDICTION_REGION,
+                region=region,
                 title=title,
                 active_from=active_from,
                 active_until=None,  # market close_time not recoverable from enriched event
@@ -269,6 +310,9 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             "prediction_enriched_consumer_processed",
             doc_id=str(doc_id),
             event_id=str(db_event_id),
+            # PLAN-0056 Wave C2b: condition_id is None on the legacy fallback path.
+            condition_id=condition_id,
+            region=region,
             exposures=exposures_written,
             entities_seen=len(raw_entity_ids),
         )

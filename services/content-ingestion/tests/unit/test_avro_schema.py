@@ -84,6 +84,8 @@ class TestAvroRoundtrip:
             "doc_id": str(common.ids.new_uuid7()),
             "source_type": "eodhd",
             "source_url": "https://example.com/article",
+            # PLAN-0056 Wave C2b: external_id passthrough (None for normal articles).
+            "external_id": None,
             "minio_bronze_key": "content-ingestion/eodhd/abc123/raw/v1.json",
             "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "fetch_id": str(common.ids.new_uuid7()),
