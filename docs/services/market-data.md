@@ -69,8 +69,12 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
 | GET | `/api/v1/prediction-markets` | List prediction markets — query params: `status` (`open`/`resolved`/`cancelled`/`all`), `limit`, `offset` | — |
+| GET | `/api/v1/prediction-markets/categories` | Per-category counts of currently-open markets (PLAN-0053) | — |
+| GET | `/api/v1/prediction-markets/events` | List Polymarket event groups (newest first) — query params: `limit` (1..200), `offset` (PLAN-0056 A4) | — |
+| GET | `/api/v1/prediction-markets/events/{event_id}` | Single event group (HTTP 404 if unknown) (PLAN-0056 A4) | — |
 | GET | `/api/v1/prediction-markets/{market_id}` | Prediction market detail with latest snapshot | — |
-| GET | `/api/v1/prediction-markets/{market_id}/history` | Prediction market price history — query params: `from_dt`, `to_dt` (HTTP 400 if `from_dt >= to_dt`). Each snapshot now includes `liquidity` (PLAN-0056 A1) | — |
+| GET | `/api/v1/prediction-markets/{market_id}/history` | Prediction market history — query params: `from`, `to` (HTTP 400 if `from >= to`), `limit` (1..2000). **Default**: probability snapshots (each includes `liquidity`, PLAN-0056 A1). **With `interval=1h\|1d\|1w`** (+ optional `token_id`): per-token interval price bars from the `prediction_market_prices` hypertable — returns `{market_id, interval, points[]}` (PLAN-0056 A4) | — |
+| GET | `/api/v1/prediction-markets/{market_id}/trades` | Recent executed fills, newest first — query params: `since` (UTC), `limit` (1..200). HTTP 404 if market unknown (PLAN-0056 A4) | — |
 | GET | `/api/v1/market/sector-returns` | Sector heatmap data — query param: `period` (`1D`, `1W`, `1M`). Returns average period return per GICS sector from OHLCV bars. | — |
 | GET | `/api/v1/market/period-movers` | Top gainers or losers — query params: `period` (`1W`/`1M`), `type` (`gainers`/`losers`), `limit` (1–50, default 10). Returns instruments sorted by period_return_pct. | — |
 | GET | `/internal/v1/price/{instrument_id}` | Price snapshot for a single instrument — cache-aside: Valkey → Quote → OHLCV fallback. Returns 404 if no data available. **Internal endpoint — S9 only.** | Valkey |

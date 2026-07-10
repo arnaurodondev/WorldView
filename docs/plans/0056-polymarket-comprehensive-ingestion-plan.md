@@ -163,6 +163,9 @@ content.article.* counts, entity.narrative/refresh envelope — untouched by thi
 
 # Sub-Plan A — S3 Storage Extension + Deeper-Stream Consumers
 
+**Status**: **COMPLETE** — 2026-07-09 (A1, A2, A3, A4 all ✅). All 4 new streams stored,
+consumed, and exposed via read use cases + API routes.
+
 **Goal**: co-locate the 4 new streams in `market_data_db` next to the existing prediction tables;
 expose `liquidity`. **Depends on**: Z. Mirrors `PredictionMarketSnapshotModel` + OHLCV hypertable +
 `PredictionMarketConsumer` patterns throughout.
@@ -220,7 +223,23 @@ R32 (043 chained from verified 042).
 **Tests**: each consumer happy-path + replay no-op (≥8). **Guardrails**: BP-034/035, base-consumer
 `is_duplicate` ordering (reset `_current_uow`).
 
-### Wave A4 — query use cases + routes (history-interval, trades, events)
+### Wave A4 — query use cases + routes (history-interval, trades, events) ✅
+**Status**: **DONE** — 2026-07-09 · 21 new tests · ruff+mypy clean · 1348 unit pass
+> Impl note: added 4 read-only use cases (`GetPredictionMarketPriceHistoryUseCase`,
+> `GetPredictionMarketTradesUseCase`, `ListPredictionEventsUseCase`,
+> `GetPredictionEventUseCase`) — all depend on `ReadOnlyUnitOfWork` and use the
+> `*_read` accessors (R27). The existing `GetPredictionMarketHistoryUseCase`
+> (snapshots) is kept intact; the `/history` route now declares BOTH it and the
+> new price use case as deps and branches on `?interval` (1h|1d|1w validated →
+> prices hypertable; omitted → snapshots, backward-compatible). Union
+> `response_model` (`PredictionMarketHistoryResponse | PredictionMarketPriceHistoryResponse`).
+> New literal `/events` + `/events/{event_id}` routes registered before
+> `/{market_id}`; `/{market_id}/trades` before `/{market_id}`. `GetPredictionEventUseCase`
+> returns event metadata only (the `list_markets` port has no `event_id` filter).
+> New schemas: `PriceHistoryPointResponse`, `PredictionMarketPriceHistoryResponse`,
+> `PredictionMarketTradeResponse`, `PredictionMarketTradesResponse`,
+> `PredictionEventResponse`, `PredictionEventsListResponse`. Dep factories added
+> in `api/dependencies.py` mirroring the existing history dep.
 **Layer**: API. **Effort**: 60m. **depends_on**: A2.
 - **T-A-4-01..03 (impl)** — Read-only use cases (`ReadOnlyUnitOfWork`) + routes under the existing S3
   `/prediction-markets` router: `GET /{market_id}/history?interval=&since=` (extend existing history to

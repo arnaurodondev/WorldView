@@ -35,8 +35,12 @@ if TYPE_CHECKING:
     )
     from market_data.application.use_cases.query_prediction_markets import (
         CountPredictionMarketCategoriesUseCase,
+        GetPredictionEventUseCase,
         GetPredictionMarketHistoryUseCase,
+        GetPredictionMarketPriceHistoryUseCase,
+        GetPredictionMarketTradesUseCase,
         GetPredictionMarketUseCase,
+        ListPredictionEventsUseCase,
         ListPredictionMarketsUseCase,
     )
     from market_data.application.use_cases.query_quote_stats import (
@@ -389,6 +393,46 @@ def get_count_prediction_market_categories_uc(
     )
 
     return CountPredictionMarketCategoriesUseCase(uow)
+
+
+def get_prediction_market_price_history_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> GetPredictionMarketPriceHistoryUseCase:
+    """PLAN-0056 A4 — interval price-history endpoint dependency (reads prices hypertable)."""
+    from market_data.application.use_cases.query_prediction_markets import (
+        GetPredictionMarketPriceHistoryUseCase,
+    )
+
+    return GetPredictionMarketPriceHistoryUseCase(uow)
+
+
+def get_prediction_market_trades_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> GetPredictionMarketTradesUseCase:
+    """PLAN-0056 A4 — trades endpoint dependency."""
+    from market_data.application.use_cases.query_prediction_markets import (
+        GetPredictionMarketTradesUseCase,
+    )
+
+    return GetPredictionMarketTradesUseCase(uow)
+
+
+def get_list_prediction_events_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> ListPredictionEventsUseCase:
+    """PLAN-0056 A4 — events list endpoint dependency."""
+    from market_data.application.use_cases.query_prediction_markets import ListPredictionEventsUseCase
+
+    return ListPredictionEventsUseCase(uow)
+
+
+def get_prediction_event_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> GetPredictionEventUseCase:
+    """PLAN-0056 A4 — single-event endpoint dependency."""
+    from market_data.application.use_cases.query_prediction_markets import GetPredictionEventUseCase
+
+    return GetPredictionEventUseCase(uow)
 
 
 # ── Period aggregation use case deps ─────────────────────────────────────────
