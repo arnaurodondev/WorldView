@@ -5,6 +5,10 @@
 import type {
   PredictionMarket,
   PredictionMarketsResponse,
+  PredictionMarketPriceHistory,
+  PredictionMarketTrades,
+  PredictionEventsResponse,
+  EntityPredictionsResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
 // WHY import here: URL construction is centralised in lib/prediction-markets so
@@ -197,6 +201,100 @@ export function createPredictionMarketsApi(t: string | undefined) {
       points.reverse();
 
       return { market_id: raw.market_id, points };
+    },
+
+    /**
+     * getPredictionMarketPriceHistory — per-token INTERVAL price bars (Wave E1/E2).
+     *
+     * WHY a SECOND history method (not overloading getPredictionMarketHistory):
+     * the legacy method above returns raw probability SNAPSHOTS keyed by
+     * `points:[{snapshot_at, yes_probability}]` and is consumed by the dashboard
+     * widget's delta+sparkline. This method hits the SAME S9 route but with an
+     * `interval` query param, which flips S3 onto the `prediction_market_prices`
+     * hypertable and returns a DIFFERENT shape (`points:[{window_start_ts, price,
+     * token_id, outcome_name}]`, one row per outcome token per bucket). Two
+     * distinct return shapes ⇒ two methods, so neither caller has to branch on
+     * the response union. The ProbabilityChart uses this one.
+     *
+     * @param conditionId Polymarket conditionId / S3 market_id.
+     * @param interval    Bucket size: "1h" | "1d" | "1w".
+     */
+    async getPredictionMarketPriceHistory(
+      conditionId: string,
+      interval: "1h" | "1d" | "1w" = "1d",
+    ): Promise<PredictionMarketPriceHistory> {
+      // WHY interval on the query string: S3 only serves interval bars when the
+      // param is present (omitting it returns the legacy snapshot shape). limit
+      // caps the bar count so a long-lived 1h series can't return thousands of
+      // rows to the browser.
+      const qs = new URLSearchParams({ interval, limit: "500" }).toString();
+      return apiFetch<PredictionMarketPriceHistory>(
+        `/v1/signals/prediction-markets/${encodeURIComponent(conditionId)}/history?${qs}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getPredictionMarketTrades — recent executed fills for a market (Wave E1/E2).
+     *
+     * Newest-first. Powers the detail Sheet's "recent flow" strip. `limit`
+     * bounds the strip; the default 30 is enough to read the last flow burst
+     * without paging.
+     */
+    async getPredictionMarketTrades(
+      conditionId: string,
+      limit = 30,
+    ): Promise<PredictionMarketTrades> {
+      const qs = new URLSearchParams({ limit: String(limit) }).toString();
+      return apiFetch<PredictionMarketTrades>(
+        `/v1/signals/prediction-markets/${encodeURIComponent(conditionId)}/trades?${qs}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getPredictionEvents — Polymarket "event" groups (Wave E1/E2).
+     *
+     * Each item is a group header (name + category + market_count). NOTE: the
+     * list response does NOT enumerate the child markets — S3 has no
+     * event_id→markets edge on the wire yet — so the Events section renders the
+     * group metadata and cannot (honestly) nest the individual market rows.
+     */
+    async getPredictionEvents(
+      params: { limit?: number; offset?: number } = {},
+    ): Promise<PredictionEventsResponse> {
+      const qs = new URLSearchParams(
+        Object.entries(params)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => [k, String(v)]),
+      ).toString();
+      return apiFetch<PredictionEventsResponse>(
+        `/v1/signals/prediction-markets/events${qs ? `?${qs}` : ""}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getEntityPredictions — prediction markets that reference an entity (Wave E1).
+     *
+     * Backed by S7 GET /v1/entities/{id}/predictions. Each item carries a
+     * `polarity` (bullish/bearish/neutral) that is the directional read FOR the
+     * entity. An entity with no linked markets returns `{items:[], total:0}` —
+     * never a 404 (absence of links is a valid state).
+     */
+    async getEntityPredictions(
+      entityId: string,
+      params: { limit?: number; offset?: number } = {},
+    ): Promise<EntityPredictionsResponse> {
+      const qs = new URLSearchParams(
+        Object.entries(params)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => [k, String(v)]),
+      ).toString();
+      return apiFetch<EntityPredictionsResponse>(
+        `/v1/entities/${encodeURIComponent(entityId)}/predictions${qs ? `?${qs}` : ""}`,
+        { token: t },
+      );
     },
   };
 }

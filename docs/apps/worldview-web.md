@@ -311,10 +311,10 @@ apps/worldview-web/
 | `/news` | News feed | Top today + full feed tabs |
 | `/chat` | RAG chat | Thread list with rename/search; slash commands (`/quote`, `/portfolio`, `/news`, etc.); citation confidence bar; context-aware starters |
 | `/watchlists/[id]` | Watchlist detail | Members, price summary |
-| `/prediction-markets` | Prediction markets | Polymarket data via S9 |
+| `/prediction-markets` | Prediction markets | Polymarket data via S9. PLAN-0056 Wave E2 analytical enrichment: collapsible `EventGroupings` (`/events`), per-row honest `SignalBadge` (resolved/closed from status), and a click-to-open right-side **`MarketDetailSheet`** (NOT a route — preserves the infinite-scroll list's scroll+filter state) containing `ProbabilityChart` (recharts LineChart, 1h/1d/1w toggle, HEX palette), current YES/NO odds, liquidity/OI/24h-volume stats (OI honestly "n/a" — not in S3 payload), a recent-flow strip (`/trades`), a history-derived "moving" signal badge (measured YES Δpp ≥ 8pp), and the external Polymarket link (`buildPolymarketUrl`). |
 | `/search` | Search results | Full-text entity + instrument search |
 | `/settings` | User settings | Profile, notifications, appearance, data, integrations, security, beta program |
-| `/intelligence/[entity_id]` | Entity intelligence | 3-column: sigma.js graph, relations/evidence/paths, entity sidebar; full-width RAG chat panel |
+| `/intelligence/[entity_id]` | Entity intelligence | 3-column: sigma.js graph, relations/evidence/paths, entity sidebar; full-width RAG chat panel. Sidebar includes `EntityPredictionsSection` (PLAN-0056 Wave E2) — prediction markets referencing the entity via `/entities/{id}/predictions`, with bullish-green/bearish-red/neutral-muted polarity + market link; renders nothing (no header) when the entity has no linked markets. |
 | `/connections` | Weird Connections feed | Global graph-wide "weird connections" feed (PLAN-0112 W5). `WeirdConnectionsFeed` consumes `GET /v1/connections/weird` via `useWeirdConnections` (TanStack Query, 5-min staleTime); ranked connections with the reliability/unexpectedness/semantic-distance/novelty sub-score breakdown + a pairwise "how are these related?" picker (`usePathBetween` → `GET /v1/paths/between`). PathsTab/PathInsightsBlock re-labelled from harmonic/diversity/surprise → weirdness. |
 | `/status` | Platform status | Service health |
 | `/dev-tools/sentry-test` | Dev only | Throws synthetic Sentry error; `notFound()` in production |
@@ -525,7 +525,7 @@ pattern ensures the latest token is always used on every refetch.
 | `intelligence.ts` | entity intelligence page data |
 | `search.ts` | entity + instrument search |
 | `brokerage.ts` | brokerage connections |
-| `prediction-markets.ts` | Polymarket signals, categories, history |
+| `prediction-markets.ts` | Polymarket signals, categories, history. Wave E2 added `getPredictionMarketPriceHistory(conditionId, interval)` (interval bars, distinct from the legacy days-based `getPredictionMarketHistory` snapshots), `getPredictionMarketTrades`, `getPredictionEvents`, `getEntityPredictions`. TanStack hooks in `prediction-markets-hooks.ts`: `usePredictionMarketPriceHistory` / `usePredictionMarketTrades` / `usePredictionEvents` / `useEntityPredictions` (useAuth token-gated, staleTime 60s/60s/5m/2m). |
 | `feedback.ts` | feedback submissions, feature votes, NPS, micro-survey, beta-program |
 | `notification-preferences.ts` | per-user notification preferences (`/v1/users/me/notification-preferences`) |
 

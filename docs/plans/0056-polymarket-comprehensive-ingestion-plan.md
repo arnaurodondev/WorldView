@@ -577,16 +577,33 @@ leg (top open S3 markets; `None` on failure, non-200 briefs pass through untouch
 **Tests**: proxy routes + auth-required + brief leg partial-failure (≥6). **Guardrails**: gateway 401 guard,
 `extra=allow` verbatim proxy.
 
-### Wave E2 — frontend page enrichment
-**Layer**: UI. **Effort**: 90m. **depends_on**: E1. **(use /implement-ui — heavy comments, shadcn/recharts, pnpm/vitest)**
-- **T-E-2-01 (impl)** — `ProbabilityChart` (NEW, recharts `LineChart`, copy `EarningsBarChart` palette/tooltip
-  pattern) + `usePredictionMarketHistory` TanStack hook + `gateway.getPredictionMarketHistory`; render on
-  market detail with interval toggle.
-- **T-E-2-02 (impl)** — Event groupings (fetch `/events`), entity-link chips (→ entity page, from
-  `/entities/{id}/predictions` reverse or market payload), signal badges (adverse-move/new/resolved),
-  liquidity/OI/recent-flow on detail. Extend `types/api.ts` `PredictionMarket` + `lib/api/prediction-markets.ts`.
-**Tests**: Vitest — chart renders series, chips link, badges by signal, groupings (≥8). **Guardrails**:
-frontend-comment-density (memory), CSS hsl(var()) no-paint (use hex in chart SVG), pnpm exact versions.
+### Wave E2 — frontend page enrichment ✅ DONE (2026-07-10)
+**Status**: DONE. **Layer**: UI. **depends_on**: E1.
+- **T-E-2-01 (impl)** — `ProbabilityChart` (NEW `components/prediction-markets/ProbabilityChart.tsx`,
+  recharts `LineChart`, HEX palette mirroring `EarningsBarChart`, 1h/1d/1w shadcn Tabs toggle, loading/
+  error/empty states) + `usePredictionMarketPriceHistory` TanStack hook + gateway
+  `getPredictionMarketPriceHistory(conditionId, interval)`. Pure pivot/delta helpers in
+  `probability-series.ts`. NOTE: added a SECOND history method rather than overloading the legacy
+  days-based `getPredictionMarketHistory` (snapshots, consumed by the dashboard widget) — distinct
+  response shapes.
+- **T-E-2-02 (impl)** — **Detail view = right-side shadcn Sheet** (`MarketDetailSheet.tsx`) opened from a
+  list row, NOT a `/[conditionId]` route — preserves the infinite-scroll list's scroll + filter state
+  (a route push would unmount it). Shows chart, current YES/NO odds, liquidity/OI/24h-volume stats
+  (OI honestly labelled "n/a" — not in S3 payload; liquidity from snapshot points), recent-flow strip
+  from `/trades`, and the external Polymarket link via `buildPolymarketUrl`. **Signal badges**
+  (`SignalBadge.tsx`): resolved/closed driven by `market.status` (list + detail); "moving" driven by a
+  MEASURED YES Δpp ≥ 8pp from the visible interval's history (detail only — list rows don't fetch
+  per-row history, so no unfounded badge). No "new" badge (list payload has no reliable created_at).
+  **Event groupings** (`EventGroupings.tsx`): collapsible section fetching `/events`; renders group
+  headers (name/category/market_count) collapsibly — child-market membership isn't on the wire yet
+  (documented). **Entity approach = reverse edge**: `EntityPredictionsSection.tsx` on the intelligence
+  sidebar via `/entities/{id}/predictions` with bullish-green/bearish-red/neutral-muted polarity +
+  market link (the LIST payload carries no entity_ids, so per-market chips aren't possible — the reverse
+  edge is higher-value). Extended `types/api.ts` + `lib/api/prediction-markets.ts` +
+  `lib/api/prediction-markets-hooks.ts` (4 hooks).
+**Tests**: 30 new Vitest tests across 6 files (probability-series pure maths, SignalBadge drivers, hooks
+path+token-gating, ProbabilityChart states+toggle, EntityPredictionsSection render/polarity/link,
+EventGroupings render/collapse). Full suite 3887 pass. ruff/eslint + tsc clean.
 
 ### Wave E3 — chat grounding
 **Layer**: impl. **Effort**: 30m. **depends_on**: none.
