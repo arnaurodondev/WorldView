@@ -185,6 +185,13 @@ class SchedulerProcess:
             # tick cadence. Poll it hourly instead so fundamentals/OHLCV/new
             # policies have headroom. See EODHDProviderSettings.
             SourceType.EODHD_TICKER_NEWS: float(self._settings.eodhd.ticker_news_poll_interval_seconds),
+            # PLAN-0056 Wave B3 — deeper Polymarket streams poll at their own
+            # PRD-0033 §4.2 cadence (events 1h, CLOB history 6h, trades 1h, OI
+            # daily), read from each provider's ``poll_interval_seconds``.
+            SourceType.POLYMARKET_GAMMA_EVENTS: float(self._settings.polymarket_events.poll_interval_seconds),
+            SourceType.POLYMARKET_CLOB: float(self._settings.polymarket_clob.poll_interval_seconds),
+            SourceType.POLYMARKET_DATA_TRADES: float(self._settings.polymarket_trades.poll_interval_seconds),
+            SourceType.POLYMARKET_DATA_OI: float(self._settings.polymarket_oi.poll_interval_seconds),
         }
 
         # SHADOW STAGE (2026-07-01): when the general-news firehose is enabled,

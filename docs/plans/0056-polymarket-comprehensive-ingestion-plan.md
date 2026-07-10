@@ -290,7 +290,23 @@ routing / outbox dispatcher / scheduler seeding.
 **Tests**: first-sight emits 1; re-poll emits 0 (dedup); resolution emits 1; body contains entities (≥5).
 **Guardrails**: R8 outbox; audit-return-persistence (emitter output must be committed, not just logged).
 
-### Wave B3 — worker routing + scheduler seeding + migration 0011 + env
+### Wave B3 — worker routing + scheduler seeding + migration 0011 + env ✅
+**Status**: **DONE** — 2026-07-09 · 43 new tests · ruff+mypy clean · full S4 suite green (0 failures) ·
+contract + avro-prediction contract tests green. **Sub-Plan B COMPLETE (B1, B2, B3).**
+Delivered: `application/use_cases/fetch_and_write_prediction_streams.py` (4 payload builders +
+`PredictionStreamSpec` registry + generic `FetchAndWritePredictionStreamUseCase`, R8 outbox);
+`WorkerProcess._execute_prediction_stream_task` + `_build_prediction_stream_adapter` +
+`_prediction_stream_spec` route the 4 new `SourceType`s directly (mirrors `_execute_polymarket_task`,
+loads live source config for `token_ids`/`condition_ids`, advisory-locked fetch_log+outbox tx);
+outbox dispatcher registers the 4 new `event_type`s → their Avro serializers (4 `.avsc` copied into the
+service-local schemas dir; serializer routes on `event_type`); `scheduler_main` adds per-stream cadence
+(events 1h, CLOB 6h, trades 1h, OI daily) from each provider's `poll_interval_seconds`; migration
+`0011_seed_polymarket_wave2_sources.py` (down_revision `0010_sec_edgar_cik_watchlist`) seeds 4 sources;
+env vars `CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS` / `…_TRADES_BACKFILL_DAYS` (default 14,
+gated by `BACKFILL_ON_STARTUP`) added to `Settings` + `dev.local.env.example` + `docker.env`.
+Known limitation: B1 CLOB/trades entities carry no parent `conditionId`, so history/trade payloads use
+`token_id` as the non-null surrogate `market_id` (S3 dedup keys already include token_id/trade_id — a
+later wave can enrich token→conditionId).
 **Layer**: config. **Effort**: 60m. **depends_on**: B1, B2.
 - **T-B-3-01 (impl)** — Extend `worker._execute_polymarket_task` dispatch: map each new
   `ContentSourceType` → its client/adapter class.

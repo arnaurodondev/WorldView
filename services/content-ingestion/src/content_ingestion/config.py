@@ -180,6 +180,8 @@ class PolymarketEventsProviderSettings(BaseModel):
     max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
     max_retries: int = Field(default=3, ge=0, le=10)
     backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
+    # Poll cadence (PRD-0033 §4.2): events groups change slowly — hourly.
+    poll_interval_seconds: float = Field(default=3600.0, ge=60.0)
 
 
 class PolymarketClobProviderSettings(BaseModel):
@@ -199,6 +201,8 @@ class PolymarketClobProviderSettings(BaseModel):
     ongoing_window_hours: int = Field(default=6, ge=1, le=168)
     max_retries: int = Field(default=3, ge=0, le=10)
     backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
+    # Poll cadence (PRD-0033 §4.2): CLOB price history refreshes every 6 hours.
+    poll_interval_seconds: float = Field(default=21600.0, ge=60.0)
 
 
 class PolymarketTradesProviderSettings(BaseModel):
@@ -210,6 +214,8 @@ class PolymarketTradesProviderSettings(BaseModel):
     backfill_days: int = Field(default=14, ge=1, le=365)
     max_retries: int = Field(default=3, ge=0, le=10)
     backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
+    # Poll cadence (PRD-0033 §4.2): trades are high-churn — hourly.
+    poll_interval_seconds: float = Field(default=3600.0, ge=60.0)
 
 
 class PolymarketOIProviderSettings(BaseModel):
@@ -218,6 +224,8 @@ class PolymarketOIProviderSettings(BaseModel):
     base_url: str = "https://data-api.polymarket.com/oi"
     max_retries: int = Field(default=3, ge=0, le=10)
     backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
+    # Poll cadence (PRD-0033 §4.2): open-interest is a daily roll-up.
+    poll_interval_seconds: float = Field(default=86400.0, ge=60.0)
 
 
 class HTTPClientSettings(BaseModel):
@@ -354,6 +362,14 @@ class Settings(BaseSettings):
     backfill_initial_days: int = 14
     # Hard cap on horizon — runtime clamps INITIAL_DAYS to YEARS * 365.
     backfill_years: int = 3
+
+    # PLAN-0056 Wave B3 — deeper Polymarket-stream backfill horizons. Flat env
+    # vars (CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS /
+    # ..._TRADES_BACKFILL_DAYS) that the worker threads into the CLOB / trades
+    # adapter windows. Only consulted when ``backfill_on_startup`` is ON — the
+    # worker passes ``is_backfill=backfill_on_startup`` to those two adapters.
+    polymarket_history_backfill_days: int = 14
+    polymarket_trades_backfill_days: int = 14
 
     # ── Provider settings (operational params — overridable via ConfigMap) ───
     eodhd: EODHDProviderSettings = EODHDProviderSettings()

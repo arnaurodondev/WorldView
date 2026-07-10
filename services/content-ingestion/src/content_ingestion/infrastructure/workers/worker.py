@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import signal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -58,6 +58,17 @@ if TYPE_CHECKING:
     from content_ingestion.domain.entities import ContentIngestionTask, PredictionMarketFetchResult
 
 logger = get_logger(__name__)
+
+# PLAN-0056 Wave B3 — the 4 deeper Polymarket streams route DIRECTLY (like the
+# base POLYMARKET type), NOT via ADAPTER_REGISTRY. See _execute_prediction_stream_task.
+_PREDICTION_STREAM_SOURCE_TYPES = frozenset(
+    {
+        SourceType.POLYMARKET_GAMMA_EVENTS,
+        SourceType.POLYMARKET_CLOB,
+        SourceType.POLYMARKET_DATA_TRADES,
+        SourceType.POLYMARKET_DATA_OI,
+    }
+)
 
 
 def _normalize_endpoint(endpoint: str) -> str:
@@ -222,7 +233,10 @@ class WorkerProcess:
         D-04: Polymarket tasks use a dedicated, longer timeout because they
         paginate the entire Gamma API catalogue and write to MinIO.
         """
-        timeout = self._polymarket_task_timeout if task.source_type == SourceType.POLYMARKET else self._task_timeout
+        # Polymarket + the 4 deeper prediction streams paginate external APIs and
+        # write MinIO — give them the longer dedicated timeout (D-04).
+        is_prediction = task.source_type == SourceType.POLYMARKET or task.source_type in _PREDICTION_STREAM_SOURCE_TYPES
+        timeout = self._polymarket_task_timeout if is_prediction else self._task_timeout
         async with self._semaphore:
             try:
                 async with asyncio.timeout(timeout):
@@ -287,6 +301,10 @@ class WorkerProcess:
         """
         if task.source_type == SourceType.POLYMARKET:
             await self._execute_polymarket_task(task)
+            return
+
+        if task.source_type in _PREDICTION_STREAM_SOURCE_TYPES:
+            await self._execute_prediction_stream_task(task)
             return
 
         bronze = MinioBronzeAdapter(self._storage)
@@ -667,6 +685,192 @@ class WorkerProcess:
         except Exception as exc:
             # Never let synthetic-doc emission break the worker loop.
             logger.error("synthetic_documents_emit_cycle_failed", error=str(exc))
+
+    # ── PLAN-0056 Wave B3 — deeper Polymarket streams ─────────────────────────
+
+    def _build_prediction_stream_adapter(
+        self,
+        source_type: SourceType,
+        dedup_fn: Callable[[str, Any], Awaitable[bool]],
+    ) -> Any:
+        """Build the adapter for one deeper-stream source type (infra layer, R25).
+
+        Each adapter reads its parent config (``token_ids`` / ``condition_ids``)
+        from ``source.config`` at ``fetch()`` time.  The CLOB / trades adapters
+        get their backfill window from the flat ``polymarket_history_backfill_days``
+        / ``polymarket_trades_backfill_days`` settings (threaded via ``model_copy``
+        so the flat env var is authoritative over the nested default).
+        """
+        from content_ingestion.infrastructure.adapters.polymarket_clob.adapter import PolymarketClobHistoryAdapter
+        from content_ingestion.infrastructure.adapters.polymarket_clob.client import PolymarketClobHistoryClient
+        from content_ingestion.infrastructure.adapters.polymarket_data_oi.adapter import PolymarketOIAdapter
+        from content_ingestion.infrastructure.adapters.polymarket_data_oi.client import PolymarketOIClient
+        from content_ingestion.infrastructure.adapters.polymarket_data_trades.adapter import PolymarketTradesAdapter
+        from content_ingestion.infrastructure.adapters.polymarket_data_trades.client import PolymarketTradesClient
+        from content_ingestion.infrastructure.adapters.polymarket_gamma_events.adapter import PolymarketEventsAdapter
+        from content_ingestion.infrastructure.adapters.polymarket_gamma_events.client import PolymarketEventsClient
+
+        s = self._settings
+        http = self._http_client
+        if source_type == SourceType.POLYMARKET_GAMMA_EVENTS:
+            return PolymarketEventsAdapter(
+                client=PolymarketEventsClient(http_client=http, settings=s.polymarket_events),
+                fetch_log_exists_fn=dedup_fn,
+                settings=s.polymarket_events,
+                storage=self._storage,
+            )
+        if source_type == SourceType.POLYMARKET_CLOB:
+            clob_settings = s.polymarket_clob.model_copy(update={"backfill_days": s.polymarket_history_backfill_days})
+            return PolymarketClobHistoryAdapter(
+                client=PolymarketClobHistoryClient(http_client=http, settings=clob_settings),
+                fetch_log_exists_fn=dedup_fn,
+                settings=clob_settings,
+                storage=self._storage,
+            )
+        if source_type == SourceType.POLYMARKET_DATA_TRADES:
+            trades_settings = s.polymarket_trades.model_copy(
+                update={"backfill_days": s.polymarket_trades_backfill_days}
+            )
+            return PolymarketTradesAdapter(
+                client=PolymarketTradesClient(http_client=http, settings=trades_settings),
+                fetch_log_exists_fn=dedup_fn,
+                settings=trades_settings,
+                storage=self._storage,
+            )
+        # POLYMARKET_DATA_OI
+        return PolymarketOIAdapter(
+            client=PolymarketOIClient(http_client=http, settings=s.polymarket_oi),
+            fetch_log_exists_fn=dedup_fn,
+            settings=s.polymarket_oi,
+            storage=self._storage,
+        )
+
+    @staticmethod
+    def _prediction_stream_spec(source_type: SourceType) -> Any:
+        """Return the :class:`PredictionStreamSpec` for a deeper-stream source type."""
+        from content_ingestion.application.use_cases.fetch_and_write_prediction_streams import (
+            PREDICTION_EVENT_SPEC,
+            PREDICTION_HISTORY_SPEC,
+            PREDICTION_OI_SPEC,
+            PREDICTION_TRADE_SPEC,
+        )
+
+        return {
+            SourceType.POLYMARKET_GAMMA_EVENTS: PREDICTION_EVENT_SPEC,
+            SourceType.POLYMARKET_CLOB: PREDICTION_HISTORY_SPEC,
+            SourceType.POLYMARKET_DATA_TRADES: PREDICTION_TRADE_SPEC,
+            SourceType.POLYMARKET_DATA_OI: PREDICTION_OI_SPEC,
+        }[source_type]
+
+    async def _execute_prediction_stream_task(self, task: ContentIngestionTask) -> None:
+        """Execute a deeper Polymarket-stream task (events/CLOB/trades/OI).
+
+        Mirrors :meth:`_execute_polymarket_task`:
+        1. Mark RUNNING.
+        2. Build the stream adapter + fetch (no session held during API I/O — R24).
+        3. Empty results → SUCCEEDED.
+        4. Under advisory lock: write fetch_log + outbox atomically; mark SUCCEEDED.
+
+        CLOB / trades run in backfill mode when ``backfill_on_startup`` is set so
+        the first cycle pulls the wider historical window (gated as required).
+        """
+        from content_ingestion.application.use_cases.fetch_and_write_prediction_streams import (
+            FetchAndWritePredictionStreamUseCase,
+        )
+        from content_ingestion.domain.entities import Source
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        # 1. Mark RUNNING.
+        async with self._write_factory() as session:
+            task_repo = TaskRepository(session)
+            try:
+                task.start()
+                await task_repo.update_status(task.id, task.status)
+                await session.commit()
+            except Exception as exc:
+                await session.rollback()
+                logger.error("prediction_stream_task_start_failed", task_id=str(task.id), error=str(exc))
+                return
+
+        spec = self._prediction_stream_spec(task.source_type)
+        # Only CLOB / trades honour a backfill window; the flag is a no-op for
+        # events / OI (their adapters ignore ``is_backfill``).
+        is_backfill = self._settings.backfill_on_startup
+
+        # 2. Build adapter + fetch (short-lived dedup session, released before I/O).
+        #    Load the live source config so the CLOB / trades / OI adapters read
+        #    their ``token_ids`` / ``condition_ids`` (seeded on the source row).
+        async with self._write_factory() as dedup_session:
+            from content_ingestion.infrastructure.db.repositories.source import SourceRepository
+
+            source_model = await SourceRepository(dedup_session).get_by_id(task.source_id)
+            source = Source(
+                id=task.source_id,
+                name=task.source_name,
+                source_type=task.source_type,
+                enabled=True,
+                config=dict(source_model.config) if source_model and source_model.config else {},
+            )
+            pm_log_repo = PredictionMarketFetchLogRepository(dedup_session)
+            adapter = self._build_prediction_stream_adapter(task.source_type, pm_log_repo.exists_by_market_snapshot)
+            try:
+                results = await adapter.fetch(source, is_backfill=is_backfill)
+            except Exception as exc:
+                logger.error("prediction_stream_fetch_failed", task_id=str(task.id), error=str(exc))
+                async with self._write_factory() as fail_session:
+                    fail_repo = TaskRepository(fail_session)
+                    task.fail(str(exc))
+                    await fail_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+                    await fail_session.commit()
+                return
+
+        # 3. Empty results → SUCCEEDED immediately.
+        if not results:
+            async with self._write_factory() as session:
+                task_repo = TaskRepository(session)
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                await session.commit()
+                task.succeed()
+            return
+
+        # 4. Write under advisory lock — fetch_log + outbox atomically.
+        async with (
+            self._write_factory() as session,
+            pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
+        ):
+            if not acquired:
+                task_repo = TaskRepository(session)
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                await session.commit()
+                task.succeed()
+                return
+
+            write_use_case = FetchAndWritePredictionStreamUseCase(
+                fetch_log_repo=PredictionMarketFetchLogRepository(session),
+                outbox_repo=OutboxRepository(session),
+                spec=spec,
+                commit_fn=session.commit,
+                rollback_fn=session.rollback,  # M-02: unpoison session on failure
+            )
+            summary = await write_use_case.execute(results, source_id=task.source_id, is_backfill=is_backfill)
+
+            task_repo = TaskRepository(session)
+            # F-302 parity: if EVERY result failed, fail the task so it retries.
+            if summary.failed > 0 and summary.fetched == 0:
+                task.fail(f"all_{summary.failed}_{task.source_type.value}_failed")
+                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            else:
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                task.succeed()
+            await session.commit()
+
+            record_fetch(
+                task.source_name,
+                fetched=summary.fetched,
+                skipped=summary.skipped,
+                failed=summary.failed,
+                duration=summary.duration_seconds,
+            )
 
 
 async def _run_worker() -> None:

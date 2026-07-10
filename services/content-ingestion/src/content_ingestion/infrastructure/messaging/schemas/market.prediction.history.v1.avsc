@@ -1,0 +1,21 @@
+{
+  "type": "record",
+  "name": "PredictionMarketHistory",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S4 Content Ingestion (Polymarket CLOB /prices-history adapter) — one event per (token_id, interval, window) datapoint. Consumed by S3 Market Data → prediction_market_prices. PLAN-0056 Wave Z1.",
+  "fields": [
+    {"name": "event_id",         "type": "string",           "doc": "UUIDv7 event identifier"},
+    {"name": "event_type",       "type": "string",           "default": "market.prediction.history", "doc": "Event type discriminator"},
+    {"name": "schema_version",   "type": "int",              "default": 1},
+    {"name": "occurred_at",      "type": "string",           "default": "1970-01-01T00:00:00Z", "doc": "ISO-8601 UTC timestamp. Default is epoch sentinel — callers MUST always supply a real value."},
+    {"name": "market_id",        "type": "string",           "doc": "Polymarket conditionId"},
+    {"name": "token_id",         "type": "string",           "doc": "Polymarket CLOB token identifier (outcome)"},
+    {"name": "outcome_name",     "type": ["null", "string"], "default": null, "doc": "Outcome name (e.g. Yes/No) if known"},
+    {"name": "interval",         "type": "string",           "doc": "Granularity: 1h | 1d | 1w"},
+    {"name": "window_start_ts",  "type": "string",           "doc": "ISO-8601 UTC start of the datapoint window"},
+    {"name": "price",            "type": "double",           "doc": "Implied probability [0.0, 1.0] at window start"},
+    {"name": "source",           "type": "string",           "default": "polymarket_clob", "doc": "Provenance of the datapoint"},
+    {"name": "is_backfill",      "type": "boolean",          "default": false, "doc": "True when produced during a historical backfill run"},
+    {"name": "correlation_id",   "type": ["null", "string"], "default": null}
+  ]
+}
