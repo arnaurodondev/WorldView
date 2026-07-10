@@ -150,3 +150,42 @@ class EntityEventExposureRepositoryPort(ABC):
             The exposure_id of the existing or newly created row.
 
         """
+
+    @abstractmethod
+    async def list_prediction_exposures_for_entity(
+        self,
+        *,
+        entity_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, object]], int]:
+        """List the prediction markets that reference a given entity (PLAN-0056 Wave C4).
+
+        Read side of the KG linkage built in Waves C2/C2b/C3: joins
+        ``entity_event_exposures`` to ``temporal_events`` where
+        ``event_type = 'prediction'`` and the exposure belongs to ``entity_id``.
+
+        Each row corresponds to one prediction market that references the entity,
+        carrying the directional polarity recorded on the exposure.  Corporate /
+        earnings / macro exposures (event_type != 'prediction') are excluded.
+
+        Args:
+        ----
+            entity_id: canonical_entities.entity_id whose linked markets to list.
+            limit:     Page size (clamped to 1-200 by the caller).
+            offset:    Pagination offset (>= 0).
+
+        Returns:
+        -------
+            Tuple of (rows, total_count) where each row dict contains:
+            - ``event_id``            (UUID)   — temporal_events.event_id
+            - ``condition_id``        (str)    — temporal_events.region (market key)
+            - ``question``            (str)    — temporal_events.title (market question)
+            - ``polarity``            (str|None) — bullish/bearish/neutral or None
+            - ``polarity_confidence`` (float|None)
+            - ``close_time``          (datetime|None) — temporal_events.active_until
+            - ``exposure_type``       (str)
+            - ``confidence``          (float)
+            and total_count is the total matching rows before LIMIT/OFFSET.
+
+        """

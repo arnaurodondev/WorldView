@@ -44,6 +44,7 @@ knowledge_graph/
 │   ├── connections.py      # /connections/weird
 │   ├── search.py           # /search/relations
 │   ├── temporal_events.py  # /temporal-events
+│   ├── entity_predictions.py # /entities/{id}/predictions (PLAN-0056 C4)
 │   ├── dlq.py              # /admin/dlq/*
 │   ├── health.py           # /healthz, /readyz, /metrics
 │   ├── internal_costs.py   # /internal/v1/llm-costs
@@ -251,6 +252,7 @@ auto-flagged; `docs/audits/2026-06-13-weird-path-quality-sample.md`). Read-only 
 | GET | `/api/v1/relations/{relation_id}` | — | Full relation (edge) detail (PLAN-0099). Returns relation metadata (type, semantic_mode, decay_class, confidence, temporal validity, contra stats, created/updated_at), the current LLM summary (+ `summary_model_id`, `summary_generated_at`), subject/object `EntitySummary`, and up to `evidence_limit` (1–100, default 25) evidence items from `relation_evidence_raw` (newest first) with `evidence_text`, `document_id`, `source_name`, `source_type`, `polarity`. Article title/url/published_at are NOT available (no article metadata in `intelligence_db` — R9; resolve `document_id` via S5/S6 through the gateway). 404 if relation missing. |
 | GET | `/api/v1/graph/stats` | — | Aggregate counts: entities, relations, evidence, stale confidence, contradictions, semantic_mode breakdown |
 | GET | `/api/v1/temporal-events` | — | Active/historical temporal events. Params: `scope`, `entity_id`, `active_only`, `event_type`, `region`, `from_date`, `to_date`, `limit` (1–200), `offset`. `lifecycle_phase` computed at query time. |
+| GET | `/api/v1/entities/{entity_id}/predictions` | — | **PLAN-0056 Wave C4** — prediction markets referencing an entity, WITH polarity. Joins `entity_event_exposures`→`temporal_events` filtered to `event_type='prediction'` for the entity. Returns `items: [{condition_id, question, polarity, polarity_confidence, close_time, confidence}]`, `total`, `limit`, `offset`. `condition_id` (from `temporal_events.region`) is the Polymarket conditionId — the join key the S9 gateway (Wave E1) uses to hydrate current odds/liquidity from S3 (this endpoint does NOT return live prices). `question`=`title`, `close_time`=`active_until`. Ordered by `active_until DESC NULLS LAST, created_at DESC`. Params: `limit` (1–200, default 50), `offset` (≥0). An entity with no linked prediction markets returns a 200 empty list (never 404). Read-only (R27). |
 
 ### Search and Discovery
 

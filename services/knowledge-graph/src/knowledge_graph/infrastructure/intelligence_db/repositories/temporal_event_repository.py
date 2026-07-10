@@ -290,3 +290,71 @@ ON CONFLICT (event_id, entity_id, exposure_type) DO NOTHING
             },
         )
         return exposure_id
+
+    async def list_prediction_exposures_for_entity(
+        self,
+        *,
+        entity_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, object]], int]:
+        """List prediction markets referencing an entity, with polarity (Wave C4).
+
+        Joins ``entity_event_exposures`` → ``temporal_events`` on ``event_id``,
+        filtered to ``event_type = 'prediction'`` (excludes corporate/earnings/
+        macro exposures) and to the given ``entity_id``.
+
+        ``condition_id`` is read from ``temporal_events.region`` (set by Wave C2b)
+        and ``question`` from ``temporal_events.title`` (set by Wave C3).  Ordered
+        by ``active_until DESC NULLS LAST`` (soonest-to-resolve/open markets first),
+        tie-broken by ``created_at DESC``.  ``COUNT(*) OVER()`` yields the total
+        matching rows before LIMIT/OFFSET.
+
+        Read-only: executes on the read-replica session supplied by the caller.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT
+    te.event_id,
+    te.region              AS condition_id,
+    te.title               AS question,
+    te.active_until        AS close_time,
+    eee.polarity,
+    eee.polarity_confidence,
+    eee.exposure_type,
+    eee.confidence,
+    COUNT(*) OVER()        AS total_count
+FROM entity_event_exposures eee
+JOIN temporal_events te ON te.event_id = eee.event_id
+WHERE eee.entity_id = :entity_id
+  AND te.event_type = 'prediction'
+ORDER BY te.active_until DESC NULLS LAST, te.created_at DESC
+LIMIT :limit OFFSET :offset
+"""),
+            {
+                "entity_id": str(entity_id),
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+        rows = result.fetchall()
+        if not rows:
+            return [], 0
+
+        from uuid import UUID as _UUID
+
+        items: list[dict[str, object]] = [
+            {
+                "event_id": _UUID(str(row[0])),
+                "condition_id": row[1],
+                "question": row[2],
+                "close_time": row[3],
+                "polarity": row[4],
+                "polarity_confidence": (float(row[5]) if row[5] is not None else None),
+                "exposure_type": row[6],
+                "confidence": float(row[7]),
+            }
+            for row in rows
+        ]
+        total_count = int(rows[0][8])
+        return items, total_count

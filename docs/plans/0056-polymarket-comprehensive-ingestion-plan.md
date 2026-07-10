@@ -473,12 +473,25 @@ untouched by this wave).
 **Tests**: bearish/bullish/neutral cases; failure→neutral; cost logged (≥5). **Guardrails**: LLM-cost
 tracking (feedback memory: every call site must set non-zero `estimated_cost_usd`); prompt-input-vs-lookup match.
 
-### Wave C4 — S7 entity-predictions read API
-**Layer**: API. **Effort**: 45m. **depends_on**: C2.
+### Wave C4 — S7 entity-predictions read API ✅
+**Layer**: API. **Effort**: 45m. **depends_on**: C2. **Status: DONE (2026-07-10).**
 - **T-C-4-01 (impl)** — `GET /api/v1/entities/{entity_id}/predictions` (NEW) via a read-only use case on
-  `ReadOnlyUnitOfWork`: join `entity_event_exposures`(polarity) → `temporal_events`(event_type='prediction')
-  for the entity; return market_id, question, current implied prob, polarity, close_time. **R25/R27**.
-**Tests**: returns linked markets w/ polarity; empty for unlinked entity (≥3). **Guardrails**: R27 ReadOnlyUoW.
+  the read-replica session (S7's R27 mechanism — `ReadOnlyDbSessionDep`): join
+  `entity_event_exposures`(polarity) → `temporal_events`(event_type='prediction') for the entity; return
+  `condition_id` (region), `question` (title), `polarity`, `polarity_confidence`, `close_time`
+  (active_until), `confidence`. **R25/R27**. Implemented as
+  `EntityEventExposureRepository.list_prediction_exposures_for_entity` +
+  `GetEntityPredictionsUseCase` + router `api/entity_predictions.py` + schemas
+  `EntityPredictionItem`/`EntityPredictionsResponse`. Ordered by `active_until DESC NULLS LAST, created_at DESC`.
+  Empty entity → 200 empty list (never 404). `limit` clamped 1..200 (FastAPI query validation), `offset` echoed.
+  Note: **current implied prob is NOT returned here** — the S9 gateway (Wave E1) hydrates live odds/liquidity
+  from S3 by `condition_id`, the critical join key returned by this endpoint.
+**Tests**: 21 new (route 10, use-case 5, repo 6) — 2 markets w/ different polarities; empty→empty list;
+prediction-only filter (non-prediction exposures excluded); limit/offset clamp + echo; NULL-polarity passthrough;
+read-replica session (R27). **Guardrails**: R27 read replica, R25 route→use-case-only.
+
+**Sub-Plan C (KEYSTONE) COMPLETE** — C1..C4 all DONE. KG prediction linkage (write side C2/C2b/C3 +
+read side C4) is fully wired; Sub-Plan D (signals) and E (gateway/frontend/chat) can now build on it.
 
 ---
 

@@ -37,6 +37,7 @@ from knowledge_graph.api import (
     cypher,
     dlq,
     entities,
+    entity_predictions,  # PLAN-0056 Wave C4: entity-predictions read API
     entity_refresh,  # REQ-003 / PLAN-0099 W0: manual entity-refresh trigger
     events,
     health,
@@ -255,6 +256,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(events.router)
     app.include_router(search.router)
     app.include_router(temporal_events.router)
+    app.include_router(entity_predictions.router)  # PLAN-0056 Wave C4 — entity-predictions read API
     app.include_router(cypher.router)
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)

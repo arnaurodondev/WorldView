@@ -18,6 +18,7 @@ from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeig
 from knowledge_graph.application.use_cases.dlq_admin import DLQAdminUseCase
 from knowledge_graph.application.use_cases.get_entity_detail import GetEntityDetailUseCase
 from knowledge_graph.application.use_cases.get_entity_intelligence import GetEntityIntelligenceUseCase
+from knowledge_graph.application.use_cases.get_entity_predictions import GetEntityPredictionsUseCase
 from knowledge_graph.application.use_cases.list_narrative_versions import ListNarrativeVersionsUseCase
 
 # ── Database sessions ─────────────────────────────────────────────────────────
@@ -152,6 +153,31 @@ def get_temporal_event_repo(session: ReadOnlyDbSessionDep) -> TemporalEventRepos
 
 
 TemporalEventRepoDep = Annotated[TemporalEventRepositoryPort, Depends(get_temporal_event_repo)]
+
+
+# ── Entity predictions read API (PLAN-0056 Wave C4) ───────────────────────────
+# R25: EntityEventExposureRepository wired here, not in the router.
+# R27: list_prediction_exposures_for_entity is a read-only SELECT → ReadOnlyDbSessionDep.
+
+
+def get_entity_predictions_uc(
+    session: ReadOnlyDbSessionDep,
+) -> GetEntityPredictionsUseCase:
+    """Build GetEntityPredictionsUseCase bound to the current read-only session.
+
+    Wires ``EntityEventExposureRepository`` here (dependencies.py) so the
+    entity_predictions.py router never imports from infrastructure/ (R25).
+    Read-only (R27) — the exposure repo runs a pure SELECT join on the
+    read replica.
+    """
+    from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
+        EntityEventExposureRepository,
+    )
+
+    return GetEntityPredictionsUseCase(EntityEventExposureRepository(session))
+
+
+GetEntityPredictionsUseCaseDep = Annotated[GetEntityPredictionsUseCase, Depends(get_entity_predictions_uc)]
 
 
 # ── Cypher (AGE) endpoint bundle ─────────────────────────────────────────────
