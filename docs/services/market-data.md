@@ -357,6 +357,19 @@ CREATE TABLE prediction_events (
 );
 ```
 
+### PLAN-0056 A2 — deeper-stream repositories, ports & UoW wiring (no DDL)
+
+Wave A2 adds the persistence layer for the A1 tables (consumers/API/use cases land in A3/A4):
+
+- **Domain entities** (frozen dataclasses in `domain/entities.py`): `PredictionMarketPrice`, `PredictionMarketTrade` (both validate their partition timestamp is UTC-aware in `__post_init__`), `PredictionMarketOI`, `PredictionEvent` (surrogate `id` generated server-side, so not carried on the entity).
+- **Ports** (ABCs in `application/ports/repositories.py`, R25 — no use case imports the Pg classes):
+  - `PredictionMarketPricesRepository` — `insert_if_not_exists(price) -> bool`, `bulk_insert(prices) -> int`, `list_prices(market_id, token_id, interval, from_dt, to_dt, limit)`
+  - `PredictionMarketTradesRepository` — `insert_if_not_exists(trade) -> bool`, `bulk_insert(trades) -> int`, `list_trades(market_id, since, limit)`
+  - `PredictionMarketOIRepository` — `upsert(oi)`, `list_oi(market_id, from_date, to_date, limit)`, `get_latest(market_id)`
+  - `PredictionMarketEventsRepository` — `upsert(event)`, `find_by_event_id(event_id)`, `list_events(limit, offset) -> (list, total)`
+- **Pg implementations** (`infrastructure/db/repositories/prediction_market_repo.py`) mirror `PgPredictionMarketSnapshotRepository`: `ON CONFLICT DO NOTHING` on each UNIQUE index for prices/trades (idempotent inserts, BP-034/035); `bulk_insert` is a single multi-row insert returning the count of rows actually inserted (`RETURNING` + `len(fetchall())`); OI and events use `ON CONFLICT DO UPDATE` (last-write-wins, `updated_at = now()`); `list_*` order DESC on the time key with optional bound-parameter filters.
+- **UoW** (R27): `UnitOfWork` gains write accessors `prediction_market_prices` / `prediction_market_trades` / `prediction_market_oi` / `prediction_events` (lazy-init, cached, write session) and read accessors `*_read` (read/replica session); `ReadOnlyUnitOfWork` gains the same `*_read` accessors — wired exactly like the existing snapshot repo.
+
 ---
 
 ## Runtime Processes (8)

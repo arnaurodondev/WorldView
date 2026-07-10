@@ -267,3 +267,100 @@ class TestUoWLazyReadSession:
 
         with pytest.raises(RuntimeError, match="not entered"):
             uow.get_read_session()
+
+
+class TestUoWPredictionStreamAccessors:
+    """PLAN-0056 A2: the deeper prediction-stream repos are wired to the right
+    session (write accessors → write session, ``*_read`` → read session) and the
+    write-side accessors are cached (lazy-init, one instance per UoW)."""
+
+    async def test_write_accessors_bind_write_session_and_cache(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+            PgPredictionMarketOIRepository,
+            PgPredictionMarketPricesRepository,
+            PgPredictionMarketTradesRepository,
+        )
+
+        write_session = AsyncMock()
+        read_session = AsyncMock()
+        write_factory = _make_session_factory(write_session)
+        read_factory = _make_session_factory(read_session)
+        uow = SqlAlchemyUnitOfWork(write_factory=write_factory, read_factory=read_factory)
+
+        async with uow:
+            prices = uow.prediction_market_prices
+            trades = uow.prediction_market_trades
+            oi = uow.prediction_market_oi
+            events = uow.prediction_events
+
+            assert isinstance(prices, PgPredictionMarketPricesRepository)
+            assert isinstance(trades, PgPredictionMarketTradesRepository)
+            assert isinstance(oi, PgPredictionMarketOIRepository)
+            assert isinstance(events, PgPredictionMarketEventsRepository)
+
+            # All bound to the WRITE session.
+            assert prices._session is write_session
+            assert trades._session is write_session
+            assert oi._session is write_session
+            assert events._session is write_session
+
+            # Lazy-init cache: repeated access returns the same instance.
+            assert uow.prediction_market_prices is prices
+            assert uow.prediction_market_trades is trades
+            assert uow.prediction_market_oi is oi
+            assert uow.prediction_events is events
+
+            # Write-only path so far → read factory untouched.
+            read_factory.assert_not_called()
+
+    async def test_read_accessors_bind_read_session(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+            PgPredictionMarketOIRepository,
+            PgPredictionMarketPricesRepository,
+            PgPredictionMarketTradesRepository,
+        )
+
+        write_session = AsyncMock()
+        read_session = AsyncMock()
+        write_factory = _make_session_factory(write_session)
+        read_factory = _make_session_factory(read_session)
+        uow = SqlAlchemyUnitOfWork(write_factory=write_factory, read_factory=read_factory)
+
+        async with uow:
+            assert isinstance(uow.prediction_market_prices_read, PgPredictionMarketPricesRepository)
+            assert isinstance(uow.prediction_market_trades_read, PgPredictionMarketTradesRepository)
+            assert isinstance(uow.prediction_market_oi_read, PgPredictionMarketOIRepository)
+            assert isinstance(uow.prediction_events_read, PgPredictionMarketEventsRepository)
+            # All bound to the READ (replica) session.
+            assert uow.prediction_market_prices_read._session is read_session
+            assert uow.prediction_market_trades_read._session is read_session
+            assert uow.prediction_market_oi_read._session is read_session
+            assert uow.prediction_events_read._session is read_session
+
+
+class TestReadOnlyUoWPredictionStreamAccessors:
+    """The read-only UoW (R27) exposes the same ``*_read`` accessors, bound to
+    its single read session."""
+
+    async def test_readonly_accessors_bind_read_session(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+            PgPredictionMarketOIRepository,
+            PgPredictionMarketPricesRepository,
+            PgPredictionMarketTradesRepository,
+        )
+        from market_data.infrastructure.db.uow import SqlAlchemyReadOnlyUnitOfWork
+
+        read_session = AsyncMock()
+        read_factory = _make_session_factory(read_session)
+        uow = SqlAlchemyReadOnlyUnitOfWork(read_factory=read_factory)
+
+        async with uow:
+            assert isinstance(uow.prediction_market_prices_read, PgPredictionMarketPricesRepository)
+            assert isinstance(uow.prediction_market_trades_read, PgPredictionMarketTradesRepository)
+            assert isinstance(uow.prediction_market_oi_read, PgPredictionMarketOIRepository)
+            assert isinstance(uow.prediction_events_read, PgPredictionMarketEventsRepository)
+            assert uow.prediction_market_prices_read._session is read_session
+            assert uow.prediction_events_read._session is read_session

@@ -8,7 +8,7 @@ models, no Pydantic schemas.  ORM models are infrastructure concerns (wave 02).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
@@ -245,3 +245,99 @@ class PredictionMarketSnapshot:
             raise ValueError("snapshot_at must be UTC-aware (naive datetime not allowed)")
         if len(self.outcomes_prices) < 2:
             raise ValueError("outcomes_prices must contain at least 2 outcome entries")
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionMarketPrice:
+    """One interval price bar for a single Polymarket token (PLAN-0056 A2).
+
+    Stored in the ``prediction_market_prices`` TimescaleDB hypertable
+    partitioned on ``window_start_ts``.  Uniquely identified by
+    ``(market_id, token_id, interval, window_start_ts)``.
+
+    ``price`` uses ``Decimal`` to match the ``NUMERIC(12,6)`` column and avoid
+    float round-trip loss.  ``interval`` is a free-form VARCHAR bucket label
+    (BP-007 — never a PG enum), e.g. ``"1m"`` / ``"1h"`` / ``"1d"``.
+    ``is_backfill`` distinguishes historical backfill rows from live-poll rows.
+
+    Field order places the four natural-key columns first (required, positional)
+    and the optional/defaulted columns last, so a frozen dataclass can carry
+    ``outcome_name`` as a nullable field without violating the "no default before
+    non-default" rule (mirrors how ``PredictionMarketSnapshot`` puts ``id`` last).
+    """
+
+    market_id: str
+    token_id: str
+    interval: str
+    window_start_ts: datetime
+    price: Decimal
+    outcome_name: str | None = None
+    source: str = "polymarket_clob"
+    is_backfill: bool = False
+
+    def __post_init__(self) -> None:
+        if self.window_start_ts.tzinfo is None:
+            raise ValueError("window_start_ts must be UTC-aware (naive datetime not allowed)")
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionMarketTrade:
+    """A single executed fill on a Polymarket token (PLAN-0056 A2).
+
+    Stored in the ``prediction_market_trades`` TimescaleDB hypertable
+    partitioned on ``ts``.  Deduped on ``(market_id, trade_id, ts)`` — the
+    partition column is included in the UNIQUE index because TimescaleDB
+    requires it, and a replayed fill carries the same immutable ``ts`` so the
+    triple dedups exactly like ``(market_id, trade_id)``.
+
+    ``price`` uses ``Decimal`` (NUMERIC(12,6)); ``size_usd`` is optional
+    (NUMERIC(20,4)) because some feeds omit notional size.  ``side`` is a
+    free-form VARCHAR (BP-007), e.g. ``"buy"`` / ``"sell"``.
+    """
+
+    market_id: str
+    trade_id: str
+    token_id: str
+    price: Decimal
+    side: str
+    ts: datetime
+    size_usd: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        if self.ts.tzinfo is None:
+            raise ValueError("ts must be UTC-aware (naive datetime not allowed)")
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionMarketOI:
+    """Daily open-interest / 24h-volume roll-up for a market (PLAN-0056 A2).
+
+    Stored in the ``prediction_market_oi`` table (NOT a hypertable — one low-
+    volume row per ``(market_id, snapshot_date)``).  Both money fields are
+    optional ``Decimal | None`` (NUMERIC(20,4)): ``None`` means "not reported"
+    for that day, distinct from ``Decimal("0")`` = "reported zero".
+    """
+
+    market_id: str
+    snapshot_date: date
+    total_oi_usd: Decimal | None = None
+    total_volume_24h_usd: Decimal | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionEvent:
+    """A Polymarket "event" group — a set of related markets (PLAN-0056 A2).
+
+    Stored in the ``prediction_events`` table (NOT a hypertable).  ``event_id``
+    is the Polymarket group id and the natural business key (UNIQUE); the row's
+    surrogate ``id`` is generated server-side, so it is not carried on the
+    entity.  ``market_count`` is the number of markets currently linked to the
+    event (denormalised for cheap fan-out reads).
+    """
+
+    event_id: str
+    name: str
+    category: str | None = None
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    market_count: int = 0

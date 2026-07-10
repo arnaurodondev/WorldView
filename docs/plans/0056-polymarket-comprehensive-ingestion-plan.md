@@ -190,7 +190,8 @@ expose `liquidity`. **Depends on**: Z. Mirrors `PredictionMarketSnapshotModel` +
 not PG enum for `interval`/`side`), BP-019/032 (hypertable created after table+index; `migrate_data=>true`),
 R32 (043 chained from verified 042).
 
-### Wave A2 — ports + Pg repos + UoW accessors
+### Wave A2 — ports + Pg repos + UoW accessors ✅
+**Status**: **DONE** — 2026-07-09 · 24 tests (16 repo-unit + 3 UoW-wiring + 5 integration, real TimescaleDB) · ruff+mypy clean
 **Layer**: infrastructure. **Effort**: 60m. **depends_on**: A1.
 - **T-A-2-01..04 (impl)** — 4 ABC ports (`PredictionMarketPricesRepository`, `…TradesRepository`,
   `…OIRepository`, `…EventsRepository`) in `application/ports/repositories.py` + `Pg…` impls mirroring

@@ -797,3 +797,340 @@ class TestPredictionMarketQueryTokenizer:
         assert params["query_like"] == "%who will the%"
         assert "query_tok_0" not in params
         assert "ESCAPE '\\'" in sql
+
+
+# ── PLAN-0056 A2: prediction deeper-stream repos (prices/trades/oi/events) ─────
+#
+# These mirror the snapshot-repo unit style: mock AsyncSession, assert the
+# ON CONFLICT semantics compile correctly, and verify insert/dedup return
+# values and list ordering/filter binding. No live DB (see integration tests
+# for real-TimescaleDB coverage). T-A-2-01..04.
+
+
+def _price(**over):
+    from market_data.domain.entities import PredictionMarketPrice
+
+    base = {
+        "market_id": "mkt-1",
+        "token_id": "tok-1",
+        "interval": "1h",
+        "window_start_ts": datetime(2026, 1, 1, tzinfo=UTC),
+        "price": Decimal("0.42"),
+    }
+    base.update(over)
+    return PredictionMarketPrice(**base)
+
+
+def _trade(**over):
+    from market_data.domain.entities import PredictionMarketTrade
+
+    base = {
+        "market_id": "mkt-1",
+        "trade_id": "trd-1",
+        "token_id": "tok-1",
+        "price": Decimal("0.51"),
+        "side": "buy",
+        "ts": datetime(2026, 1, 1, tzinfo=UTC),
+    }
+    base.update(over)
+    return PredictionMarketTrade(**base)
+
+
+def _oi(**over):
+    from datetime import date
+
+    from market_data.domain.entities import PredictionMarketOI
+
+    base = {"market_id": "mkt-1", "snapshot_date": date(2026, 1, 1)}
+    base.update(over)
+    return PredictionMarketOI(**base)
+
+
+def _event(**over):
+    from market_data.domain.entities import PredictionEvent
+
+    base = {"event_id": "evt-1", "name": "US Election 2028"}
+    base.update(over)
+    return PredictionEvent(**base)
+
+
+def _mock_session(*, scalar=None, fetchall=None):
+    """Build an AsyncMock session whose execute() returns a result stub."""
+    session = AsyncMock()
+    result = MagicMock()
+    if scalar is not None or fetchall is None:
+        result.scalar_one_or_none.return_value = scalar
+    if fetchall is not None:
+        result.fetchall.return_value = fetchall
+    session.execute.return_value = result
+    return session
+
+
+class TestPgPredictionMarketPricesRepository:
+    async def test_insert_if_not_exists_true_on_new(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketPricesRepository,
+        )
+
+        session = _mock_session(scalar="new-id")
+        repo = PgPredictionMarketPricesRepository(session)
+        assert await repo.insert_if_not_exists(_price()) is True
+        # ON CONFLICT DO NOTHING on the composite unique index must be present.
+        stmt = session.execute.call_args[0][0]
+        from sqlalchemy.dialects import postgresql
+
+        sql = str(stmt.compile(dialect=postgresql.dialect())).lower()
+        assert "on conflict" in sql and "do nothing" in sql
+
+    async def test_insert_if_not_exists_false_on_conflict(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketPricesRepository,
+        )
+
+        session = _mock_session(scalar=None)
+        repo = PgPredictionMarketPricesRepository(session)
+        assert await repo.insert_if_not_exists(_price()) is False
+
+    async def test_bulk_insert_empty_is_noop(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketPricesRepository,
+        )
+
+        session = _mock_session()
+        repo = PgPredictionMarketPricesRepository(session)
+        assert await repo.bulk_insert([]) == 0
+        session.execute.assert_not_called()
+
+    async def test_bulk_insert_returns_inserted_row_count(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketPricesRepository,
+        )
+
+        # RETURNING yields one row per row actually inserted (2 of 3 — 1 conflict).
+        session = _mock_session(fetchall=[("id1",), ("id2",)])
+        repo = PgPredictionMarketPricesRepository(session)
+        n = await repo.bulk_insert([_price(), _price(interval="1d"), _price(interval="1m")])
+        assert n == 2
+        session.execute.assert_called_once()
+
+    async def test_list_prices_orders_desc_and_binds_filters(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketPricesRepository,
+        )
+
+        session = _mock_session(fetchall=[])
+        repo = PgPredictionMarketPricesRepository(session)
+        await repo.list_prices(
+            "mkt-1",
+            token_id="tok-1",
+            interval="1h",
+            from_dt=datetime(2026, 1, 1, tzinfo=UTC),
+            to_dt=datetime(2026, 2, 1, tzinfo=UTC),
+            limit=10,
+        )
+        clause = session.execute.call_args[0][0]
+        sql = clause.text
+        params = {k: v.value for k, v in clause._bindparams.items()}
+        assert "ORDER BY window_start_ts DESC" in sql
+        assert params["token_id"] == "tok-1"  # noqa: S105 — token_id is a market outcome id, not a secret
+        assert params["interval"] == "1h"
+        assert params["from_dt"] == datetime(2026, 1, 1, tzinfo=UTC)
+        assert params["to_dt"] == datetime(2026, 2, 1, tzinfo=UTC)
+        assert params["limit"] == 10
+
+
+class TestPgPredictionMarketTradesRepository:
+    async def test_insert_if_not_exists_dedup(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketTradesRepository,
+        )
+
+        repo_new = PgPredictionMarketTradesRepository(_mock_session(scalar="id"))
+        assert await repo_new.insert_if_not_exists(_trade()) is True
+        repo_dup = PgPredictionMarketTradesRepository(_mock_session(scalar=None))
+        assert await repo_dup.insert_if_not_exists(_trade()) is False
+
+    async def test_bulk_insert_empty_is_noop(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketTradesRepository,
+        )
+
+        session = _mock_session()
+        repo = PgPredictionMarketTradesRepository(session)
+        assert await repo.bulk_insert([]) == 0
+        session.execute.assert_not_called()
+
+    async def test_list_trades_orders_by_ts_desc_with_since(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketTradesRepository,
+        )
+
+        session = _mock_session(fetchall=[])
+        repo = PgPredictionMarketTradesRepository(session)
+        await repo.list_trades("mkt-1", since=datetime(2026, 1, 1, tzinfo=UTC), limit=25)
+        clause = session.execute.call_args[0][0]
+        params = {k: v.value for k, v in clause._bindparams.items()}
+        assert "ORDER BY ts DESC" in clause.text
+        assert params["since"] == datetime(2026, 1, 1, tzinfo=UTC)
+        assert params["limit"] == 25
+
+
+class TestPgPredictionMarketOIRepository:
+    async def test_upsert_uses_on_conflict_do_update(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketOIRepository,
+        )
+
+        session = _mock_session()
+        repo = PgPredictionMarketOIRepository(session)
+        await repo.upsert(_oi(total_oi_usd=Decimal("1000"), total_volume_24h_usd=Decimal("50")))
+        stmt = session.execute.call_args[0][0]
+        from sqlalchemy.dialects import postgresql
+
+        sql = str(stmt.compile(dialect=postgresql.dialect())).lower()
+        assert "on conflict" in sql and "do update" in sql
+        assert "excluded" in sql
+
+    async def test_get_latest_limits_to_one_and_maps(self):
+        from types import SimpleNamespace
+
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketOIRepository,
+        )
+
+        row = SimpleNamespace(
+            market_id="mkt-1",
+            snapshot_date=__import__("datetime").date(2026, 1, 3),
+            total_oi_usd=Decimal("1234.5"),
+            total_volume_24h_usd=None,
+        )
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchone.return_value = row
+        session.execute.return_value = result
+        repo = PgPredictionMarketOIRepository(session)
+        oi = await repo.get_latest("mkt-1")
+        assert oi is not None
+        assert oi.total_oi_usd == Decimal("1234.5")
+        assert oi.total_volume_24h_usd is None
+        assert "LIMIT 1" in session.execute.call_args[0][0].text
+
+    async def test_get_latest_returns_none_when_absent(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketOIRepository,
+        )
+
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchone.return_value = None
+        session.execute.return_value = result
+        repo = PgPredictionMarketOIRepository(session)
+        assert await repo.get_latest("mkt-x") is None
+
+    async def test_list_oi_binds_date_range_and_orders_desc(self):
+        from datetime import date
+
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketOIRepository,
+        )
+
+        session = _mock_session(fetchall=[])
+        repo = PgPredictionMarketOIRepository(session)
+        await repo.list_oi("mkt-1", from_date=date(2026, 1, 1), to_date=date(2026, 1, 31), limit=7)
+        clause = session.execute.call_args[0][0]
+        params = {k: v.value for k, v in clause._bindparams.items()}
+        assert "ORDER BY snapshot_date DESC" in clause.text
+        assert params["from_date"] == date(2026, 1, 1)
+        assert params["to_date"] == date(2026, 1, 31)
+
+
+class TestPgPredictionMarketEventsRepository:
+    async def test_upsert_on_conflict_do_update_on_event_id(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+        )
+
+        session = _mock_session()
+        repo = PgPredictionMarketEventsRepository(session)
+        await repo.upsert(_event(category="politics", market_count=4))
+        stmt = session.execute.call_args[0][0]
+        from sqlalchemy.dialects import postgresql
+
+        sql = str(stmt.compile(dialect=postgresql.dialect())).lower()
+        assert "on conflict" in sql and "do update" in sql
+        assert "event_id" in sql
+
+    async def test_find_by_event_id_maps_and_missing_returns_none(self):
+        from types import SimpleNamespace
+
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+        )
+
+        row = SimpleNamespace(
+            event_id="evt-1",
+            name="US Election 2028",
+            category="politics",
+            start_date=None,
+            end_date=None,
+            market_count=3,
+        )
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchone.return_value = row
+        session.execute.return_value = result
+        repo = PgPredictionMarketEventsRepository(session)
+        ev = await repo.find_by_event_id("evt-1")
+        assert ev is not None
+        assert ev.event_id == "evt-1"
+        assert ev.market_count == 3
+
+        session2 = AsyncMock()
+        result2 = MagicMock()
+        result2.fetchone.return_value = None
+        session2.execute.return_value = result2
+        assert await PgPredictionMarketEventsRepository(session2).find_by_event_id("nope") is None
+
+    async def test_list_events_returns_empty_and_total_zero(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+        )
+
+        session = _mock_session(fetchall=[])
+        repo = PgPredictionMarketEventsRepository(session)
+        events, total = await repo.list_events(limit=10, offset=0)
+        assert events == []
+        assert total == 0
+
+    async def test_list_events_reads_total_from_window_count(self):
+        from types import SimpleNamespace
+
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+        )
+
+        rows = [
+            SimpleNamespace(
+                event_id="evt-1",
+                name="A",
+                category=None,
+                start_date=None,
+                end_date=None,
+                market_count=1,
+                total=2,
+            ),
+            SimpleNamespace(
+                event_id="evt-2",
+                name="B",
+                category="crypto",
+                start_date=None,
+                end_date=None,
+                market_count=5,
+                total=2,
+            ),
+        ]
+        session = _mock_session(fetchall=rows)
+        repo = PgPredictionMarketEventsRepository(session)
+        events, total = await repo.list_events(limit=10, offset=0)
+        assert [e.event_id for e in events] == ["evt-1", "evt-2"]
+        assert total == 2

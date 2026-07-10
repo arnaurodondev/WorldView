@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -11,13 +11,28 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from market_data.application.ports.repositories import (
+    PredictionMarketEventsRepository,
+    PredictionMarketOIRepository,
+    PredictionMarketPricesRepository,
     PredictionMarketRepository,
     PredictionMarketSnapshotRepository,
+    PredictionMarketTradesRepository,
 )
-from market_data.domain.entities import PredictionMarket, PredictionMarketSnapshot
+from market_data.domain.entities import (
+    PredictionEvent,
+    PredictionMarket,
+    PredictionMarketOI,
+    PredictionMarketPrice,
+    PredictionMarketSnapshot,
+    PredictionMarketTrade,
+)
 from market_data.infrastructure.db.models.prediction_markets import (
+    PredictionEventModel,
     PredictionMarketModel,
+    PredictionMarketOIModel,
+    PredictionMarketPriceModel,
     PredictionMarketSnapshotModel,
+    PredictionMarketTradeModel,
 )
 
 if TYPE_CHECKING:
@@ -145,6 +160,65 @@ def _row_to_snapshot(row: Any) -> PredictionMarketSnapshot:
         volume_24h=Decimal(str(row.volume_24h)) if row.volume_24h is not None else None,
         liquidity=Decimal(str(row.liquidity)) if row.liquidity is not None else None,
         source_event_id=row.source_event_id,
+    )
+
+
+def _dec(value: Any) -> Decimal | None:
+    """Coerce a nullable DB numeric to ``Decimal`` (or ``None``).
+
+    Mirrors the ``Decimal(str(...))`` round-trip used by ``_row_to_snapshot`` so
+    values keep full NUMERIC precision regardless of the driver's Python type.
+    """
+    return Decimal(str(value)) if value is not None else None
+
+
+def _row_to_price(row: Any) -> PredictionMarketPrice:
+    """Map a raw DB row to a ``PredictionMarketPrice`` domain entity."""
+    return PredictionMarketPrice(
+        market_id=row.market_id,
+        token_id=row.token_id,
+        interval=row.interval,
+        window_start_ts=row.window_start_ts,
+        # price is NOT NULL in the schema, but str()-round-trip keeps precision.
+        price=Decimal(str(row.price)),
+        outcome_name=row.outcome_name,
+        source=row.source,
+        is_backfill=row.is_backfill,
+    )
+
+
+def _row_to_trade(row: Any) -> PredictionMarketTrade:
+    """Map a raw DB row to a ``PredictionMarketTrade`` domain entity."""
+    return PredictionMarketTrade(
+        market_id=row.market_id,
+        trade_id=row.trade_id,
+        token_id=row.token_id,
+        price=Decimal(str(row.price)),
+        side=row.side,
+        ts=row.ts,
+        size_usd=_dec(row.size_usd),
+    )
+
+
+def _row_to_oi(row: Any) -> PredictionMarketOI:
+    """Map a raw DB row to a ``PredictionMarketOI`` domain entity."""
+    return PredictionMarketOI(
+        market_id=row.market_id,
+        snapshot_date=row.snapshot_date,
+        total_oi_usd=_dec(row.total_oi_usd),
+        total_volume_24h_usd=_dec(row.total_volume_24h_usd),
+    )
+
+
+def _row_to_event(row: Any) -> PredictionEvent:
+    """Map a raw DB row to a ``PredictionEvent`` domain entity."""
+    return PredictionEvent(
+        event_id=row.event_id,
+        name=row.name,
+        category=getattr(row, "category", None),
+        start_date=row.start_date,
+        end_date=row.end_date,
+        market_count=int(row.market_count),
     )
 
 
@@ -460,3 +534,315 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
         return {
             row.market_id: (row.outcomes_prices if row.outcomes_prices is not None else {}) for row in result.fetchall()
         }
+
+
+class PgPredictionMarketPricesRepository(PredictionMarketPricesRepository):
+    """SQLAlchemy-backed per-token interval price history (PLAN-0056 A2)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def insert_if_not_exists(self, price: PredictionMarketPrice) -> bool:
+        """Insert one price bar; ``True`` if new, ``False`` on conflict.
+
+        WHY ``index_elements`` (not ``constraint``): the UNIQUE index
+        ``uq_pmp_market_token_interval_window`` is a unique index, so
+        ``ON CONFLICT (cols)`` targets it directly (mirrors the snapshot repo).
+        ``id`` is omitted so the DB generates it via ``gen_random_uuid()``.
+        """
+        stmt = (
+            pg_insert(PredictionMarketPriceModel)
+            .values(
+                market_id=price.market_id,
+                token_id=price.token_id,
+                outcome_name=price.outcome_name,
+                interval=price.interval,
+                window_start_ts=price.window_start_ts,
+                price=price.price,
+                source=price.source,
+                is_backfill=price.is_backfill,
+            )
+            .on_conflict_do_nothing(index_elements=["market_id", "token_id", "interval", "window_start_ts"])
+            .returning(PredictionMarketPriceModel.id)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def bulk_insert(self, prices: list[PredictionMarketPrice]) -> int:
+        """Insert many price bars in a single multi-row INSERT … ON CONFLICT DO NOTHING."""
+        if not prices:
+            return 0
+        values = [
+            {
+                "market_id": p.market_id,
+                "token_id": p.token_id,
+                "outcome_name": p.outcome_name,
+                "interval": p.interval,
+                "window_start_ts": p.window_start_ts,
+                "price": p.price,
+                "source": p.source,
+                "is_backfill": p.is_backfill,
+            }
+            for p in prices
+        ]
+        stmt = (
+            pg_insert(PredictionMarketPriceModel)
+            .values(values)
+            .on_conflict_do_nothing(index_elements=["market_id", "token_id", "interval", "window_start_ts"])
+            .returning(PredictionMarketPriceModel.id)
+        )
+        result = await self._session.execute(stmt)
+        # RETURNING yields one row per row actually inserted; conflicts are skipped.
+        return len(result.fetchall())
+
+    async def list_prices(
+        self,
+        market_id: str,
+        *,
+        token_id: str | None,
+        interval: str | None,
+        from_dt: datetime | None,
+        to_dt: datetime | None,
+        limit: int,
+    ) -> list[PredictionMarketPrice]:
+        # F-101: static SQL base; all user values bound via named parameters.
+        params: dict[str, Any] = {"market_id": market_id, "limit": limit}
+        predicates = ["market_id = :market_id"]
+        if token_id is not None:
+            predicates.append("token_id = :token_id")
+            params["token_id"] = token_id
+        if interval is not None:
+            predicates.append("interval = :interval")
+            params["interval"] = interval
+        if from_dt is not None:
+            predicates.append("window_start_ts >= :from_dt")
+            params["from_dt"] = from_dt
+        if to_dt is not None:
+            predicates.append("window_start_ts <= :to_dt")
+            params["to_dt"] = to_dt
+
+        full_sql = (
+            "SELECT market_id, token_id, outcome_name, interval, window_start_ts, "
+            "price, source, is_backfill "
+            "FROM prediction_market_prices "
+            "WHERE " + " AND ".join(predicates) + " "
+            "ORDER BY window_start_ts DESC "
+            "LIMIT :limit"
+        )
+        result = await self._session.execute(text(full_sql).bindparams(**params))
+        return [_row_to_price(row) for row in result.fetchall()]
+
+
+class PgPredictionMarketTradesRepository(PredictionMarketTradesRepository):
+    """SQLAlchemy-backed individual-trade repository (PLAN-0056 A2)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def insert_if_not_exists(self, trade: PredictionMarketTrade) -> bool:
+        """Insert one trade; ``True`` if new, ``False`` on conflict on ``(market_id, trade_id, ts)``."""
+        stmt = (
+            pg_insert(PredictionMarketTradeModel)
+            .values(
+                market_id=trade.market_id,
+                trade_id=trade.trade_id,
+                token_id=trade.token_id,
+                price=trade.price,
+                size_usd=trade.size_usd,
+                side=trade.side,
+                ts=trade.ts,
+            )
+            .on_conflict_do_nothing(index_elements=["market_id", "trade_id", "ts"])
+            .returning(PredictionMarketTradeModel.id)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def bulk_insert(self, trades: list[PredictionMarketTrade]) -> int:
+        """Insert many trades in a single multi-row INSERT … ON CONFLICT DO NOTHING."""
+        if not trades:
+            return 0
+        values = [
+            {
+                "market_id": t.market_id,
+                "trade_id": t.trade_id,
+                "token_id": t.token_id,
+                "price": t.price,
+                "size_usd": t.size_usd,
+                "side": t.side,
+                "ts": t.ts,
+            }
+            for t in trades
+        ]
+        stmt = (
+            pg_insert(PredictionMarketTradeModel)
+            .values(values)
+            .on_conflict_do_nothing(index_elements=["market_id", "trade_id", "ts"])
+            .returning(PredictionMarketTradeModel.id)
+        )
+        result = await self._session.execute(stmt)
+        return len(result.fetchall())
+
+    async def list_trades(
+        self,
+        market_id: str,
+        *,
+        since: datetime | None,
+        limit: int,
+    ) -> list[PredictionMarketTrade]:
+        params: dict[str, Any] = {"market_id": market_id, "limit": limit}
+        predicates = ["market_id = :market_id"]
+        if since is not None:
+            predicates.append("ts >= :since")
+            params["since"] = since
+        full_sql = (
+            "SELECT market_id, trade_id, token_id, price, size_usd, side, ts "
+            "FROM prediction_market_trades "
+            "WHERE " + " AND ".join(predicates) + " "
+            "ORDER BY ts DESC "
+            "LIMIT :limit"
+        )
+        result = await self._session.execute(text(full_sql).bindparams(**params))
+        return [_row_to_trade(row) for row in result.fetchall()]
+
+
+class PgPredictionMarketOIRepository(PredictionMarketOIRepository):
+    """SQLAlchemy-backed daily open-interest / 24h-volume roll-up (PLAN-0056 A2)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def upsert(self, oi: PredictionMarketOI) -> None:
+        """Insert or overwrite the daily roll-up (last-write-wins on the money fields).
+
+        Conflict target is the composite PK ``(market_id, snapshot_date)``. On
+        conflict the money fields are overwritten so a later same-day poll
+        supersedes an earlier partial reading; ``updated_at`` is bumped to now().
+        """
+        stmt = pg_insert(PredictionMarketOIModel).values(
+            market_id=oi.market_id,
+            snapshot_date=oi.snapshot_date,
+            total_oi_usd=oi.total_oi_usd,
+            total_volume_24h_usd=oi.total_volume_24h_usd,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market_id", "snapshot_date"],
+            set_={
+                "total_oi_usd": stmt.excluded.total_oi_usd,
+                "total_volume_24h_usd": stmt.excluded.total_volume_24h_usd,
+                "updated_at": text("now()"),
+            },
+        )
+        await self._session.execute(stmt)
+
+    async def list_oi(
+        self,
+        market_id: str,
+        *,
+        from_date: date | None,
+        to_date: date | None,
+        limit: int,
+    ) -> list[PredictionMarketOI]:
+        params: dict[str, Any] = {"market_id": market_id, "limit": limit}
+        predicates = ["market_id = :market_id"]
+        if from_date is not None:
+            predicates.append("snapshot_date >= :from_date")
+            params["from_date"] = from_date
+        if to_date is not None:
+            predicates.append("snapshot_date <= :to_date")
+            params["to_date"] = to_date
+        full_sql = (
+            "SELECT market_id, snapshot_date, total_oi_usd, total_volume_24h_usd "
+            "FROM prediction_market_oi "
+            "WHERE " + " AND ".join(predicates) + " "
+            "ORDER BY snapshot_date DESC "
+            "LIMIT :limit"
+        )
+        result = await self._session.execute(text(full_sql).bindparams(**params))
+        return [_row_to_oi(row) for row in result.fetchall()]
+
+    async def get_latest(self, market_id: str) -> PredictionMarketOI | None:
+        """Return the most recent daily roll-up for ``market_id`` (or ``None``)."""
+        result = await self._session.execute(
+            text(
+                "SELECT market_id, snapshot_date, total_oi_usd, total_volume_24h_usd "
+                "FROM prediction_market_oi "
+                "WHERE market_id = :market_id "
+                "ORDER BY snapshot_date DESC "
+                "LIMIT 1"
+            ).bindparams(market_id=market_id)
+        )
+        row = result.fetchone()
+        return _row_to_oi(row) if row is not None else None
+
+
+class PgPredictionMarketEventsRepository(PredictionMarketEventsRepository):
+    """SQLAlchemy-backed Polymarket "event" group repository (PLAN-0056 A2)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def upsert(self, event: PredictionEvent) -> None:
+        """Insert or update the event keyed on ``event_id`` (last-write-wins metadata).
+
+        ``id`` is omitted so the DB generates it via ``gen_random_uuid()``; on
+        conflict every mutable metadata column is refreshed and ``updated_at``
+        bumped. ``event_id`` is the natural business key (UNIQUE index).
+        """
+        stmt = pg_insert(PredictionEventModel).values(
+            event_id=event.event_id,
+            name=event.name,
+            category=event.category,
+            start_date=event.start_date,
+            end_date=event.end_date,
+            market_count=event.market_count,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["event_id"],
+            set_={
+                "name": stmt.excluded.name,
+                "category": stmt.excluded.category,
+                "start_date": stmt.excluded.start_date,
+                "end_date": stmt.excluded.end_date,
+                "market_count": stmt.excluded.market_count,
+                "updated_at": text("now()"),
+            },
+        )
+        await self._session.execute(stmt)
+
+    async def find_by_event_id(self, event_id: str) -> PredictionEvent | None:
+        result = await self._session.execute(
+            text(
+                "SELECT event_id, name, category, start_date, end_date, market_count "
+                "FROM prediction_events WHERE event_id = :event_id LIMIT 1"
+            ).bindparams(event_id=event_id)
+        )
+        row = result.fetchone()
+        return _row_to_event(row) if row is not None else None
+
+    async def list_events(
+        self,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[PredictionEvent], int]:
+        """Return a page of events + total count.
+
+        Ordered ``start_date DESC NULLS LAST`` so events with a known start date
+        surface first (most recent first); undated events sort last.
+        ``COUNT(*) OVER()`` piggybacks the total onto the same query.
+        """
+        result = await self._session.execute(
+            text(
+                "SELECT event_id, name, category, start_date, end_date, market_count, "
+                "COUNT(*) OVER() AS total "
+                "FROM prediction_events "
+                "ORDER BY start_date DESC NULLS LAST, event_id ASC "
+                "LIMIT :limit OFFSET :offset"
+            ).bindparams(limit=limit, offset=offset)
+        )
+        rows = result.fetchall()
+        if not rows:
+            return [], 0
+        total = int(rows[0].total)
+        return [_row_to_event(row) for row in rows], total

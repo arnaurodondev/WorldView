@@ -25,8 +25,12 @@ if TYPE_CHECKING:
         FundamentalsRecord,
         Instrument,
         OHLCVBar,
+        PredictionEvent,
         PredictionMarket,
+        PredictionMarketOI,
+        PredictionMarketPrice,
         PredictionMarketSnapshot,
+        PredictionMarketTrade,
         Quote,
         ScreenFieldMetadata,
         Security,
@@ -747,3 +751,122 @@ class PredictionMarketSnapshotRepository(ABC):
 
         Returns a dict keyed by ``market_id``; missing markets are not included.
         """
+
+
+class PredictionMarketPricesRepository(ABC):
+    """Port for per-token interval price history (hypertable) operations (PLAN-0056 A2)."""
+
+    @abstractmethod
+    async def insert_if_not_exists(self, price: PredictionMarketPrice) -> bool:
+        """Atomically insert one price bar; ``True`` if new, ``False`` on conflict.
+
+        Conflict target: ``(market_id, token_id, interval, window_start_ts)``.
+        """
+
+    @abstractmethod
+    async def bulk_insert(self, prices: list[PredictionMarketPrice]) -> int:
+        """Insert many price bars in one multi-row ``INSERT … ON CONFLICT DO NOTHING``.
+
+        Used by the historical backfill path (BP-034/035 idempotent inserts).
+        Returns the number of rows actually inserted (conflicts are skipped).
+        An empty list is a no-op returning ``0``.
+        """
+
+    @abstractmethod
+    async def list_prices(
+        self,
+        market_id: str,
+        *,
+        token_id: str | None,
+        interval: str | None,
+        from_dt: datetime | None,
+        to_dt: datetime | None,
+        limit: int,
+    ) -> list[PredictionMarketPrice]:
+        """Return price bars for ``market_id``, ordered by ``window_start_ts DESC``.
+
+        Optional ``token_id`` / ``interval`` narrow to one series; ``from_dt`` /
+        ``to_dt`` bound the window (inclusive).
+        """
+
+
+class PredictionMarketTradesRepository(ABC):
+    """Port for individual trade/fill (hypertable) operations (PLAN-0056 A2)."""
+
+    @abstractmethod
+    async def insert_if_not_exists(self, trade: PredictionMarketTrade) -> bool:
+        """Atomically insert one trade; ``True`` if new, ``False`` on conflict.
+
+        Conflict target: ``(market_id, trade_id, ts)``.
+        """
+
+    @abstractmethod
+    async def bulk_insert(self, trades: list[PredictionMarketTrade]) -> int:
+        """Insert many trades in one multi-row ``INSERT … ON CONFLICT DO NOTHING``.
+
+        Returns the number of rows actually inserted. Empty list → ``0``.
+        """
+
+    @abstractmethod
+    async def list_trades(
+        self,
+        market_id: str,
+        *,
+        since: datetime | None,
+        limit: int,
+    ) -> list[PredictionMarketTrade]:
+        """Return trades for ``market_id``, ordered by ``ts DESC``.
+
+        Optional ``since`` bounds the window to ``ts >= since`` (inclusive).
+        """
+
+
+class PredictionMarketOIRepository(ABC):
+    """Port for daily open-interest / 24h-volume roll-up operations (PLAN-0056 A2)."""
+
+    @abstractmethod
+    async def upsert(self, oi: PredictionMarketOI) -> None:
+        """Insert or overwrite the daily roll-up for ``(market_id, snapshot_date)``.
+
+        On conflict the money fields are overwritten (last-write-wins) so a later
+        poll on the same day supersedes an earlier partial reading.
+        """
+
+    @abstractmethod
+    async def list_oi(
+        self,
+        market_id: str,
+        *,
+        from_date: date | None,
+        to_date: date | None,
+        limit: int,
+    ) -> list[PredictionMarketOI]:
+        """Return daily roll-ups for ``market_id``, ordered by ``snapshot_date DESC``.
+
+        Optional ``from_date`` / ``to_date`` bound the range (inclusive).
+        """
+
+    @abstractmethod
+    async def get_latest(self, market_id: str) -> PredictionMarketOI | None:
+        """Return the most recent daily roll-up for ``market_id`` (or ``None``)."""
+
+
+class PredictionMarketEventsRepository(ABC):
+    """Port for Polymarket "event" group operations (PLAN-0056 A2)."""
+
+    @abstractmethod
+    async def upsert(self, event: PredictionEvent) -> None:
+        """Insert or update the event keyed on ``event_id`` (last-write-wins metadata)."""
+
+    @abstractmethod
+    async def find_by_event_id(self, event_id: str) -> PredictionEvent | None:
+        """Return the event with the given ``event_id`` (or ``None`` if absent)."""
+
+    @abstractmethod
+    async def list_events(
+        self,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[PredictionEvent], int]:
+        """Return a page of events (ordered by ``start_date DESC NULLS LAST``) + total count."""
