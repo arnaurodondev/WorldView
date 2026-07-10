@@ -67,9 +67,15 @@ ENV PYTHONUNBUFFERED=1
 
 USER appuser
 
-EXPOSE 8000
+# Port 8001 is the portfolio (S1) convention across the platform: config.py default
+# (port: int = 8001), the k8s Service, and every inter-service client
+# (RAG_CHAT_S1_BASE_URL, alert's S1 health client, api-gateway's S1 route) all use
+# 8001. The CMD previously hardcoded --port 8000, so the container bound 8000 while
+# everything dialed 8001 → alert/rag-chat health checks to portfolio timed out and the
+# probe (also 8001) refused. Bind 8001 to match.
+EXPOSE 8001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/readyz')"
 
-CMD ["uvicorn", "portfolio.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "portfolio.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8001"]

@@ -50,7 +50,11 @@ class Settings(BaseSettings):
     valkey_url: str = "redis://localhost:6379/0"
 
     # ── Ollama (local LLM container) ──────────────────────────────────────────
-    ollama_base_url: str = "http://localhost:11434"
+    # Empty by default: Ollama was removed from the platform (all LLM/embedding paths
+    # use DeepInfra). An empty base URL disables the Ollama readiness probe in
+    # api/health.py (a non-empty default made /readyz hard-fail 503 with no Ollama
+    # deployed). Set RAG_CHAT_OLLAMA_BASE_URL only if a local Ollama is reintroduced.
+    ollama_base_url: str = ""
     # NOTE: ``ollama_classification_model`` was removed alongside the retirement of
     # the pre-agent LLM intent classifier (its only consumer). The Layer-2
     # injection-safety classifier uses ``deepinfra_classification_model`` below.
