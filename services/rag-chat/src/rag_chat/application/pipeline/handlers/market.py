@@ -820,6 +820,26 @@ def _format_probability(price: Any) -> str | None:
     return f"{pct:.0f}%"
 
 
+def _probability_grounding_value(price: Any) -> str | None:
+    """Return the implied-probability as the SAME integer-percent the prose cites.
+
+    PLAN-0056 Wave E3. The prediction-market text renders each outcome's implied
+    odds via ``_format_probability`` as ``NN%`` (price*100 rounded to 0 dp, e.g.
+    price ``0.63`` -> ``"63%"``). The value-substantiation gate scans the prose for
+    that bare integer and matches it against the item's ``grounding_fields``. So the
+    grounding value MUST be that same integer percent (``"63"``) — NOT the raw
+    ``0.63`` fraction, which would not match the ``"63%"`` written in ``text`` and
+    would leave the odds unsubstantiated. Returns None for non-numeric input so no
+    phantom number enters the bag.
+    """
+    pct_str = _format_probability(price)
+    if pct_str is None:
+        return None
+    # Strip the trailing "%" and re-coerce so the value matches the canonical
+    # grounding-number formatting the matcher expects (e.g. "63").
+    return _coerce_grounding_number(pct_str.rstrip("%"))
+
+
 class MarketHandler(ToolHandler):
     """Handles price, fundamentals, screener, movers, and calendar tools.
 
@@ -2551,6 +2571,35 @@ class MarketHandler(ToolHandler):
             # polymarket items — see _check_entity_grounding — so grounding no
             # longer depends on the flaky question-entity resolution.)
             entity_label = str(cat).strip().title() if isinstance(cat, str) and cat.strip() else "Prediction Market"
+
+            # ── PLAN-0056 Wave E3: ground the odds + volume ───────────────────
+            # Without grounding_fields the implied-odds percentages lived ONLY in
+            # the markdown ``text``, so the value-substantiation eval could not
+            # verify a cited "Yes 63%" figure (docs/audits/
+            # 2026-07-03-prediction-market-refusal.md — "Residual gap"). We emit
+            # one ``(<outcome>_probability, NN)`` entry per outcome using the SAME
+            # integer percent the prose cites (via _probability_grounding_value —
+            # never the raw 0..1 fraction, which would mismatch the "63%" in text),
+            # plus the raw 24h volume and the market_id. Empty-safe: a market with
+            # no usable outcomes still yields market_id (or an empty tuple), never a
+            # crash. This ONLY adds metadata — the text rendering and citation logic
+            # above are untouched, so it cannot reintroduce the phantom-citation
+            # refusal.
+            grounding: list[tuple[str, str]] = []
+            if isinstance(outcomes, list):
+                for o in outcomes:
+                    if not isinstance(o, dict):
+                        continue
+                    o_name = str(o.get("name") or "").strip()
+                    pct_val = _probability_grounding_value(o.get("price"))
+                    if o_name and pct_val is not None:
+                        grounding.append((f"{o_name.lower()}_probability", pct_val))
+            vol_val = _coerce_grounding_number(volume)
+            if vol_val is not None:
+                grounding.append(("volume_24h", vol_val))
+            if market_id:
+                grounding.append(("market_id", market_id))
+
             out.append(
                 RetrievedItem.create(
                     item_id=f"tool:prediction_market:{market_id or question[:32]}",
@@ -2568,6 +2617,7 @@ class MarketHandler(ToolHandler):
                         published_at=published_at,
                         entity_name=entity_label,
                     ),
+                    grounding_fields=tuple(grounding),
                 )
             )
 

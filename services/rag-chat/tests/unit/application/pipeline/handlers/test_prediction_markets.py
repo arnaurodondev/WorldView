@@ -165,6 +165,72 @@ async def test_handler_normalises_status_and_clamps_limit_and_drops_blank_query(
     assert brief.calls == [{"query": None, "category": None, "status": "open", "limit": 50}]
 
 
+# ── PLAN-0056 Wave E3: grounding_fields on the odds + volume ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_grounding_fields_populated_with_odds_and_volume() -> None:
+    """A 2-outcome market emits yes/no probability + volume_24h grounding entries.
+
+    The probability values MUST match the integer-percent written in the prose
+    (``Yes 63%``, ``No 37%``) — not the raw 0.63/0.37 fraction — so the value-
+    substantiation gate can verify the cited odds.
+    """
+    brief = _FakeS3Brief([_market()])
+    items = await _handler(brief)._handle_get_prediction_markets(query="Fed rate cut")
+    gf = dict(items[0].grounding_fields)
+    assert gf["yes_probability"] == "63"
+    assert gf["no_probability"] == "37"
+    assert gf["volume_24h"] == "1250000"
+    assert gf["market_id"] == "0xabc123"
+
+
+@pytest.mark.asyncio
+async def test_grounding_probability_matches_percentage_in_text() -> None:
+    """The grounding value is the SAME integer the ``NN%`` text cites (0.63 -> "63")."""
+    brief = _FakeS3Brief([_market()])
+    items = await _handler(brief)._handle_get_prediction_markets(query="Fed rate cut")
+    item = items[0]
+    gf = dict(item.grounding_fields)
+    # The text renders "Yes 63%"; the grounding value is the bare "63".
+    assert "Yes 63%" in item.text
+    assert gf["yes_probability"] == "63"
+    assert "No 37%" in item.text
+    assert gf["no_probability"] == "37"
+
+
+@pytest.mark.asyncio
+async def test_grounding_fields_empty_safe_when_outcomes_missing() -> None:
+    """A market with no usable outcomes must not crash — minimal grounding only."""
+    brief = _FakeS3Brief([_market(outcomes=[], volume_24h=None)])
+    items = await _handler(brief)._handle_get_prediction_markets(query="x")
+    gf = dict(items[0].grounding_fields)
+    # No probability / volume entries; only the market_id survives (non-crash).
+    assert "yes_probability" not in gf
+    assert "volume_24h" not in gf
+    assert gf.get("market_id") == "0xabc123"
+
+
+@pytest.mark.asyncio
+async def test_grounding_fields_no_volume_entry_when_volume_absent() -> None:
+    """Missing 24h volume → no ``volume_24h`` grounding entry (never a phantom 0)."""
+    brief = _FakeS3Brief([_market(volume_24h=None)])
+    items = await _handler(brief)._handle_get_prediction_markets(query="Fed rate cut")
+    gf = dict(items[0].grounding_fields)
+    assert "volume_24h" not in gf
+    # Odds still grounded.
+    assert gf["yes_probability"] == "63"
+
+
+@pytest.mark.asyncio
+async def test_grounding_fields_fully_empty_market_does_not_crash() -> None:
+    """A market with neither outcomes, volume, nor id yields an empty tuple safely."""
+    brief = _FakeS3Brief([_market(outcomes=None, volume_24h=None, market_id="")])
+    items = await _handler(brief)._handle_get_prediction_markets(query="x")
+    # Empty grounding tuple, no exception.
+    assert items[0].grounding_fields == ()
+
+
 # ── R9 safe degradation ───────────────────────────────────────────────────────
 
 

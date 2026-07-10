@@ -2,7 +2,7 @@
 id: PLAN-0056
 title: "Prediction Markets: Activation, Signals & Enrichment (Wave 2)"
 prd: PRD-0033
-status: in-progress
+status: completed
 created: 2026-05-01
 updated: 2026-07-10
 supersedes: PLAN-0056 (original ingestion-first draft, withdrawn 2026-07-09)
@@ -605,13 +605,22 @@ leg (top open S3 markets; `None` on failure, non-200 briefs pass through untouch
 path+token-gating, ProbabilityChart states+toggle, EntityPredictionsSection render/polarity/link,
 EventGroupings render/collapse). Full suite 3887 pass. ruff/eslint + tsc clean.
 
-### Wave E3 — chat grounding
-**Layer**: impl. **Effort**: 30m. **depends_on**: none.
-- **T-E-3-01 (impl)** — In `handlers/market.py` (`~:2555`), set `grounding_fields` on the prediction
-  `RetrievedItem` (per-outcome `{name}_probability`, `volume_24h`) mirroring `_grounding_fields_from_bars`,
-  so the value-substantiation eval can verify odds (audit finding).
+### Wave E3 — chat grounding ✅ DONE (2026-07-10)
+**Status**: DONE. **Layer**: impl. **Effort**: 30m. **depends_on**: none.
+- **T-E-3-01 (impl)** — In `handlers/market.py` (`_handle_get_prediction_markets`), each prediction
+  `RetrievedItem` now sets `grounding_fields`: one `(<outcome>_probability, NN)` entry per outcome via
+  the new `_probability_grounding_value` helper (emits the SAME integer percent the prose cites — e.g.
+  price `0.63` → `"63"`, matching the `Yes 63%` text — never the raw 0..1 fraction), plus `volume_24h`
+  (raw, coerced) and `market_id`. Empty-safe (no outcomes → `market_id`-only or `()`; never crashes).
+  Metadata-only: text/citation rendering untouched, so it cannot reintroduce the phantom-citation refusal.
+  New tests in `test_prediction_markets.py` (5): odds+volume populated, percentage-matches-text,
+  empty-outcomes safe, no-volume, fully-empty market. ruff/mypy clean; 398 related unit tests pass.
 **Tests**: grounding_fields populated from outcomes/volume; empty-safe (≥3). **Guardrails**: numeric-grounding
 (don't reintroduce phantom-citation refusal — see 2026-07-03 refusal audit).
+
+**Sub-Plan E COMPLETE** (E1, E2, E3 all DONE). **PLAN-0056 COMPLETE** — all 20 waves across
+Sub-Plans A–E are done. Remaining validation: live Docker deploy + QA of the prediction-market chat
+grounding and the full activation pipeline.
 
 ---
 
