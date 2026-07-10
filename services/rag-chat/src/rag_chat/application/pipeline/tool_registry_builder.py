@@ -1266,6 +1266,69 @@ def build_default_registry() -> ToolRegistry:
         handler=lambda **_: None,
     )
 
+    # Area-2 P3 (chat-enhancement-roadmap): curated TAM / market-size reference
+    # tool. Backed by a packaged analyst-estimate YAML table (NOT a live feed) so
+    # projection / what-if questions can GROUND a scenario parameter — a total
+    # addressable market, served-market size, or segment share — instead of only
+    # assuming it. The description states the estimate framing explicitly so the
+    # planner routes sizing/TAM/share questions here and the answer never
+    # overclaims freshness.
+    registry.register(
+        ToolSpec(
+            name="get_market_sizing",
+            description=(
+                "Returns curated TAM / total-addressable-market, served-market-size, and "
+                "segment-share ESTIMATES for a sector or segment. **Use this — NOT memory — "
+                "whenever a projection, what-if, sensitivity, or share-shift question needs a "
+                "market size, TAM, served market, or vendor share as a scenario parameter** "
+                "(e.g. 'if AMD captures 15% of the AI accelerator TAM, what is the revenue "
+                "impact?', 'how big is the data-center CPU market?', 'HBM market share'). "
+                "Covers semiconductor segments (AI accelerator/data-center GPU, data-center "
+                "CPU, HBM, foundry, DRAM, NAND, analog, automotive, EDA), smartphone "
+                "(revenue, units, mobile SoC), and cloud (IaaS/PaaS, SaaS, generative-AI "
+                "platform, cybersecurity, data-center capex). IMPORTANT: this is "
+                "ANALYST-ESTIMATE REFERENCE DATA with an as-of date, NOT a real-time feed — "
+                "present every figure as a dated estimate and cite it "
+                "([get_market_sizing row N]). Retrieve the entity's OWN base figures via "
+                "query_fundamentals / get_fundamentals_history for the anchor; use this tool "
+                "only for the market-size / share scenario parameter."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="query",
+                    type="string",
+                    description=(
+                        "Free-text sector / segment / keyword to match (e.g. 'AI "
+                        "accelerator TAM', 'data-center CPU market', 'HBM share', 'cloud "
+                        "infrastructure', 'smartphone units'). Optional — omit to list "
+                        "reference rows (optionally narrowed by category)."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="category",
+                    type="string",
+                    description="Optional coarse category filter.",
+                    required=False,
+                    enum=["semiconductor", "smartphone", "cloud"],
+                ),
+                ParameterSpec(
+                    name="limit",
+                    type="integer",
+                    description="Max reference rows to return (1-20). Default 5.",
+                    required=False,
+                ),
+            ],
+            source_type="market_data",
+            example_queries=[
+                "How big is the AI accelerator TAM?",
+                "What is the data-center CPU market size and AMD's share?",
+                "If AMD wins 20% of the AI GPU market, what revenue is that?",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
     # PLAN-0082 Wave A + Wave B: register 2 action tools (get_alerts, create_alert).
     # Calls S9-proxied S10 alert endpoints (R14 compliance).
     # create_alert requires user confirmation before execution (requires_confirmation=true).

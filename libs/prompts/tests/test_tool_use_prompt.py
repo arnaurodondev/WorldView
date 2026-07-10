@@ -978,14 +978,21 @@ class TestToolUsePromptContract:
         _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
         assert _ver >= (1, 21), f"expected version >= 1.21 for projection scaffold, got {_ver}"
 
+    def test_prompt_template_version_bumped_for_market_sizing_tool(self) -> None:
+        """v1.22 (Area-2 P3) routes the PROJECTION / WHAT-IF SCAFFOLD to the new
+        get_market_sizing reference tool — the scenario parameter is now retrievable
+        + citable — so the semver version MUST advance to >= 1.22. Pinning the floor
+        catches an accidental revert of the market-sizing routing rule."""
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 22), f"expected version >= 1.22 for market-sizing tool, got {_ver}"
+
     def test_reasoning_addendum_projection_scaffold_rule(self) -> None:
-        """v1.21 P2 (Area-2 harder projections — light routing rule): the REASONING
-        addendum must add a PROJECTION / WHAT-IF SCAFFOLD block instructing the
-        planner to (a) retrieve the base ANCHOR figures first, and (b) recognise a
-        SCENARIO PARAMETER (TAM / market size / share / cost-share) as a MODELLING
-        ASSUMPTION the tools do not carry — so it does NOT loop tools hunting for it
-        or refuse on its absence; the synthesis turn supplies it as a labelled
-        low-high assumption. Addendum-scoped: it must appear for REASONING and NOT
+        """v1.22 P3 (Area-2 — get_market_sizing routing): the REASONING addendum
+        PROJECTION / WHAT-IF SCAFFOLD block must instruct the planner to (a) retrieve
+        the base ANCHOR figures first, and (b) call get_market_sizing for the SCENARIO
+        PARAMETER (TAM / market size / share) — now a RETRIEVABLE + CITABLE curated
+        analyst estimate — keeping the labelled-assumption fallback ONLY for the
+        no-matching-row case. Addendum-scoped: it must appear for REASONING and NOT
         for an unrelated intent.
         """
         prompt = get_tool_use_system_prompt(intent="REASONING", today_iso="2026-07-09")
@@ -993,12 +1000,12 @@ class TestToolUsePromptContract:
         assert "PROJECTION / WHAT-IF SCAFFOLD" in prompt
         # (a) retrieve the base ANCHOR figures first.
         assert "RETRIEVE the base ANCHOR figures" in flat
-        # (b) scenario parameter is a modelling assumption — do not chase / refuse.
+        # (b) scenario parameter is now retrievable via get_market_sizing + citable.
         assert "SCENARIO PARAMETER" in prompt
-        assert "MODELLING ASSUMPTION, NOT a fact the tools carry" in flat
-        assert "do NOT loop tools hunting for it" in flat
-        assert "do NOT treat its absence as a reason to refuse" in flat
-        # The synthesis turn supplies it as a labelled low-high assumption.
+        assert "get_market_sizing" in flat
+        assert "[get_market_sizing row N]" in flat
+        # Fallback to a labelled assumption ONLY when no row matches.
+        assert "no matching row" in flat
         assert "labelled low-high assumption" in flat
         # Points back to the STRICT-RULES what-if mandate (retrieve base first).
         assert "WHAT-IF / PROJECTION rule in STRICT RULES" in flat

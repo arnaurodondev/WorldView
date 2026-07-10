@@ -259,10 +259,29 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          hunting for it and do NOT refuse on its absence; let the synthesis
     #          turn supply it as a labelled low-high assumption. Additive + light;
     #          no grounding / refusal / routing rule relaxed.
-    version="1.21",
+    #   1.22 — 2026-07-09 (Area-2 P3 — get_market_sizing reference tool). The
+    #          curated TAM / market-size reference tool now CARRIES dated, sourced
+    #          market-size / served-market / segment-share ESTIMATES for the
+    #          semiconductor / smartphone / cloud sectors these projections touch.
+    #          v1.21 told the planner the scenario parameter was un-retrievable and
+    #          to defer it to a synthesis-turn assumption; it is now RETRIEVABLE +
+    #          CITABLE, so the PROJECTION / WHAT-IF SCAFFOLD is updated to route the
+    #          planner to call get_market_sizing (in the round-1 anchor batch) for
+    #          the sector's TAM / share, cite it ([get_market_sizing row N]), and
+    #          keep the labelled-assumption fallback ONLY for the no-matching-row
+    #          case. Grounds the scenario parameter instead of assuming it; the
+    #          estimate framing (dated, not live) is preserved end-to-end. Additive;
+    #          no grounding / refusal rule relaxed.
+    version="1.22",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.21 adds an Area-2 PROJECTION / WHAT-IF SCAFFOLD to the REASONING "
+        "(v1.22 routes the PROJECTION / WHAT-IF SCAFFOLD to the new get_market_sizing "
+        "reference tool: a projection's SCENARIO PARAMETER — TAM / market size / "
+        "segment share — is now RETRIEVABLE + CITABLE from a curated dated "
+        "analyst-estimate table, so the planner calls get_market_sizing in the "
+        "round-1 anchor batch and cites the row, keeping the labelled-assumption "
+        "fallback only for the no-matching-row case. "
+        "v1.21 adds an Area-2 PROJECTION / WHAT-IF SCAFFOLD to the REASONING "
         "addendum: retrieve the base ANCHOR figures first, but recognise a "
         "SCENARIO PARAMETER (TAM / market size / segment share / cost-share) as a "
         "MODELLING ASSUMPTION the tools do not carry — do NOT loop tools hunting "
@@ -1168,12 +1187,25 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "First RETRIEVE the base ANCHOR figures the projection rests on (revenue, "
         "margin, EPS, cost) via the entity's fundamentals / intelligence tools — a "
         "what-if about a named entity still requires its base figures (see the "
-        "WHAT-IF / PROJECTION rule in STRICT RULES). A SCENARIO PARAMETER the "
+        "WHAT-IF / PROJECTION rule in STRICT RULES). The SCENARIO PARAMETER the "
         "derivation multiplies by — a TAM, served market size, segment share, or "
-        "cost-share — is a MODELLING ASSUMPTION, NOT a fact the tools carry: do "
-        "NOT loop tools hunting for it, and do NOT treat its absence as a reason "
-        "to refuse. Retrieve the anchor, THEN let the synthesis turn supply the "
-        "missing scenario parameter as a clearly-labelled low-high assumption."
+        "cost-share — is a MODELLING ASSUMPTION the entity's own fundamentals do "
+        # 1.22 (2026-07-09, Area-2 P3): the get_market_sizing reference tool now
+        # CARRIES curated (dated, sourced) TAM / market-size / share estimates for
+        # the semiconductor / smartphone / cloud sectors these projections touch.
+        # v1.21 told the planner the parameter was un-retrievable; it now IS
+        # retrievable + citable, so route to it — while keeping the labelled-
+        # assumption fallback for the no-matching-row case.
+        "NOT carry — but the get_market_sizing tool DOES carry a curated "
+        "analyst-ESTIMATE for it. So, in the SAME round-1 batch as the anchor "
+        "tools, ALSO call get_market_sizing for the relevant sector/segment "
+        "(e.g. 'AI accelerator TAM', 'data-center CPU market', 'HBM share') to "
+        "retrieve a sourced, dated market-size / share estimate you can CITE "
+        "([get_market_sizing row N]). Do NOT loop tools hunting for it beyond that "
+        "one call, and do NOT refuse on its absence: if get_market_sizing returns "
+        "no matching row, let the synthesis turn supply the scenario parameter as "
+        "a clearly-labelled low-high assumption instead. Either way the parameter "
+        "is a labelled ESTIMATE, never presented as a live/spot figure."
     ),
     "SIGNAL_INTEL": (
         "\n\nSIGNAL INTEL FORMAT:\n"

@@ -27,6 +27,7 @@ import structlog
 from .handlers.alerts import AlertsHandler
 from .handlers.intelligence import IntelligenceHandler
 from .handlers.market import MarketHandler
+from .handlers.market_sizing import MarketSizingHandler
 from .handlers.narrative import NarrativeHandler
 from .handlers.news import NewsHandler
 from .handlers.portfolio import PortfolioHandler
@@ -231,6 +232,10 @@ class ToolExecutor:
                 timeout=timeout,
             ),
             self._alerts_handler,
+            # Area-2 P3: curated TAM / market-size reference lookup. No upstream
+            # port — reads a packaged YAML reference table (analyst estimates)
+            # so projections can GROUND a scenario parameter instead of assuming.
+            MarketSizingHandler(),
         ]
         # Populated by execute_all; holds per-tool wall-clock seconds in the same
         # order as the capped input list.  Empty list before the first call.
@@ -401,6 +406,7 @@ __all__ = [
     "EntityContext",
     "IntelligenceHandler",
     "MarketHandler",
+    "MarketSizingHandler",
     "NarrativeHandler",
     "NewsHandler",
     "PortfolioHandler",

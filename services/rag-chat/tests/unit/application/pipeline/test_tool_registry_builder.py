@@ -67,8 +67,10 @@ def test_default_registry_has_zero_drift() -> None:
     # Chat prediction-market tool bumped 26 → 27 by adding ``get_prediction_markets``.
     # Chat SEC-filings tool bumped 27 → 28 by adding ``get_filings``
     # (SEC EDGAR filings with clickable EDGAR citation URLs).
-    assert sizes["manifest"] == 28, (
-        f"Expected 28 platform tools, got {sizes['manifest']}. "
+    # Area-2 P3 bumped 28 → 29 by adding ``get_market_sizing`` (curated TAM /
+    # market-size reference tool for grounding projection scenario parameters).
+    assert sizes["manifest"] == 29, (
+        f"Expected 29 platform tools, got {sizes['manifest']}. "
         "If a tool was intentionally added/removed, update this assertion."
     )
 

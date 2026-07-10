@@ -1,4 +1,4 @@
-version: "7"
+version: "8"
 tools:
   - name: get_price_history
     description: >
@@ -840,6 +840,46 @@ tools:
       - "What are the odds the Fed cuts rates in March?"
       - "What is Polymarket pricing for the next presidential election?"
       - "Show me prediction markets about Bitcoin hitting 100k"
+
+  - name: get_market_sizing
+    description: >
+      Returns curated TAM / total-addressable-market, served-market-size, and
+      segment-share ESTIMATES for a sector or segment. Use this — not memory —
+      whenever a projection, what-if, sensitivity, or share-shift question needs a
+      market size, TAM, served market, or vendor share as a scenario parameter
+      (e.g. "if AMD captures 15% of the AI accelerator TAM, what revenue is that?",
+      "how big is the data-center CPU market?", "HBM market share"). Covers
+      semiconductor segments (AI accelerator/data-center GPU, data-center CPU, HBM,
+      foundry, DRAM, NAND, analog, automotive, EDA), smartphone (revenue, units,
+      mobile SoC), and cloud (IaaS/PaaS, SaaS, generative-AI platform,
+      cybersecurity, data-center capex). IMPORTANT: this is ANALYST-ESTIMATE
+      REFERENCE DATA with an as-of date, NOT a real-time feed — present every
+      figure as a dated estimate and cite it ([get_market_sizing row N]).
+    parameters:
+      - name: query
+        type: string
+        description: >
+          Free-text sector / segment / keyword to match (e.g. 'AI accelerator TAM',
+          'data-center CPU market', 'HBM share', 'cloud infrastructure',
+          'smartphone units'). Optional — omit to list reference rows (optionally
+          narrowed by category).
+        required: false
+      - name: category
+        type: string
+        enum: [semiconductor, smartphone, cloud]
+        description: "Optional coarse category filter."
+        required: false
+      - name: limit
+        type: integer
+        description: Max reference rows to return (1-20). Default 5.
+        required: false
+    source_type: "market_data"
+    since: "v8"
+    deprecated_at: null
+    example_queries:
+      - "How big is the AI accelerator TAM?"
+      - "What is the data-center CPU market size and AMD's share?"
+      - "If AMD wins 20% of the AI GPU market, what revenue is that?"
 
   - name: get_alerts
     description: >
