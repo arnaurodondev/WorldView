@@ -100,12 +100,11 @@ def build_prediction_history_payloads(
 ) -> list[dict[str, Any]]:
     """Build one ``market.prediction.history.v1`` payload PER price datapoint.
 
-    NOTE on ``market_id``: the B1 CLOB fetch-result entity carries only the CLOB
-    ``token_id`` (the ``token_ids`` seeded on the source), not the parent
-    Polymarket ``conditionId``.  The history schema/consumer require a non-null
-    ``market_id``, and the S3 dedup key ``(market_id, token_id, interval,
-    window_start_ts)`` already contains ``token_id``, so we use ``token_id`` as a
-    stable surrogate ``market_id``.  A later wave can enrich token→conditionId.
+    ``market_id`` = the PARENT market ``conditionId`` (PLAN-0056 Wave B4:
+    ``result.market_id``), so the S3 ``prediction_market_prices`` rows JOIN to
+    ``prediction_markets`` (keyed on conditionId).  ``token_id`` is the per-outcome
+    CLOB token.  Legacy fetch-results with no parent (``market_id is None``) fall
+    back to the ``token_id`` surrogate to satisfy the non-null schema field.
     """
     return [
         {
@@ -113,7 +112,7 @@ def build_prediction_history_payloads(
             "event_type": "market.prediction.history",
             "schema_version": 1,
             "occurred_at": ct.to_iso8601(result.fetched_at),
-            "market_id": result.token_id,
+            "market_id": result.market_id or result.token_id,
             "token_id": result.token_id,
             "outcome_name": None,
             "interval": result.interval,
@@ -133,10 +132,11 @@ def build_prediction_trade_payloads(
 ) -> list[dict[str, Any]]:
     """Build the ``market.prediction.trade.v1`` payload for one fill.
 
-    NOTE on ``market_id``: as with history, the B1 trade entity carries no
-    parent ``conditionId``; the S3 trade dedup key is ``(market_id, trade_id,
-    ts)`` and ``trade_id`` is globally unique, so ``token_id`` is used as the
-    non-null surrogate ``market_id``.
+    ``market_id`` = the PARENT market ``conditionId`` (PLAN-0056 Wave B4:
+    ``result.market_id`` — the trades feed is polled per condition_id), so the S3
+    ``prediction_market_trades`` rows JOIN to ``prediction_markets``.  ``token_id``
+    is the per-outcome CLOB token.  Legacy trades with no parent
+    (``market_id is None``) fall back to the ``token_id`` surrogate.
     """
     return [
         {
@@ -144,7 +144,7 @@ def build_prediction_trade_payloads(
             "event_type": "market.prediction.trade",
             "schema_version": 1,
             "occurred_at": ct.to_iso8601(result.traded_at),
-            "market_id": result.token_id,
+            "market_id": result.market_id or result.token_id,
             "trade_id": result.trade_id,
             "token_id": result.token_id,
             "price": result.price,

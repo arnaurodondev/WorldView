@@ -38,11 +38,23 @@ def _response(body: object, status_code: int = 200) -> MagicMock:
 
 
 def _source(condition_ids: list[str] | None = None) -> Source:
+    # Legacy flat ``condition_ids`` config (pre-B4) — still honoured via fallback.
     return Source(
         name="pm-trades",
         source_type=SourceType.POLYMARKET_DATA_TRADES,
         enabled=True,
         config={"condition_ids": condition_ids if condition_ids is not None else ["cond_1"]},
+    )
+
+
+def _source_markets(markets: list[dict]) -> Source:
+    # PLAN-0056 Wave B4: unified ``markets`` work-list config
+    # ({condition_id, token_ids}) — the trades feed keys on condition_id.
+    return Source(
+        name="pm-trades",
+        source_type=SourceType.POLYMARKET_DATA_TRADES,
+        enabled=True,
+        config={"markets": markets},
     )
 
 
@@ -120,6 +132,27 @@ class TestPolymarketTradesAdapter:
         assert r.size_usd == 125.5
         assert r.side == "BUY"
         assert r.source_type == SourceType.POLYMARKET_DATA_TRADES
+        # Legacy flat config: condition_id IS the polled key → stamped as market_id.
+        assert r.market_id == "cond_a"
+
+    async def test_markets_worklist_stamps_parent_condition_id(self) -> None:
+        """PLAN-0056 Wave B4: the ``markets`` work-list stamps market_id=conditionId."""
+        client = MagicMock()
+        client.fetch_trades_page = AsyncMock(
+            return_value=TradesPage(trades=[_trade("0xt1"), _trade("0xt2")], has_more=False)
+        )
+        adapter = _make_adapter(client)
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(
+                _source_markets([{"condition_id": "cond_xyz", "token_ids": ["tok_yes", "tok_no"]}])
+            )
+
+        assert len(results) == 2
+        # Every trade under this market carries the same parent conditionId, while
+        # token_id stays the per-outcome token from the trade record.
+        assert {r.market_id for r in results} == {"cond_xyz"}
+        assert {r.token_id for r in results} == {"tok_yes"}
 
     async def test_offset_pagination_stops_at_max_pages(self) -> None:
         client = MagicMock()

@@ -750,6 +750,10 @@ class PredictionHistoryFetchResult:
     raw_bytes: bytes
     fetched_at: datetime
     minio_bronze_key: str | None = None
+    # PLAN-0056 Wave B4: parent market ``conditionId`` (Gamma /markets key) so the
+    # S3 ``prediction_market_prices.market_id`` column JOINs to ``prediction_markets``.
+    # ``None`` only for legacy flat-``token_ids`` config with no parent mapping.
+    market_id: str | None = None
     id: UUID = field(default_factory=common.ids.new_uuid7)
 
     def __post_init__(self) -> None:
@@ -766,11 +770,16 @@ class PredictionHistoryFetchResult:
         fetched_at: datetime,
         *,
         interval: str,
+        condition_id: str | None = None,
     ) -> PredictionHistoryFetchResult:
         """Construct from a CLOB ``/prices-history`` response.
 
         The CLOB response is ``{"history": [{"t": <epoch_s>, "p": <price>}, ...]}``.
         Malformed individual datapoints are skipped rather than failing the parse.
+
+        ``condition_id`` (PLAN-0056 Wave B4) is the PARENT market conditionId that
+        owns this ``token_id`` outcome; it is stored as ``market_id`` so downstream
+        price rows associate with the parent market, not the per-outcome token.
         """
         history = raw.get("history") if isinstance(raw, dict) else raw
         points: list[PricePoint] = []
@@ -798,6 +807,7 @@ class PredictionHistoryFetchResult:
             raw_bytes=json.dumps(raw).encode(),
             fetched_at=fetched_at,
             minio_bronze_key=None,
+            market_id=condition_id,
         )
 
 
@@ -820,6 +830,10 @@ class PredictionTradeFetchResult:
     raw_bytes: bytes
     fetched_at: datetime
     minio_bronze_key: str | None = None
+    # PLAN-0056 Wave B4: parent market ``conditionId`` (the /trades feed is polled
+    # per condition_id) so the S3 ``prediction_market_trades.market_id`` column
+    # JOINs to ``prediction_markets``.  ``None`` only for legacy config.
+    market_id: str | None = None
     id: UUID = field(default_factory=common.ids.new_uuid7)
 
     def __post_init__(self) -> None:
@@ -829,12 +843,22 @@ class PredictionTradeFetchResult:
             raise ValueError("PredictionTradeFetchResult.trade_id must not be empty")
 
     @classmethod
-    def from_api_response(cls, raw: dict, fetched_at: datetime) -> PredictionTradeFetchResult:
+    def from_api_response(
+        cls,
+        raw: dict,
+        fetched_at: datetime,
+        *,
+        condition_id: str | None = None,
+    ) -> PredictionTradeFetchResult:
         """Construct from a Data-API ``/trades`` record.
 
         Field names vary across Data-API versions — we accept the common
         aliases (``transactionHash``/``id`` for the trade id, ``asset``/
         ``token_id`` for the token, ``size``/``usdcSize`` for USD size).
+
+        ``condition_id`` (PLAN-0056 Wave B4) is the PARENT market conditionId that
+        the trades feed was polled under; it is stored as ``market_id`` so trade
+        rows associate with the parent market, not the per-outcome token.
         """
         traded_at = _parse_epoch_seconds(raw.get("timestamp")) or fetched_at
         return cls(
@@ -850,6 +874,7 @@ class PredictionTradeFetchResult:
             raw_bytes=json.dumps(raw).encode(),
             fetched_at=fetched_at,
             minio_bronze_key=None,
+            market_id=condition_id,
         )
 
 

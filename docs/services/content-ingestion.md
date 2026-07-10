@@ -133,8 +133,8 @@ curl -X POST http://localhost:8004/api/v1/documents/upload \
 | `market.prediction.v1` | `infrastructure/messaging/schemas/market.prediction.v1.avsc` | `market_id` | Polymarket prediction market snapshot (`market.prediction.snapshot` event type via outbox) |
 | `content.document.deleted.v1` | `infrastructure/messaging/schemas/content.document.deleted.v1.avsc` | `doc_id` | Tenant document soft-deletion event (emitted by `DeleteTenantDocumentUseCase`) so downstream services purge derived artifacts |
 | `market.prediction.event.v1` | `infrastructure/messaging/schemas/market.prediction.event.v1.avsc` | `group_id` | Polymarket Gamma `/events` group (`market.prediction.event` event type via outbox) — PLAN-0056 B3 |
-| `market.prediction.history.v1` | `infrastructure/messaging/schemas/market.prediction.history.v1.avsc` | `token_id` | CLOB `/prices-history` datapoint (`market.prediction.history`), one event per datapoint — B3 |
-| `market.prediction.trade.v1` | `infrastructure/messaging/schemas/market.prediction.trade.v1.avsc` | `trade_id` | Data-API `/trades` fill (`market.prediction.trade`) — B3 |
+| `market.prediction.history.v1` | `infrastructure/messaging/schemas/market.prediction.history.v1.avsc` | `token_id` | CLOB `/prices-history` datapoint (`market.prediction.history`), one event per datapoint — B3. **B4**: payload `market_id` = PARENT conditionId (was token_id surrogate), `token_id` = per-outcome token → S3 price rows JOIN to `prediction_markets` |
+| `market.prediction.trade.v1` | `infrastructure/messaging/schemas/market.prediction.trade.v1.avsc` | `trade_id` | Data-API `/trades` fill (`market.prediction.trade`) — B3. **B4**: payload `market_id` = PARENT conditionId (was token_id surrogate), `token_id` = per-outcome token → S3 trade rows JOIN to `prediction_markets` |
 | `market.prediction.oi.v1` | `infrastructure/messaging/schemas/market.prediction.oi.v1.avsc` | `market_id` | Data-API daily open-interest snapshot (`market.prediction.oi`) — B3 |
 
 **`ContentArticleRaw` Avro fields:**
@@ -338,7 +338,7 @@ CREATE INDEX idx_tdu_uploaded_at ON tenant_document_uploads (tenant_id, uploaded
 | `0008_seed_default_sources` | Seed the canonical default content sources (idempotent via `uq_sources_dedup`) — PLAN-0106 Wave B-1 |
 | `0009_remove_finnhub_global_news` | Remove the `finnhub` source seeded with no `symbol` (Finnhub `company-news` requires a symbol); per-ticker `Finnhub-<SYM>` sources are kept |
 | `0010_sec_edgar_cik_watchlist` | Scope the `sec-edgar-filings` source to a per-CIK watchlist (`config["ciks"]`) so watched mega-caps are always ingested (R1 Fix ②) |
-| `0011_seed_polymarket_wave2_sources` | Seed the 4 deeper Polymarket-stream sources (`polymarket_gamma_events`/`polymarket_clob`/`polymarket_data_trades`/`polymarket_data_oi`) — PLAN-0056 Wave B3 |
+| `0011_seed_polymarket_wave2_sources` | Seed the 4 deeper Polymarket-stream sources (`polymarket_gamma_events`/`polymarket_clob`/`polymarket_data_trades`/`polymarket_data_oi`) — PLAN-0056 Wave B3. **B4**: CLOB + trades seed reshaped to `{"markets": []}` (a `{condition_id, token_ids}` work-list); OI keeps `condition_ids` |
 
 **Latest head:** `0011_seed_polymarket_wave2_sources`.
 
@@ -390,7 +390,7 @@ All news-source `SourceType` values come from `contracts.enums.ContentSourceType
 
 - **CLOB resolved-market fallback:** the price-history adapter requests `interval=1h`; if that returns HTTP 400 (via `AdapterError.status_code`) or an empty series, it retries once at `interval=1d` (resolved markets frequently lack a fine-grained series — PRD-0033 §4.4/§9.2). Backfill uses `backfill_days`; ongoing polling uses `ongoing_window_hours` (6h) for the `startTs` lower bound.
 - **Config:** `Polymarket{Events,Clob,Trades,OI}ProviderSettings` in `config.py`, wired into `Settings` as `polymarket_events` / `polymarket_clob` / `polymarket_trades` / `polymarket_oi`. Every `base_url` is env-overridable (`CONTENT_INGESTION_POLYMARKET_EVENTS__BASE_URL`, etc.) so exact live API paths can be corrected at deploy without a code change. `AdapterError` gained an optional `status_code` kwarg (backward-compatible) to carry the HTTP status for the CLOB fallback.
-- **Token/market ids** for the CLOB/trades/OI adapters are read from `source.config` (`token_ids` / `condition_ids`); those source rows are seeded in Wave B3.
+- **Token/market ids** for the CLOB/trades adapters are read from a `source.config["markets"]` **work-list** — `[{"condition_id": ..., "token_ids": [...]}]` pairing each parent market conditionId with its child CLOB outcome tokens (PLAN-0056 **Wave B4**; parsed by `infrastructure/adapters/polymarket_worklist.py`, camelCase-tolerant, legacy flat `token_ids`/`condition_ids` fallback). The parent `condition_id` is threaded onto every `PredictionHistoryFetchResult`/`PredictionTradeFetchResult` as `market_id` so S3 price/trade rows JOIN to `prediction_markets` (keyed on conditionId) instead of the per-outcome token surrogate. OI still reads `condition_ids`. Those source rows are seeded (empty) in migration `0011`.
 
 **End-to-end wiring (PLAN-0056 Wave B3 — Sub-Plan B complete):** the 4 deeper `SourceType`s route directly through `WorkerProcess._execute_task` → `_execute_prediction_stream_task` (mirrors `_execute_polymarket_task`; shares the 900s Polymarket timeout; NOT in `ADAPTER_REGISTRY`). Per task the worker loads the live `sources.config` row (for `token_ids`/`condition_ids`), builds the B1 client+adapter via `_build_prediction_stream_adapter`, fetches with no session held (R24), then under the `s4:fetch:<source>` advisory lock the generic `FetchAndWritePredictionStreamUseCase` (`application/use_cases/fetch_and_write_prediction_streams.py`) writes fetch_log + outbox in one tx (R8).
 

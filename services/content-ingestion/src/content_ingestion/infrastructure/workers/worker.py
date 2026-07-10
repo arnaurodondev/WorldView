@@ -695,8 +695,9 @@ class WorkerProcess:
     ) -> Any:
         """Build the adapter for one deeper-stream source type (infra layer, R25).
 
-        Each adapter reads its parent config (``token_ids`` / ``condition_ids``)
-        from ``source.config`` at ``fetch()`` time.  The CLOB / trades adapters
+        Each adapter reads its parent config (the ``markets`` work-list for CLOB /
+        trades — PLAN-0056 Wave B4 — or ``condition_ids`` for OI) from
+        ``source.config`` at ``fetch()`` time.  The CLOB / trades adapters
         get their backfill window from the flat ``polymarket_history_backfill_days``
         / ``polymarket_trades_backfill_days`` settings (threaded via ``model_copy``
         so the flat env var is authoritative over the nested default).
@@ -799,7 +800,7 @@ class WorkerProcess:
 
         # 2. Build adapter + fetch (short-lived dedup session, released before I/O).
         #    Load the live source config so the CLOB / trades / OI adapters read
-        #    their ``token_ids`` / ``condition_ids`` (seeded on the source row).
+        #    their ``markets`` work-list / ``condition_ids`` (seeded on the source row).
         async with self._write_factory() as dedup_session:
             from content_ingestion.infrastructure.db.repositories.source import SourceRepository
 

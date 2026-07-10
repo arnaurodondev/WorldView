@@ -61,14 +61,18 @@ class TestSeededSources:
     def test_all_sources_enabled(self) -> None:
         assert all(s["enabled"] is True for s in self.m._WAVE2_SOURCES)
 
-    def test_clob_config_has_token_ids(self) -> None:
-        clob = next(s for s in self.m._WAVE2_SOURCES if s["source_type"] == "polymarket_clob")
-        assert "token_ids" in json.loads(clob["config"])
-
-    def test_trades_and_oi_config_have_condition_ids(self) -> None:
-        for st in ("polymarket_data_trades", "polymarket_data_oi"):
+    def test_clob_and_trades_config_have_markets_worklist(self) -> None:
+        # PLAN-0056 Wave B4: CLOB + trades now read the ``markets`` work-list
+        # ({condition_id, token_ids}) instead of the flat token_ids/condition_ids
+        # lists (those encoded the token_id-surrogate join bug).
+        for st in ("polymarket_clob", "polymarket_data_trades"):
             row = next(s for s in self.m._WAVE2_SOURCES if s["source_type"] == st)
-            assert "condition_ids" in json.loads(row["config"])
+            assert "markets" in json.loads(row["config"])
+
+    def test_oi_config_has_condition_ids(self) -> None:
+        # OI is unchanged by B4 — it already keys on market_id = conditionId.
+        row = next(s for s in self.m._WAVE2_SOURCES if s["source_type"] == "polymarket_data_oi")
+        assert "condition_ids" in json.loads(row["config"])
 
 
 class TestUpgradeDowngrade:

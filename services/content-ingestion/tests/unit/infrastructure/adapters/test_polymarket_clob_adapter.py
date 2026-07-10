@@ -41,11 +41,23 @@ def _response(body: dict, status_code: int = 200) -> MagicMock:
 
 
 def _source(token_ids: list[str] | None = None) -> Source:
+    # Legacy flat ``token_ids`` config (pre-B4) — still honoured via fallback.
     return Source(
         name="pm-clob",
         source_type=SourceType.POLYMARKET_CLOB,
         enabled=True,
         config={"token_ids": token_ids if token_ids is not None else ["tok_1"]},
+    )
+
+
+def _source_markets(markets: list[dict]) -> Source:
+    # PLAN-0056 Wave B4: unified ``markets`` work-list config
+    # ({condition_id, token_ids}) that carries the parent conditionId.
+    return Source(
+        name="pm-clob",
+        source_type=SourceType.POLYMARKET_CLOB,
+        enabled=True,
+        config={"markets": markets},
     )
 
 
@@ -99,6 +111,36 @@ class TestPolymarketClobHistoryAdapter:
         assert results[0].token_id == "tok_a"  # noqa: S105 — token id, not a secret
         assert results[0].interval == "1h"
         assert len(results[0].points) == 3
+        # Legacy flat config → no parent conditionId known.
+        assert results[0].market_id is None
+
+    async def test_markets_worklist_stamps_parent_condition_id(self) -> None:
+        """PLAN-0056 Wave B4: the ``markets`` work-list stamps market_id=conditionId."""
+        client = MagicMock()
+        client.fetch_price_history = AsyncMock(return_value=_history(3))
+        adapter = _make_adapter(client)
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source_markets([{"condition_id": "cond_xyz", "token_ids": ["tok_a"]}]))
+
+        assert len(results) == 1
+        assert results[0].token_id == "tok_a"  # noqa: S105 — token id, not a secret
+        assert results[0].market_id == "cond_xyz"
+
+    async def test_two_token_ids_share_parent_condition_id(self) -> None:
+        """A market with 2 outcome tokens → 2 results, all under the same parent."""
+        client = MagicMock()
+        client.fetch_price_history = AsyncMock(return_value=_history(2))
+        adapter = _make_adapter(client)
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(
+                _source_markets([{"condition_id": "cond_multi", "token_ids": ["tok_yes", "tok_no"]}])
+            )
+
+        assert {r.token_id for r in results} == {"tok_yes", "tok_no"}
+        assert {r.market_id for r in results} == {"cond_multi"}
+        assert client.fetch_price_history.await_count == 2
 
     async def test_no_token_ids_returns_empty(self) -> None:
         client = MagicMock()

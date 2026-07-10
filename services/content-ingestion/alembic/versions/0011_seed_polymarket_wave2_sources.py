@@ -13,9 +13,14 @@ streams (per-stream cadence is set in ``scheduler_main`` from each provider's
 ``poll_interval_seconds``: events 1h, CLOB history 6h, trades 1h, OI daily —
 PRD-0033 §4.2).
 
-The CLOB / trades / OI adapters read ``token_ids`` / ``condition_ids`` from the
-source ``config``; those are seeded EMPTY here (the adapters gracefully no-op on
-an empty list).  A later wave populates them from the live market universe.
+The CLOB / trades adapters read a ``markets`` work-list — a list of
+``{"condition_id": ..., "token_ids": [...]}`` pairing each parent market
+``conditionId`` with its child CLOB outcome tokens (PLAN-0056 Wave B4) — so the
+resulting S3 price/trade rows carry ``market_id = conditionId`` and JOIN to
+``prediction_markets``.  The OI adapter reads ``condition_ids``.  All are seeded
+EMPTY here (the adapters gracefully no-op on an empty list); a later wave
+populates them from the live market universe (derived from Gamma ``/markets``
+``clobTokenIds``).
 
 Mirrors the 0008 seeding pattern: deterministic SHA-256-derived UUIDs (stable
 across re-deploys) + ``ON CONFLICT ON CONSTRAINT uq_sources_dedup DO NOTHING``
@@ -60,17 +65,19 @@ _WAVE2_SOURCES = [
     {
         "id": _uuid_from_seed("source:polymarket_clob:prices-history"),
         "name": "polymarket-clob-history",
-        # CLOB adapter reads ``token_ids`` (seeded empty; populated later).
+        # CLOB adapter reads the ``markets`` work-list — {condition_id, token_ids}
+        # pairs (PLAN-0056 Wave B4) — seeded empty; populated later.
         "source_type": "polymarket_clob",
-        "config": json.dumps({"token_ids": []}),
+        "config": json.dumps({"markets": []}),
         "enabled": True,
     },
     {
         "id": _uuid_from_seed("source:polymarket_data_trades:trades"),
         "name": "polymarket-trades",
-        # Trades adapter reads ``condition_ids`` (seeded empty; populated later).
+        # Trades adapter reads the ``markets`` work-list — {condition_id, token_ids}
+        # pairs (PLAN-0056 Wave B4) — seeded empty; populated later.
         "source_type": "polymarket_data_trades",
-        "config": json.dumps({"condition_ids": []}),
+        "config": json.dumps({"markets": []}),
         "enabled": True,
     },
     {

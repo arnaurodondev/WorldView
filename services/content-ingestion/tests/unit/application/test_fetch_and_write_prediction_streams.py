@@ -119,7 +119,8 @@ def _event() -> PredictionEventFetchResult:
     )
 
 
-def _history() -> PredictionHistoryFetchResult:
+def _history(market_id: str | None = "cond_parent") -> PredictionHistoryFetchResult:
+    # PLAN-0056 Wave B4: results now carry the parent market_id (conditionId).
     return PredictionHistoryFetchResult(
         source_type=SourceType.POLYMARKET_CLOB,
         token_id="tok_yes",
@@ -130,10 +131,12 @@ def _history() -> PredictionHistoryFetchResult:
         ],
         raw_bytes=b"{}",
         fetched_at=_FETCHED_AT,
+        market_id=market_id,
     )
 
 
-def _trade() -> PredictionTradeFetchResult:
+def _trade(market_id: str | None = "cond_parent") -> PredictionTradeFetchResult:
+    # PLAN-0056 Wave B4: results now carry the parent market_id (conditionId).
     return PredictionTradeFetchResult(
         source_type=SourceType.POLYMARKET_DATA_TRADES,
         trade_id="0xabc",
@@ -144,6 +147,7 @@ def _trade() -> PredictionTradeFetchResult:
         traded_at=_FETCHED_AT,
         raw_bytes=b"{}",
         fetched_at=_FETCHED_AT,
+        market_id=market_id,
     )
 
 
@@ -179,8 +183,9 @@ class TestPayloadBuilders:
         for p in payloads:
             assert set(p.keys()) == _HISTORY_FIELDS
             assert p["event_type"] == "market.prediction.history"
-            # token_id is used as the surrogate market_id (B1 entity has no conditionId).
-            assert p["market_id"] == "tok_yes"
+            # PLAN-0056 Wave B4: market_id is now the PARENT conditionId (was the
+            # token_id surrogate in B3 — that assertion encoded the join bug).
+            assert p["market_id"] == "cond_parent"
             assert p["token_id"] == "tok_yes"  # noqa: S105
             assert p["interval"] == "1h"
             assert p["is_backfill"] is True
@@ -191,15 +196,32 @@ class TestPayloadBuilders:
         payloads = build_prediction_history_payloads(_history())
         assert all(p["is_backfill"] is False for p in payloads)
 
+    def test_history_market_id_falls_back_to_token_when_no_parent(self) -> None:
+        # PLAN-0056 Wave B4: legacy fetch-result with no parent conditionId keeps
+        # the non-null schema field satisfied via the token_id surrogate.
+        payloads = build_prediction_history_payloads(_history(market_id=None))
+        for p in payloads:
+            assert p["market_id"] == "tok_yes"
+            assert p["token_id"] == "tok_yes"  # noqa: S105
+
     def test_trade_payload_matches_schema_fields(self) -> None:
         payload = build_prediction_trade_payloads(_trade())[0]
         assert set(payload.keys()) == _TRADE_FIELDS
         assert payload["event_type"] == "market.prediction.trade"
         assert payload["trade_id"] == "0xabc"
         assert payload["token_id"] == "tok_yes"  # noqa: S105
-        assert payload["market_id"] == "tok_yes"  # surrogate
+        # PLAN-0056 Wave B4: market_id is now the PARENT conditionId (was token_id
+        # surrogate in B3 — that assertion encoded the join bug).
+        assert payload["market_id"] == "cond_parent"
         assert payload["side"] == "buy"
         assert payload["size_usd"] == 125.5
+
+    def test_trade_market_id_falls_back_to_token_when_no_parent(self) -> None:
+        # PLAN-0056 Wave B4: legacy trade with no parent conditionId keeps the
+        # non-null schema field satisfied via the token_id surrogate.
+        payload = build_prediction_trade_payloads(_trade(market_id=None))[0]
+        assert payload["market_id"] == "tok_yes"
+        assert payload["token_id"] == "tok_yes"  # noqa: S105
 
     def test_oi_payload_matches_schema_fields(self) -> None:
         payload = build_prediction_oi_payloads(_oi())[0]

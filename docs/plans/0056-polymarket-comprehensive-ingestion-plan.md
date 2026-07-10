@@ -22,7 +22,8 @@ synthetic-doc emitter), S6 nlp-pipeline (UNCHANGED — reused via synthetic docs
 via existing fanout), S9 api-gateway (read + brief leg), worldview-web (page + chat), plus
 libs/messaging + libs/contracts + libs/prompts + intelligence-migrations.
 
-**Total: 6 sub-plans, 18 waves.** Keystone = Sub-Plan C (KG linking); signals (D) depend on it.
+**Total: 6 sub-plans, 19 waves.** Keystone = Sub-Plan C (KG linking); signals (D) depend on it.
+(Wave B4 added 2026-07-10 as a corrective wave under Sub-Plan B.)
 
 ### Model decisions from recon (2026-07-09) — supersede PRD first-draft wording (reconcile in /revise-prd)
 
@@ -318,6 +319,34 @@ later wave can enrich token→conditionId).
   `CONTENT_INGESTION_BACKFILL_ON_STARTUP`.
 **Tests**: routing dispatch per source type; scheduler seeds 4 sources; migration up/down (≥6).
 **Guardrails**: R32 (0011 chained from verified 0010); compose-profile recreate gotcha (feedback memory).
+
+### Wave B4 — CLOB/trades conditionId association (corrective) ✅
+**Status**: **DONE** — 2026-07-10 · 12 new/updated tests · ruff+mypy clean (only pre-existing pdfminer
+stub) · full S4 suite green (1019 passed / 60 pre-existing integration skips) · avro-prediction contract
+tests green (32 passed). **Corrective wave** fixing the B3 **token_id-surrogate bug**: CLOB
+`/prices-history` and Data `/trades` are keyed by per-outcome `token_id` and carry no parent
+`conditionId`, so B3 set the outbox `market_id = token_id` → S3 `prediction_market_prices` /
+`prediction_market_trades` rows did NOT JOIN to `prediction_markets` (keyed on conditionId), breaking the
+probability chart (E2) and move-signal (D1).
+Fix: CLOB/trades source `config` now carries a **`markets` work-list** — `[{"condition_id": ...,
+"token_ids": [...]}]` pairing each parent market with its child CLOB outcome tokens (derivable from Gamma
+`/markets` `clobTokenIds`) — parsed by the new shared `infrastructure/adapters/polymarket_worklist.py`
+(`parse_markets` → `MarketWorkItem`, camelCase-tolerant, legacy flat `token_ids`/`condition_ids` fallback
+with `condition_id=None`). The adapters thread the parent `condition_id` into
+`PredictionHistoryFetchResult`/`PredictionTradeFetchResult` (new `market_id: str | None` field, set via
+`from_api_response(..., condition_id=...)`); the history/trade payload builders now emit
+`market_id = result.market_id or result.token_id` (surrogate only when the parent is unknown) with
+`token_id` unchanged. Migration `0011` seed reshaped to `{"markets": []}` for CLOB + trades (OI keeps
+`condition_ids`). No Avro change — both `market_id` and `token_id` fields already exist (Wave A1). Dedup
+keys unchanged (history→token_id, trade→trade_id).
+**Layer**: infrastructure/domain. **Effort**: 45m. **depends_on**: B1, B3.
+- **T-B-4-01 (impl)** — shared `polymarket_worklist.parse_markets` (`markets` work-list → `MarketWorkItem`).
+- **T-B-4-02 (impl)** — CLOB + trades adapters parse the work-list and thread `condition_id` onto results.
+- **T-B-4-03 (impl)** — entities carry `market_id`; payload builders set `market_id = parent conditionId`.
+- **T-B-4-04 (schema)** — migration `0011` seed reshaped to `{"markets": []}` for CLOB + trades.
+**Tests**: work-list parser (6); history/trade payload market_id=conditionId + surrogate fallback;
+2-token market shares parent conditionId; migration seed has `markets` (≥12 total).
+**Guardrails**: R8 (outbox unchanged); R32 (0011 seed edited, HEAD verified); no Avro break (both columns exist).
 
 ---
 

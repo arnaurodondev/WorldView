@@ -1,7 +1,12 @@
 """Polymarket CLOB ``/prices-history`` adapter — emits PredictionHistoryFetchResult.
 
 Responsibilities:
-- Per token_id (read from ``source.config["token_ids"]``), fetch the price series.
+- Per market ``condition_id`` and its child CLOB ``token_ids`` (read from the
+  ``source.config["markets"]`` work-list — PLAN-0056 Wave B4), fetch the price
+  series.  The parent ``condition_id`` is threaded onto each fetch-result as
+  ``market_id`` so S3 price rows JOIN to ``prediction_markets`` (keyed on
+  conditionId) instead of the per-outcome ``token_id``.  A legacy flat
+  ``token_ids`` list is still honoured with ``condition_id = None``.
 - **Resolved-market fallback**: if the primary interval (``1h``) request returns
   HTTP 400 or an EMPTY series, retry once at the coarser ``fallback_interval``
   (``1d``) — resolved markets frequently have no fine-grained series (PRD-0033
@@ -27,6 +32,7 @@ from typing import TYPE_CHECKING
 import common.time
 from content_ingestion.domain.entities import PredictionHistoryFetchResult
 from content_ingestion.domain.exceptions import AdapterError
+from content_ingestion.infrastructure.adapters.polymarket_worklist import MarketWorkItem, parse_markets
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -90,18 +96,21 @@ class PolymarketClobHistoryAdapter:
     ) -> list[PredictionHistoryFetchResult]:
         """Fetch CLOB price history for each configured token id.
 
-        Token ids are read from ``source.config["token_ids"]`` (seeded in a later
-        wave). Returns one result per token that yields ≥1 datapoint.
+        The market work-list (parent ``condition_id`` + child ``token_ids``) is
+        read from ``source.config["markets"]`` (PLAN-0056 Wave B4); a legacy flat
+        ``token_ids`` list is honoured with an unknown parent. Returns one result
+        per token that yields ≥1 datapoint, stamped with its parent ``market_id``.
 
         Args:
-            source: The configured polling source (carries ``token_ids``).
+            source: The configured polling source (carries the ``markets`` work-list).
             is_backfill: When True use the ``backfill_days`` window, else the
                 ``ongoing_window_hours`` incremental window.
             from_date: Unused (window derived from settings + is_backfill).
         """
         fetched_at = _round_to_minute(common.time.utc_now())
-        token_ids = self._extract_token_ids(source)
-        if not token_ids:
+        markets = self._extract_markets(source)
+        token_count = sum(len(m.token_ids) for m in markets)
+        if token_count == 0:
             logger.info("polymarket_clob_no_token_ids", source=source.name)
             return []
 
@@ -112,32 +121,45 @@ class PolymarketClobHistoryAdapter:
         start_ts = int((fetched_at - window).timestamp())
 
         results: list[PredictionHistoryFetchResult] = []
-        for token_id in token_ids:
-            result = await self._process_token(token_id, fetched_at, start_ts)
-            if result is not None:
-                results.append(result)
+        for market in markets:
+            for token_id in market.token_ids:
+                # B4: thread the parent conditionId so the result carries market_id.
+                result = await self._process_token(token_id, fetched_at, start_ts, market.condition_id)
+                if result is not None:
+                    results.append(result)
 
         logger.info(
             "polymarket_clob_fetch_complete",
             source=source.name,
-            tokens=len(token_ids),
+            markets=len(markets),
+            tokens=token_count,
             new=len(results),
         )
         return results
 
     @staticmethod
-    def _extract_token_ids(source: Source) -> list[str]:
-        """Read the list of CLOB token ids from the source config."""
+    def _extract_markets(source: Source) -> list[MarketWorkItem]:
+        """Read the CLOB market work-list (parent condition_id + child token_ids).
+
+        Prefers the B4 ``markets`` work-list; falls back to a legacy flat
+        ``token_ids`` / ``clob_token_ids`` list with an unknown parent
+        (``condition_id = None``) for backward compatibility.
+        """
+        markets = parse_markets(source.config)
+        if markets:
+            return markets
         raw = source.config.get("token_ids") or source.config.get("clob_token_ids") or []
         if not isinstance(raw, list):
             return []
-        return [str(t) for t in raw if t]
+        tokens = [str(t) for t in raw if t]
+        return [MarketWorkItem(condition_id=None, token_ids=tokens)] if tokens else []
 
     async def _process_token(
         self,
         token_id: str,
         fetched_at: datetime,
         start_ts: int,
+        condition_id: str | None = None,
     ) -> PredictionHistoryFetchResult | None:
         """Fetch, dedup, parse and store one token's price history.
 
@@ -204,6 +226,7 @@ class PolymarketClobHistoryAdapter:
                 raw,
                 fetched_at,
                 interval=interval,
+                condition_id=condition_id,
             )
         except Exception:
             logger.warning("polymarket_clob_parse_failed", token_id=token_id, exc_info=True)

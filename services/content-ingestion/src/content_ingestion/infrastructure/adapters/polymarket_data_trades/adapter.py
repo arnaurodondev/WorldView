@@ -1,14 +1,17 @@
 """Polymarket Data-API ``/trades`` adapter — emits PredictionTradeFetchResult.
 
 Responsibilities:
-- Per market ``condition_id`` (read from ``source.config["condition_ids"]``),
-  offset-paginate the trades feed (up to ``max_pages_per_cycle`` pages).
+- Per market ``condition_id`` (read from the ``source.config["markets"]`` work-list
+  — PLAN-0056 Wave B4 — or a legacy flat ``condition_ids`` list), offset-paginate
+  the trades feed (up to ``max_pages_per_cycle`` pages).
 - Deduplication per trade via ``fetch_log_exists_fn`` (trade_id, snapshot_at).
 - Raw bytes stored to MinIO bronze (non-fatal on failure).
 - Parse errors logged and skipped (non-fatal).
 
 Design notes:
-- One ``PredictionTradeFetchResult`` per new (non-duplicate) trade.
+- One ``PredictionTradeFetchResult`` per new (non-duplicate) trade, stamped with
+  its parent ``market_id = condition_id`` so S3 trade rows JOIN to
+  ``prediction_markets`` (keyed on conditionId) — PLAN-0056 Wave B4.
 - ``snapshot_at = fetched_at`` (rounded to the minute) is passed to the dedup
   callback; the natural dedup key is ``trade_id`` (globally unique).
 """
@@ -23,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 import common.time
 from content_ingestion.domain.entities import PredictionTradeFetchResult
 from content_ingestion.domain.exceptions import AdapterError
+from content_ingestion.infrastructure.adapters.polymarket_worklist import parse_markets
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -83,11 +87,12 @@ class PolymarketTradesAdapter:
     ) -> list[PredictionTradeFetchResult]:
         """Fetch trades for each configured market condition id.
 
-        Condition ids are read from ``source.config["condition_ids"]`` (seeded in
-        a later wave). Returns one result per new (non-duplicate) trade.
+        Condition ids are read from the ``source.config["markets"]`` work-list
+        (PLAN-0056 Wave B4), or a legacy flat ``condition_ids`` list. Returns one
+        result per new (non-duplicate) trade, stamped with its parent ``market_id``.
 
         Args:
-            source: The configured polling source (carries ``condition_ids``).
+            source: The configured polling source (carries the ``markets`` work-list).
             is_backfill: Unused here (offset pagination bounded by max_pages).
             from_date: Unused.
         """
@@ -111,7 +116,14 @@ class PolymarketTradesAdapter:
 
     @staticmethod
     def _extract_condition_ids(source: Source) -> list[str]:
-        """Read the list of market condition ids from the source config."""
+        """Read the list of market condition ids from the source config.
+
+        Prefers the B4 ``markets`` work-list; falls back to a legacy flat
+        ``condition_ids`` / ``market_ids`` list for backward compatibility.
+        """
+        markets = parse_markets(source.config)
+        if markets:
+            return [m.condition_id for m in markets if m.condition_id]
         raw = source.config.get("condition_ids") or source.config.get("market_ids") or []
         if not isinstance(raw, list):
             return []
@@ -142,7 +154,8 @@ class PolymarketTradesAdapter:
             page_count += 1
 
             for trade in page.trades:
-                result = await self._process_trade(trade, fetched_at)
+                # B4: thread the parent conditionId so the trade carries market_id.
+                result = await self._process_trade(trade, fetched_at, condition_id)
                 if result is not None:
                     results.append(result)
 
@@ -156,6 +169,7 @@ class PolymarketTradesAdapter:
         self,
         trade: dict[str, Any],
         fetched_at: datetime,
+        condition_id: str | None = None,
     ) -> PredictionTradeFetchResult | None:
         """Dedup, parse and store a single trade dict."""
         trade_id: str = str(trade.get("transactionHash") or trade.get("id") or "")
@@ -174,7 +188,7 @@ class PolymarketTradesAdapter:
 
         # Parse.
         try:
-            result = PredictionTradeFetchResult.from_api_response(trade, fetched_at)
+            result = PredictionTradeFetchResult.from_api_response(trade, fetched_at, condition_id=condition_id)
         except Exception:
             logger.warning("polymarket_trades_parse_failed", trade_id=trade_id, exc_info=True)
             return None
