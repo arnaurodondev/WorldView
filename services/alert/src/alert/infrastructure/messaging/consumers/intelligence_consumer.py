@@ -2,9 +2,10 @@
 
 Consumer group: ``alert-service-group``
 Topics:
-  - ``nlp.signal.detected.v1``       → AlertType.SIGNAL
-  - ``graph.state.changed.v1``       → AlertType.GRAPH_CHANGE
+  - ``nlp.signal.detected.v1``        → AlertType.SIGNAL
+  - ``graph.state.changed.v1``        → AlertType.GRAPH_CHANGE
   - ``intelligence.contradiction.v1`` → AlertType.CONTRADICTION
+  - ``market.prediction.signal.v1``   → AlertType.PREDICTION (PLAN-0056 D3)
 
 At-least-once delivery with manual offset commit (``enable_auto_commit=False``).
 Backfill suppression is delegated to :class:`AlertFanoutUseCase`.
@@ -37,6 +38,8 @@ _KNOWN_TOPICS: frozenset[str] = frozenset(
         "nlp.signal.detected.v1",
         "graph.state.changed.v1",
         "intelligence.contradiction.v1",
+        # PLAN-0056 Wave D3: prediction-market signals from S7 (Wave D2).
+        "market.prediction.signal.v1",
     },
 )
 
@@ -45,6 +48,8 @@ _TOPIC_SCHEMA_PATHS: dict[str, str] = {
     "nlp.signal.detected.v1": get_schema_path("nlp.signal.detected.v1.avsc"),
     "graph.state.changed.v1": get_schema_path("graph.state.changed.v1.avsc"),
     "intelligence.contradiction.v1": get_schema_path("intelligence.contradiction.v1.avsc"),
+    # PLAN-0056 Wave D3: Avro-first decode of the prediction signal.
+    "market.prediction.signal.v1": get_schema_path("market.prediction.signal.v1.avsc"),
 }
 
 # PLAN-0062 F-018: defence-in-depth bound on the unbounded ``json.loads`` read.
@@ -309,6 +314,9 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
             return "graph.state.changed.v1"
         if event_type.startswith("intelligence.contradiction"):
             return "intelligence.contradiction.v1"
+        # PLAN-0056 Wave D3: event_type is "market.prediction.signal".
+        if event_type.startswith("market.prediction.signal"):
+            return "market.prediction.signal.v1"
 
         # Unresolvable — log warning; fanout degrades gracefully for unknown topics
         logger.warning(  # type: ignore[no-any-return]

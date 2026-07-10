@@ -523,7 +523,22 @@ audit-return-persistence, config-driven thresholds (no hardcode).
 **Tests**: each trigger emits per-entity signal with correct score/polarity; no exposure → no signal (≥6).
 **Guardrails**: R8 outbox; noise-gate (only tracked-linked entities); idempotency per (condition_id, trigger, window).
 
-### Wave D3 — alert: subscribe + prediction type + rule toggle
+### Wave D3 — alert: subscribe + prediction type + rule toggle ✅ DONE (2026-07-10)
+**Status**: DONE — **Sub-Plan D COMPLETE**. `IntelligenceConsumer` now subscribes
+`market.prediction.signal.v1` (topic const `kafka_topic_prediction_signal`; added to `_KNOWN_TOPICS`,
+`_TOPIC_SCHEMA_PATHS`, `_resolve_topic`, ConsumerConfig + banner). `AlertFanoutUseCase` maps the topic →
+`AlertType.PREDICTION` (`TOPIC_ALERT_TYPE`), extracts `subject_entity_id` as the fanout watchlist key, and
+derives severity from `market_impact_score` via `SeverityThresholds.classify` (NOT in the MEDIUM-override set —
+score already carries D2's adverse boost, so bearish moves land higher naturally). `_compose_prediction_detail`
+composes adverse-emphasis copy from `trigger`+`polarity`+`question` ("AAPL — prediction market moving against:
+…" for bearish; "in favor of" for bullish; neutral direction-less); `polarity`/`trigger`/`market_id`/`question`/
+`url` all carried into the persisted payload for the frontend link. `AlertType.PREDICTION="prediction"` (VARCHAR,
+no alerts-table migration — `alerts.alert_type` has NO CHECK). `RuleType.PREDICTION` + `PredictionCondition`
+(`entity_id`/`min_impact_score`/`polarities`/`triggers`) + event-driven `PredictionRuleEvaluator` (registered;
+poller-skipped like KG_CONNECTION) + `should_fire`/`next_state` PREDICTION branch (score-floor + 1h cooldown).
+Migration `0011_add_prediction_rule_type.py` (rev 0011 / down 0010) widens `ck_alert_rules_rule_type`. **Gating
+that actually fires prediction alerts = watchlist membership** (like all SIGNAL-class events); the rule type is a
+user-configurable toggle/filter only. 35 new tests; 696 alert tests pass; ruff+mypy clean.
 **Layer**: infrastructure/schema. **Effort**: 60m. **depends_on**: D2.
 - **T-D-3-01 (impl)** — `IntelligenceConsumer`: subscribe `market.prediction.signal.v1`; map
   `subject_entity_id`→entity, `market_impact_score`→severity via `SeverityThresholds`, `polarity`→alert

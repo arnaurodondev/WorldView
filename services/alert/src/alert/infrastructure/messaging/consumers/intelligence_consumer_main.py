@@ -7,6 +7,7 @@ Consumes:
   - ``nlp.signal.detected.v1``
   - ``graph.state.changed.v1``
   - ``intelligence.contradiction.v1``
+  - ``market.prediction.signal.v1`` (PLAN-0056 Wave D3)
 
 Run with::
 
@@ -267,6 +268,8 @@ async def main() -> None:
             settings.kafka_topic_signal,
             settings.kafka_topic_graph_state,
             settings.kafka_topic_contradiction,
+            # PLAN-0056 Wave D3: prediction-market signals → watchlist fanout.
+            settings.kafka_topic_prediction_signal,
         ],
         # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
         group_instance_id=settings.kafka_intelligence_consumer_instance_id,
@@ -292,6 +295,7 @@ async def main() -> None:
                 settings.kafka_topic_signal,
                 settings.kafka_topic_graph_state,
                 settings.kafka_topic_contradiction,
+                settings.kafka_topic_prediction_signal,
             ],
         },
     )

@@ -31,6 +31,10 @@ DEFAULT_COOLDOWN_SECONDS: dict[RuleType, int] = {
     RuleType.NEWS_MOMENTUM: 21600,
     RuleType.KG_CONNECTION: 0,
     RuleType.FUNDAMENTAL_CROSS: 86400,
+    # PLAN-0056 Wave D3 — prediction signals can arrive in bursts (a market
+    # moving in steps); a 1h cooldown collapses a run of moves into one alert
+    # per rule, mirroring the fanout path's 300s dedup at a coarser cadence.
+    RuleType.PREDICTION: 3600,
 }
 
 # ---------------------------------------------------------------------------
@@ -442,6 +446,18 @@ class AlertRule:
             already = bool(self.last_state.get("connected")) if self.last_state else False
             return not already
 
+        if self.rule_type == RuleType.PREDICTION:
+            # A prediction signal carries its gating score in ``result.value``
+            # (the event's ``market_impact_score``, already adverse-boosted by
+            # S7 D2). Fire when the score clears the rule's ``min_impact_score``
+            # floor. Bursts are collapsed by the per-type cooldown above rather
+            # than an edge flag — each qualifying signal is an independent
+            # observation, unlike the held-state cross rules.
+            if result.value is None:
+                return False
+            floor = float(self.condition.get("min_impact_score", 0.0))  # type: ignore[arg-type]
+            return result.value >= floor
+
         return False
 
     def next_state(self, result: EvalResult, now: datetime, *, fired: bool) -> dict[str, object]:
@@ -467,6 +483,8 @@ class AlertRule:
                 state["was_above"] = result.delta_pct >= min_delta and result.count >= min_count
         elif self.rule_type == RuleType.KG_CONNECTION and result.connected is not None:
             state["connected"] = result.connected
+        elif self.rule_type == RuleType.PREDICTION and result.value is not None:
+            state["last_value"] = result.value
 
         if fired:
             state["last_fired_at"] = now.isoformat()

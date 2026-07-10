@@ -95,13 +95,38 @@ class FundamentalCrossCondition(_ConditionBase):
     value: float
 
 
+class PredictionCondition(_ConditionBase):
+    """``PREDICTION`` — prediction-market signals about ``entity_id`` (PLAN-0056 Wave D3).
+
+    Keyed on ``entity_id`` (the ``subject_entity_id`` carried in
+    ``market.prediction.signal.v1``). Optional filters let a user narrow which
+    prediction signals raise an alert:
+
+    - ``min_impact_score`` — floor on the event's ``market_impact_score`` (which
+      S7 D2 already boosts for adverse/bearish moves). Default 0.0 = any.
+    - ``polarities`` — restrict to these directions (e.g. only ``bearish`` = a
+      bad-for-the-entity outcome being priced up). ``None`` = all directions.
+    - ``triggers`` — restrict to these trigger kinds. ``None`` = all triggers.
+
+    NOTE: prediction signals fan out via watchlist membership regardless of any
+    rule; this condition only powers the user-configurable toggle/filter path.
+    """
+
+    entity_id: UUID
+    # ``ge=0, le=1``: the score is a [0,1] gate; anything else is meaningless.
+    min_impact_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    polarities: list[Literal["bullish", "bearish", "neutral"]] | None = None
+    triggers: list[Literal["new_market", "material_move", "resolution"]] | None = None
+
+
 # Public union type — used in type hints / request schemas.
 Condition = Annotated[
     PriceCrossCondition
     | NewsCountCondition
     | NewsMomentumCondition
     | KgConnectionCondition
-    | FundamentalCrossCondition,
+    | FundamentalCrossCondition
+    | PredictionCondition,
     Field(),
 ]
 
@@ -113,6 +138,7 @@ _CONDITION_MODELS: dict[RuleType, type[_ConditionBase]] = {
     RuleType.NEWS_MOMENTUM: NewsMomentumCondition,
     RuleType.KG_CONNECTION: KgConnectionCondition,
     RuleType.FUNDAMENTAL_CROSS: FundamentalCrossCondition,
+    RuleType.PREDICTION: PredictionCondition,
 }
 
 
@@ -135,6 +161,7 @@ __all__ = [
     "KgConnectionCondition",
     "NewsCountCondition",
     "NewsMomentumCondition",
+    "PredictionCondition",
     "PriceCrossCondition",
     "parse_condition",
 ]

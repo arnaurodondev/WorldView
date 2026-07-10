@@ -30,6 +30,13 @@ class AlertType(StrEnum):
     GRAPH_CHANGE = "GRAPH_CHANGE"
     CONTRADICTION = "CONTRADICTION"
     USER_RULE = "user_rule"
+    # PLAN-0056 Wave D3 — prediction-market signals (market.prediction.signal.v1)
+    # fanned out through the existing watchlist-gated AlertFanoutUseCase. The
+    # value ``"prediction"`` (lowercase, like ``user_rule``) is what the frontend
+    # matches to render "a prediction is moving against <entity>". Because
+    # ``alerts.alert_type`` is VARCHAR(100) with NO CHECK constraint (BP-007),
+    # this addition needs no alerts-table migration.
+    PREDICTION = "prediction"
 
 
 class RuleType(StrEnum):
@@ -50,6 +57,13 @@ class RuleType(StrEnum):
     NEWS_MOMENTUM = "NEWS_MOMENTUM"
     KG_CONNECTION = "KG_CONNECTION"
     FUNDAMENTAL_CROSS = "FUNDAMENTAL_CROSS"
+    # PLAN-0056 Wave D3 — a user-configurable toggle for prediction-market
+    # signals. NOTE: prediction alerts fire through the watchlist fanout
+    # regardless of any rule (like the other SIGNAL-class events); this rule
+    # type exists so a user can opt into / filter prediction signals by score,
+    # polarity, or trigger. Event-driven (``market.prediction.signal.v1``), keyed
+    # on ``entity_id``.
+    PREDICTION = "PREDICTION"
 
 
 class OutboxStatus(StrEnum):
