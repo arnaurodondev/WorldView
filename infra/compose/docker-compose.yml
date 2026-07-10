@@ -2358,6 +2358,35 @@ services:
       retries: 3
       start_period: 30s
 
+  # PLAN-0056 Wave D2 — PredictionMoveConsumer: joins market.prediction.move.v1
+  # (S3 Wave D1) to a market's entity exposures and emits one
+  # market.prediction.signal.v1 (trigger='material_move') per linked entity via the
+  # outbox. Own consumer group (kg-prediction-move-group).
+  knowledge-graph-prediction-move-consumer:
+    init: true
+    image: worldview-knowledge-graph:latest
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.prediction_move_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # PLAN-0074 Wave E1 — PathInsightWorker: multi-hop path discovery + scoring.
   # Horizontally scalable: each replica generates a unique instance UUID at
   # startup (or use KNOWLEDGE_GRAPH_PATH_INSIGHT_WORKER_INSTANCE_ID to pin it).

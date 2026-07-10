@@ -152,6 +152,37 @@ class EntityEventExposureRepositoryPort(ABC):
         """
 
     @abstractmethod
+    async def list_exposures_for_condition(
+        self,
+        *,
+        condition_id: str,
+    ) -> tuple[str | None, list[dict[str, object]]]:
+        """List the entity exposures of a prediction market keyed by condition_id (PLAN-0056 Wave D2).
+
+        Joins ``entity_event_exposures`` to ``temporal_events`` where
+        ``event_type = 'prediction'`` and ``region = condition_id`` (the market
+        identity stamped by Wave C2b).  Used by the ``PredictionMoveConsumer`` to
+        fan a ``market.prediction.move.v1`` event out to the market's linked
+        entities before invoking ``PredictionSignalEmitter``.
+
+        Args:
+        ----
+            condition_id: Polymarket conditionId (temporal_events.region).
+
+        Returns:
+        -------
+            Tuple of ``(question, rows)`` where:
+            - ``question`` is the market question (temporal_events.title), or None
+              when the market is unknown / has no exposures.
+            - ``rows`` is a list of dicts, one per linked entity, each with:
+              ``entity_id`` (UUID), ``polarity`` (str|None),
+              ``polarity_confidence`` (float|None), ``confidence`` (float).
+            An empty ``rows`` list means the market is not linked to any entity
+            (the consumer no-ops).
+
+        """
+
+    @abstractmethod
     async def list_prediction_exposures_for_entity(
         self,
         *,

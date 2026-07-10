@@ -126,6 +126,27 @@ class Settings(BaseSettings):
     )
     polarity_classifier_timeout_seconds: int = 30  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_TIMEOUT_SECONDS
 
+    # ── PLAN-0056 Wave D2 — PredictionSignalEmitter tunables ─────────────────
+    # The emitter turns the three prediction triggers (new_market / material_move /
+    # resolution) into per-entity ``market.prediction.signal.v1`` events (one per
+    # entity exposure) with a gating ``market_impact_score`` in [0, 1]. All bases /
+    # multipliers are env-driven so the alert severity mapping can be tuned without
+    # a code change (no magic numbers buried in the score logic).
+    #
+    # new_market  : score = new_market_base * exposure.confidence (clamped 0..1).
+    # material_move: score = clamp(|delta|, 0..1), boosted by adverse_factor when the
+    #               move is adverse for the entity (bearish-outcome rising OR the
+    #               entity's favourable outcome falling), capped at 1.0.
+    # resolution  : score = resolution_base (fixed).
+    prediction_signal_new_market_base: float = 0.5  # KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_NEW_MARKET_BASE
+    prediction_signal_resolution_base: float = 0.6  # KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_RESOLUTION_BASE
+    # KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_MATERIAL_MOVE_ADVERSE_FACTOR
+    prediction_signal_material_move_adverse_factor: float = 1.25
+    # Gate: when False the enriched consumer never emits new_market signals (the
+    # first-sight-of-a-market trigger). material_move + resolution are unaffected.
+    # KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_EMIT_NEW_MARKET
+    prediction_signal_emit_new_market: bool = True
+
     # Observability (STANDARDS.md §5)
     log_level: str = "INFO"
     log_json: bool = True
@@ -302,6 +323,8 @@ class Settings(BaseSettings):
     kafka_earnings_calendar_dataset_consumer_instance_id: str = ""
     # PLAN-0056 Wave C2 — PredictionEnrichedConsumer (own group on nlp.article.enriched.v1).
     kafka_prediction_enriched_consumer_instance_id: str = ""
+    # PLAN-0056 Wave D2 — PredictionMoveConsumer (own group on market.prediction.move.v1).
+    kafka_prediction_move_consumer_instance_id: str = ""
     kafka_economic_events_dataset_consumer_instance_id: str = ""
     kafka_insider_transactions_dataset_consumer_instance_id: str = ""
     kafka_macro_indicator_dataset_consumer_instance_id: str = ""

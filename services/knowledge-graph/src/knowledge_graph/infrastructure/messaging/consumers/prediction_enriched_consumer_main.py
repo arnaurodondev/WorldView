@@ -106,6 +106,21 @@ async def main() -> None:
             model=settings.polarity_classifier_model_id,
         )
 
+    # PLAN-0056 Wave D2: PredictionSignalEmitter turns first-sight (new_market) and
+    # resolution docs into per-entity market.prediction.signal.v1 signals via the
+    # outbox. Always wired (no external dependency) — the new_market gate lives in
+    # config (KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_EMIT_NEW_MARKET).
+    from knowledge_graph.application.services.prediction_signal_emitter import (
+        PredictionSignalEmitter,
+    )
+
+    signal_emitter = PredictionSignalEmitter(
+        emit_new_market=settings.prediction_signal_emit_new_market,
+        new_market_base=settings.prediction_signal_new_market_base,
+        resolution_base=settings.prediction_signal_resolution_base,
+        material_move_adverse_factor=settings.prediction_signal_material_move_adverse_factor,
+    )
+
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id="kg-prediction-enriched-group",
@@ -120,6 +135,8 @@ async def main() -> None:
         dedup_client=valkey,
         # PLAN-0056 Wave C3: None when no DeepInfra key → exposures keep NULL polarity.
         polarity_classifier=polarity_classifier,
+        # PLAN-0056 Wave D2: new_market + resolution prediction signals.
+        signal_emitter=signal_emitter,
     )
     # Bind the probe so /healthz reflects this consumer's poll-loop progress.
     liveness_probe.bind(consumer)

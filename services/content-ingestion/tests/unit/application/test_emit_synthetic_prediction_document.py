@@ -215,6 +215,12 @@ class TestSyntheticDocumentEmitter:
         # The second document uses the :resolved dedup hash and notes the outcome.
         second_payload = outbox.append.call_args_list[1].kwargs["payload"]
         assert second_payload["source_type"] == "polymarket"
+        # PLAN-0056 Wave D2: first-sight external_id = polymarket:<cid>; the
+        # resolution doc appends ':resolved' so S7 emits a 'resolution' (vs
+        # 'new_market') signal. Both still carry the same condition_id.
+        first_payload = outbox.append.call_args_list[0].kwargs["payload"]
+        assert first_payload["external_id"] == "polymarket:cond_abc"
+        assert second_payload["external_id"] == "polymarket:cond_abc:resolved"
 
     async def test_resolution_only_document_when_first_sight_exists(self) -> None:
         """When first-sight already emitted, a newly-resolved market emits only the resolution doc."""

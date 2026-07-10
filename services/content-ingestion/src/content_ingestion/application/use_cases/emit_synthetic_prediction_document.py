@@ -252,7 +252,14 @@ class SyntheticDocumentEmitter:
                 # PredictionEnrichedConsumer can resolve this synthetic doc back
                 # to its real Polymarket market (condition_id) instead of an
                 # anonymous doc_id.  source_url above stays the human URL.
-                external_id=f"polymarket:{result.market_id}",
+                # PLAN-0056 Wave D2: the resolution doc appends ':resolved' so S7
+                # can distinguish it from the first-sight doc and emit a
+                # 'resolution' (vs 'new_market') prediction signal.  S7 strips the
+                # suffix before keying the temporal event, so BOTH docs still
+                # collapse onto ONE market row (idempotent per condition_id).
+                external_id=(
+                    f"polymarket:{result.market_id}:resolved" if resolved else f"polymarket:{result.market_id}"
+                ),
             )
             await self._outbox.append(
                 aggregate_type="article",

@@ -633,3 +633,149 @@ class TestPredictionEnrichedConsumerPolarity:
         event_repo.upsert_by_natural_key.assert_awaited_once()
         assert exposure_repo.upsert.call_args.kwargs["polarity"] is None
         session.commit.assert_awaited_once()
+
+
+# ── PLAN-0056 Wave D2: new_market + resolution signal wiring ──────────────────
+
+_OUTBOX_REPO = "knowledge_graph.infrastructure.intelligence_db.repositories.outbox.OutboxRepository"
+
+
+def _make_consumer_with_emitter(
+    *,
+    emit_new_market: bool = True,
+) -> tuple[Any, Any, Any, Any]:
+    """Build a consumer wired with a REAL PredictionSignalEmitter (Wave D2).
+
+    Returns (consumer, event_repo, exposure_repo, session). The OutboxRepository is
+    patched by the caller so ``emit`` writes to a mock outbox.
+    """
+    from knowledge_graph.application.services.prediction_signal_emitter import (
+        PredictionSignalEmitter,
+    )
+    from knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer import (
+        PredictionEnrichedConsumer,
+    )
+
+    from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+    config = ConsumerConfig(
+        bootstrap_servers="localhost:9092",
+        group_id="kg-prediction-enriched-test",
+        topics=["nlp.article.enriched.v1"],
+    )
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.commit = AsyncMock()
+    sf = MagicMock()
+    sf.return_value = session
+
+    event_repo = AsyncMock()
+    event_repo.upsert_by_natural_key = AsyncMock(return_value=_DB_EVENT_ID)
+    exposure_repo = AsyncMock()
+    exposure_repo.upsert = AsyncMock(return_value=_EXPOSURE_ID)
+
+    emitter = PredictionSignalEmitter(emit_new_market=emit_new_market)
+    consumer = PredictionEnrichedConsumer(config=config, session_factory=sf, signal_emitter=emitter)
+    return consumer, event_repo, exposure_repo, session
+
+
+class TestPredictionEnrichedConsumerSignalWiring:
+    def test_first_sight_doc_emits_new_market_signals(self) -> None:
+        """A first-sight polymarket doc → one new_market signal per exposure."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer_with_emitter()
+        outbox = AsyncMock(append=AsyncMock())
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_OUTBOX_REPO, return_value=outbox),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(external_id=f"polymarket:{_CONDITION_ID}"),
+                    {},
+                ),
+            )
+        # Two resolved entities → two new_market signals.
+        assert outbox.append.await_count == 2
+
+    def test_new_market_gate_off_emits_no_signals(self) -> None:
+        """With the new_market gate off, a first-sight doc emits no signals."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer_with_emitter(emit_new_market=False)
+        outbox = AsyncMock(append=AsyncMock())
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_OUTBOX_REPO, return_value=outbox),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(external_id=f"polymarket:{_CONDITION_ID}"),
+                    {},
+                ),
+            )
+        outbox.append.assert_not_awaited()
+
+    def test_resolution_doc_emits_resolution_signals(self) -> None:
+        """A ':resolved' external_id → resolution-trigger signals (gate is new_market-only)."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer_with_emitter(emit_new_market=False)
+        outbox = AsyncMock(append=AsyncMock())
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_OUTBOX_REPO, return_value=outbox),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(external_id=f"polymarket:{_CONDITION_ID}:resolved"),
+                    {},
+                ),
+            )
+        # Resolution is NOT gated by the new_market flag → still emits 2.
+        assert outbox.append.await_count == 2
+        # region still keys on the bare condition_id (suffix stripped).
+        assert event_repo.upsert_by_natural_key.call_args.kwargs["region"] == _CONDITION_ID
+
+    def test_legacy_doc_without_condition_id_emits_no_signals(self) -> None:
+        """No external_id (anonymous market) → no market_id → no signals."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer_with_emitter()
+        outbox = AsyncMock(append=AsyncMock())
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_OUTBOX_REPO, return_value=outbox),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+        outbox.append.assert_not_awaited()
+
+    def test_signal_emission_idempotent_across_redelivery(self) -> None:
+        """Re-delivering the same first-sight doc uses the SAME outbox event_id per entity."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer_with_emitter()
+        outbox = AsyncMock(append=AsyncMock())
+        msg = _make_message(external_id=f"polymarket:{_CONDITION_ID}", resolved_entity_ids=[_ENTITY_A])
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_OUTBOX_REPO, return_value=outbox),
+        ):
+            asyncio.run(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
+        assert outbox.append.await_count == 2
+        first_id = outbox.append.call_args_list[0].kwargs["event_id"]
+        second_id = outbox.append.call_args_list[1].kwargs["event_id"]
+        assert first_id == second_id
+
+    def test_resolution_external_id_detected(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer import (
+            _is_resolution_external_id,
+            _parse_condition_id,
+        )
+
+        assert _is_resolution_external_id(f"polymarket:{_CONDITION_ID}:resolved") is True
+        assert _is_resolution_external_id(f"polymarket:{_CONDITION_ID}") is False
+        assert _is_resolution_external_id(None) is False
+        # The bare condition_id is recovered (suffix stripped) for BOTH docs.
+        assert _parse_condition_id(f"polymarket:{_CONDITION_ID}:resolved") == _CONDITION_ID

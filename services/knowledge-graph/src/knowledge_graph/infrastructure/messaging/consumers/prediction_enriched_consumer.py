@@ -90,14 +90,23 @@ _PREDICTION_REGION = "prediction"
 # as "polymarket:<condition_id>" and threaded verbatim S4→S5→S6→here.
 _EXTERNAL_ID_PREFIX = "polymarket:"
 
+# PLAN-0056 Wave D2: the RESOLUTION synthetic doc's external_id is stamped by S4
+# as "polymarket:<condition_id>:resolved" so S7 can distinguish the resolution
+# document from the first-sight document (both carry the SAME condition_id, so the
+# temporal-event natural key still collapses them onto ONE row — the suffix is
+# stripped by ``_parse_condition_id`` before keying).
+_RESOLVED_SUFFIX = ":resolved"
+
 
 def _parse_condition_id(external_id: Any) -> str | None:
     """Extract the Polymarket condition_id from an ``external_id`` value.
 
-    The synthetic-document emitter (S4 Wave B2) stamps
-    ``external_id = "polymarket:<condition_id>"``.  Returns the bare condition_id,
-    or ``None`` when the value is absent/empty/malformed (not a string, wrong
-    prefix, or empty after the prefix) so the caller can fall back to the old
+    The synthetic-document emitter (S4 Wave B2/D2) stamps
+    ``external_id = "polymarket:<condition_id>"`` for the first-sight doc and
+    ``"polymarket:<condition_id>:resolved"`` for the resolution doc.  Returns the
+    bare condition_id (``:resolved`` suffix stripped so BOTH docs key onto the same
+    market), or ``None`` when the value is absent/empty/malformed (not a string,
+    wrong prefix, or empty after the prefix) so the caller can fall back to the old
     anonymous doc_id-based behaviour (backward-compatible).
     """
     if not isinstance(external_id, str):
@@ -106,7 +115,21 @@ def _parse_condition_id(external_id: Any) -> str | None:
     if not stripped.startswith(_EXTERNAL_ID_PREFIX):
         return None
     condition_id = stripped[len(_EXTERNAL_ID_PREFIX) :].strip()
+    if condition_id.endswith(_RESOLVED_SUFFIX):
+        condition_id = condition_id[: -len(_RESOLVED_SUFFIX)].strip()
     return condition_id or None
+
+
+def _is_resolution_external_id(external_id: Any) -> bool:
+    """True when the external_id marks a market RESOLUTION doc (Wave D2).
+
+    Only ``polymarket:<condition_id>:resolved`` counts; the first-sight
+    ``polymarket:<condition_id>`` (and any legacy/absent value) is a new-market doc.
+    """
+    if not isinstance(external_id, str):
+        return False
+    stripped = external_id.strip()
+    return stripped.startswith(_EXTERNAL_ID_PREFIX) and stripped.endswith(_RESOLVED_SUFFIX)
 
 
 # Prediction markets influence linked entities for a bounded window after the
@@ -191,11 +214,18 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         *,
         dedup_client: Any | None = None,
         polarity_classifier: Any | None = None,
+        signal_emitter: Any | None = None,
     ) -> None:
         super().__init__(config)
         self._sf = session_factory
         self._dedup_client = dedup_client
         self._polarity_classifier = polarity_classifier
+        # PLAN-0056 Wave D2: optional PredictionSignalEmitter. When wired AND the
+        # market identity (condition_id) is recoverable, first-sight docs emit a
+        # ``new_market`` signal (gated by config) and resolution docs a
+        # ``resolution`` signal — one per entity exposure, via the outbox (R8).
+        # When None (e.g. legacy tests), no signals are emitted (no behaviour change).
+        self._signal_emitter = signal_emitter
 
     # ------------------------------------------------------------------
     # Core processing
@@ -299,7 +329,15 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             TemporalEventRepository,
         )
 
+        # PLAN-0056 Wave D2: whether THIS doc is the market's resolution doc
+        # (external_id ends ':resolved') vs the first-sight doc. Drives the signal
+        # trigger below.
+        is_resolution = _is_resolution_external_id(value.get("external_id"))
+
         exposures_written = 0
+        # Collect the exposures written this pass so the signal emitter fans one
+        # signal out per entity (subject_entity_id + polarity) after the commit.
+        signal_exposures: list[Any] = []
         async with self._sf() as session:
             event_repo = TemporalEventRepository(session)
             exposure_repo = EntityEventExposureRepository(session)
@@ -331,6 +369,45 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     polarity_confidence=polarity_confidence,
                 )
                 exposures_written += 1
+                if self._signal_emitter is not None and condition_id is not None:
+                    from knowledge_graph.application.services.prediction_signal_emitter import (
+                        ExposureSignalInput,
+                    )
+
+                    signal_exposures.append(
+                        ExposureSignalInput(
+                            entity_id=entity_id,
+                            polarity=polarity,
+                            polarity_confidence=polarity_confidence,
+                            confidence=_DEFAULT_EXPOSURE_CONFIDENCE,
+                        ),
+                    )
+
+            # PLAN-0056 Wave D2: emit one prediction signal per exposure via the
+            # outbox (R8), atomically with the exposure writes. Only when the
+            # emitter is wired AND the market identity is known (condition_id) AND
+            # at least one entity is linked. new_market on a first-sight doc
+            # (gated by config inside the emitter); resolution on a ':resolved' doc.
+            signals_emitted = 0
+            if self._signal_emitter is not None and condition_id is not None and signal_exposures:
+                from knowledge_graph.application.services.prediction_signal_emitter import (
+                    TRIGGER_NEW_MARKET,
+                    TRIGGER_RESOLUTION,
+                )
+                from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
+                    OutboxRepository,
+                )
+
+                trigger = TRIGGER_RESOLUTION if is_resolution else TRIGGER_NEW_MARKET
+                outbox_repo = OutboxRepository(session)
+                signals_emitted = await self._signal_emitter.emit(
+                    outbox_repo,
+                    condition_id=condition_id,
+                    question=title,
+                    trigger=trigger,
+                    exposures=signal_exposures,
+                    correlation_id=value.get("correlation_id"),
+                )
 
             # R26: the consumer OWNS the commit — without this the writes roll back
             # on session close (the HTTP200-but-rollback class of KG bug).
@@ -348,6 +425,9 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             polarities_classified=len(polarity_by_entity),
             exposures=exposures_written,
             entities_seen=len(raw_entity_ids),
+            # PLAN-0056 Wave D2: prediction signals emitted this pass (new_market/resolution).
+            is_resolution=is_resolution,
+            signals_emitted=signals_emitted,
         )
 
     async def _classify_polarities(

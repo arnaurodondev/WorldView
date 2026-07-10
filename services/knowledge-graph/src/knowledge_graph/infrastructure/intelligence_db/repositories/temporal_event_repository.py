@@ -291,6 +291,55 @@ ON CONFLICT (event_id, entity_id, exposure_type) DO NOTHING
         )
         return exposure_id
 
+    async def list_exposures_for_condition(
+        self,
+        *,
+        condition_id: str,
+    ) -> tuple[str | None, list[dict[str, object]]]:
+        """List the entity exposures of a prediction market by condition_id (Wave D2).
+
+        Joins ``entity_event_exposures`` → ``temporal_events`` on ``event_id``,
+        filtered to ``event_type = 'prediction'`` and ``region = condition_id``.
+        All exposures of a market share the same temporal-event row (natural key
+        collapses first-sight + resolution docs per Wave C2b), so the question
+        (``temporal_events.title``) is stable and returned once.
+
+        Returns ``(question, rows)``; ``rows`` is empty (and ``question`` None)
+        when the market is not linked to any entity — the caller no-ops.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT
+    eee.entity_id,
+    eee.polarity,
+    eee.polarity_confidence,
+    eee.confidence,
+    te.title AS question
+FROM entity_event_exposures eee
+JOIN temporal_events te ON te.event_id = eee.event_id
+WHERE te.event_type = 'prediction'
+  AND te.region = :condition_id
+"""),
+            {"condition_id": condition_id},
+        )
+        rows = result.fetchall()
+        if not rows:
+            return None, []
+
+        from uuid import UUID as _UUID
+
+        question = str(rows[0][4]) if rows[0][4] is not None else None
+        items: list[dict[str, object]] = [
+            {
+                "entity_id": _UUID(str(row[0])),
+                "polarity": row[1],
+                "polarity_confidence": (float(row[2]) if row[2] is not None else None),
+                "confidence": float(row[3]),
+            }
+            for row in rows
+        ]
+        return question, items
+
     async def list_prediction_exposures_for_entity(
         self,
         *,
