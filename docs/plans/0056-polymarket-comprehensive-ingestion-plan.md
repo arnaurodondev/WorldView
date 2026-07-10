@@ -200,8 +200,17 @@ R32 (043 chained from verified 042).
   (`uow.py`). **R25**: ports are ABCs; use cases never import `Pg…`. **R27**: `_read` accessors on ReadOnlyUoW.
 **Tests**: repo insert/dedup/list per table (≥8). **Guardrails**: BP-034/035 idempotent inserts.
 
-### Wave A3 — 4 stream consumers
+### Wave A3 — 4 stream consumers ✅
+**Status**: **DONE** — 2026-07-09 · 32 tests · ruff+mypy clean
 **Layer**: infrastructure. **Effort**: 75m. **depends_on**: A2, Z1.
+> Impl note: `PredictionEventConsumer` upserts the `prediction_events` row only
+> (group_id→event_id, name, category, start/end dates, market_count). The
+> market→event_id linkage is set S4-side later (the event Avro schema carries
+> only the group, not its child market ids), so no `prediction_markets.event_id`
+> backfill happens here. 4 `_main.py` entrypoints + 8 docker-compose services
+> (dev + test harness) added; 4 static-membership instance-id settings in
+> `config.py`. All consume `auto_offset_reset="earliest"` (durable append/upsert
+> streams; duplicates return is_new=False from `ingestion_events`).
 - **T-A-3-01..04 (impl)** — 4 consumers mirroring `PredictionMarketConsumer` (+ `_main.py` entrypoints,
   docker-compose services): `PredictionHistoryConsumer` (`market.prediction.history.v1`→prices),
   `PredictionEventConsumer` (`…event.v1`→events + backfill `prediction_markets.event_id`),

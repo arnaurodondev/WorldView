@@ -595,6 +595,99 @@ services:
       retries: 3
       start_period: 5s
 
+  # ── PLAN-0056 Wave A3: prediction deeper-stream consumers (history/event/trade/oi) ──
+  market-data-prediction-history-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_history_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  market-data-prediction-event-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_event_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  market-data-prediction-trade-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_trade_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  market-data-prediction-oi-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_oi_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
   # ── Developer tools ────────────────────────────────────────────────────────
   kafka-ui:
     # WHY pinned: third-party image; floating :latest can introduce UI breaking changes

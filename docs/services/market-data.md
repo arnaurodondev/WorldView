@@ -110,6 +110,10 @@ or articles, perform NLP processing, manage portfolios.
 | `market.dataset.fetched` | `market-data-intraday-resampling` | Derive 5m/15m/30m/1h/4h/1d bars from `dataset_type=ohlcv, timeframe=1m` events | `event_id` |
 | `market.dataset.fetched` | `market-data-insider-transactions` | Materialize per-transaction insider feed (`dataset_type=insider_transactions`) | `event_id` |
 | `market.prediction.v1` | `market-data-prediction-markets` | Materialize prediction market snapshots (PRD-0019) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
+| `market.prediction.history.v1` | `market-data-prediction-history` | Materialize per-token interval price bars into `prediction_market_prices` (PLAN-0056 A3) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
+| `market.prediction.event.v1` | `market-data-prediction-events` | Upsert Polymarket event groups into `prediction_events` (group_id→event_id) (PLAN-0056 A3) | Atomic `create_if_not_exists` + `ON CONFLICT DO UPDATE` |
+| `market.prediction.trade.v1` | `market-data-prediction-trades` | Materialize individual fills into `prediction_market_trades` (PLAN-0056 A3) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
+| `market.prediction.oi.v1` | `market-data-prediction-oi` | Upsert daily OI / 24h-volume roll-ups into `prediction_market_oi` (PLAN-0056 A3) | Atomic `create_if_not_exists` + `ON CONFLICT DO UPDATE` |
 
 ### Produced
 
@@ -383,6 +387,10 @@ Wave A2 adds the persistence layer for the A1 tables (consumers/API/use cases la
 | Intraday Resampling Consumer | Consume 1m bars and derive 5m/15m/30m/1h/4h/1d derived bars (`IntradayResamplingWorker`) |
 | Outbox Dispatcher | Publish instrument lifecycle events (`InstrumentCreated`, `InstrumentUpdated`, `InstrumentDiscovered`) |
 | Prediction Market Consumer | Materialize `market.prediction.v1` events into `prediction_markets` + `prediction_market_snapshots` |
+| Prediction History Consumer | Materialize `market.prediction.history.v1` per-token interval bars into `prediction_market_prices` (PLAN-0056 A3) |
+| Prediction Event Consumer | Upsert `market.prediction.event.v1` groups into `prediction_events` (group_id→event_id; market linkage set S4-side later) (PLAN-0056 A3) |
+| Prediction Trade Consumer | Materialize `market.prediction.trade.v1` fills into `prediction_market_trades` (PLAN-0056 A3) |
+| Prediction OI Consumer | Upsert `market.prediction.oi.v1` daily roll-ups into `prediction_market_oi` (PLAN-0056 A3) |
 | Insider Transactions Consumer | Materialize per-transaction insider feed (`dataset_type == "insider_transactions"`) into `insider_transactions` — feeds the 6-hourly `insider_net_buy_90d` rollup. Existed in code since PLAN-0089 L-4b but only added to docker-compose on 2026-06-11 (backend-gaps wave 3) — the table was empty until then |
 
 ---

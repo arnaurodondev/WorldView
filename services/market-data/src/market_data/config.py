@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     kafka_insider_transactions_consumer_instance_id: str = ""
     kafka_intraday_resampling_consumer_instance_id: str = ""
     kafka_prediction_market_consumer_instance_id: str = ""
+    # PLAN-0056 Wave A3: static-membership ids for the four deeper-stream
+    # prediction consumers (history / event / trade / oi). Empty = dynamic.
+    kafka_prediction_history_consumer_instance_id: str = ""
+    kafka_prediction_event_consumer_instance_id: str = ""
+    kafka_prediction_trade_consumer_instance_id: str = ""
+    kafka_prediction_oi_consumer_instance_id: str = ""
 
     # ── Outbox dispatcher (BUG-4 / BP-612) ─────────────────────────────────────
     # These tune the ``DispatcherConfig`` built in ``dispatcher_main`` /

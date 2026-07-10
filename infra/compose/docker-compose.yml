@@ -1206,6 +1206,99 @@ services:
       retries: 3
       start_period: 30s
 
+  # ── PLAN-0056 Wave A3: prediction deeper-stream consumers (history/event/trade/oi) ──
+  market-data-prediction-history-consumer:
+    init: true
+    image: worldview-market-data:latest
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_history_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  market-data-prediction-event-consumer:
+    init: true
+    image: worldview-market-data:latest
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_event_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  market-data-prediction-trade-consumer:
+    init: true
+    image: worldview-market-data:latest
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_trade_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  market-data-prediction-oi-consumer:
+    init: true
+    image: worldview-market-data:latest
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_oi_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   market-data-intraday-resampling-consumer:
     init: true
     image: worldview-market-data:latest
