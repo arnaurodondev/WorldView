@@ -373,6 +373,19 @@ All news-source `SourceType` values come from `contracts.enums.ContentSourceType
 
 **Polymarket special path:** `POLYMARKET` is intentionally NOT in `ADAPTER_REGISTRY`. The worker detects `SourceType.POLYMARKET` and dispatches directly to `_execute_polymarket_task()` → `PolymarketAdapter` → `FetchAndWritePredictionMarketsUseCase` (R24: batch-collect first, then short-lived session for dedup). The scheduler uses `PolymarketAdapter` only for its `fetch_log_exists_fn` dedup callback.
 
+**Deeper-stream Polymarket adapters (PLAN-0056 Wave B1):** four additional streams supplement the base markets snapshot. Each is a `{Name}Client` + `{Name}Adapter` package under `infrastructure/adapters/`, mirroring `PolymarketAdapter` (dedup via `fetch_log_exists_fn(id, snapshot_at)`, non-fatal MinIO bronze write, `AdapterError` on non-200, 429 → retryable). Like base `POLYMARKET`, all four route directly through `_execute_polymarket_task()` (wired in Wave B3) and are NOT in `ADAPTER_REGISTRY`. This wave delivers clients + adapters + config + fetch-result entities only.
+
+| Stream | `SourceType` | Package | Client / Adapter | Endpoint (default `base_url`) | Fetch-result entity |
+|--------|--------------|---------|------------------|-------------------------------|---------------------|
+| Events | `polymarket_gamma_events` | `polymarket_gamma_events/` | `PolymarketEventsClient` / `PolymarketEventsAdapter` | `https://gamma-api.polymarket.com/events` (cursor-paginated) | `PredictionEventFetchResult` |
+| Price history | `polymarket_clob` | `polymarket_clob/` | `PolymarketClobHistoryClient` / `PolymarketClobHistoryAdapter` | `https://clob.polymarket.com/prices-history` (per token_id) | `PredictionHistoryFetchResult` |
+| Trades | `polymarket_data_trades` | `polymarket_data_trades/` | `PolymarketTradesClient` / `PolymarketTradesAdapter` | `https://data-api.polymarket.com/trades` (per condition_id, offset) | `PredictionTradeFetchResult` |
+| Open interest | `polymarket_data_oi` | `polymarket_data_oi/` | `PolymarketOIClient` / `PolymarketOIAdapter` | `https://data-api.polymarket.com/oi` (per condition_id) | `PredictionOIFetchResult` |
+
+- **CLOB resolved-market fallback:** the price-history adapter requests `interval=1h`; if that returns HTTP 400 (via `AdapterError.status_code`) or an empty series, it retries once at `interval=1d` (resolved markets frequently lack a fine-grained series — PRD-0033 §4.4/§9.2). Backfill uses `backfill_days`; ongoing polling uses `ongoing_window_hours` (6h) for the `startTs` lower bound.
+- **Config:** `Polymarket{Events,Clob,Trades,OI}ProviderSettings` in `config.py`, wired into `Settings` as `polymarket_events` / `polymarket_clob` / `polymarket_trades` / `polymarket_oi`. Every `base_url` is env-overridable (`CONTENT_INGESTION_POLYMARKET_EVENTS__BASE_URL`, etc.) so exact live API paths can be corrected at deploy without a code change. `AdapterError` gained an optional `status_code` kwarg (backward-compatible) to carry the HTTP status for the CLOB fallback.
+- **Token/market ids** for the CLOB/trades/OI adapters are read from `source.config` (`token_ids` / `condition_ids`); those source rows are seeded in Wave B3.
+
 ---
 
 ## Configuration
@@ -445,6 +458,12 @@ All environment variables are prefixed with `CONTENT_INGESTION_`. Nested provide
 | `CONTENT_INGESTION_POLYMARKET__BASE_URL` | `https://gamma-api.polymarket.com/markets` | Gamma API endpoint |
 | `CONTENT_INGESTION_POLYMARKET__PAGE_SIZE` | `500` | Markets per page (max 1000) |
 | `CONTENT_INGESTION_POLYMARKET__MAX_PAGES_PER_CYCLE` | `20` | Max pages per cycle (20 × 500 = 10K markets) |
+| `CONTENT_INGESTION_POLYMARKET_EVENTS__BASE_URL` | `https://gamma-api.polymarket.com/events` | Gamma events endpoint (B1) |
+| `CONTENT_INGESTION_POLYMARKET_CLOB__BASE_URL` | `https://clob.polymarket.com/prices-history` | CLOB price-history endpoint (B1) |
+| `CONTENT_INGESTION_POLYMARKET_CLOB__INTERVAL` / `__FALLBACK_INTERVAL` | `1h` / `1d` | Primary + resolved-market fallback interval (B1) |
+| `CONTENT_INGESTION_POLYMARKET_CLOB__BACKFILL_DAYS` / `__ONGOING_WINDOW_HOURS` | `14` / `6` | CLOB backfill horizon + incremental window (B1) |
+| `CONTENT_INGESTION_POLYMARKET_TRADES__BASE_URL` | `https://data-api.polymarket.com/trades` | Data-API trades endpoint (B1) |
+| `CONTENT_INGESTION_POLYMARKET_OI__BASE_URL` | `https://data-api.polymarket.com/oi` | Data-API open-interest endpoint (B1) |
 | `CONTENT_INGESTION_HTTP_CLIENT__TIMEOUT_SECONDS` | `30.0` | httpx total timeout |
 | `CONTENT_INGESTION_HTTP_CLIENT__CONNECT_TIMEOUT_SECONDS` | `5.0` | httpx connect timeout |
 | `CONTENT_INGESTION_HTTP_CLIENT__MAX_RETRIES` | `3` | Default retry count |

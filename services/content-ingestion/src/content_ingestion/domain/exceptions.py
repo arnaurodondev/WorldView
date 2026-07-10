@@ -23,7 +23,21 @@ class QuotaExhaustedError(DomainError):
 
 
 class AdapterError(DomainError):
-    """Raised when a source adapter (EODHD, SEC, Finnhub, NewsAPI) fails."""
+    """Raised when a source adapter (EODHD, SEC, Finnhub, NewsAPI, Polymarket) fails.
+
+    Args:
+        message: Human-readable failure description.
+        status_code: Optional HTTP status code that triggered the failure.
+            Carried so callers can branch on the specific status without
+            string-parsing the message — e.g. the Polymarket CLOB history
+            adapter retries ``interval=1d`` only when a ``1h`` request returns
+            HTTP 400 (resolved-market fallback, PRD-0033 §4.4/§9.2). ``None``
+            for non-HTTP failures (timeouts, JSON decode, etc.).
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class InvalidStateTransition(DomainError):  # noqa: N818

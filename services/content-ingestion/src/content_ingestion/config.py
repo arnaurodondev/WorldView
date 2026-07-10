@@ -163,6 +163,63 @@ class PolymarketProviderSettings(BaseModel):
     max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
 
 
+# ── PLAN-0056 Wave B1 — deeper-stream Polymarket provider settings ─────────────
+#
+# Four provider configs, one per new ingestion stream (PRD-0033). Every base_url
+# is overridable via env (CONTENT_INGESTION_POLYMARKET_EVENTS__BASE_URL etc.) so
+# the exact live API paths can be corrected at deploy time WITHOUT a code change.
+# ``max_retries`` + ``backoff_base_seconds`` tune the client's 429/timeout retry
+# handling (external-I/O guardrails BP-025/026/027).
+
+
+class PolymarketEventsProviderSettings(BaseModel):
+    """Operational parameters for the Polymarket Gamma ``/events`` stream (1h cadence)."""
+
+    base_url: str = "https://gamma-api.polymarket.com/events"
+    page_size: int = Field(default=500, ge=1, le=1000)
+    max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
+    max_retries: int = Field(default=3, ge=0, le=10)
+    backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
+
+
+class PolymarketClobProviderSettings(BaseModel):
+    """Operational parameters for the Polymarket CLOB ``/prices-history`` stream.
+
+    ``interval``/``fidelity`` are the primary (fine-grained) request params; the
+    adapter falls back to ``fallback_interval`` when a primary request returns
+    HTTP 400 or an empty series (resolved-market fallback, PRD-0033 §4.4/§9.2).
+    """
+
+    base_url: str = "https://clob.polymarket.com/prices-history"
+    interval: str = "1h"
+    fallback_interval: str = "1d"
+    fidelity: int = Field(default=60, ge=1, le=1440)
+    # Historical backfill horizon (days) and ongoing incremental window (hours).
+    backfill_days: int = Field(default=14, ge=1, le=365)
+    ongoing_window_hours: int = Field(default=6, ge=1, le=168)
+    max_retries: int = Field(default=3, ge=0, le=10)
+    backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
+
+
+class PolymarketTradesProviderSettings(BaseModel):
+    """Operational parameters for the Polymarket Data-API ``/trades`` stream."""
+
+    base_url: str = "https://data-api.polymarket.com/trades"
+    page_size: int = Field(default=500, ge=1, le=1000)
+    max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
+    backfill_days: int = Field(default=14, ge=1, le=365)
+    max_retries: int = Field(default=3, ge=0, le=10)
+    backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
+
+
+class PolymarketOIProviderSettings(BaseModel):
+    """Operational parameters for the Polymarket Data-API open-interest stream (daily)."""
+
+    base_url: str = "https://data-api.polymarket.com/oi"
+    max_retries: int = Field(default=3, ge=0, le=10)
+    backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
+
+
 class HTTPClientSettings(BaseModel):
     """Shared httpx client tuning parameters."""
 
@@ -304,6 +361,12 @@ class Settings(BaseSettings):
     newsapi: NewsAPIProviderSettings = NewsAPIProviderSettings()
     sec_edgar: SECEdgarProviderSettings = SECEdgarProviderSettings()
     polymarket: PolymarketProviderSettings = PolymarketProviderSettings()
+    # PLAN-0056 Wave B1 — deeper-stream Polymarket providers (env-overridable
+    # base_url so exact live API paths can be corrected at deploy without code).
+    polymarket_events: PolymarketEventsProviderSettings = PolymarketEventsProviderSettings()
+    polymarket_clob: PolymarketClobProviderSettings = PolymarketClobProviderSettings()
+    polymarket_trades: PolymarketTradesProviderSettings = PolymarketTradesProviderSettings()
+    polymarket_oi: PolymarketOIProviderSettings = PolymarketOIProviderSettings()
     http_client: HTTPClientSettings = HTTPClientSettings()
 
     # ── Ticker-news sync worker (PLAN-0106 Wave C-2) ─────────────────────────

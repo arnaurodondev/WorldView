@@ -609,3 +609,301 @@ class PredictionMarketFetchResult:
             market_slug=market_slug,
             category=category,
         )
+
+
+# ── PLAN-0056 Wave B1 — deeper-stream Polymarket fetch-result entities ─────────
+#
+# Four immutable domain DTOs, one per new Polymarket ingestion stream (PRD-0033):
+#   • PredictionEventFetchResult   — Gamma /events group metadata
+#   • PredictionHistoryFetchResult — CLOB /prices-history token price series
+#   • PredictionTradeFetchResult   — Data-API /trades individual fills
+#   • PredictionOIFetchResult      — Data-API /oi open-interest snapshots
+#
+# All mirror ``PredictionMarketFetchResult``: pure-domain (no infra imports),
+# frozen + slotted, a ``from_*_response`` classmethod that tolerates absent keys
+# defensively, a ``fetched_at`` (UTC-aware) and an optional ``minio_bronze_key``
+# attached post-upload via ``dataclasses.replace()``.
+
+
+def _parse_iso_datetime(raw: Any) -> datetime | None:
+    """Parse an ISO-8601 string (with optional trailing ``Z``) into UTC, or None.
+
+    Tolerant: returns ``None`` for missing/blank/malformed input rather than
+    raising, so a single bad date field never fails an entire parse.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _parse_epoch_seconds(raw: Any) -> datetime | None:
+    """Parse a Unix epoch-seconds value (int/float/str) into a UTC datetime, or None."""
+    if raw is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(raw), tz=UTC)
+    except (ValueError, TypeError, OSError, OverflowError):
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionEventFetchResult:
+    """Immutable result of fetching one Polymarket *event* (a group of markets).
+
+    A Gamma ``/events`` record groups several related child markets under a
+    single question theme (e.g. "2028 US Presidential Election"). We capture the
+    group identity + metadata; the child markets themselves flow through the
+    existing markets stream.
+
+    Invariants:
+        - ``fetched_at`` must be UTC-aware.
+        - ``event_id`` must be non-empty.
+    """
+
+    source_type: SourceType
+    event_id: str
+    title: str
+    raw_bytes: bytes
+    fetched_at: datetime
+    category: str | None = None
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    market_count: int = 0
+    minio_bronze_key: str | None = None
+    id: UUID = field(default_factory=common.ids.new_uuid7)
+
+    def __post_init__(self) -> None:
+        if self.fetched_at.tzinfo is None:
+            raise ValueError("PredictionEventFetchResult.fetched_at must be UTC-aware")
+        if not self.event_id:
+            raise ValueError("PredictionEventFetchResult.event_id must not be empty")
+
+    @classmethod
+    def from_gamma_response(cls, raw: dict, fetched_at: datetime) -> PredictionEventFetchResult:
+        """Construct from a Polymarket Gamma ``/events`` record.
+
+        Parses group id, title/name, category (or first tag), start/end dates and
+        the count of child markets. All optional fields default defensively.
+        """
+        # WHY category from tags fallback: some event records omit a top-level
+        # ``category`` and instead carry a ``tags`` list (of dicts with ``label``/
+        # ``name`` or of plain strings). Prefer explicit ``category``; else take the
+        # first non-empty tag label; else None (downstream leaves the column untouched).
+        raw_category: Any = raw.get("category")
+        category: str | None = None
+        if isinstance(raw_category, str) and raw_category.strip():
+            category = raw_category.strip()
+        else:
+            tags_raw = raw.get("tags") or []
+            if isinstance(tags_raw, list):
+                for tag in tags_raw:
+                    if isinstance(tag, str) and tag.strip():
+                        category = tag.strip()
+                        break
+                    if isinstance(tag, dict):
+                        label = tag.get("label") or tag.get("name") or ""
+                        if isinstance(label, str) and label.strip():
+                            category = label.strip()
+                            break
+
+        child_markets = raw.get("markets")
+        market_count = len(child_markets) if isinstance(child_markets, list) else 0
+
+        return cls(
+            source_type=SourceType.POLYMARKET_GAMMA_EVENTS,
+            event_id=str(raw.get("id") or raw.get("slug") or ""),
+            title=raw.get("title") or raw.get("name") or "",
+            category=category,
+            start_date=_parse_iso_datetime(raw.get("startDate")),
+            end_date=_parse_iso_datetime(raw.get("endDate")),
+            market_count=market_count,
+            raw_bytes=json.dumps(raw).encode(),
+            fetched_at=fetched_at,
+            minio_bronze_key=None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PricePoint:
+    """A single (timestamp, price) datapoint from the CLOB price-history series."""
+
+    timestamp: datetime
+    price: float
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionHistoryFetchResult:
+    """Immutable result of fetching a CLOB ``/prices-history`` series for one token.
+
+    Invariants:
+        - ``fetched_at`` must be UTC-aware.
+        - ``token_id`` must be non-empty.
+    """
+
+    source_type: SourceType
+    token_id: str
+    interval: str
+    points: list[PricePoint]
+    raw_bytes: bytes
+    fetched_at: datetime
+    minio_bronze_key: str | None = None
+    id: UUID = field(default_factory=common.ids.new_uuid7)
+
+    def __post_init__(self) -> None:
+        if self.fetched_at.tzinfo is None:
+            raise ValueError("PredictionHistoryFetchResult.fetched_at must be UTC-aware")
+        if not self.token_id:
+            raise ValueError("PredictionHistoryFetchResult.token_id must not be empty")
+
+    @classmethod
+    def from_api_response(
+        cls,
+        token_id: str,
+        raw: dict,
+        fetched_at: datetime,
+        *,
+        interval: str,
+    ) -> PredictionHistoryFetchResult:
+        """Construct from a CLOB ``/prices-history`` response.
+
+        The CLOB response is ``{"history": [{"t": <epoch_s>, "p": <price>}, ...]}``.
+        Malformed individual datapoints are skipped rather than failing the parse.
+        """
+        history = raw.get("history") if isinstance(raw, dict) else raw
+        points: list[PricePoint] = []
+        if isinstance(history, list):
+            for dp in history:
+                if not isinstance(dp, dict):
+                    continue
+                ts = _parse_epoch_seconds(dp.get("t"))
+                if ts is None:
+                    continue
+                raw_price = dp.get("p")
+                if raw_price is None:
+                    continue
+                try:
+                    price = float(raw_price)
+                except (TypeError, ValueError):
+                    continue
+                points.append(PricePoint(timestamp=ts, price=price))
+
+        return cls(
+            source_type=SourceType.POLYMARKET_CLOB,
+            token_id=token_id,
+            interval=interval,
+            points=points,
+            raw_bytes=json.dumps(raw).encode(),
+            fetched_at=fetched_at,
+            minio_bronze_key=None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionTradeFetchResult:
+    """Immutable result of fetching one Polymarket Data-API ``/trades`` fill.
+
+    Invariants:
+        - ``fetched_at`` must be UTC-aware.
+        - ``trade_id`` must be non-empty.
+    """
+
+    source_type: SourceType
+    trade_id: str
+    token_id: str
+    price: float
+    size_usd: float
+    side: str
+    traded_at: datetime
+    raw_bytes: bytes
+    fetched_at: datetime
+    minio_bronze_key: str | None = None
+    id: UUID = field(default_factory=common.ids.new_uuid7)
+
+    def __post_init__(self) -> None:
+        if self.fetched_at.tzinfo is None:
+            raise ValueError("PredictionTradeFetchResult.fetched_at must be UTC-aware")
+        if not self.trade_id:
+            raise ValueError("PredictionTradeFetchResult.trade_id must not be empty")
+
+    @classmethod
+    def from_api_response(cls, raw: dict, fetched_at: datetime) -> PredictionTradeFetchResult:
+        """Construct from a Data-API ``/trades`` record.
+
+        Field names vary across Data-API versions — we accept the common
+        aliases (``transactionHash``/``id`` for the trade id, ``asset``/
+        ``token_id`` for the token, ``size``/``usdcSize`` for USD size).
+        """
+        traded_at = _parse_epoch_seconds(raw.get("timestamp")) or fetched_at
+        return cls(
+            source_type=SourceType.POLYMARKET_DATA_TRADES,
+            trade_id=str(raw.get("transactionHash") or raw.get("id") or ""),
+            token_id=str(raw.get("asset") or raw.get("token_id") or ""),
+            price=float(raw["price"]) if raw.get("price") is not None else 0.0,
+            size_usd=float(raw["size"])
+            if raw.get("size") is not None
+            else (float(raw["usdcSize"]) if raw.get("usdcSize") is not None else 0.0),
+            side=str(raw.get("side") or ""),
+            traded_at=traded_at,
+            raw_bytes=json.dumps(raw).encode(),
+            fetched_at=fetched_at,
+            minio_bronze_key=None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionOIFetchResult:
+    """Immutable result of fetching a Polymarket Data-API open-interest snapshot.
+
+    Invariants:
+        - ``fetched_at`` must be UTC-aware.
+        - ``market_id`` must be non-empty.
+    """
+
+    source_type: SourceType
+    market_id: str
+    open_interest_usd: float
+    snapshot_date: datetime
+    raw_bytes: bytes
+    fetched_at: datetime
+    volume_24h_usd: float | None = None
+    minio_bronze_key: str | None = None
+    id: UUID = field(default_factory=common.ids.new_uuid7)
+
+    def __post_init__(self) -> None:
+        if self.fetched_at.tzinfo is None:
+            raise ValueError("PredictionOIFetchResult.fetched_at must be UTC-aware")
+        if not self.market_id:
+            raise ValueError("PredictionOIFetchResult.market_id must not be empty")
+
+    @classmethod
+    def from_api_response(
+        cls,
+        market_id: str,
+        raw: dict,
+        fetched_at: datetime,
+    ) -> PredictionOIFetchResult:
+        """Construct from a Data-API open-interest response.
+
+        Accepts the ``openInterest``/``oi`` alias for total OI (USD) and
+        ``volume24hr``/``volume24h`` for the trailing-24h volume. ``market_id``
+        is passed in explicitly because the OI response does not always echo it.
+        """
+        oi_raw = raw.get("openInterest")
+        if oi_raw is None:
+            oi_raw = raw.get("oi")
+        vol_raw = raw.get("volume24hr")
+        if vol_raw is None:
+            vol_raw = raw.get("volume24h")
+        return cls(
+            source_type=SourceType.POLYMARKET_DATA_OI,
+            market_id=market_id,
+            open_interest_usd=float(oi_raw) if oi_raw is not None else 0.0,
+            volume_24h_usd=float(vol_raw) if vol_raw is not None else None,
+            snapshot_date=fetched_at,
+            raw_bytes=json.dumps(raw).encode(),
+            fetched_at=fetched_at,
+            minio_bronze_key=None,
+        )

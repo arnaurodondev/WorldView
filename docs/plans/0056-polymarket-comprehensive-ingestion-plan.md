@@ -257,7 +257,8 @@ Mirrors `PolymarketClient`/`PolymarketAdapter` + `FetchAndWritePredictionMarkets
 `build_raw_article_payload` + worker routing patterns. **Note**: new adapters route directly in
 `worker._execute_polymarket_task` (NOT via `ADAPTER_REGISTRY`), same as existing Polymarket.
 
-### Wave B1 — 4 clients + config settings + 4 adapters
+### Wave B1 — 4 clients + config settings + 4 adapters ✅
+**Status**: **DONE** — 2026-07-09 · 31 new tests · ruff+mypy clean · full S4 suite green (0 failures)
 **Layer**: infrastructure. **Effort**: 90m. **depends_on**: Z1.
 - **T-B-1-01..04 (impl)** — Per stream, a `{Name}Client` (NEW) + `{Name}Adapter` (NEW) under
   `infrastructure/adapters/{polymarket_gamma_events,polymarket_clob,polymarket_data_trades,polymarket_data_oi}/`:

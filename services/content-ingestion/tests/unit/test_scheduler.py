@@ -26,7 +26,20 @@ class TestAdapterRegistry:
     # MANUAL: not polled — delivered via webhook/submit endpoint, no adapter needed.
     # POLYMARKET: adapter added in Wave A-2 (PLAN-0019); excluded here until then.
     # TENANT_UPLOAD: not polled — documents arrive via REST upload API (PLAN-0086).
-    _NO_ADAPTER: ClassVar[set[SourceType]] = {SourceType.MANUAL, SourceType.POLYMARKET, SourceType.TENANT_UPLOAD}
+    # POLYMARKET_GAMMA_EVENTS/CLOB/DATA_TRADES/DATA_OI (PLAN-0056 Wave B1): the
+    #   deeper-stream Polymarket adapters route DIRECTLY via
+    #   worker._execute_polymarket_task (R24 batch-collect pattern), NOT through
+    #   ADAPTER_REGISTRY — same as the base POLYMARKET type. Worker routing is
+    #   wired in Wave B3; excluded here because they are never registry adapters.
+    _NO_ADAPTER: ClassVar[set[SourceType]] = {
+        SourceType.MANUAL,
+        SourceType.POLYMARKET,
+        SourceType.TENANT_UPLOAD,
+        SourceType.POLYMARKET_GAMMA_EVENTS,
+        SourceType.POLYMARKET_CLOB,
+        SourceType.POLYMARKET_DATA_TRADES,
+        SourceType.POLYMARKET_DATA_OI,
+    }
 
     def test_all_source_types_have_adapters(self) -> None:
         """Every SourceType except non-polled types should have an adapter."""
