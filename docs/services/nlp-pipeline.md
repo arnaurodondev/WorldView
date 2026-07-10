@@ -391,6 +391,7 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
   "source_type": "string",
   "source_name": "string | null",
   "external_id": "string | null",
+  "source_title": "string | null",
   "published_at": "ISO-8601 | null",
   "routing_tier": "suppress | light | medium | deep",
   "routing_score": "float [0,1]",
@@ -410,6 +411,15 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
 > NER/extraction change and no migration. Absent on non-prediction / legacy events → null.
 > The KG `PredictionEnrichedConsumer` parses the `condition_id` out of it to resolve a
 > synthetic prediction doc to its real Polymarket market.
+
+> **`source_title` passthrough (PLAN-0056 Wave C3)**: same mechanism as `external_id` — a
+> pure, in-memory passthrough. S6 copies the (recovered) inbound document `title` onto the
+> enriched event's `source_title` (`process_message` sets `source_title=doc_title` →
+> `_run_pipeline` → `_enqueue_enriched`). NOT persisted, NOT re-read, no NER/extraction
+> change, no migration. For a Polymarket synthetic doc the title IS the market question, so
+> the KG uses `source_title` as the prediction temporal-event title AND as the input to the
+> `MarketPolarityClassifier` (per-entity bullish/bearish/neutral polarity). Absent on
+> legacy/title-less events → null.
 
 ---
 

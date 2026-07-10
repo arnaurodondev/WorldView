@@ -169,12 +169,14 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         config:            Consumer configuration (bootstrap servers, group, topics).
         session_factory:   async_sessionmaker for intelligence_db (read/write).
         dedup_client:      Optional Valkey dedup client (idempotency across restarts).
-        polarity_classifier: Optional collaborator injected by Wave C3. When None
-            (the default, and the only wiring today) exposures are written with
-            NULL polarity. When present it is consulted per (event, entity) to
-            derive ('bullish'|'bearish'|'neutral', confidence). This seam keeps
-            C2 free of the LLM classifier while letting C3 drop it in without
-            touching the write path.
+        polarity_classifier: Optional ``MarketPolarityClassifier`` (Wave C3). When
+            None exposures are written with NULL polarity. When present AND the
+            enriched event carries the market question (``source_title``), it is
+            consulted per (market, entity) via
+            ``classify(question, entity_name, outcomes, condition_id=, entity_id=)``
+            → ('bullish'|'bearish'|'neutral', confidence), classified once per
+            (condition_id, entity_id). On any LLM failure it returns
+            ('neutral', 0.0) so ingestion is never blocked (PRD §13).
     """
 
     # 7-day TTL comfortably spans re-delivery windows for the low-volume
@@ -232,6 +234,16 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # Resolved entity ids the market question mentions (may be empty).
         raw_entity_ids: list[Any] = list(value.get("resolved_entity_ids") or [])
 
+        # PLAN-0056 Wave C3: the market QUESTION now rides along as ``source_title``
+        # (S6 copies content.article.stored.v1.title verbatim onto the enriched
+        # event — pure passthrough).  When present it becomes BOTH the temporal-event
+        # title AND the input to the polarity classifier.  Absent on legacy/non-C3
+        # events → None → the anonymous placeholder title is used (backward-compatible).
+        raw_source_title = value.get("source_title")
+        question: str | None = (
+            raw_source_title.strip() if isinstance(raw_source_title, str) and raw_source_title.strip() else None
+        )
+
         # PLAN-0056 Wave C2b: prefer the real market identity (condition_id) carried
         # on the enriched event's external_id.  When present, the temporal event is
         # keyed on the condition_id — so the first-sight and resolution docs of the
@@ -242,10 +254,45 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         condition_id = _parse_condition_id(value.get("external_id"))
         if condition_id is not None:
             region = condition_id
-            title = f"Prediction market {condition_id}"
+            placeholder_title = f"Prediction market {condition_id}"
         else:
             region = _PREDICTION_REGION
-            title = f"Prediction market {doc_id}"
+            placeholder_title = f"Prediction market {doc_id}"
+        # Wave C3: the real question titles the event when available; else the
+        # anonymous placeholder.  ``region`` still keys idempotency per market, and
+        # the question is stable per market, so the natural key stays unique-per-market.
+        title = question or placeholder_title
+
+        # De-dupe + validate the resolved entity ids ONCE up front so the polarity
+        # classification (HTTP) and the exposure writes iterate over the same set.
+        valid_entity_ids: list[UUID] = []
+        seen: set[UUID] = set()
+        for raw_entity_id in raw_entity_ids:
+            try:
+                entity_id = UUID(str(raw_entity_id))
+            except ValueError:
+                logger.warning(
+                    "prediction_enriched_consumer_bad_entity_id",
+                    doc_id=str(doc_id),
+                    entity_id=str(raw_entity_id),
+                )
+                continue
+            if entity_id in seen:
+                continue  # de-dupe repeated ids within the same payload
+            seen.add(entity_id)
+            valid_entity_ids.append(entity_id)
+
+        # PLAN-0056 Wave C3: classify per-entity polarity BEFORE opening the write
+        # session — no DB connection is held across the LLM HTTP calls (R24). Runs
+        # only when a classifier is wired AND the question text is available; each
+        # (condition_id, entity_id) pair is classified at most once (classifier cache).
+        polarity_by_entity: dict[UUID, tuple[str | None, float | None]] = {}
+        if self._polarity_classifier is not None and question and valid_entity_ids:
+            polarity_by_entity = await self._classify_polarities(
+                condition_id=condition_id,
+                question=question,
+                entity_ids=valid_entity_ids,
+            )
 
         from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
             EntityEventExposureRepository,
@@ -270,27 +317,10 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 confidence=_DEFAULT_EVENT_CONFIDENCE,
             )
 
-            # (b) ONE exposure per resolved entity (DIRECTLY_AFFECTED).
-            seen: set[UUID] = set()
-            for raw_entity_id in raw_entity_ids:
-                try:
-                    entity_id = UUID(str(raw_entity_id))
-                except ValueError:
-                    logger.warning(
-                        "prediction_enriched_consumer_bad_entity_id",
-                        doc_id=str(doc_id),
-                        entity_id=str(raw_entity_id),
-                    )
-                    continue
-                if entity_id in seen:
-                    continue  # de-dupe repeated ids within the same payload
-                seen.add(entity_id)
-
-                polarity, polarity_confidence = self._resolve_polarity(
-                    event_id=db_event_id,
-                    entity_id=entity_id,
-                    title=title,
-                )
+            # (b) ONE exposure per resolved entity (DIRECTLY_AFFECTED). Polarity is
+            # NULL unless the Wave C3 classifier produced a verdict for this entity.
+            for entity_id in valid_entity_ids:
+                polarity, polarity_confidence = polarity_by_entity.get(entity_id, (None, None))
                 await exposure_repo.upsert(
                     exposure_id=new_uuid7(),
                     event_id=db_event_id,
@@ -313,42 +343,83 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             # PLAN-0056 Wave C2b: condition_id is None on the legacy fallback path.
             condition_id=condition_id,
             region=region,
+            # PLAN-0056 Wave C3: whether the real question titled the event.
+            has_question=question is not None,
+            polarities_classified=len(polarity_by_entity),
             exposures=exposures_written,
             entities_seen=len(raw_entity_ids),
         )
 
-    def _resolve_polarity(
+    async def _classify_polarities(
         self,
         *,
-        event_id: UUID,
-        entity_id: UUID,
-        title: str,
-    ) -> tuple[str | None, float | None]:
-        """Return (polarity, polarity_confidence) for one exposure.
+        condition_id: str | None,
+        question: str,
+        entity_ids: list[UUID],
+    ) -> dict[UUID, tuple[str | None, float | None]]:
+        """Classify polarity for each (market, entity) pair (PLAN-0056 Wave C3).
 
-        Wave C2 has no classifier wired, so this returns (None, None) → NULL
-        polarity. Wave C3 injects a ``polarity_classifier`` collaborator; this
-        seam lets that wave slot the LLM call in without touching the write path.
+        Two phases so no DB connection is held across the LLM HTTP calls (R24):
+          1. Look up each entity's canonical name in a short read session, then
+             release it.
+          2. Call the injected ``polarity_classifier`` (DeepInfra small model) per
+             entity that resolved to a name.  The classifier caches by
+             ``(condition_id, entity_id)`` and returns ``("neutral", 0.0)`` on any
+             failure (PRD §13 — never blocks ingestion), so this never raises.
+
+        Entities with no resolvable name are omitted from the result → their
+        exposure keeps NULL polarity.
         """
-        if self._polarity_classifier is None:
-            return (None, None)
-        # Wave C3 wires the classifier; kept defensive so a partial C3 rollout
-        # never blocks ingestion (PRD §13 — default neutral, never block).
-        try:
-            result: tuple[str | None, float | None] = self._polarity_classifier.classify(
-                event_id=event_id,
-                entity_id=entity_id,
-                title=title,
-            )
-            return result
-        except Exception:
-            logger.warning(
-                "prediction_enriched_consumer_polarity_classify_failed",
-                event_id=str(event_id),
-                entity_id=str(entity_id),
-                exc_info=True,
-            )
-            return (None, None)
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+
+        # Guarded by the caller (only invoked when polarity_classifier is not None);
+        # assert narrows the Any | None type for the classify() call below.
+        assert self._polarity_classifier is not None
+
+        # Phase 1 — resolve names (DB), session released before any HTTP call.
+        name_by_id: dict[UUID, str | None] = {}
+        async with self._sf() as session:
+            entity_repo = CanonicalEntityRepository(session)
+            for entity_id in entity_ids:
+                try:
+                    row = await entity_repo.get(entity_id)
+                except Exception:
+                    logger.warning(
+                        "prediction_enriched_consumer_entity_name_lookup_failed",
+                        entity_id=str(entity_id),
+                        exc_info=True,
+                    )
+                    row = None
+                name = row.get("canonical_name") if row else None
+                name_by_id[entity_id] = str(name) if name else None
+
+        # Phase 2 — classify (HTTP, no DB session held).
+        results: dict[UUID, tuple[str | None, float | None]] = {}
+        for entity_id in entity_ids:
+            entity_name = name_by_id.get(entity_id)
+            if not entity_name:
+                continue  # no name → leave polarity NULL for this exposure
+            try:
+                polarity, confidence = await self._polarity_classifier.classify(
+                    question=question,
+                    entity_name=entity_name,
+                    outcomes=None,
+                    condition_id=condition_id,
+                    entity_id=entity_id,
+                )
+            except Exception:
+                # Defensive: the classifier already swallows its own errors, but a
+                # broken injection must never block ingestion.
+                logger.warning(
+                    "prediction_enriched_consumer_polarity_classify_failed",
+                    entity_id=str(entity_id),
+                    exc_info=True,
+                )
+                continue
+            results[entity_id] = (polarity, confidence)
+        return results
 
     # ------------------------------------------------------------------
     # Failure tracking (log-only — mirrors the other KG consumers)

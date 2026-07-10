@@ -115,6 +115,17 @@ class Settings(BaseSettings):
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_CONCURRENCY
     deepinfra_extraction_concurrency: int = 5
 
+    # PLAN-0056 Wave C3: MarketPolarityClassifier (prediction-market exposure polarity).
+    # Reuses the DeepInfra OpenAI-compat small-model stack (same shape as S6 relevance
+    # scoring — a small, cheap chat model). When ``deepinfra_api_key`` is set the
+    # PredictionEnrichedConsumer wires the classifier; empty key → exposures keep
+    # NULL polarity (the classifier is never constructed).
+    polarity_classifier_model_id: str = "Qwen/Qwen2.5-0.5B-Instruct"  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_MODEL_ID
+    polarity_classifier_base_url: str = (
+        "https://api.deepinfra.com/v1/openai"  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_BASE_URL
+    )
+    polarity_classifier_timeout_seconds: int = 30  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_TIMEOUT_SECONDS
+
     # Observability (STANDARDS.md §5)
     log_level: str = "INFO"
     log_json: bool = True

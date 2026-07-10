@@ -118,6 +118,38 @@ class TestSchemaAlignment:
         round_tripped = CanonicalNlpArticleEnriched.from_dict(d)
         assert round_tripped.source_name is None
 
+    # PLAN-0056 Wave C3: forward-compat regression — source_title MUST be a
+    # nullable string carrying the upstream document title (= market question for
+    # Polymarket synthetic docs) so the KG can title/classify prediction events.
+    def test_source_title_is_nullable_with_null_default(self) -> None:
+        schema = _load_schema()
+        for f in schema["fields"]:
+            if f["name"] == "source_title":
+                assert isinstance(f["type"], list)
+                assert "null" in f["type"]
+                assert "string" in f["type"]
+                assert f.get("default", "MISSING") is None
+                return
+        pytest.fail("source_title field missing from schema")
+
+    def test_source_title_round_trip_through_canonical(self) -> None:
+        """Producer→consumer round-trip preserves source_title (Wave C3 regression)."""
+        original = _sample(source_title="Will Company X miss Q3 earnings?")
+        d = original.to_dict()
+        # KG PredictionEnrichedConsumer reads ``value.get("source_title")`` directly.
+        assert d["source_title"] == "Will Company X miss Q3 earnings?"
+        round_tripped = CanonicalNlpArticleEnriched.from_dict(d)
+        assert round_tripped.source_title == "Will Company X miss Q3 earnings?"
+
+    def test_source_title_defaults_to_none_when_omitted(self) -> None:
+        """Legacy producers that don't set source_title end up with None on consume."""
+        original = _sample()  # no source_title override
+        assert original.source_title is None
+        d = original.to_dict()
+        assert d["source_title"] is None
+        round_tripped = CanonicalNlpArticleEnriched.from_dict(d)
+        assert round_tripped.source_title is None
+
 
 class TestRoundTrip:
     def test_from_dict_to_dict_preserves_payload(self) -> None:

@@ -874,6 +874,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 correlation_id=correlation_id,
                 tenant_id=tenant_id,
                 doc_title=doc_title,
+                # PLAN-0056 Wave C3: carry the (recovered) document title onto the
+                # enriched event as source_title.  For a Polymarket synthetic doc
+                # this IS the market question — the KG needs it to title the
+                # prediction temporal event and classify per-entity polarity.
+                source_title=doc_title,
             )
 
         url = value.get("url") or await extract_url_from_silver(self._storage, self._settings.silver_bucket, minio_key)
@@ -1117,6 +1122,9 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         correlation_id: str | None,
         tenant_id: uuid.UUID | None = None,
         doc_title: str | None = None,
+        # PLAN-0056 Wave C3: document title threaded verbatim onto the enriched
+        # event's source_title (default None keeps existing direct-call unit tests green).
+        source_title: str | None = None,
     ) -> None:
         """Download text and run Blocks 3-10 with D-004 dual-DB commit ordering."""
 
@@ -1474,6 +1482,9 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     source_type=source_type,
                     source_name=source_name,
                     external_id=external_id,
+                    # PLAN-0056 Wave C3: carry the document title (market question
+                    # for Polymarket synthetic docs) onto the enriched event.
+                    source_title=source_title,
                     published_at=published_at,
                     is_backfill=is_backfill,
                     routing_decision=routing_decision,

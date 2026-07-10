@@ -424,7 +424,44 @@ per KG-relation-growth memory); entity-noise gate.
 **Files**: 4 avsc + `article_enriched.py`; `fetch_and_write.py`, `emit_synthetic_prediction_document.py`; `process_article.py`, content-store `article_consumer.py`; nlp `article_consumer.py`, `blocks/enriched_event.py`; `prediction_enriched_consumer.py`; `tests/contract/test_avro_schemas.py` + 5 test files.
 **Layer**: contracts/application/infrastructure. **depends_on**: C2.
 
-### Wave C3 — MarketPolarityClassifier (LLM at link time)
+### Wave C3 — MarketPolarityClassifier (LLM at link time) ✅
+**Status**: **DONE** — 2026-07-10 · ~20 new/updated tests (schema round-trip + field-count 27,
+canonical-model source_title round-trip ×3, prompt ×7, classifier ×11, S6 passthrough ×2,
+consumer C3 ×7) · full KG unit (1680) + nlp-pipeline unit (1368) + libs/prompts + libs/contracts
+suites green · ruff + mypy clean on all touched packages. Pre-existing unrelated failures logged
+(market.dataset.fetched count, entity.narrative/refresh envelope, ContentSourceType enum-drift —
+untouched by this wave).
+**IMPLEMENTATION NOTES**:
+- **source_title passthrough (Part 1)**: added a nullable `source_title` (`["null","string"]`,
+  default null, R5) to `nlp.article.enriched.v1.avsc` + `CanonicalNlpArticleEnriched`
+  (to_dict/from_dict). S6 copies the inbound `content.article.stored.v1.title` verbatim onto the
+  enriched event (`article_consumer.process_message` → `_run_pipeline` → `_enqueue_enriched`) — pure
+  in-memory passthrough, no NER change, no migration. Field-count test bumped 26→27; the
+  canonical↔avro alignment test (`avro_fields == to_dict keys`) stays green because BOTH sides gained
+  the field. No service-local enriched schema copy exists, so only the canonical `.avsc` changed.
+- **MARKET_POLARITY prompt (Part 2)**: `libs/prompts/src/prompts/classification/market_polarity.py`
+  (`MARKET_POLARITY_CLASSIFIER`, version 1.0), mirrors `article_relevance.py` (static block +
+  caller-appended dynamic trailer, `parameters=frozenset()`). Output JSON
+  `{polarity: bullish|bearish|neutral, confidence, reason}`.
+- **MarketPolarityClassifier (Part 3)**: S7 `infrastructure/llm/market_polarity_classifier.py`, reuses
+  the S6 relevance stack (DeepInfra OpenAI-compat `/chat/completions`, small model
+  `Qwen/Qwen2.5-0.5B-Instruct`, `response_format=json_object`, `enable_thinking=False`,
+  `httpx.AsyncClient`). Every call logs to `llm_usage_log` via `SessionScopedKgUsageLogger` with a
+  NON-ZERO cost resolved through `ml_clients.pricing.resolve_cost` (DeepInfra `usage.estimated_cost` →
+  `cost_source="provider"`). Any error/timeout/parse-failure → `("neutral", 0.0)`. Caches per
+  `(condition_id, entity_id)`. Config env vars added to S7 `config.py`
+  (`polarity_classifier_model_id`/`_base_url`/`_timeout_seconds`); wired in
+  `prediction_enriched_consumer_main.py` only when `deepinfra_api_key` is set.
+- **Consumer wiring (Part 4)**: `PredictionEnrichedConsumer` now reads `source_title` → titles the
+  temporal event with the real question (fallback to the condition_id/doc_id placeholder). When a
+  classifier is injected AND the question is present, it resolves each entity's canonical name (short
+  read session, released BEFORE the LLM HTTP calls — R24) then classifies polarity, writing
+  `polarity`/`polarity_confidence` onto each exposure. Idempotent + graceful (NULL polarity) when
+  `source_title`/classifier/entity-name absent or the classifier raises.
+- Files: `nlp.article.enriched.v1.avsc`, `libs/contracts/.../article_enriched.py`,
+  `libs/prompts/.../classification/market_polarity.py` (+ `__init__`), S7
+  `infrastructure/llm/market_polarity_classifier.py`, `prediction_enriched_consumer.py` +
+  `_main.py`, `config.py`, S6 `blocks/enriched_event.py` + `article_consumer.py`, contract/unit tests.
 **Layer**: infrastructure. **Effort**: 60m. **depends_on**: C2.
 - **T-C-3-01 (impl)** — `MARKET_POLARITY` prompt (NEW) in `libs/prompts/src/prompts/classification/market_polarity.py`
   (mirror `article_relevance.py` structure/versioning): input (market question, outcome, entity name) →

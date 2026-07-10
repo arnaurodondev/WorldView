@@ -64,6 +64,13 @@ class CanonicalNlpArticleEnriched:
     # parses the condition_id out of it so temporal events resolve to a real
     # market instead of an anonymous doc_id.
     external_id: str | None = None
+    # PLAN-0056 Wave C3 (2026-07-10): upstream document title copied verbatim from
+    # content.article.stored.v1.title (S6 pure passthrough — no NER change).  For a
+    # Polymarket synthetic doc this IS the market question, which S7's
+    # PredictionEnrichedConsumer uses both as the temporal-event title and as the
+    # input to MarketPolarityClassifier.  Nullable + default None keeps the schema
+    # forward-compatible (R5); legacy producers decode to None.
+    source_title: str | None = None
     published_at: str | None = None
     is_backfill: bool = False
     relation_count: int = 0
@@ -99,6 +106,9 @@ class CanonicalNlpArticleEnriched:
             # PLAN-0056 Wave C2b: optional on the wire (Avro default=null) and on
             # legacy events; cast only when present.
             external_id=(str(d["external_id"]) if d.get("external_id") is not None else None),
+            # PLAN-0056 Wave C3: optional on the wire (Avro default=null) and on
+            # legacy events; cast only when present.
+            source_title=(str(d["source_title"]) if d.get("source_title") is not None else None),
             published_at=(str(d["published_at"]) if d.get("published_at") is not None else None),
             is_backfill=bool(d.get("is_backfill", False)),
             relation_count=int(d.get("relation_count", 0)),
@@ -130,6 +140,8 @@ class CanonicalNlpArticleEnriched:
             # PLAN-0056 Wave C2b: emit external_id even when None so the Avro union
             # picks the null branch rather than complaining about a missing field.
             "external_id": self.external_id,
+            # PLAN-0056 Wave C3: emit source_title even when None (null-branch of the union).
+            "source_title": self.source_title,
             "published_at": self.published_at,
             "is_backfill": self.is_backfill,
             "routing_tier": self.routing_tier,

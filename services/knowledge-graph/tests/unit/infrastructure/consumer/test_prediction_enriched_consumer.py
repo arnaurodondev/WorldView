@@ -80,11 +80,13 @@ def _make_message(
     resolved_entity_ids: list[str] | None = None,
     published_at: str | None = "2026-07-09T12:00:00+00:00",
     external_id: str | None = None,
+    source_title: str | None = None,
 ) -> dict[str, Any]:
     """Build a decoded nlp.article.enriched.v1 dict.
 
-    ``external_id`` (PLAN-0056 Wave C2b) is omitted from the payload when None so
-    the default fixtures exercise the legacy anonymous fallback path.
+    ``external_id`` (PLAN-0056 Wave C2b) and ``source_title`` (Wave C3) are omitted
+    from the payload when None so the default fixtures exercise the legacy path
+    (anonymous title, no question → no polarity classification).
     """
     msg: dict[str, Any] = {
         "event_id": str(uuid4()),
@@ -96,6 +98,8 @@ def _make_message(
     }
     if external_id is not None:
         msg["external_id"] = external_id
+    if source_title is not None:
+        msg["source_title"] = source_title
     return msg
 
 
@@ -418,3 +422,214 @@ class TestPredictionEnrichedConsumerPlumbing:
         consumer, _, _, _ = _make_consumer()
         assert consumer.get_schema_path("nlp.article.enriched.v1") is not None
         assert consumer.get_schema_path("some.other.topic") is None
+
+
+# ── PLAN-0056 Wave C3: source_title question + polarity classification ────────
+
+_CANONICAL_ENTITY_REPO = (
+    "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository"
+)
+_QUESTION = "Will Company X miss Q3 earnings?"
+
+
+class _FakeClassifier:
+    """Async stand-in for MarketPolarityClassifier (no LLM)."""
+
+    def __init__(self, verdict: tuple[str, float] = ("bullish", 0.9)) -> None:
+        self._verdict = verdict
+        self.calls: list[dict[str, Any]] = []
+
+    async def classify(
+        self,
+        question: str,
+        entity_name: str,
+        outcomes: list[str] | None = None,
+        *,
+        condition_id: str | None = None,
+        entity_id: Any = None,
+    ) -> tuple[str, float]:
+        self.calls.append(
+            {"question": question, "entity_name": entity_name, "condition_id": condition_id, "entity_id": entity_id},
+        )
+        return self._verdict
+
+
+def _make_consumer_with_classifier(
+    classifier: Any,
+) -> tuple[Any, Any, Any, Any]:
+    """Build a consumer wired with a polarity classifier (else identical to _make_consumer)."""
+    from knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer import (
+        PredictionEnrichedConsumer,
+    )
+
+    from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+    config = ConsumerConfig(
+        bootstrap_servers="localhost:9092",
+        group_id="kg-prediction-enriched-test",
+        topics=["nlp.article.enriched.v1"],
+    )
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.commit = AsyncMock()
+    sf = MagicMock()
+    sf.return_value = session
+
+    event_repo = AsyncMock()
+    event_repo.upsert_by_natural_key = AsyncMock(return_value=_DB_EVENT_ID)
+    exposure_repo = AsyncMock()
+    exposure_repo.upsert = AsyncMock(return_value=_EXPOSURE_ID)
+
+    consumer = PredictionEnrichedConsumer(config=config, session_factory=sf, polarity_classifier=classifier)
+    return consumer, event_repo, exposure_repo, session
+
+
+def _canonical_repo_returning(name: str | None) -> Any:
+    """A CanonicalEntityRepository mock whose .get() returns a row with canonical_name."""
+    repo = AsyncMock()
+    repo.get = AsyncMock(return_value=({"canonical_name": name} if name is not None else None))
+    return repo
+
+
+class TestPredictionEnrichedConsumerSourceTitle:
+    def test_source_title_becomes_event_title(self) -> None:
+        """When source_title (the question) is present it titles the temporal event."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(external_id=f"polymarket:{_CONDITION_ID}", source_title=_QUESTION),
+                    {},
+                ),
+            )
+        kwargs = event_repo.upsert_by_natural_key.call_args.kwargs
+        assert kwargs["title"] == _QUESTION
+        assert kwargs["region"] == _CONDITION_ID
+
+    def test_blank_source_title_falls_back_to_placeholder(self) -> None:
+        """A whitespace-only source_title → the anonymous placeholder title."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(external_id=f"polymarket:{_CONDITION_ID}", source_title="   "),
+                    {},
+                ),
+            )
+        kwargs = event_repo.upsert_by_natural_key.call_args.kwargs
+        assert kwargs["title"] == f"Prediction market {_CONDITION_ID}"
+
+    def test_no_classifier_keeps_null_polarity_even_with_question(self) -> None:
+        """source_title present but NO classifier wired → title=question, polarity NULL."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(source_title=_QUESTION), {}))
+        for call in exposure_repo.upsert.call_args_list:
+            assert call.kwargs["polarity"] is None
+            assert call.kwargs["polarity_confidence"] is None
+
+
+class TestPredictionEnrichedConsumerPolarity:
+    def test_classifier_polarity_written_to_exposure(self) -> None:
+        """Classifier verdict is written onto each exposure (polarity + confidence)."""
+        classifier = _FakeClassifier(("bearish", 0.77))
+        consumer, event_repo, exposure_repo, _ = _make_consumer_with_classifier(classifier)
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_CANONICAL_ENTITY_REPO, return_value=_canonical_repo_returning("Company X")),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(external_id=f"polymarket:{_CONDITION_ID}", source_title=_QUESTION),
+                    {},
+                ),
+            )
+        assert exposure_repo.upsert.await_count == 2
+        for call in exposure_repo.upsert.call_args_list:
+            assert call.kwargs["polarity"] == "bearish"
+            assert call.kwargs["polarity_confidence"] == pytest.approx(0.77)
+        # The classifier was called with the question + the resolved entity name.
+        assert classifier.calls
+        assert classifier.calls[0]["question"] == _QUESTION
+        assert classifier.calls[0]["entity_name"] == "Company X"
+        assert classifier.calls[0]["condition_id"] == _CONDITION_ID
+
+    def test_no_question_skips_classification(self) -> None:
+        """Classifier wired but NO source_title → classifier never called, polarity NULL."""
+        classifier = _FakeClassifier(("bullish", 0.9))
+        consumer, event_repo, exposure_repo, _ = _make_consumer_with_classifier(classifier)
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_CANONICAL_ENTITY_REPO, return_value=_canonical_repo_returning("Company X")),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(external_id=f"polymarket:{_CONDITION_ID}"), {}))
+        assert classifier.calls == []
+        for call in exposure_repo.upsert.call_args_list:
+            assert call.kwargs["polarity"] is None
+
+    def test_unresolvable_entity_name_leaves_null_polarity(self) -> None:
+        """Entity whose canonical name cannot be resolved → exposure keeps NULL polarity."""
+        classifier = _FakeClassifier(("bullish", 0.9))
+        consumer, event_repo, exposure_repo, _ = _make_consumer_with_classifier(classifier)
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_CANONICAL_ENTITY_REPO, return_value=_canonical_repo_returning(None)),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(
+                        external_id=f"polymarket:{_CONDITION_ID}",
+                        source_title=_QUESTION,
+                        resolved_entity_ids=[_ENTITY_A],
+                    ),
+                    {},
+                ),
+            )
+        assert classifier.calls == []  # no name → never classified
+        assert exposure_repo.upsert.call_args.kwargs["polarity"] is None
+
+    def test_classifier_exception_does_not_block_ingestion(self) -> None:
+        """A classifier that raises must not stop the exposure write (polarity NULL)."""
+
+        class _BoomClassifier:
+            async def classify(self, *args: Any, **kwargs: Any) -> tuple[str, float]:
+                raise RuntimeError("llm down")
+
+        consumer, event_repo, exposure_repo, session = _make_consumer_with_classifier(_BoomClassifier())
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_CANONICAL_ENTITY_REPO, return_value=_canonical_repo_returning("Company X")),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(
+                        external_id=f"polymarket:{_CONDITION_ID}",
+                        source_title=_QUESTION,
+                        resolved_entity_ids=[_ENTITY_A],
+                    ),
+                    {},
+                ),
+            )
+        # Event + exposure still written and committed; polarity fell back to NULL.
+        event_repo.upsert_by_natural_key.assert_awaited_once()
+        assert exposure_repo.upsert.call_args.kwargs["polarity"] is None
+        session.commit.assert_awaited_once()

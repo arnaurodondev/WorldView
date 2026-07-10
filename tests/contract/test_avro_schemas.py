@@ -33,7 +33,7 @@ EXPECTED_FIELD_COUNTS: dict[str, int] = {
     # PLAN-0087 D-INIT-6 (2026-05-09): source_name added so KG enriched_consumer
     # can stamp evidence-row provenance without an R7 cross-DB query (25 fields).
     # PLAN-0056 Wave C2b (2026-07-10): external_id added (26 fields).
-    "nlp.article.enriched.v1": 26,
+    "nlp.article.enriched.v1": 27,  # PLAN-0056 Wave C3: +source_title passthrough (26→27)
     "nlp.signal.detected.v1": 14,
     "graph.state.changed.v1": 12,
     "intelligence.contradiction.v1": 12,
@@ -654,3 +654,50 @@ class TestExternalIdPassthroughC2b:
         rows = list(fastavro.reader(buf))
         assert rows[0]["external_id"] == "polymarket:0xcond"
         assert rows[1]["external_id"] is None
+
+
+@pytest.mark.contract
+class TestSourceTitlePassthroughC3:
+    """PLAN-0056 Wave C3: the ``source_title`` passthrough on nlp.article.enriched.v1.
+
+    S6 copies content.article.stored.v1.title verbatim into the enriched event's
+    ``source_title`` (for Polymarket synthetic docs this IS the market question).
+    The field MUST be nullable (union [null, string]) with a null default so old
+    producers/consumers that pre-date the field stay forward-compatible (R5).
+    """
+
+    def test_source_title_is_nullable_with_null_default(self) -> None:
+        schema = _load_schema(SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        fields_by_name = {f["name"]: f for f in schema["fields"]}
+        assert "source_title" in fields_by_name, "enriched schema missing source_title"
+        field = fields_by_name["source_title"]
+        assert field["type"] == ["null", "string"], "source_title must be union [null, string]"
+        assert field.get("default", "MISSING") is None, "source_title must default to null (R5)"
+
+    def test_enriched_round_trips_with_and_without_source_title(self) -> None:
+        """A producer that sets source_title AND a legacy one that omits it both decode."""
+        import io
+
+        schema = _load_schema(SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        parsed = fastavro.parse_schema(schema)
+
+        base = {
+            "event_id": "018f4a00-0000-7000-0000-000000000030",
+            "event_type": "nlp.article.enriched",
+            "schema_version": 1,
+            "occurred_at": "2026-07-10T12:00:00Z",
+            "doc_id": "018f4a00-0000-7000-0000-000000000031",
+            "source_type": "polymarket",
+            "routing_tier": "medium",
+            "routing_score": 0.55,
+            "section_count": 1,
+            "chunk_count": 1,
+            "mention_count": 0,
+        }
+        with_title = {**base, "source_title": "Will Company X miss Q3 earnings?"}
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [with_title, base])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert rows[0]["source_title"] == "Will Company X miss Q3 earnings?"
+        assert rows[1]["source_title"] is None

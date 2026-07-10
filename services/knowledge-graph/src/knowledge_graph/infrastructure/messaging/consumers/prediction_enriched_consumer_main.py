@@ -80,6 +80,32 @@ async def main() -> None:
     engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
+    # PLAN-0056 Wave C3: wire the MarketPolarityClassifier when a DeepInfra key is
+    # configured. Empty key → classifier=None → exposures keep NULL polarity (no
+    # behaviour change). Every LLM call is cost-logged (non-zero) via the
+    # session-scoped KG usage logger so we never reintroduce the S6/S8 $0 bug.
+    polarity_classifier = None
+    deepinfra_key = settings.deepinfra_api_key.get_secret_value()
+    if deepinfra_key:
+        from knowledge_graph.infrastructure.intelligence_db.usage_log_factory import (
+            SessionScopedKgUsageLogger,
+        )
+        from knowledge_graph.infrastructure.llm.market_polarity_classifier import (
+            MarketPolarityClassifier,
+        )
+
+        polarity_classifier = MarketPolarityClassifier(
+            api_key=deepinfra_key,
+            api_base_url=settings.polarity_classifier_base_url,
+            model_id=settings.polarity_classifier_model_id,
+            timeout_seconds=settings.polarity_classifier_timeout_seconds,
+            usage_logger=SessionScopedKgUsageLogger(write_factory),
+        )
+        log.info(
+            "prediction_enriched_consumer_polarity_classifier_enabled",
+            model=settings.polarity_classifier_model_id,
+        )
+
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id="kg-prediction-enriched-group",
@@ -92,7 +118,8 @@ async def main() -> None:
         config=config,
         session_factory=write_factory,
         dedup_client=valkey,
-        # Wave C3 will pass polarity_classifier=... here; None → NULL polarity now.
+        # PLAN-0056 Wave C3: None when no DeepInfra key → exposures keep NULL polarity.
+        polarity_classifier=polarity_classifier,
     )
     # Bind the probe so /healthz reflects this consumer's poll-loop progress.
     liveness_probe.bind(consumer)
