@@ -357,7 +357,13 @@ LLM-classified polarity, and expose them per entity. **Depends on**: B2 (synthet
 S6). Mirrors `EarningsCalendarDatasetConsumer` + `TemporalEventRepository.upsert_by_natural_key` +
 `EntityEventExposureRepository.upsert`.
 
-### Wave C1 — migration 0066: PREDICTION event type + exposure polarity
+### Wave C1 — migration 0066: PREDICTION event type + exposure polarity ✅
+**Status**: **DONE** — 2026-07-10 · verified HEAD 0065 (filesystem-authoritative, R32) so chained
+`0066`→`0065` · widened `ck_temporal_event_type` to add `'prediction'` (keeps all 7 prior values) +
+`entity_event_exposures.polarity varchar(20) null` / `polarity_confidence double precision null` +
+`ck_exposure_polarity` CHECK (bullish|bearish|neutral OR NULL, VARCHAR not enum per BP-007) · 7 DB-free
+static-guard tests pass · ruff clean · mypy N/A (alembic/ + tests/ excluded) · DB-dependent
+integration/apply/rollback tests NOT run (no Postgres in env).
 **Layer**: schema. **Effort**: 45m. **depends_on**: none (but verify HEAD per ⚠️ above).
 - **T-C-1-01 (schema)** — intelligence-migrations `0066_prediction_event_type_and_exposure_polarity.py`
   (`revision="0066"`, `down_revision="0065"`): widen `ck_temporal_event_type` to include `'prediction'`

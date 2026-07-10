@@ -350,7 +350,7 @@ marks it dispatched without re-delivering.
 | `SemanticMode` | `RELATION_STATE` (active state, e.g. employs) \| `TEMPORAL_CLAIM` (historical record) |
 | `DecayClass` | `STANDARD` \| `TEMPORAL` |
 | `RelationType` | 16 code-level values; more total in `relation_type_registry` DB seeds |
-| `EventType` | `geopolitical`, `regulatory`, `macro`, `sanctions`, `natural_disaster`, `corporate`, `other` |
+| `EventType` | `geopolitical`, `regulatory`, `macro`, `sanctions`, `natural_disaster`, `corporate`, `other`; `prediction` accepted by the DB CHECK as of migration 0066 — the code-level `EventType.PREDICTION` value lands in PLAN-0056 Wave C2 |
 | `EventScope` | `LOCAL`, `REGIONAL`, `NATIONAL`, `GLOBAL` |
 | `ExposureType` | `directly_affected`, `operationally_impacted`, `supply_chain`, `revenue_geography`, `sector_exposure` |
 
@@ -409,7 +409,7 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
 | `events` | RANGE monthly (36 months) | Extracted events with `structured_data` JSONB |
 | `event_entities` | — | Entity-to-event linkage |
 | `temporal_events` | — | Geopolitical/macro events (from S2 and S7 workers) |
-| `entity_event_exposures` | — | Entity exposure to temporal events |
+| `entity_event_exposures` | — | Entity exposure to temporal events. As of migration 0066 also carries `polarity` (`bullish`/`bearish`/`neutral`, VARCHAR+CHECK, nullable) and `polarity_confidence` (double, nullable) — populated for prediction-market exposures (PLAN-0056 Sub-Plan C); NULL for non-directional earnings/corporate exposures. |
 | `provisional_entity_queue` | — | Unresolved entities awaiting Worker 13E enrichment; `next_retry_at` for exponential backoff |
 | `path_insights` | — | Pre-computed multi-hop paths scored by `PathInsightWorker`. PLAN-0112 (migration 0052) added `dst_entity_id` (far endpoint, FK CASCADE, nullable for old rows), `reliability`/`unexpectedness`/`semantic_distance`/`novelty`/`weirdness` (FLOAT, the WeirdnessScorer sub-scores), `scorer_version` (e.g. `weirdness-1.0`). `composite_score` now mirrors `weirdness` (ranking column). Indexes: `idx_path_insights_global_weird (weirdness DESC) WHERE weirdness IS NOT NULL` (global feed), `idx_path_insights_dst (dst_entity_id, weirdness DESC)` (endpoint filter). |
 | `node_degree` | — | PLAN-0112 (migration 0052). Precomputed undirected degree per graph vertex (`degree`, `degree_meaningful` excluding membership edges, `refreshed_at`); PK `entity_id` FK→`canonical_entities` CASCADE. Powers the WeirdnessScorer's configuration-model unexpectedness without per-query recompute. Refreshed each AGE-sync cycle via a fast `_ag_label_edge` SQL aggregation (~sub-second / ~2.7k entities). |
