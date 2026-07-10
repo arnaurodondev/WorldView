@@ -272,7 +272,13 @@ Mirrors `PolymarketClient`/`PolymarketAdapter` + `FetchAndWritePredictionMarkets
 **Tests**: per adapter — happy-path parse, dedup, 429 backoff, CLOB `1d` fallback (≥12). **Guardrails**:
 BP-025/026/027 (external I/O: timeouts, retry classification, rate-limit).
 
-### Wave B2 — SyntheticDocumentEmitter
+### Wave B2 — SyntheticDocumentEmitter ✅
+**Status**: **DONE** — 2026-07-09 · 16 new tests · ruff+mypy clean · full S4 suite green (0 failures).
+Delivered `application/use_cases/emit_synthetic_prediction_document.py` (`SyntheticDocumentEmitter` +
+`build_synthetic_document_body` + first-sight/resolution `url_hash` helpers) and wired
+`WorkerProcess._emit_synthetic_documents(results)` into `_execute_polymarket_task()` (runs outside the
+snapshot advisory lock, best-effort, own atomic fetch_log+outbox tx per doc). B3 still owns the 4-adapter
+routing / outbox dispatcher / scheduler seeding.
 **Layer**: application. **Effort**: 60m. **depends_on**: B1(config only) — can start with A.
 - **T-B-2-01 (impl)** — `SyntheticDocumentEmitter` (NEW): from a `PredictionMarketFetchResult`, build a
   `content.article.raw.v1` payload via the existing `build_raw_article_payload` shape with

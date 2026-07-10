@@ -20,6 +20,9 @@ from typing import TYPE_CHECKING
 import httpx
 
 from content_ingestion.application.use_cases.claim_tasks import ClaimTasksUseCase
+from content_ingestion.application.use_cases.emit_synthetic_prediction_document import (
+    SyntheticDocumentEmitter,
+)
 from content_ingestion.application.use_cases.execute_task import ExecuteContentTaskUseCase
 from content_ingestion.application.use_cases.fetch_and_write_prediction_markets import (
     FetchAndWritePredictionMarketsUseCase,
@@ -52,7 +55,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from content_ingestion.application.ports.source_adapter import SourceAdapterPort
-    from content_ingestion.domain.entities import ContentIngestionTask
+    from content_ingestion.domain.entities import ContentIngestionTask, PredictionMarketFetchResult
 
 logger = get_logger(__name__)
 
@@ -627,6 +630,43 @@ class WorkerProcess:
                 failed=summary.failed,
                 duration=summary.duration_seconds,
             )
+
+        # PLAN-0056 B2: emit synthetic entity-linking documents for each market.
+        # Runs OUTSIDE the snapshot advisory lock in its own session — the
+        # synthetic document is a distinct atomic unit (own fetch_log + outbox
+        # tx) and dedup is enforced by the article_fetch_log.url_hash UNIQUE
+        # constraint, so a concurrent worker cannot double-emit. Best-effort:
+        # a synthetic-doc failure must never fail the snapshot task.
+        await self._emit_synthetic_documents(results)
+
+    async def _emit_synthetic_documents(
+        self,
+        results: list[PredictionMarketFetchResult],
+    ) -> None:
+        """Emit first-sight/resolution synthetic documents for each fetched market.
+
+        Opens one short-lived write session shared across all markets; the
+        emitter commits (or rolls back) its own transaction per document, so a
+        single bad market never poisons the rest. Errors are swallowed here —
+        this path is strictly additive to the snapshot ingestion it follows.
+        """
+        try:
+            async with self._write_factory() as session:
+                emitter = SyntheticDocumentEmitter(
+                    fetch_log_repo=FetchLogRepository(session),
+                    outbox_repo=OutboxRepository(session),
+                    commit_fn=session.commit,
+                    rollback_fn=session.rollback,
+                )
+                total_emitted = 0
+                for result in results:
+                    summary = await emitter.emit(result)
+                    total_emitted += summary.emitted
+                if total_emitted:
+                    logger.info("synthetic_documents_cycle", emitted=total_emitted, markets=len(results))
+        except Exception as exc:
+            # Never let synthetic-doc emission break the worker loop.
+            logger.error("synthetic_documents_emit_cycle_failed", error=str(exc))
 
 
 async def _run_worker() -> None:

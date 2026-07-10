@@ -386,6 +386,20 @@ All news-source `SourceType` values come from `contracts.enums.ContentSourceType
 - **Config:** `Polymarket{Events,Clob,Trades,OI}ProviderSettings` in `config.py`, wired into `Settings` as `polymarket_events` / `polymarket_clob` / `polymarket_trades` / `polymarket_oi`. Every `base_url` is env-overridable (`CONTENT_INGESTION_POLYMARKET_EVENTS__BASE_URL`, etc.) so exact live API paths can be corrected at deploy without a code change. `AdapterError` gained an optional `status_code` kwarg (backward-compatible) to carry the HTTP status for the CLOB fallback.
 - **Token/market ids** for the CLOB/trades/OI adapters are read from `source.config` (`token_ids` / `condition_ids`); those source rows are seeded in Wave B3.
 
+### Synthetic-document emitter (PLAN-0056 Wave B2)
+
+A prediction-market *question* is natural language, so it is routed through the existing `content.article.raw.v1` rails as a **synthetic document** — S6's NER then links the question to the entities it mentions with **zero S6 change** (PRD-0033 §7). This is the entity-linking bridge for the KG keystone (Sub-Plan C).
+
+`SyntheticDocumentEmitter` (`application/use_cases/emit_synthetic_prediction_document.py`) is invoked by `WorkerProcess._emit_synthetic_documents(results)` at the end of `_execute_polymarket_task()`, after the market snapshots are written. It runs **outside** the snapshot advisory lock in a fresh write session and is strictly best-effort — a synthetic-doc failure never fails the snapshot task.
+
+- **Document body** (`build_synthetic_document_body`): the question, then one `- {outcome name}: {price*100:.1f}%` line per outcome, then `Market closes {close_time}`, `Category: {category}`, and (when a parent-event name is supplied) `Belongs to event: {name}`. The resolution document additionally appends the resolved outcome.
+- **Payload mapping** (via the existing `build_raw_article_payload`): `source_type='polymarket'`, `title` = question, `published_at` = close_time, `content_hash` = sha256(body), `minio_bronze_key` reuses the snapshot's bronze key.
+- **Two documents per market lifetime**, each deduped on `article_fetch_log.url_hash`:
+  - first-sight — `url_hash = sha256("polymarket:<condition_id>")`
+  - resolution (emitted only when `resolution_status == "resolved"`) — `url_hash = sha256("polymarket:<condition_id>:resolved")`
+- **Idempotent:** `FetchLogRepository.exists_by_url_hash` (cheap first pass) plus the `url_hash` UNIQUE constraint (concurrency guard) mean re-polls emit **0** new documents. An empty `condition_id` emits nothing (would collide dedup keys across markets).
+- **R8 outbox:** each document writes its `article_fetch_log` row + `outbox_events` row in one transaction and commits; on error the session is rolled back and the failure counted (the emit result is committed, never merely returned/logged).
+
 ---
 
 ## Configuration
