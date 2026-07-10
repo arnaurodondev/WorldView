@@ -239,17 +239,56 @@ def get_ohlcv_bars_flexible_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) 
     return GetOHLCVBarsFlexibleUseCase(uow)
 
 
-def get_fundamentals_history_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetFundamentalsHistoryUseCase:
+def _build_fundamentals_cache(request: Request) -> Any | None:
+    """Return a FundamentalsCache bound to this app, or None when disabled.
+
+    chat-enhancement-roadmap Area 1 #3. Reads the feature flag + TTL from
+    Settings and the shared ValkeyClient from app.state (wired at startup). When
+    the flag is off (or Valkey was never wired), returns None so the caller uses
+    the un-wrapped use-case — the pre-cache DB path, unchanged.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None or not getattr(settings, "fundamentals_cache_enabled", False):
+        return None
+    valkey_client = getattr(request.app.state, "valkey_client", None)
+    if valkey_client is None:
+        return None
+    from market_data.infrastructure.cache.fundamentals_cache import FundamentalsCache
+
+    return FundamentalsCache(valkey_client, ttl=settings.fundamentals_cache_ttl_seconds)
+
+
+def get_fundamentals_history_uc(
+    request: Request,
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> GetFundamentalsHistoryUseCase:
     from market_data.application.use_cases.get_fundamentals_history import GetFundamentalsHistoryUseCase
 
-    return GetFundamentalsHistoryUseCase(uow)
+    base = GetFundamentalsHistoryUseCase(uow)
+    cache = _build_fundamentals_cache(request)
+    if cache is None:
+        return base
+    # Cache-aside wrapper mirrors the use-case's execute() signature, so the
+    # router is oblivious to whether it holds the raw or cached variant.
+    from market_data.infrastructure.cache.fundamentals_cache import CachedFundamentalsHistoryUseCase
+
+    return CachedFundamentalsHistoryUseCase(base, cache)  # type: ignore[return-value]
 
 
 # PLAN-0104 W32: parameterised fundamentals projection use case.
-def get_query_fundamentals_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> Any:
+def get_query_fundamentals_uc(
+    request: Request,
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> Any:
     from market_data.application.use_cases.query_fundamentals_metrics import QueryFundamentalsUseCase
 
-    return QueryFundamentalsUseCase(uow)
+    base = QueryFundamentalsUseCase(uow)
+    cache = _build_fundamentals_cache(request)
+    if cache is None:
+        return base
+    from market_data.infrastructure.cache.fundamentals_cache import CachedQueryFundamentalsUseCase
+
+    return CachedQueryFundamentalsUseCase(base, cache)
 
 
 # ── Fundamentals use case deps ────────────────────────────────────────────────

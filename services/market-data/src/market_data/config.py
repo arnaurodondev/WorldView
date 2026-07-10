@@ -67,6 +67,23 @@ class Settings(BaseSettings):
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
 
+    # Fundamentals read-cache (chat-enhancement-roadmap Area 1 #3).
+    #
+    # The chat hot-path hammers a handful of tickers (AAPL/AMZN/NVDA) with the
+    # SAME fundamentals reads across many questions. Fundamentals only change
+    # quarterly, so a short-TTL Valkey cache in front of the read use-cases
+    # (/fundamentals/history, /fundamentals/query, /fundamentals/batch) cuts DB
+    # round-trips + connection-pool pressure with safe bounded staleness.
+    #
+    # ``fundamentals_cache_enabled`` (env MARKET_DATA_FUNDAMENTALS_CACHE_ENABLED)
+    # is a kill-switch: set False to route every read straight to the DB (the
+    # pre-cache behaviour) without a redeploy.
+    fundamentals_cache_enabled: bool = True
+    # Default 6h — comfortably shorter than the quarterly refresh cadence, so a
+    # freshly-ingested quarter is visible within at most one TTL window. Env:
+    # MARKET_DATA_FUNDAMENTALS_CACHE_TTL_SECONDS.
+    fundamentals_cache_ttl_seconds: int = 21_600
+
     # Internal auth (PRD-0025): S9 api-gateway base URL for JWKS endpoint.
     api_gateway_url: str = "http://api-gateway:8000"
 

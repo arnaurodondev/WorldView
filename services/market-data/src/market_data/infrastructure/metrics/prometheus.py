@@ -17,6 +17,18 @@ s3_post_commit_hook_failures_total = Counter(
     "Non-zero values indicate cache staleness bounded by the cache TTL.",
 )
 
+# Fundamentals read-cache hit/miss/error counter (chat-enhancement-roadmap
+# Area 1 #3). ``use_case`` distinguishes the history vs query read paths;
+# ``outcome`` is one of "hit" | "miss" | "error". A rising "error" rate means
+# Valkey is degrading (reads still succeed via DB fallback — see the fail-open
+# policy in FundamentalsCache); a low hit-ratio on hot tickers suggests the TTL
+# or key granularity needs tuning.
+s3_fundamentals_cache_events_total = Counter(
+    "s3_fundamentals_cache_events_total",
+    "Fundamentals read-cache events by use case and outcome (hit/miss/error).",
+    labelnames=("use_case", "outcome"),
+)
+
 
 # ── Consumer processing latency ───────────────────────────────────────────────
 # PLAN-0102 T-W6-03 / BP-617: histogram of fundamentals consumer per-message
