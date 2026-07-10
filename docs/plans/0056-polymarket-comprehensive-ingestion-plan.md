@@ -302,7 +302,7 @@ loads live source config for `token_ids`/`condition_ids`, advisory-locked fetch_
 outbox dispatcher registers the 4 new `event_type`s → their Avro serializers (4 `.avsc` copied into the
 service-local schemas dir; serializer routes on `event_type`); `scheduler_main` adds per-stream cadence
 (events 1h, CLOB 6h, trades 1h, OI daily) from each provider's `poll_interval_seconds`; migration
-`0011_seed_polymarket_wave2_sources.py` (down_revision `0010_sec_edgar_cik_watchlist`) seeds 4 sources;
+`0011_seed_pm_wave2_sources.py` (down_revision `0010_sec_edgar_cik_watchlist`) seeds 4 sources;
 env vars `CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS` / `…_TRADES_BACKFILL_DAYS` (default 14,
 gated by `BACKFILL_ON_STARTUP`) added to `Settings` + `dev.local.env.example` + `docker.env`.
 Known limitation: B1 CLOB/trades entities carry no parent `conditionId`, so history/trade payloads use
@@ -312,7 +312,7 @@ later wave can enrich token→conditionId).
 - **T-B-3-01 (impl)** — Extend `worker._execute_polymarket_task` dispatch: map each new
   `ContentSourceType` → its client/adapter class.
 - **T-B-3-02 (impl)** — Outbox dispatcher: map the 4 new outbox `event_type`s → their Avro serializers/topics.
-- **T-B-3-03 (schema)** — content-ingestion migration `0011_seed_polymarket_wave2_sources.py`
+- **T-B-3-03 (schema)** — content-ingestion migration `0011_seed_pm_wave2_sources.py`
   (`down_revision="0010_sec_edgar_cik_watchlist"`) seeding 4 new `sources` rows with per-adapter cadence.
 - **T-B-3-04 (config)** — env vars `CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS=14`,
   `…TRADES_BACKFILL_DAYS=14` (+ `dev.local.env.example`, docker.env). Backfill gated by existing
@@ -651,3 +651,30 @@ grounding and the full activation pipeline.
 # Compounding (post-implementation)
 Per PRD §16: BP entries (CLOB closed-market granularity; plumbed-but-unused), `.claude-context.md` for
 S3/S4/S7/alert, service docs, MASTER_PLAN diagram.
+
+# Deploy fixes (2026-07-10) — local-validation blockers
+
+Two blockers found during local Docker validation of the code-complete branch, both fixed (BP-720):
+
+- **BLOCKER-1 (Sub-Plan C/D) — `kg-prediction-enriched-group` crash-loop (166 restarts).** The new
+  `PredictionEnrichedConsumer` group read the ~20.6k-message historical `nlp.article.enriched.v1` backlog
+  (written under the pre-C2b/C3 schema). The no-registry `fastavro.schemaless_reader` decodes those old
+  records with the NEW reader schema → union misalignment (`IndexError` in `read_union`) → every old
+  record dead-lettered → `dead_letter_cap` (5000) → forced restart forever. Fix (both): (1) the
+  consumer is FORWARD-ONLY (needs only NEW polymarket synthetic docs; ZERO polymarket docs exist in the
+  news backlog) → new config `kafka_prediction_enriched_consumer_auto_offset_reset="latest"` starts the
+  fresh group at LATEST so it never reads the backlog; (2) resilient deserialize — `_handle_message`
+  override catches the base `MalformedDataError`, logs it with the offset (`..._deserialize_skipped`),
+  and advances past the poison/old-schema record. **Deploy op**: `auto.offset.reset` only applies with
+  NO committed offset; the crash-loop OFF-path never committed (CURRENT-OFFSET was `-`), but as
+  belt-and-suspenders the group was reset while it had no active members:
+  `kafka-consumer-groups --group kg-prediction-enriched-group --topic nlp.article.enriched.v1
+  --reset-offsets --to-latest --execute`. Verified live: 0 restarts / 0 dead-letters over ~70s, group
+  at LATEST (LAG 0).
+- **BLOCKER-2 (Sub-Plan B) — migration 0011 revision id > 32 chars.** The Wave B3 revision id
+  `0011_seed_polymarket_wave2_sources` (34 chars) overflows `alembic_version.version_num varchar(32)`
+  → `StringDataRightTruncationError` on a fresh DB (whole migration rolls back). Fix: renamed the id
+  (and file) to `0011_seed_pm_wave2_sources` (26 chars ≤ 32); prefer shortening the id over widening
+  the column. The live content_ingestion_db had a deploy-time `ALTER COLUMN … varchar(255)` workaround
+  + the old 34-char id recorded — reconciled to the shortened id and reverted the column to varchar(32).
+  Verified: `content-ingestion-migrate` sidecar exits 0 on the rebuilt image.

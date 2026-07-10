@@ -125,6 +125,14 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id="kg-prediction-enriched-group",
         topics=[settings.kafka_topic_enriched],
+        # PLAN-0056 deploy-fix: FORWARD-ONLY consumer starts at the LATEST offset so
+        # a fresh group never re-reads the ~20k pre-C2b/C3 historical backlog on the
+        # shared nlp.article.enriched.v1 topic (old-schema records misalign under the
+        # new no-registry reader schema → crash-loop). There are ZERO polymarket docs
+        # in that backlog, so nothing of interest is skipped. See config.py for the
+        # full rationale. NOTE: if this group already committed a bad early offset
+        # from a prior crash-loop, the deploy must reset it to latest (see report).
+        auto_offset_reset=settings.kafka_prediction_enriched_consumer_auto_offset_reset,
         # PLAN-0113 FIX-2: opt-in Kafka static membership (KIP-345). Empty default
         # = dynamic membership (no behaviour change); a stable id skips rebalances.
         group_instance_id=settings.kafka_prediction_enriched_consumer_instance_id,

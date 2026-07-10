@@ -323,6 +323,18 @@ class Settings(BaseSettings):
     kafka_earnings_calendar_dataset_consumer_instance_id: str = ""
     # PLAN-0056 Wave C2 — PredictionEnrichedConsumer (own group on nlp.article.enriched.v1).
     kafka_prediction_enriched_consumer_instance_id: str = ""
+    # PLAN-0056 deploy-fix — start-at-latest for the prediction-enriched consumer.
+    # This consumer is a FRESH group on the high-volume nlp.article.enriched.v1
+    # topic, which holds ~20k historical messages written under the PRE-C2b/C3
+    # schema (before the additive nullable external_id/source_title fields). The
+    # no-registry ``fastavro.schemaless_reader`` decodes those old records with the
+    # NEW reader schema → union misalignment → IndexError → dead-letter storm →
+    # dead_letter_cap crash-loop. The consumer is FORWARD-ONLY (it only needs NEW
+    # polymarket synthetic docs; there are ZERO polymarket docs in the historical
+    # news backlog), so a fresh group starts at the LATEST offset and never reads
+    # the pre-change backlog. Override via
+    # KNOWLEDGE_GRAPH_KAFKA_PREDICTION_ENRICHED_CONSUMER_AUTO_OFFSET_RESET.
+    kafka_prediction_enriched_consumer_auto_offset_reset: str = "latest"
     # PLAN-0056 Wave D2 — PredictionMoveConsumer (own group on market.prediction.move.v1).
     kafka_prediction_move_consumer_instance_id: str = ""
     kafka_economic_events_dataset_consumer_instance_id: str = ""

@@ -60,6 +60,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     UnitOfWorkProtocol,
 )
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
+from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -226,6 +227,36 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # ``resolution`` signal — one per entity exposure, via the outbox (R8).
         # When None (e.g. legacy tests), no signals are emitted (no behaviour change).
         self._signal_emitter = signal_emitter
+
+    # ------------------------------------------------------------------
+    # Resilient message handling
+    # ------------------------------------------------------------------
+
+    async def _handle_message(self, msg: Any) -> None:
+        """Deserialize + dispatch one message, SKIPPING un-decodable records.
+
+        PLAN-0056 deploy-fix (defence-in-depth alongside the start-at-latest
+        offset reset). The base ``_handle_message`` raises ``MalformedDataError``
+        (a ``FatalError``) whenever ``deserialize_value`` fails — e.g. an old-schema
+        record on the shared ``nlp.article.enriched.v1`` topic that misaligns under
+        the new no-registry reader schema. A ``FatalError`` dead-letters immediately,
+        and a burst of them trips ``dead_letter_cap`` → the consumer crash-loops
+        forever on a poison/old-schema message. A single un-decodable record must
+        NEVER wedge this forward-only consumer, so we catch the deserialize failure,
+        log it WITH the offset, and return normally — the run loop then commits the
+        offset and advances past the bad record. All other exceptions propagate
+        unchanged (genuine processing failures still flow through the retry/DLQ path).
+        """
+        try:
+            await super()._handle_message(msg)
+        except MalformedDataError as exc:
+            logger.warning(
+                "prediction_enriched_consumer_deserialize_skipped",
+                topic=msg.topic(),
+                partition=msg.partition(),
+                offset=msg.offset(),
+                error=str(exc),
+            )
 
     # ------------------------------------------------------------------
     # Core processing

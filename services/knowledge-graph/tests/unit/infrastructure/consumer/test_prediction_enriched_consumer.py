@@ -424,6 +424,81 @@ class TestPredictionEnrichedConsumerPlumbing:
         assert consumer.get_schema_path("some.other.topic") is None
 
 
+class _FakeKafkaMessage:
+    """Minimal confluent-Kafka message stand-in for ``_handle_message`` tests."""
+
+    def __init__(self, raw_value: bytes, *, offset: int = 42, partition: int = 0) -> None:
+        self._value = raw_value
+        self._offset = offset
+        self._partition = partition
+
+    def topic(self) -> str:
+        return "nlp.article.enriched.v1"
+
+    def value(self) -> bytes:
+        return self._value
+
+    def key(self) -> bytes | None:
+        return None
+
+    def headers(self) -> list[tuple[str, bytes]]:
+        return []
+
+    def offset(self) -> int:
+        return self._offset
+
+    def partition(self) -> int:
+        return self._partition
+
+
+class TestPredictionEnrichedConsumerResilientDeserialize:
+    """PLAN-0056 deploy-fix: an un-decodable record must be SKIPPED, not crash-loop.
+
+    The base ``_handle_message`` raises ``MalformedDataError`` (a ``FatalError``) on a
+    deserialize failure — e.g. an old-schema record on the shared
+    ``nlp.article.enriched.v1`` topic misaligning under the new no-registry reader
+    schema. A burst of those trips ``dead_letter_cap`` → forced restart forever. The
+    override swallows the deserialize failure so the poison record is skipped (offset
+    advances in the run loop).
+    """
+
+    def test_undecodable_record_is_skipped_not_raised(self) -> None:
+        consumer, _, _, _ = _make_consumer()
+        # Confluent magic byte (0x00) + garbage that no Avro reader can decode →
+        # deserialize_confluent_avro raises → base wraps in MalformedDataError.
+        msg = _FakeKafkaMessage(b"\x00\x00\x00\x00\x01garbage-not-avro")
+        # Must NOT raise (a single poison message can never wedge the consumer).
+        asyncio.run(consumer._handle_message(msg))
+
+    def test_malformed_data_error_from_deserialize_is_swallowed(self) -> None:
+        from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+
+        consumer, _, _, _ = _make_consumer()
+        msg = _FakeKafkaMessage(b"\x00bad")
+        # Force the base path to raise MalformedDataError deterministically.
+        with patch.object(consumer, "deserialize_value", side_effect=ValueError("boom")):
+            # ValueError inside deserialize_value → base raises MalformedDataError →
+            # override catches it. Any OTHER exception would propagate (asserted by
+            # the fact this returns cleanly only for the deserialize path).
+            asyncio.run(consumer._handle_message(msg))
+        # Sanity: the base really does classify this as MalformedDataError.
+        assert issubclass(MalformedDataError, Exception)
+
+    def test_non_deserialize_exception_still_propagates(self) -> None:
+        """Only deserialize failures are swallowed — genuine processing errors bubble up."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        good_value = _make_message()
+        msg = _FakeKafkaMessage(b"\x00whatever")
+        # deserialize_value succeeds, but process_message blows up with a non-Malformed
+        # error → must propagate (so the retry/DLQ path still handles real failures).
+        with (
+            patch.object(consumer, "deserialize_value", return_value=good_value),
+            patch.object(consumer, "process_message", side_effect=RuntimeError("db down")),
+        ):
+            with pytest.raises(RuntimeError, match="db down"):
+                asyncio.run(consumer._handle_message(msg))
+
+
 # ── PLAN-0056 Wave C3: source_title question + polarity classification ────────
 
 _CANONICAL_ENTITY_REPO = (
