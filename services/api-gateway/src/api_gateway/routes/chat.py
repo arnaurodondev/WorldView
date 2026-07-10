@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 
 from api_gateway.routes.chat_safety import (
     build_injection_block_body,
@@ -24,6 +25,9 @@ from api_gateway.routes.helpers import (
     proxy_rag_chat_stream,
     rag_chat_request,
 )
+from observability.logging import get_logger  # type: ignore[import-untyped]
+
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 router = APIRouter(prefix="/v1")
 
@@ -352,6 +356,36 @@ async def update_thread(thread_id: str, request: Request) -> Any:
 # ── Briefings (PRD-0028 Wave S9-1) ───────────────────────────────────────────
 
 
+async def _safe_prediction_brief_leg(request: Request) -> Any | None:
+    """Best-effort prediction-signals leg for the morning brief (PLAN-0056 Wave E1).
+
+    Fetches the top open prediction markets from S3 so the brief can surface
+    portfolio-relevant prediction odds alongside the S8-composed narrative.
+
+    PARTIAL-FAILURE-SAFE: returns ``None`` on ANY error (transport failure,
+    non-200, malformed body) and logs a ``morning_brief_prediction_leg_failed``
+    warning. The caller attaches the result under ``prediction_signals`` — a
+    ``None`` leg never breaks the brief itself (mirrors the ``_safe_*`` pattern
+    in clients/dashboard.py).
+    """
+    try:
+        clients = _clients(request)
+        # Fresh JWT (unique JTI) for this leg — do NOT reuse the brief's headers,
+        # or InternalJWTMiddleware replay-detection could reject one of the calls.
+        resp = await clients.market_data.get(
+            "/api/v1/prediction-markets",
+            params={"limit": 5, "status": "open"},
+            headers=_auth_headers(request),
+        )
+        if resp.status_code != 200:
+            logger.warning("morning_brief_prediction_leg_failed", status=resp.status_code)
+            return None
+        return resp.json()
+    except Exception:
+        logger.warning("morning_brief_prediction_leg_failed")
+        return None
+
+
 @router.get("/briefings/morning")
 async def get_morning_briefing(request: Request) -> Any:
     """Proxy GET /api/v1/briefings/morning → S8 RAG/Chat service.
@@ -359,6 +393,14 @@ async def get_morning_briefing(request: Request) -> Any:
     Requires authentication. Returns the AI-generated morning market briefing.
     The rag-chat client has a 120 s timeout (app.py lifespan). On timeout we
     return 503 (not 500) so the frontend can show a friendly retry message.
+
+    PLAN-0056 Wave E1: augments the S8 brief with a best-effort
+    ``prediction_signals`` leg (top open prediction markets from S3). The brief
+    is composed in S8 rag-chat, so the gateway plumbing is a thin, partial-
+    failure-safe composition: when the S8 brief returns 200 JSON we attach the
+    prediction leg; if the prediction leg fails it degrades to ``None`` and the
+    brief is returned untouched. Non-200 briefs pass through verbatim (no leg,
+    no re-serialisation) so the BUG-7 5xx sanitisation is preserved.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -371,7 +413,22 @@ async def get_morning_briefing(request: Request) -> Any:
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
-    return proxy_json_response(request, resp)
+
+    # Only augment a healthy JSON brief. Any non-200 (incl. 5xx) passes through
+    # proxy_json_response unchanged — the prediction leg must never turn an
+    # upstream error into a 200.
+    if resp.status_code != 200:
+        return proxy_json_response(request, resp)
+    try:
+        brief_body = resp.json()
+    except Exception:
+        # Unexpected non-JSON 200 — forward verbatim rather than risk mangling it.
+        return proxy_json_response(request, resp)
+
+    prediction_leg = await _safe_prediction_brief_leg(request)
+    if isinstance(brief_body, dict):
+        brief_body["prediction_signals"] = prediction_leg
+    return JSONResponse(content=brief_body, status_code=200)
 
 
 @router.get("/briefings/instrument/{entity_id}")

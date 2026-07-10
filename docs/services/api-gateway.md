@@ -326,8 +326,15 @@ preferable to all-or-nothing for dashboard widgets.
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | GET | `/v1/signals/prediction-markets` | List prediction markets | Yes |
-| GET | `/v1/signals/prediction-markets/{id}` | Get market detail | Yes |
-| GET | `/v1/signals/prediction-markets/{id}/history` | Market price history | Yes |
+| GET | `/v1/signals/prediction-markets/categories` | Category counts for currently-open markets | Yes |
+| GET | `/v1/signals/prediction-markets/events` | List Polymarket event groups (`limit`/`offset`) — PLAN-0056 Wave E1 | Yes |
+| GET | `/v1/signals/prediction-markets/events/{event_id}` | Single event group (404 if unknown) — PLAN-0056 Wave E1 | Yes |
+| GET | `/v1/signals/prediction-markets/{id}` | Get market detail (now surfaces `liquidity` / `open_interest`) | Yes |
+| GET | `/v1/signals/prediction-markets/{id}/history` | Market price history — forwards `interval` (1h/1d/1w) + `token_id` for per-token bars; `liquidity` on snapshots — PLAN-0056 Wave A4/E1 | Yes |
+| GET | `/v1/signals/prediction-markets/{id}/trades` | Recent executed fills (`since`, `limit`) — PLAN-0056 Wave E1 | Yes |
+| GET | `/v1/entities/{entity_id}/predictions` | Prediction markets referencing an entity, with polarity (proxies S7 `/api/v1/entities/{id}/predictions`; verbatim, no odds hydration — frontend hydrates via the market-detail route by `condition_id`) — PLAN-0056 Wave E1 | Yes |
+
+> **Route ordering** (PLAN-0056 Wave E1): the literal `/events` and `/events/{event_id}` routes are registered **before** `/{market_id}` in `routes/intelligence.py` so FastAPI's registration-order matching does not treat `events` as a `market_id`.
 
 **Query params** for `GET /v1/signals/prediction-markets`:
 - `status` (optional, default `open`; choices: `open`, `resolved`, `cancelled`, `all`)
@@ -340,7 +347,7 @@ preferable to all-or-nothing for dashboard widgets.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| GET | `/v1/briefings/morning` | AI morning briefing (stub) | Yes |
+| GET | `/v1/briefings/morning` | AI morning briefing — augmented with a best-effort `prediction_signals` leg (top open prediction markets from S3; `null` on failure, never breaks the brief) — PLAN-0056 Wave E1 | Yes |
 | POST | `/v1/briefings/morning/generate` | Force-regenerate morning brief (proxies S8 `POST /api/v1/briefings/morning/generate`; 202 + queued; 503 on S8 timeout) | Yes |
 | GET | `/v1/briefings/instrument/{entity_id}` | Instrument briefing (stub) | Yes |
 

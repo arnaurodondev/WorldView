@@ -386,3 +386,99 @@ async def test_proxy_morning_generate_timeout_returns_503(authed_app, authed_moc
         )
 
     assert resp.status_code == 503
+
+
+# ── PLAN-0056 Wave E1: morning-brief prediction leg ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_morning_brief_attaches_prediction_signals(authed_app, authed_mock_clients) -> None:
+    """A healthy S8 brief is augmented with a ``prediction_signals`` leg from S3."""
+    authed_mock_clients.rag_chat.get = AsyncMock(
+        return_value=_mock_response(200, b'{"summary": "Markets calm", "sections": []}')
+    )
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, b'{"items": [{"market_id": "m-1"}], "total": 1}')
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/briefings/morning",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # Original brief content preserved…
+    assert body["summary"] == "Markets calm"
+    # …plus the new prediction leg populated from S3.
+    assert body["prediction_signals"]["items"][0]["market_id"] == "m-1"
+    # S3 was queried for the top open prediction markets.
+    assert authed_mock_clients.market_data.get.call_args[0][0] == "/api/v1/prediction-markets"
+
+
+@pytest.mark.asyncio
+async def test_morning_brief_prediction_leg_failure_is_none(authed_app, authed_mock_clients) -> None:
+    """A failing prediction leg degrades to ``None`` and never breaks the brief."""
+    authed_mock_clients.rag_chat.get = AsyncMock(return_value=_mock_response(200, b'{"summary": "Markets calm"}'))
+    # S3 raises → leg must swallow the error and return None.
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=httpx.ConnectError("S3 down"))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/briefings/morning",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"] == "Markets calm"
+    assert body["prediction_signals"] is None
+
+
+@pytest.mark.asyncio
+async def test_morning_brief_prediction_leg_non200_is_none(authed_app, authed_mock_clients) -> None:
+    """A non-200 from S3 → ``prediction_signals`` is None (brief still 200)."""
+    authed_mock_clients.rag_chat.get = AsyncMock(return_value=_mock_response(200, b'{"summary": "Markets calm"}'))
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(503, b"{}"))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/briefings/morning",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["prediction_signals"] is None
+
+
+@pytest.mark.asyncio
+async def test_morning_brief_upstream_error_not_augmented(authed_app, authed_mock_clients) -> None:
+    """A non-200 S8 brief passes through untouched — S3 is never called."""
+    authed_mock_clients.rag_chat.get = AsyncMock(return_value=_mock_response(500, b'{"detail": "boom"}'))
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"items": []}'))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/briefings/morning",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    # 5xx is sanitised by proxy_json_response (→ 502); prediction leg not added.
+    assert resp.status_code == 502
+    authed_mock_clients.market_data.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_morning_brief_requires_auth(app, mock_clients) -> None:
+    """Missing JWT → 401; neither S8 nor S3 is called."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/briefings/morning")
+
+    assert resp.status_code == 401
+    mock_clients.rag_chat.get.assert_not_called()

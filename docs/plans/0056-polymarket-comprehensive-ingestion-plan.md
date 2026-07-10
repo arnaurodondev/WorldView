@@ -557,8 +557,16 @@ rule toggle on/off (≥6). **Guardrails**: BP-007 (VARCHAR+CHECK, not PG enum), 
 
 **Goal**: surface everything to the user. **Depends on**: A4 (S3 routes), C4 (entity predictions), D (badges).
 
-### Wave E1 — S9 gateway routes + brief leg
+### Wave E1 — S9 gateway routes + brief leg ✅ DONE (2026-07-10)
 **Layer**: API. **Effort**: 60m. **depends_on**: A4, C4.
+**Status**: DONE. Added S3 proxies `/events`, `/events/{id}`, `/{id}/trades` (registered BEFORE
+`/{market_id}` for FastAPI route-ordering) + history `interval`/`token_id` passthrough; explicit
+`liquidity`/`open_interest` + `PredictionEvent`/`PredictionMarketTrade` schemas (`extra=allow`).
+`GET /v1/entities/{id}/predictions` proxies S7 C4 **verbatim** (no gateway odds-hydration — frontend
+hydrates by `condition_id`; simpler + no fan-out latency/partial-failure surface). Morning brief
+(`routes/chat.py get_morning_briefing`) augmented with a partial-failure-safe `prediction_signals`
+leg (top open S3 markets; `None` on failure, non-200 briefs pass through untouched). 18 new tests
+(13 route + 5 brief), ruff/mypy clean, 730 api-gateway tests pass.
 - **T-E-1-01 (impl)** — Under existing `/v1/signals/prediction-markets/*` (`routes/intelligence.py`),
   add proxies: history `?interval=`, `/{id}/trades`, `/events`, `/events/{id}`, and expose `liquidity`/OI
   in the passthrough schemas (`schemas/prediction_markets.py`, `extra=allow`). Copy the `proxy_json_response`

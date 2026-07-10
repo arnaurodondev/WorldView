@@ -1615,6 +1615,54 @@ async def get_prediction_market_categories(request: Request) -> Any:
     return proxy_json_response(request, resp)
 
 
+@router.get("/signals/prediction-markets/events")
+async def list_prediction_events(request: Request) -> Any:
+    """Proxy GET /api/v1/prediction-markets/events → S3 Market Data (PLAN-0056 Wave E1).
+
+    Lists Polymarket "event" groups (sets of related markets), newest first.
+    Forwards ``limit``/``offset`` pagination query params verbatim.
+
+    WHY registered BEFORE ``/{market_id}``: FastAPI matches routes in
+    registration order. If the ``/{market_id}`` detail route were declared first
+    it would shadow this literal path and treat "events" as a market_id. The two
+    ``events`` routes therefore MUST precede every ``/{market_id}`` route in this
+    module (mirrors the same ordering guard S3 applies in its own router).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        "/api/v1/prediction-markets/events",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return proxy_json_response(request, resp)
+
+
+@router.get("/signals/prediction-markets/events/{event_id}")
+async def get_prediction_event(
+    event_id: str = Path(..., min_length=1, max_length=80, pattern=r"^[\w\-\.]+$"),
+    *,
+    request: Request,
+) -> Any:
+    """Proxy GET /api/v1/prediction-markets/events/{event_id} → S3 (PLAN-0056 Wave E1).
+
+    Returns a single Polymarket event group. S3 returns 404 for an unknown
+    ``event_id``. Registered before ``/{market_id}`` for the same reason as the
+    events-list route above.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/prediction-markets/events/{event_id}",
+        headers=headers,
+    )
+    return proxy_json_response(request, resp)
+
+
 @router.get(
     "/signals/prediction-markets/{market_id}",
     response_model=PredictionMarket,
@@ -1653,7 +1701,11 @@ async def get_prediction_market_history(
 ) -> Any:
     """Proxy GET /api/v1/prediction-markets/{id}/history → S3 Market Data.
 
-    Requires authentication. Forwards from/to/limit query params.
+    Requires authentication. Forwards all query params verbatim, including
+    ``from``/``to``/``limit`` (raw snapshots) and the PLAN-0056 Wave A4
+    ``interval`` (1h|1d|1w) + ``token_id`` params that switch S3 to per-token
+    interval price bars. ``liquidity`` surfaces on each snapshot point (S3
+    PLAN-0056 A1) and passes through unchanged.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1661,6 +1713,30 @@ async def get_prediction_market_history(
     clients = _clients(request)
     resp = await clients.market_data.get(
         f"/api/v1/prediction-markets/{market_id}/history",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return proxy_json_response(request, resp)
+
+
+@router.get("/signals/prediction-markets/{market_id}/trades")
+async def get_prediction_market_trades(
+    market_id: str = Path(..., min_length=1, max_length=80, pattern=r"^[\w\-\.]+$"),
+    *,
+    request: Request,
+) -> Any:
+    """Proxy GET /api/v1/prediction-markets/{id}/trades → S3 (PLAN-0056 Wave E1).
+
+    Returns recent executed fills for a market, newest first. Forwards
+    ``since`` (UTC lower bound) and ``limit`` query params verbatim. S3 returns
+    404 for an unknown ``market_id``.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/prediction-markets/{market_id}/trades",
         params=dict(request.query_params),
         headers=headers,
     )
@@ -1690,6 +1766,44 @@ async def get_entity_sentiment_timeseries(
     resp = await clients.nlp_pipeline.get(
         f"/api/v1/entities/{entity_id}/sentiment-timeseries",
         params={"days": days},
+        headers=headers,
+    )
+    return proxy_json_response(request, resp)
+
+
+# ── Entity Predictions (PLAN-0056 Wave E1, T-E-1-02) ─────────────────────────
+
+
+@router.get("/entities/{entity_id}/predictions")
+async def get_entity_predictions(
+    entity_id: UUID,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    """Proxy GET /api/v1/entities/{entity_id}/predictions → S7 Knowledge Graph.
+
+    Returns the prediction markets that reference the entity, each carrying
+    ``condition_id`` + ``question`` + ``polarity`` (bullish/bearish/neutral) +
+    ``polarity_confidence`` + ``close_time`` (S7 Wave C4). An entity with no
+    linked prediction markets returns ``{"items": [], "total": 0, ...}`` — never
+    a 404 (absence of links is a valid, expected state).
+
+    VERBATIM PROXY (no gateway-side odds hydration): the task allowed an optional
+    per-``condition_id`` join to S3 for current implied odds. We deliberately
+    proxy S7 unchanged and let the frontend hydrate odds via the existing
+    ``GET /v1/signals/prediction-markets/{condition_id}`` route. Rationale: a fan-out
+    join here would add N parallel S3 calls (latency + partial-failure surface)
+    to what is otherwise a single-call read, and the ``condition_id`` link alone
+    is enough for the client to hydrate lazily. Simpler and more robust.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.get(
+        f"/api/v1/entities/{entity_id}/predictions",
+        params={"limit": limit, "offset": offset},
         headers=headers,
     )
     return proxy_json_response(request, resp)
