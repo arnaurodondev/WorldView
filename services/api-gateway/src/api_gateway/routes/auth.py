@@ -20,6 +20,7 @@ from typing import Any
 import jwt
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel
 
 from api_gateway.pkce import (
     generate_code_challenge,
@@ -160,10 +161,9 @@ async def callback(
     from observability import get_logger  # type: ignore[import-untyped]
 
     logger = get_logger("api_gateway.auth")
-    settings = request.app.state.settings
-    oidc_config = getattr(request.app.state, "oidc_config", None)
+    # settings/oidc_config/httpx_client are only needed for the token exchange, which
+    # now lives in _complete_oidc_login; this handler only needs valkey (verifier lookup).
     valkey = getattr(request.app.state, "valkey", None)
-    httpx_client = getattr(request.app.state, "httpx_client", None)
 
     # 1. Zitadel error forwarded in query params
     if error:
@@ -200,6 +200,52 @@ async def callback(
             status_code=400,
             content={"error": "invalid_state", "detail": "State expired or invalid"},
         )
+
+    # Steps 4-9 (exchange → validate → provision → cache → cookie) are shared with the
+    # POST /callback browser-PKCE variant below — see _complete_oidc_login.
+    return await _complete_oidc_login(request, code, code_verifier)
+
+
+class CallbackExchangeRequest(BaseModel):
+    """Body of POST /v1/auth/callback (browser-PKCE flow).
+
+    The SPA runs the PKCE authorize itself and owns the code_verifier (kept in
+    sessionStorage, never in a URL/log), then POSTs it here so S9 does the
+    token exchange server-to-server with the client_secret. This is the flow the
+    worldview-web frontend uses (lib/api/auth.ts exchangeCode). It differs from the
+    GET /callback hosted flow, where S9 owns the verifier in Valkey keyed by `state`.
+    """
+
+    code: str
+    code_verifier: str
+
+
+@router.post("/callback")
+async def callback_post(request: Request, body: CallbackExchangeRequest) -> Response:
+    """Browser-PKCE token exchange: {code, code_verifier} in the JSON body.
+
+    Same result as GET /callback but the verifier comes from the request body
+    (the SPA generated it) instead of a Valkey state lookup. Added 2026-07-11: the
+    frontend POSTs here and the GET-only route was 405'ing, breaking every real
+    Zitadel login ("token exchange with the identity provider failed").
+    """
+    return await _complete_oidc_login(request, body.code, body.code_verifier)
+
+
+async def _complete_oidc_login(request: Request, code: str, code_verifier: str) -> Response:
+    """Exchange an auth code (+ PKCE verifier) for tokens, validate, provision, respond.
+
+    Shared by GET /callback (hosted flow — verifier from Valkey) and POST /callback
+    (browser-PKCE flow — verifier from the request body). Returns the JSON
+    AuthCallbackResponse and sets the httpOnly refresh cookie.
+    """
+    from observability import get_logger  # type: ignore[import-untyped]
+
+    logger = get_logger("api_gateway.auth")
+    settings = request.app.state.settings
+    oidc_config = getattr(request.app.state, "oidc_config", None)
+    valkey = getattr(request.app.state, "valkey", None)
+    httpx_client = getattr(request.app.state, "httpx_client", None)
 
     # Guard against missing OIDC config / httpx client (fail-fast after PKCE)
     if oidc_config is None:
