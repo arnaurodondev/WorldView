@@ -292,16 +292,26 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          parallel batch next round, never one-per-round. Pure latency fix; NO
     #          grounding / routing / dedup / refusal rule relaxed — NO REDUNDANT TOOL
     #          CALLS and GROUNDING-IS-ABSOLUTE still bind.
-    version="1.23",
+    #   1.24 — 2026-07-11 (A/B safety patch). A/B against live Qwen3-235B showed
+    #          v1.23's BATCH WIDTH consolidation pressure caused cmp_nvda_amd to DROP
+    #          traverse_graph (the TSMC supply-chain tool the question explicitly
+    #          named), a quality regression. Added CONSOLIDATION SAFETY clause: when
+    #          batching, never drop a graph/relationship tool that directly addresses
+    #          a named company or supply-chain link in the question. Additive to
+    #          v1.23; no width/fan-out rules loosened.
+    version="1.24",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.23 is a pure planning-latency fix: strengthens the RESEARCH LOOP with a "
-        "concrete BATCH WIDTH mandate (a multi-faceted question needs 4-6 independent "
-        "tools in the round-1 parallel batch; a 1-2 tool round-1 is a PLANNING FAILURE "
-        "that trickles the rest out one-per-round at ~8s each) plus a PARALLEL FAN-OUT "
-        "rule extending the batch discipline to ROUND 2+ (probe SEVERAL newly-surfaced "
-        "entities in ONE batch, never one-per-round). No grounding/routing/dedup/refusal "
-        "rule relaxed. "
+        "(v1.24 adds CONSOLIDATION SAFETY to v1.23: when widening the round-1 batch, "
+        "never drop graph/relationship tools (traverse_graph, search_entity_relations, "
+        "get_entity_intelligence) that directly address a named company or supply-chain "
+        "link in the question — consolidation must widen, not prune. v1.23 is a pure "
+        "planning-latency fix: strengthens the RESEARCH LOOP with a concrete BATCH WIDTH "
+        "mandate (a multi-faceted question needs 4-6 independent tools in the round-1 "
+        "parallel batch; a 1-2 tool round-1 is a PLANNING FAILURE that trickles the rest "
+        "out one-per-round at ~8s each) plus a PARALLEL FAN-OUT rule extending the batch "
+        "discipline to ROUND 2+ (probe SEVERAL newly-surfaced entities in ONE batch, "
+        "never one-per-round). No grounding/routing/dedup/refusal rule relaxed. "
         "v1.22 routes the PROJECTION / WHAT-IF SCAFFOLD to the new get_market_sizing "
         "reference tool: a projection's SCENARIO PARAMETER — TAM / market size / "
         "segment share — is now RETRIEVABLE + CITABLE from a curated dated "
@@ -691,6 +701,17 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "for EVERY angle whose arguments you already know from the question. When\n"
         "in doubt whether a tool belongs in round 1, INCLUDE it: an unused result\n"
         "is cheap, an extra sequential round is not.\n"
+        # v1.24 safety clause (option C from A/B review): consolidation into a
+        # wider round-1 batch must never DROP a tool that addresses a relationship
+        # or named entity the question explicitly mentions. E.g. if the question
+        # names "TSMC supply chain", traverse_graph / search_entity_relations for
+        # TSMC is mandatory even if consolidating other tools into the same batch.
+        "CONSOLIDATION SAFETY: when batching, NEVER drop a graph or relationship\n"
+        "tool (traverse_graph, search_entity_relations, get_entity_intelligence)\n"
+        "that directly addresses a specific company, supply-chain link, or named\n"
+        "relationship the question explicitly mentions. Widening the batch is\n"
+        "always the goal — omitting a named-entity relationship tool to 'keep it\n"
+        "simple' is the one case where consolidation becomes a quality regression.\n"
         "ROUND 2+ — GO DEEP (adaptive follow-up): Reserve later rounds for\n"
         "tools whose ARGUMENTS you could only learn from an earlier round's\n"
         "results. This is where the analysis happens: if round-1 news surfaces\n"
