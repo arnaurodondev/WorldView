@@ -81,7 +81,10 @@ const ORG_JSONLD = {
   logo: `${SITE_URL}/icon-512.png`,
   description:
     "Market intelligence terminal that fuses real-time market data, impact-scored news, and an entity knowledge graph with a grounded, citation-backed AI assistant. Knowledge-graph path discovery, portfolio analytics, and a fundamentals screener in one workspace.",
-  sameAs: ["https://github.com"],
+  // 2026-07 landing rework: removed the placeholder sameAs entry — a bare
+  // "https://github.com" is structured-data noise Google treats as a broken
+  // profile link. Re-add real profile URLs (GitHub org, X, LinkedIn) when
+  // they exist.
 };
 
 /**
@@ -111,10 +114,10 @@ const FAQ_JSONLD = {
   mainEntity: [
     {
       "@type": "Question",
-      name: "Is Worldview a real product or a thesis demo?",
+      name: "Is Worldview a real product or a research demo?",
       acceptedAnswer: {
         "@type": "Answer",
-        text: "Both. It's a fully working terminal with 10 production microservices, a Next.js frontend, and live data integrations — built as a university final thesis demonstrating modern microservice architecture and AI integration. You can sign up free and use it today.",
+        text: "It's a real, live product — a working terminal with 10 production microservices, a Next.js frontend, and live data integrations. It began as a university research project, and that research DNA is why every AI answer must be grounded and cited. You can sign up free and use it today.",
       },
     },
     {

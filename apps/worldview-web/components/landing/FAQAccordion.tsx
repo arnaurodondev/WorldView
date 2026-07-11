@@ -26,9 +26,12 @@ interface FAQ {
 }
 
 const FAQS: FAQ[] = [
+  // 2026-07 landing rework: launch framing — lead with "real, live product",
+  // keep the research origin as the honest second beat. MUST stay in lockstep
+  // with FAQ_JSONLD in app/page.tsx (structured-data parity, see that file).
   {
-    q: "Is Worldview a real product or a thesis demo?",
-    a: "Both. It's a fully working terminal with 10 production microservices, a Next.js frontend, and live data integrations — built as a university final thesis demonstrating modern microservice architecture and AI integration. You can sign up free and use it today.",
+    q: "Is Worldview a real product or a research demo?",
+    a: "It's a real, live product — a working terminal with 10 production microservices, a Next.js frontend, and live data integrations. It began as a university research project, and that research DNA is why every AI answer must be grounded and cited. You can sign up free and use it today.",
   },
   {
     q: "What data sources do you actually use?",
@@ -68,7 +71,7 @@ const FAQS: FAQ[] = [
   },
   {
     q: "How do I report a bug or request a feature?",
-    a: "Use the floating feedback button in the bottom-right of any authenticated page. Bugs, feature requests, and roadmap voting all flow into the public roadmap at /feedback. Direct contact: hello@worldview.local.",
+    a: "Use the floating feedback button in the bottom-right of any authenticated page. Bugs, feature requests, and roadmap voting all flow into the public roadmap at /feedback. Direct contact: hello@worldview-labs.com.",
   },
 ];
 
@@ -104,10 +107,10 @@ export function FAQAccordion() {
         <p className="mt-10 text-center text-xs text-muted-foreground">
           Didn&apos;t find your answer?{" "}
           <a
-            href="mailto:hello@worldview.local"
+            href="mailto:hello@worldview-labs.com"
             className="text-primary hover:underline"
           >
-            hello@worldview.local
+            hello@worldview-labs.com
           </a>
         </p>
       </div>

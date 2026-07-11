@@ -10,7 +10,6 @@
  *   T-A-1-01 HeroSection         — primary CTA href + headline
  *   T-A-1-02 LiveDataStrip       — renders all 6 sample tickers
  *   T-A-1-03 SectorHeatmapPreview — renders 6 sector tiles + heading
- *   T-A-1-04 DifferentiatorsSection — 3 differentiator cards
  *   T-A-1-05 WorkflowSection      — ordered list with 4 steps
  *   T-A-1-06 AIDemoSection        — citations match question
  *   T-A-1-07 ComparisonTable      — header lists 4 competitors + Worldview
@@ -44,7 +43,6 @@ vi.mock("next/link", () => ({
 import { HeroSection } from "@/components/landing/HeroSection";
 import { LiveDataStrip } from "@/components/landing/LiveDataStrip";
 import { SectorHeatmapPreview } from "@/components/landing/SectorHeatmapPreview";
-import { DifferentiatorsSection } from "@/components/landing/DifferentiatorsSection";
 import { WorkflowSection } from "@/components/landing/WorkflowSection";
 import { AIDemoSection } from "@/components/landing/AIDemoSection";
 import { ComparisonTable } from "@/components/landing/ComparisonTable";
@@ -69,10 +67,10 @@ describe("T-A-1-01 — HeroSection", () => {
   });
 
   it("renders the hero product screenshot frame (intelligence surface)", () => {
-    // Redesign (2026-06-23): the ASCII <pre> mock was replaced by a real
-    // product screenshot in a ProductShot window-chrome frame. While the PNG
-    // is pending capture the frame renders a placeholder panel exposing the
-    // descriptive alt as role="img".
+    // Redesign (2026-06-23): the ASCII <pre> mock was replaced by a
+    // ProductShot window-chrome frame. 2026-07 rework: while the real PNG is
+    // pending capture, the frame renders a hand-built CSS/SVG illustration
+    // (mocks.tsx) exposing the descriptive alt as role="img".
     render(<HeroSection />);
     expect(
       screen.getByRole("img", { name: /instrument Intelligence tab/i }),
@@ -107,15 +105,6 @@ describe("T-A-1-03 — SectorHeatmapPreview", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: /heatmap/i }),
     ).toBeInTheDocument();
-  });
-});
-
-describe("T-A-1-04 — DifferentiatorsSection", () => {
-  it("renders 3 differentiator cards with all titles", () => {
-    render(<DifferentiatorsSection />);
-    expect(screen.getByText(/News intelligence, not aggregation/i)).toBeInTheDocument();
-    expect(screen.getByText(/Knowledge graph over flat tickers/i)).toBeInTheDocument();
-    expect(screen.getByText(/Multi-source data fusion/i)).toBeInTheDocument();
   });
 });
 
@@ -221,7 +210,7 @@ describe("T-A-1-11 — FAQAccordion", () => {
   it("expands an item when its trigger is clicked", () => {
     render(<FAQAccordion />);
     const trigger = screen.getByRole("button", {
-      name: /thesis demo/i,
+      name: /research demo/i,
     });
     fireEvent.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");

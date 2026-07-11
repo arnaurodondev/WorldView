@@ -71,7 +71,7 @@ const TIERS: Tier[] = [
     tagline: "Teams, funds, and institutions with custom data and access controls.",
     monthly: 0, // 0 sentinel = "Custom"
     annual: 0,
-    cta: { label: "Talk to us", href: "mailto:hello@worldview.local" },
+    cta: { label: "Talk to us", href: "mailto:hello@worldview-labs.com" },
     features: [
       "Everything in Pro",
       "SSO · SAML · audit logs",

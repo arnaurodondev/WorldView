@@ -113,7 +113,7 @@ test.describe("PLAN-0052 Wave A — landing page", () => {
 
   test("FAQ accordion expands on click", async ({ page }) => {
     await page.goto("/#faq");
-    const trigger = page.getByRole("button", { name: /thesis demo/i });
+    const trigger = page.getByRole("button", { name: /research demo/i });
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await trigger.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
