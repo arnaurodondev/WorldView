@@ -371,6 +371,16 @@ class Settings(BaseSettings):
     polymarket_history_backfill_days: int = 14
     polymarket_trades_backfill_days: int = 14
 
+    # PLAN-0056 live-QA (BUG 2) — deeper-stream work-list seeder cap.
+    # After each base Gamma /markets poll the worker derives the
+    # {condition_id, token_ids} work-list from the OPEN markets it just fetched
+    # and upserts it into the polymarket_clob / polymarket_data_trades
+    # (config["markets"]) and polymarket_data_oi (config["condition_ids"])
+    # source rows. Each deeper-stream adapter iterates the WHOLE list per poll,
+    # so this bounds the per-cadence fetch fan-out.
+    # CONTENT_INGESTION_PREDICTION_STREAM_WORKLIST_MAX_MARKETS
+    prediction_stream_worklist_max_markets: int = 500
+
     # ── Provider settings (operational params — overridable via ConfigMap) ───
     eodhd: EODHDProviderSettings = EODHDProviderSettings()
     finnhub: FinnhubProviderSettings = FinnhubProviderSettings()

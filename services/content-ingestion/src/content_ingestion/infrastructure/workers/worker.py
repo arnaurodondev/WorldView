@@ -27,6 +27,9 @@ from content_ingestion.application.use_cases.execute_task import ExecuteContentT
 from content_ingestion.application.use_cases.fetch_and_write_prediction_markets import (
     FetchAndWritePredictionMarketsUseCase,
 )
+from content_ingestion.application.use_cases.seed_prediction_stream_worklists import (
+    SeedPredictionStreamWorklistsUseCase,
+)
 from content_ingestion.config import Settings
 from content_ingestion.domain.entities import SourceType
 from content_ingestion.domain.exceptions import AdapterError
@@ -38,6 +41,7 @@ from content_ingestion.infrastructure.db.repositories.outbox import OutboxReposi
 from content_ingestion.infrastructure.db.repositories.prediction_market_fetch_log import (
     PredictionMarketFetchLogRepository,
 )
+from content_ingestion.infrastructure.db.repositories.source import SourceRepository
 from content_ingestion.infrastructure.db.repositories.task import TaskRepository
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
@@ -684,6 +688,37 @@ class WorkerProcess:
         # constraint, so a concurrent worker cannot double-emit. Best-effort:
         # a synthetic-doc failure must never fail the snapshot task.
         await self._emit_synthetic_documents(results)
+
+        # PLAN-0056 live-QA (BUG 2): seed the deeper-stream (CLOB/trades/OI)
+        # work-lists from THIS batch's open markets. The base fetch already holds
+        # each market's conditionId + clobTokenIds, so we derive the
+        # {condition_id, token_ids} work-list here and upsert it into the three
+        # deeper-stream source configs — otherwise those adapters poll an empty
+        # list forever (migration 0011 seeded them empty). Best-effort: a seeding
+        # failure must never fail the snapshot task.
+        await self._seed_prediction_stream_worklists(results)
+
+    async def _seed_prediction_stream_worklists(
+        self,
+        results: list[PredictionMarketFetchResult],
+    ) -> None:
+        """Populate CLOB/trades/OI source configs from this batch's open markets.
+
+        Runs in its own short-lived write session, AFTER the snapshot + synthetic
+        docs. Strictly additive: any failure is swallowed so it can never break the
+        base prediction-market ingestion it follows.
+        """
+        try:
+            async with self._write_factory() as session:
+                use_case = SeedPredictionStreamWorklistsUseCase(
+                    source_repo=SourceRepository(session),
+                    commit_fn=session.commit,
+                    max_markets=self._settings.prediction_stream_worklist_max_markets,
+                )
+                await use_case.execute(results)
+        except Exception as exc:
+            # Never let work-list seeding break the worker loop.
+            logger.error("prediction_stream_worklist_seed_failed", error=str(exc))
 
     async def _emit_synthetic_documents(
         self,
