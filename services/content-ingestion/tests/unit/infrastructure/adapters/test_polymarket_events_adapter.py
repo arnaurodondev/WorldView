@@ -91,6 +91,29 @@ class TestPolymarketEventsClient:
         assert isinstance(page, GammaEventsPage)
         assert page.next_cursor is None
 
+    async def test_non_list_body_yields_empty_page(self) -> None:
+        # PLAN-0056 QA FIX 5: a bare non-list/non-dict body must not crash — the
+        # client returns an empty page instead of propagating a non-iterable.
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response("unexpected-string-body"))  # type: ignore[arg-type]
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+
+        page = await client.fetch_events_page()
+
+        assert page.events == []
+        assert page.next_cursor is None
+
+    async def test_non_dict_items_skipped(self) -> None:
+        # Only genuine event dicts are kept; scalar junk in the list is dropped.
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response({"events": [_event(), "junk", 42, None]}))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+
+        page = await client.fetch_events_page()
+
+        assert len(page.events) == 1
+        assert page.events[0]["id"] == "evt_1"
+
     async def test_http_429_raises_adapter_error(self) -> None:
         http = AsyncMock()
         http.get = AsyncMock(return_value=_response({}, status_code=429))

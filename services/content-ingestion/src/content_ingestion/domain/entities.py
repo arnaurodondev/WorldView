@@ -426,6 +426,24 @@ class OutcomeSnapshot:
             raise ValueError(f"OutcomeSnapshot.price must be in [0.0, 1.0], got {self.price}")
 
 
+# PLAN-0056 QA — cap for untrusted Polymarket free-text fields (question / title /
+# category / name). These strings flow unbounded from the public Gamma / Data-API
+# into the synthetic-doc body + Avro payloads; bound them defensively so a
+# pathologically long field cannot bloat storage or downstream messages.
+_MAX_PREDICTION_TEXT_LEN = 500
+
+
+def _truncate_text(value: str, *, max_length: int = _MAX_PREDICTION_TEXT_LEN) -> str:
+    """Truncate an untrusted free-text field to ``max_length`` characters.
+
+    Returns the input unchanged when already within bounds. Non-str inputs are
+    coerced defensively (callers already pass strings, but this keeps the guard
+    total).
+    """
+    text = value if isinstance(value, str) else str(value)
+    return text if len(text) <= max_length else text[:max_length]
+
+
 @dataclass(frozen=True, slots=True)
 class PredictionMarketFetchResult:
     """Immutable result of fetching one prediction market from Polymarket.
@@ -595,7 +613,8 @@ class PredictionMarketFetchResult:
         return cls(
             source_type=SourceType.POLYMARKET,
             market_id=raw.get("conditionId", ""),
-            question=raw.get("question", ""),
+            # PLAN-0056 QA: bound untrusted free-text before it enters the DTO.
+            question=_truncate_text(raw.get("question", "")),
             description=raw.get("description"),
             outcomes=outcomes,
             volume_24h=float(raw["volume24hr"]) if raw.get("volume24hr") is not None else None,
@@ -607,7 +626,7 @@ class PredictionMarketFetchResult:
             fetched_at=fetched_at,
             minio_bronze_key=None,
             market_slug=market_slug,
-            category=category,
+            category=_truncate_text(category) if category is not None else None,
         )
 
 
@@ -715,8 +734,9 @@ class PredictionEventFetchResult:
         return cls(
             source_type=SourceType.POLYMARKET_GAMMA_EVENTS,
             event_id=str(raw.get("id") or raw.get("slug") or ""),
-            title=raw.get("title") or raw.get("name") or "",
-            category=category,
+            # PLAN-0056 QA: bound untrusted free-text (title / name / category).
+            title=_truncate_text(raw.get("title") or raw.get("name") or ""),
+            category=_truncate_text(category) if category is not None else None,
             start_date=_parse_iso_datetime(raw.get("startDate")),
             end_date=_parse_iso_datetime(raw.get("endDate")),
             market_count=market_count,

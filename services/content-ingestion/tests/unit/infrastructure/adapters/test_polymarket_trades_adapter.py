@@ -112,6 +112,27 @@ class TestPolymarketTradesClient:
             await client.fetch_trades_page(market="cond_1")
         assert exc.value.status_code == 429
 
+    async def test_non_list_body_yields_empty_page(self) -> None:
+        # PLAN-0056 QA FIX 5: a bare non-list/non-dict body must not crash.
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response("unexpected-string-body"))
+        client = PolymarketTradesClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+
+        page = await client.fetch_trades_page(market="cond_1")
+
+        assert page.trades == []
+        assert page.has_more is False
+
+    async def test_non_dict_items_skipped(self) -> None:
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response({"data": [_trade("a"), "junk", 7, None]}))
+        client = PolymarketTradesClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+
+        page = await client.fetch_trades_page(market="cond_1", limit=500)
+
+        assert len(page.trades) == 1
+        assert page.trades[0]["transactionHash"] == "a"
+
 
 class TestPolymarketTradesAdapter:
     async def test_happy_path_parses_trades(self) -> None:

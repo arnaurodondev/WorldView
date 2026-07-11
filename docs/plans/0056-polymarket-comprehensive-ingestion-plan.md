@@ -782,3 +782,60 @@ affirmative-outcome-only so signal collapse is already prevented.
   crafted-injection-still-valid-enum + overlong-truncation; prompt `@1.1` version + hardening-line. Suites:
   knowledge-graph unit **1767 passed** (5 skipped, 2 xfailed), libs/prompts **308 passed**. ruff check+format
   clean; mypy `services/knowledge-graph/src` (5 files) + `libs/prompts/src` clean.
+
+## QA fixes (2026-07-10) — final CI/correctness batch (alert + market-data + content-ingestion + content-store)
+
+Final QA sweep of the PLAN-0056 prediction pipeline surfaced 2 CI blockers, 2 correctness/R24
+fixes, and 2 low-severity hygiene items. All fixed on `feat/prediction-data-activation`; no
+wave-count change.
+
+- **FIX 1 [MED, CI blocker] — 4 market-data consumers missing from the dedup allowlist.**
+  `PredictionHistoryConsumer` / `PredictionEventConsumer` / `PredictionTradeConsumer` /
+  `PredictionOIConsumer` extend `BaseKafkaConsumer` and rely on natural-key idempotency
+  (`ingestion_events.create_if_not_exists` + ON CONFLICT), so `is_duplicate()` returns False.
+  Added all four to `tests/architecture/_consumer_dedup_allowlist.yaml` mirroring the
+  `PredictionMarketConsumer` (BP-035) justification. `test_consumer_dedup_mixin_enforcement.py` GREEN.
+
+- **FIX 2 [MED, CI blocker] — 2 KG consumers missing from `docker-compose.test.yml`.**
+  `prediction_enriched_consumer_main` and `prediction_move_consumer_main` had prod containers but
+  no test-topology entry. Added both to `docker-compose.test.yml` (profiles `[intelligence-test, all]`)
+  mirroring the prod entries. `test_compose_alignment.py` GREEN.
+
+- **FIX 3 [MED, correctness] — alert dedup collapsed distinct prediction markets for one entity.**
+  `Alert.compute_dedup_key` was `sha256(entity_id:alert_type:window_bucket)`, so two DISTINCT markets
+  about the same entity in one 300s window shared a key → one alert silently suppressed. Added an
+  optional `discriminator` arg; `AlertFanoutUseCase` threads `market_id:trigger` for `AlertType.PREDICTION`
+  only. Other alert types pass `discriminator=None` → key identical to the historical per-entity+type key
+  (SIGNAL/GRAPH/CONTRADICTION collapse unchanged). Repeated moves on the SAME market still share a key and
+  remain rate-limited by the upstream `PredictionRuleEvaluator` 1h per-market cooldown.
+
+- **FIX 4 [MED, R24 pool-hold] — content-ingestion held a write session across Polymarket HTTP + MinIO I/O.**
+  Both `_execute_polymarket_task` and `_execute_prediction_stream_task` bound the dedup callback to a
+  session opened via `async with self._write_factory()` AROUND `adapter.fetch()`, pinning a write-pool
+  connection for the entire paginated fetch + every MinIO put (the documented S4 pool-exhaustion→500 path).
+  Fix: new `WorkerProcess._make_dedup_exists_fn()` returns a callback that opens+closes its OWN short-lived
+  session per check (acquire→check→release), so NO connection is pinned across the fetch. The stream path
+  additionally reads the source config in a short-lived session that CLOSES before I/O. Both paths verified.
+
+- **FIX 5 [LOW] — Polymarket JSON not length-bounded + non-list guard.** The Gamma `/events` and Data-API
+  `/trades` clients assigned a non-list body straight to the items list; a malformed body then crashed the
+  whole task. Both now coerce a non-list body to an empty page and keep only dict items. Free-text fields
+  (`question`/`title`/`category`/`name`) are `_truncate_text`-capped to 500 chars in
+  `PredictionMarketFetchResult.from_gamma_response` and `PredictionEventFetchResult.from_gamma_response`
+  before they enter the DTO → synthetic-doc body / Avro.
+
+- **FIX 6 [LOW, stale test] — content-store SourceType enum drift.** Wave Z1 added 4
+  `ContentSourceType` values (`polymarket_gamma_events`/`polymarket_clob`/`polymarket_data_trades`/
+  `polymarket_data_oi`). `content-store/tests/unit/domain/test_enums.py::TestSourceType::test_all_sources`
+  (SourceType re-exports `contracts.ContentSourceType`) expected the old set. Updated the expected set to
+  reality; exhaustiveness guarantee preserved.
+
+- **Tests (all new/adjusted):** alert — `TestPredictionDedupKey` (two distinct markets→2 alerts; same market
+  repeated→dedup-suppressed; distinct trigger→split) + `TestComputeDedupKeyDiscriminator` (discriminator
+  changes key; None==legacy key). content-ingestion — `test_worker_prediction_pool_hold.py` (dedup fn
+  opens+closes per call; NO write session open during snapshot + stream fetch) + client non-list/non-dict
+  guards (events + trades) + `from_gamma_response` truncation (market + event). content-store — enum set
+  updated. Suites: alert unit, content-ingestion unit, content-store unit (374 passed) all GREEN;
+  `tests/architecture` — the 2 CI blockers now pass (2 remaining failures are pre-existing and unrelated:
+  TOPO-LIFESPAN nlp-pipeline R22 + pytest-marker on nlp-pipeline chunk-search test). ruff check+format clean;
+  mypy `services/alert/src` (2 files) + `services/content-ingestion/src` (4 files) clean.

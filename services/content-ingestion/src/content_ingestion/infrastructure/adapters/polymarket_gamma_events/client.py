@@ -89,7 +89,12 @@ class PolymarketEventsClient:
             raise AdapterError(f"Gamma events API HTTP {resp.status_code}", status_code=resp.status_code)
 
         data = resp.json()
-        events: list[dict] = data.get("events", []) if isinstance(data, dict) else data
+        # Guard against a non-list body: a malformed / unexpected response (e.g. a
+        # bare string, number, or error object) must yield an empty page rather
+        # than propagating a non-iterable into ``_process_event`` and failing the
+        # whole task. Only a genuine list of event dicts is accepted.
+        raw_events = data.get("events", []) if isinstance(data, dict) else data
+        events: list[dict] = [e for e in raw_events if isinstance(e, dict)] if isinstance(raw_events, list) else []
         cursor: str | None = data.get("next_cursor") if isinstance(data, dict) else None
 
         logger.debug(

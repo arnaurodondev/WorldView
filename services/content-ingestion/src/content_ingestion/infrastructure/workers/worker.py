@@ -53,6 +53,7 @@ from storage.settings import StorageSettings  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from datetime import datetime
 
     from content_ingestion.application.ports.source_adapter import SourceAdapterPort
     from content_ingestion.domain.entities import ContentIngestionTask, PredictionMarketFetchResult
@@ -538,13 +539,39 @@ class WorkerProcess:
                 worker_id=self._worker_id,
             )
 
+    def _make_dedup_exists_fn(self) -> Callable[[str, datetime], Awaitable[bool]]:
+        """Return a dedup callback that opens its OWN short-lived session per check.
+
+        R24 / S4 pool-exhaustion fix (PLAN-0056 QA): the prediction fetch adapters
+        call ``fetch_log_exists_fn`` DURING a paginated Gamma/CLOB HTTP fetch that
+        also performs MinIO puts. Binding the callback to a session opened via
+        ``async with self._write_factory()`` around ``adapter.fetch()`` pins a
+        write-pool connection for the ENTIRE fetch — the documented pool-exhaustion
+        → 500 path, widened by the longer polymarket task timeout.
+
+        This wrapper instead acquires → checks → releases a fresh short-lived
+        session per dedup lookup, so NO write-pool connection is held across the
+        fetch. The dedup query is a single indexed existence check, so the extra
+        acquire/release per market is cheap relative to the HTTP + MinIO I/O it
+        replaces holding a connection for.
+        """
+
+        async def _exists(market_id: str, snapshot_at: datetime) -> bool:
+            async with self._write_factory() as check_session:
+                return await PredictionMarketFetchLogRepository(check_session).exists_by_market_snapshot(
+                    market_id, snapshot_at
+                )
+
+        return _exists
+
     async def _execute_polymarket_task(self, task: ContentIngestionTask) -> None:
         """Execute a Polymarket prediction-market task through the dedicated pipeline.
 
         Pipeline (mirrors ExecuteContentTaskUseCase but uses prediction-market repos):
         1. Mark RUNNING.
-        2. Build PolymarketAdapter with fetch_log_exists_fn from a short-lived session.
-        3. Fetch from Gamma API (no session held during I/O — R24).
+        2. Build PolymarketAdapter with a session-per-check dedup callback.
+        3. Fetch from Gamma API (NO session held during I/O — R24; the dedup
+           callback opens+closes its own short-lived session per check).
         4. If no results → mark SUCCEEDED.
         5. Under advisory lock: write fetch_log + outbox rows atomically; mark SUCCEEDED.
         """
@@ -574,30 +601,31 @@ class WorkerProcess:
         )
         settings = self._settings
 
-        async with self._write_factory() as dedup_session:
-            pm_log_repo = PredictionMarketFetchLogRepository(dedup_session)
-            polymarket_client = PolymarketClient(
-                http_client=self._http_client,
-                settings=settings.polymarket,
-            )
-            adapter = PolymarketAdapter(
-                client=polymarket_client,
-                fetch_log_exists_fn=pm_log_repo.exists_by_market_snapshot,
-                settings=settings.polymarket,
-                storage=self._storage,
-            )
+        # NO write session is held here: the dedup callback opens+closes its own
+        # short-lived session per check (R24), so no connection is pinned across
+        # the paginated Gamma API fetch + MinIO puts inside adapter.fetch().
+        polymarket_client = PolymarketClient(
+            http_client=self._http_client,
+            settings=settings.polymarket,
+        )
+        adapter = PolymarketAdapter(
+            client=polymarket_client,
+            fetch_log_exists_fn=self._make_dedup_exists_fn(),
+            settings=settings.polymarket,
+            storage=self._storage,
+        )
 
-            # 3. Fetch (no session held during Gamma API I/O)
-            try:
-                results = await adapter.fetch(source)
-            except Exception as exc:
-                logger.error("polymarket_fetch_failed", task_id=str(task.id), error=str(exc))
-                async with self._write_factory() as fail_session:
-                    task_repo = TaskRepository(fail_session)
-                    task.fail(str(exc))
-                    await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
-                    await fail_session.commit()
-                return
+        # 3. Fetch (no session held during Gamma API I/O)
+        try:
+            results = await adapter.fetch(source)
+        except Exception as exc:
+            logger.error("polymarket_fetch_failed", task_id=str(task.id), error=str(exc))
+            async with self._write_factory() as fail_session:
+                task_repo = TaskRepository(fail_session)
+                task.fail(str(exc))
+                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+                await fail_session.commit()
+            return
 
         # 4. Empty results → SUCCEEDED immediately
         if not results:
@@ -798,32 +826,35 @@ class WorkerProcess:
         # events / OI (their adapters ignore ``is_backfill``).
         is_backfill = self._settings.backfill_on_startup
 
-        # 2. Build adapter + fetch (short-lived dedup session, released before I/O).
-        #    Load the live source config so the CLOB / trades / OI adapters read
-        #    their ``markets`` work-list / ``condition_ids`` (seeded on the source row).
-        async with self._write_factory() as dedup_session:
-            from content_ingestion.infrastructure.db.repositories.source import SourceRepository
+        # 2. Load source config, then build adapter + fetch with NO session held.
+        #    First open a SHORT-LIVED session only to read the live source config
+        #    (the CLOB / trades / OI adapters read their ``markets`` work-list /
+        #    ``condition_ids`` seeded on the source row), then CLOSE it before any
+        #    I/O. The dedup callback opens+closes its own short-lived session per
+        #    check (R24), so no write-pool connection is pinned across the fetch.
+        from content_ingestion.infrastructure.db.repositories.source import SourceRepository
 
-            source_model = await SourceRepository(dedup_session).get_by_id(task.source_id)
-            source = Source(
-                id=task.source_id,
-                name=task.source_name,
-                source_type=task.source_type,
-                enabled=True,
-                config=dict(source_model.config) if source_model and source_model.config else {},
-            )
-            pm_log_repo = PredictionMarketFetchLogRepository(dedup_session)
-            adapter = self._build_prediction_stream_adapter(task.source_type, pm_log_repo.exists_by_market_snapshot)
-            try:
-                results = await adapter.fetch(source, is_backfill=is_backfill)
-            except Exception as exc:
-                logger.error("prediction_stream_fetch_failed", task_id=str(task.id), error=str(exc))
-                async with self._write_factory() as fail_session:
-                    fail_repo = TaskRepository(fail_session)
-                    task.fail(str(exc))
-                    await fail_repo.update_status(task.id, task.status, error_detail=task.error_detail)
-                    await fail_session.commit()
-                return
+        async with self._write_factory() as config_session:
+            source_model = await SourceRepository(config_session).get_by_id(task.source_id)
+            source_config = dict(source_model.config) if source_model and source_model.config else {}
+        source = Source(
+            id=task.source_id,
+            name=task.source_name,
+            source_type=task.source_type,
+            enabled=True,
+            config=source_config,
+        )
+        adapter = self._build_prediction_stream_adapter(task.source_type, self._make_dedup_exists_fn())
+        try:
+            results = await adapter.fetch(source, is_backfill=is_backfill)
+        except Exception as exc:
+            logger.error("prediction_stream_fetch_failed", task_id=str(task.id), error=str(exc))
+            async with self._write_factory() as fail_session:
+                fail_repo = TaskRepository(fail_session)
+                task.fail(str(exc))
+                await fail_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+                await fail_session.commit()
+            return
 
         # 3. Empty results → SUCCEEDED immediately.
         if not results:

@@ -86,10 +86,11 @@ class PolymarketTradesClient:
 
         data = resp.json()
         # Data-API may return a bare list or ``{"data": [...]}`` — accept both.
-        if isinstance(data, dict):
-            trades: list[dict] = data.get("data", [])
-        else:
-            trades = data
+        # Guard against a non-list body: a malformed / unexpected response must
+        # yield an empty page rather than propagating a non-iterable downstream
+        # and failing the whole task. Only genuine trade dicts are kept.
+        raw_trades = data.get("data", []) if isinstance(data, dict) else data
+        trades: list[dict] = [t for t in raw_trades if isinstance(t, dict)] if isinstance(raw_trades, list) else []
         has_more = len(trades) >= limit
 
         logger.debug(

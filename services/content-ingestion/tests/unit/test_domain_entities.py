@@ -147,6 +147,24 @@ class TestPredictionMarketFetchResult:
         assert result.minio_bronze_key is None
         assert result.market_slug == "will-it-rain-tomorrow"
 
+    def test_from_gamma_response_truncates_long_question(self) -> None:
+        # PLAN-0056 QA FIX 5: untrusted free-text question is bounded to <=500 chars.
+        long_q = "Will " + "x" * 1000 + "?"
+        raw = self._gamma_raw(question=long_q)
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert len(result.question) == 500
+
+    def test_from_gamma_response_truncates_long_category(self) -> None:
+        raw = self._gamma_raw(category="c" * 900)
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.category is not None
+        assert len(result.category) == 500
+
+    def test_from_gamma_response_short_question_unchanged(self) -> None:
+        raw = self._gamma_raw(question="Short?")
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.question == "Short?"
+
     def test_prediction_market_fetch_result_from_gamma_response_missing_optional(self) -> None:
         raw = {
             "conditionId": "cond_min",
@@ -340,3 +358,30 @@ class TestPredictionMarketFetchResult:
         result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
         # "DeFi" maps to crypto in the normalization table.
         assert result.category == "crypto"
+
+
+# ── PredictionEventFetchResult — free-text truncation (PLAN-0056 QA FIX 5) ──────
+
+
+class TestPredictionEventFetchResultTruncation:
+    def test_from_gamma_response_truncates_long_title(self) -> None:
+        from content_ingestion.domain.entities import PredictionEventFetchResult
+
+        raw = {"id": "evt_1", "title": "T" * 900, "category": "Politics"}
+        result = PredictionEventFetchResult.from_gamma_response(raw, _utc_now())
+        assert len(result.title) == 500
+
+    def test_from_gamma_response_truncates_long_category(self) -> None:
+        from content_ingestion.domain.entities import PredictionEventFetchResult
+
+        raw = {"id": "evt_2", "title": "Election", "category": "c" * 800}
+        result = PredictionEventFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.category is not None
+        assert len(result.category) == 500
+
+    def test_from_gamma_response_short_title_unchanged(self) -> None:
+        from content_ingestion.domain.entities import PredictionEventFetchResult
+
+        raw = {"id": "evt_3", "name": "2028 Election", "category": "Politics"}
+        result = PredictionEventFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.title == "2028 Election"
