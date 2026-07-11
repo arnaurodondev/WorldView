@@ -23,7 +23,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # Reuse the established harness helpers from the tool-loop test module.
-from tests.unit.use_cases.test_chat_orchestrator_tool_loop import (
+# Import by bare module name (NOT ``tests.unit.use_cases....``): this package has
+# no ``__init__.py`` files under ``tests/``, so pytest's default ``prepend`` import
+# mode inserts the test file's own directory onto ``sys.path`` and imports each
+# module by its top-level name. A ``tests.``-qualified import raises
+# ``ModuleNotFoundError: No module named 'tests'`` at collection time, which aborts
+# the entire session (both the unit and integration CI jobs). Keep this bare.
+from test_chat_orchestrator_tool_loop import (
     _FAKE_UUID,
     _collect_events,
     _make_chat_request,
