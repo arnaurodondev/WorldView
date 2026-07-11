@@ -108,21 +108,21 @@ describe("AiSignalsWidget — news momentum rows", () => {
     expect(container.innerHTML).not.toContain("text-[hsl(var(--positive))]");
   });
 
-  it("shows a capped percentage (not '+N') for new coverage when the prior window was empty", async () => {
-    // WHY: the display unit must be consistent across all rows in the same widget —
-    // always a % (financial convention). Prior=0 is valid data (new coverage) but
-    // switching to an absolute count "+N" while other rows show "↑200%" is a mixed-
-    // unit bug. The raw counts are visible in the hover tooltip so nothing is lost.
+  it("shows a 'NEW' badge (not a fabricated %) for new coverage when the prior window was empty", async () => {
+    // WHY: with prior_count===0 there is NO baseline, so a percentage is undefined.
+    // The server sends is_new=true + delta_pct=0.0; the widget must show "NEW", NOT a
+    // fabricated "↑500%". (The old code floored the denominator at 1, so 0→5 became
+    // "↑500%" — and during a news-ingestion gap, when the prior window is empty for
+    // EVERY row, the whole widget read as ↑700%–↑1400%.)
     gatewayMocks.getAiSignals.mockResolvedValue({
-      signals: [item({ count: 5, prior_count: 0, delta: 5, delta_pct: 500 })],
+      signals: [item({ count: 5, prior_count: 0, delta: 5, delta_pct: 0, is_new: true })],
       window_hours: 24,
     });
     render(<AiSignalsWidget />, { wrapper });
 
-    // Prior=0, delta_pct=500 → renders as "↑500%" (not the old "+5").
-    expect(await screen.findByText("↑500%")).toBeInTheDocument();
-    // The old absolute reading must NOT appear — it would break unit consistency.
-    expect(screen.queryByText("+5")).not.toBeInTheDocument();
+    expect(await screen.findByText("NEW")).toBeInTheDocument();
+    // The fabricated percentage must NOT appear.
+    expect(screen.queryByText("↑500%")).not.toBeInTheDocument();
   });
 
   it("caps the momentum percentage at 999% to prevent slot overflow", async () => {

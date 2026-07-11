@@ -78,8 +78,14 @@ export interface NewsMomentumItem {
   prior_count?: number | null;
   /** Absolute velocity: count − prior_count. */
   delta?: number | null;
-  /** Relative surge: 100 × delta / max(prior_count, 1). */
+  /** Relative surge: 100 × delta / prior_count (0 when is_new — no baseline). */
   delta_pct?: number | null;
+  /**
+   * True when prior_count === 0 (no baseline window). The row shows a "NEW" badge
+   * instead of delta_pct, which is meaningless without a prior window. Prevents the
+   * old fabricated "↑N00%" surges when the prior window is empty (e.g. ingestion gap).
+   */
+  is_new?: boolean | null;
   /** The entity's most relevant recent headline. */
   top_article?: MomentumTopArticle | null;
 }

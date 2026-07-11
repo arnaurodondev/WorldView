@@ -94,11 +94,11 @@ export function sortMomentumItems(items: NewsMomentumItem[], mode: SortMode): Ne
  * available in the hover tooltip (trendTitle / rowTitle) so no absolute info is
  * lost by switching to % here.
  *
- * WHY we no longer special-case prior_count===0 with "+N": prior=0 is valid data
- * (new coverage), but emitting an absolute integer while other rows emit a % means
- * the SAME widget shows mixed units — a display inconsistency that breaks at a
- * glance comparison. The server floors the prior denominator at 1, so delta_pct is
- * always finite and safe to display as a %.
+ * NEW-coverage rows (is_new === true, i.e. prior_count === 0): there is NO baseline,
+ * so a percentage is undefined. The server sends is_new + delta_pct=0.0; we render a
+ * "NEW" badge instead of a fabricated number. (Previously the server floored the
+ * denominator at 1, turning 0→N into "N*100%" — so during a news-ingestion gap, when
+ * the prior window is empty for EVERY row, the whole widget read as ↑700%–↑1400%.)
  *
  * Color: §15.11 semantic utilities — text-positive (rising), text-negative
  * (falling), muted (flat). Arrow + color encode the same bit (WCAG 1.4.1) so
@@ -112,6 +112,11 @@ export function trendMeta(item: NewsMomentumItem): {
 } {
   const delta = item.delta ?? 0;
   const pct = item.delta_pct ?? 0;
+
+  // New coverage: no prior-window baseline → show "NEW", not a percentage.
+  if (item.is_new) {
+    return { arrow: "↑", text: "text-positive", label: "NEW", word: "new coverage" };
+  }
 
   if (delta > 0) {
     // Always emit a percentage — consistent with every other mover widget.

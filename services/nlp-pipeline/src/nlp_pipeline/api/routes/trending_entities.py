@@ -58,8 +58,11 @@ class TrendingEntityResponse(BaseModel):
     prior_count: int
     # Absolute velocity: count - prior_count.
     delta: int
-    # Relative surge: 100 * delta / max(prior_count, 1).
+    # Relative surge: 100 * delta / prior_count when prior_count > 0, else 0.0.
     delta_pct: float
+    # True when prior_count == 0 (no baseline). Clients should render a "NEW" badge
+    # instead of delta_pct, which is meaningless (0.0) for new-coverage rows.
+    is_new: bool = False
     top_article: TrendingTopArticle | None = None
 
 
@@ -115,6 +118,7 @@ def _to_response(item: TrendingEntityData) -> TrendingEntityResponse:
         prior_count=item.prior_count,
         delta=item.delta,
         delta_pct=item.delta_pct,
+        is_new=item.is_new,
         top_article=top,
     )
 
