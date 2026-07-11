@@ -272,10 +272,37 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          case. Grounds the scenario parameter instead of assuming it; the
     #          estimate framing (dated, not live) is preserved end-to-end. Additive;
     #          no grounding / refusal rule relaxed.
-    version="1.22",
+    #   1.23 — 2026-07-11 (planning-latency — round-1 batch WIDTH + deep-round
+    #          fan-out). Live eval (run_20260710T225329Z) showed complex
+    #          multi-tool questions running 45-112s, dominated by ~8 SEQUENTIAL
+    #          planning round-trips (~8s each). Root cause: under the full 21k-char
+    #          prompt Qwen3-235B reliably batches only ~2 tools in round 1 (a lean
+    #          prompt gets 4) — the rest trickle out ONE-per-round in the ROUND 2+
+    #          adaptive phase, each a full planning round-trip. Measured tools/round
+    #          for agg_q5_tsla_macro: {0:2, 1:1, 2:1, 3:1, 4:1, 5:1, 6:1} = 8 tools
+    #          across 8 rounds. v1.12's PLAN-WIDE rule was correct but too abstract
+    #          to override the model's default caution at this prompt length. Two
+    #          additive strengthenings: (a) a BATCH WIDTH mandate naming the concrete
+    #          expectation (a multi-faceted question needs 4-6 independent tools; a
+    #          1-2 tool round-1 on such a question is a PLANNING FAILURE that
+    #          multiplies latency) plus a pre-send ANGLE checklist; (b) a PARALLEL
+    #          FAN-OUT rule extending the batch discipline to ROUND 2+: when a round
+    #          reveals SEVERAL new entities at once (traverse_graph returns N
+    #          suppliers, news names 3 counterparties), probe ALL of them in ONE
+    #          parallel batch next round, never one-per-round. Pure latency fix; NO
+    #          grounding / routing / dedup / refusal rule relaxed — NO REDUNDANT TOOL
+    #          CALLS and GROUNDING-IS-ABSOLUTE still bind.
+    version="1.23",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.22 routes the PROJECTION / WHAT-IF SCAFFOLD to the new get_market_sizing "
+        "(v1.23 is a pure planning-latency fix: strengthens the RESEARCH LOOP with a "
+        "concrete BATCH WIDTH mandate (a multi-faceted question needs 4-6 independent "
+        "tools in the round-1 parallel batch; a 1-2 tool round-1 is a PLANNING FAILURE "
+        "that trickles the rest out one-per-round at ~8s each) plus a PARALLEL FAN-OUT "
+        "rule extending the batch discipline to ROUND 2+ (probe SEVERAL newly-surfaced "
+        "entities in ONE batch, never one-per-round). No grounding/routing/dedup/refusal "
+        "rule relaxed. "
+        "v1.22 routes the PROJECTION / WHAT-IF SCAFFOLD to the new get_market_sizing "
         "reference tool: a projection's SCENARIO PARAMETER — TAM / market size / "
         "segment share — is now RETRIEVABLE + CITABLE from a curated dated "
         "analyst-estimate table, so the planner calls get_market_sizing in the "
@@ -646,12 +673,42 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "traverse_graph or search_entity_relations (supply-chain / customer /\n"
         "peer exposure) — because every entity argument is already known at the\n"
         "start. Do NOT serialise these across rounds.\n"
+        # v1.23 (2026-07-11): the abstract PLAN-WIDE rule above was not enough —
+        # live eval showed Qwen3-235B batching only ~2 tools in round 1 under the
+        # full prompt, then dribbling the rest out one-per-round (8 rounds / 64s of
+        # planning for one question). This names the concrete expectation and the
+        # pre-send checklist so the width is unambiguous. Latency-only; grounding,
+        # dedup, and routing rules below are untouched.
+        "BATCH WIDTH (the single biggest latency lever — measured): a\n"
+        "multi-faceted question — anything asking what DRIVES or AFFECTS an\n"
+        "entity, its EXPOSURE / RISK, its CATALYSTS, or COMPARING entities —\n"
+        "almost always needs 4-6 INDEPENDENT tools. Emitting only 1-2\n"
+        "tool_calls in round 1 for such a question is a PLANNING FAILURE: the\n"
+        "remaining tools then trickle out one-per-round and EACH extra round\n"
+        "adds ~6-10s of pure latency. Before you send round 1, enumerate every\n"
+        "ANGLE the question touches — macro / economic calendar, news, earnings\n"
+        "& events, fundamentals, relationships / graph, price — and fire a tool\n"
+        "for EVERY angle whose arguments you already know from the question. When\n"
+        "in doubt whether a tool belongs in round 1, INCLUDE it: an unused result\n"
+        "is cheap, an extra sequential round is not.\n"
         "ROUND 2+ — GO DEEP (adaptive follow-up): Reserve later rounds for\n"
         "tools whose ARGUMENTS you could only learn from an earlier round's\n"
         "results. This is where the analysis happens: if round-1 news surfaces\n"
         "a NEW supplier, counterparty, regulator, or event you did not know at\n"
         "the start, THEN query the graph / fundamentals / events for THAT\n"
-        "newly-surfaced entity. Keep looping — plan wide, then chase what each\n"
+        "newly-surfaced entity. "
+        # v1.23 (2026-07-11): the batch discipline is NOT round-1-only. When a
+        # single round reveals MULTIPLE new entities at once, fanning them out
+        # one-per-round re-introduces the same sequential-latency tail the round-1
+        # rule fixes. Probe them together.
+        "PARALLEL FAN-OUT still applies here: when a single round\n"
+        "reveals SEVERAL new entities at once — traverse_graph returns 5\n"
+        "suppliers, or a news round names 3 new counterparties — do NOT probe\n"
+        "them one per round. Issue the follow-up call for ALL of them TOGETHER\n"
+        "as one parallel batch in the very next round. The parallel-batch rule\n"
+        "holds for EVERY round, not just round 1: within any round, fire every\n"
+        "call whose arguments you now know in parallel. "
+        "Keep looping — plan wide, then chase what each\n"
         "round reveals — until you have the evidence to answer; then STOP and\n"
         "synthesise. Do not pad with redundant calls once the question is\n"
         "covered.\n"

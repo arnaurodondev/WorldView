@@ -48,7 +48,16 @@ def validate_registry_parity(registry: ToolRegistry) -> dict[str, int]:
     orphan_in_manifest = manifest_tools - handled_tools
     orphan_in_handlers = handled_tools - manifest_tools
 
-    if orphan_in_manifest or orphan_in_handlers:
+    # EMNLP ablation: when the tool allowlist prunes the registry to a subset,
+    # manifest tools legitimately have no handler; a pruned registry is always a
+    # subset of the manifest, so tolerate that case. Registered-but-unmanifested
+    # handlers remain a real drift and always raise.
+    import os
+
+    _ablation = bool(os.getenv("RAG_CHAT_TOOL_ALLOWLIST")) or os.path.exists(
+        os.getenv("RAG_CHAT_TOOL_ALLOWLIST_FILE", "/app/tool_allowlist.txt")
+    )
+    if orphan_in_handlers or (orphan_in_manifest and not _ablation):
         raise ToolRegistryDriftError(
             "Tool registry drift detected. "
             f"In manifest only: {sorted(orphan_in_manifest)}. "
@@ -1593,5 +1602,23 @@ def build_default_registry() -> ToolRegistry:
         ),
         handler=lambda **_: None,
     )
+
+    # Evaluation-only tool allowlist (EMNLP demo ablation). If the env var
+    # RAG_CHAT_TOOL_ALLOWLIST is set, or the file it points to exists, prune the
+    # registry to the comma/newline-separated tool names given, so the planner
+    # can only choose among them. Absent (the default) is a no-op, so production
+    # behaviour is unchanged. Used to run a document-only-RAG baseline.
+    import os
+
+    _allow = os.getenv("RAG_CHAT_TOOL_ALLOWLIST")
+    _allow_file = os.getenv("RAG_CHAT_TOOL_ALLOWLIST_FILE", "/app/tool_allowlist.txt")
+    if not _allow and os.path.exists(_allow_file):
+        with open(_allow_file) as _f:
+            _allow = _f.read()
+    if _allow:
+        keep = {t.strip() for t in _allow.replace(",", "\n").split() if t.strip()}
+        if keep:
+            registry._specs = {k: v for k, v in registry._specs.items() if k in keep}
+            registry._handlers = {k: v for k, v in registry._handlers.items() if k in keep}
 
     return registry
