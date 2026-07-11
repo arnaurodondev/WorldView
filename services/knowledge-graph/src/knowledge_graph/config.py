@@ -120,7 +120,20 @@ class Settings(BaseSettings):
     # scoring — a small, cheap chat model). When ``deepinfra_api_key`` is set the
     # PredictionEnrichedConsumer wires the classifier; empty key → exposures keep
     # NULL polarity (the classifier is never constructed).
-    polarity_classifier_model_id: str = "Qwen/Qwen2.5-0.5B-Instruct"  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_MODEL_ID
+    #
+    # PLAN-0056 live-QA fix: the original default ``Qwen/Qwen2.5-0.5B-Instruct`` is
+    # NOT served on this DeepInfra account — the endpoint returns HTTP 404
+    # ("model_not_found"), which the classifier swallows into ("neutral", 0.0), so
+    # EVERY exposure silently degraded to neutral/0.0 (the "against a company"
+    # bullish/bearish signal was dead). We default to the SAME served model the S6
+    # relevance-scoring worker uses in the live config
+    # (``meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo`` — verified HTTP 200 with the
+    # current KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY). It is larger than 0.5B (a small
+    # cost bump), but a working classifier beats a 404→neutral degrade. Override via
+    # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_MODEL_ID if the account tier changes.
+    polarity_classifier_model_id: str = (
+        "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_MODEL_ID
+    )
     polarity_classifier_base_url: str = (
         "https://api.deepinfra.com/v1/openai"  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_BASE_URL
     )

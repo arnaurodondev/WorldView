@@ -27,9 +27,11 @@ _CONDITION = "0xabc123"
 def _make_classifier(usage_logger: Any = None, *, api_key: str = "test-key") -> Any:
     from knowledge_graph.infrastructure.llm.market_polarity_classifier import MarketPolarityClassifier
 
+    # PLAN-0056 live-QA: use a DeepInfra-SERVED model here (the 0.5B Qwen variant
+    # 404s on this account → the classifier degrades every verdict to neutral/0.0).
     return MarketPolarityClassifier(
         api_key=api_key,
-        model_id="Qwen/Qwen2.5-0.5B-Instruct",
+        model_id="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
         timeout_seconds=5,
         usage_logger=usage_logger,
     )
@@ -225,3 +227,38 @@ class TestCaching:
         asyncio.run(clf.classify("q", "X"))  # no condition_id/entity_id → not cached
         asyncio.run(clf.classify("q", "X"))
         assert len(calls) == 2
+
+
+# ── PLAN-0056 live-QA (BUG 1) — served-model default regression guard ──────────
+# The original defaults pointed at ``Qwen/Qwen2.5-0.5B-Instruct``, which is NOT
+# served on this DeepInfra account (HTTP 404 → swallowed into ("neutral", 0.0)),
+# so EVERY polarity verdict silently degraded to neutral. These tests pin the
+# defaults to a served model and prove the env override still applies.
+_UNSERVED_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
+
+
+class TestServedModelDefault:
+    def test_config_default_is_not_the_unserved_qwen(self) -> None:
+        from knowledge_graph.config import Settings
+
+        settings = Settings()  # type: ignore[call-arg]
+        assert settings.polarity_classifier_model_id != _UNSERVED_MODEL
+        # Must mirror the S6 relevance stack's served model.
+        assert settings.polarity_classifier_model_id == "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+
+    def test_env_override_still_applies(self, monkeypatch: Any) -> None:
+        from knowledge_graph.config import Settings
+
+        monkeypatch.setenv(
+            "KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_MODEL_ID",
+            "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        )
+        settings = Settings()  # type: ignore[call-arg]
+        assert settings.polarity_classifier_model_id == "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+    def test_classifier_constructor_default_is_served(self) -> None:
+        from knowledge_graph.infrastructure.llm.market_polarity_classifier import MarketPolarityClassifier
+
+        clf = MarketPolarityClassifier(api_key="k")
+        assert clf._model_id != _UNSERVED_MODEL  # — regression guard on the default
+        assert clf._model_id == "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"

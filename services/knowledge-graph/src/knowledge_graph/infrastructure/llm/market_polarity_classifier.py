@@ -108,7 +108,12 @@ class MarketPolarityClassifier:
                          every ``classify`` returns ``("neutral", 0.0)`` without
                          an HTTP call (so a partial rollout never blocks ingestion).
         api_base_url:    OpenAI-compatible base URL (DeepInfra by default).
-        model_id:        Small/cheap chat model id (e.g. "Qwen/Qwen2.5-0.5B-Instruct").
+        model_id:        Small/cheap chat model id that MUST be served by the
+                         provider. Default mirrors the S6 relevance-scoring worker
+                         (``meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo``). NOTE:
+                         ``Qwen/Qwen2.5-0.5B-Instruct`` is NOT served on this
+                         DeepInfra account (HTTP 404 → swallowed into neutral/0.0),
+                         so do not reintroduce it as a default (PLAN-0056 live-QA).
         timeout_seconds: Per-call wall-clock timeout.
         usage_logger:    ``LlmUsageLogProtocol`` implementation. Every call (success
                          or failure) logs one row with a NON-ZERO ``estimated_cost_usd``
@@ -120,7 +125,8 @@ class MarketPolarityClassifier:
         *,
         api_key: str,
         api_base_url: str = "https://api.deepinfra.com/v1/openai",
-        model_id: str = "Qwen/Qwen2.5-0.5B-Instruct",
+        # Served on DeepInfra (verified 200). The 0.5B Qwen variant 404s → neutral degrade.
+        model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
         timeout_seconds: int = 30,
         usage_logger: LlmUsageLogProtocol | None = None,
     ) -> None:

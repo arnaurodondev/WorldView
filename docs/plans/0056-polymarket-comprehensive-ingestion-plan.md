@@ -839,3 +839,55 @@ wave-count change.
   `tests/architecture` — the 2 CI blockers now pass (2 remaining failures are pre-existing and unrelated:
   TOPO-LIFESPAN nlp-pipeline R22 + pytest-marker on nlp-pipeline chunk-search test). ruff check+format clean;
   mypy `services/alert/src` (2 files) + `services/content-ingestion/src` (4 files) clean.
+
+## QA fixes (2026-07-10) — live-instance QA batch (knowledge-graph + content-ingestion + alert)
+
+Live-instance QA of the running prediction pipeline surfaced 3 defects that made whole feature
+paths silently dead. All fixed on `feat/prediction-data-activation`; one new corrective sub-wave
+(**B5**) added under Sub-Plan B for the deeper-stream work-list seeder.
+
+- **BUG 1 [P0] — polarity classifier model 404 → every exposure neutral/0.0.** The default
+  `polarity_classifier_model_id` was `Qwen/Qwen2.5-0.5B-Instruct`, which is **not served** on this
+  DeepInfra account: `/chat/completions` returns HTTP 404 (`model_not_found`), which
+  `MarketPolarityClassifier` swallows into the resilience default `("neutral", 0.0)`. So the entire
+  "against a company" bullish/bearish exposure signal (Wave C3) degraded to neutral with 0 confidence
+  for every market. Fix: default to the SAME served model the S6 relevance-scoring worker uses in the
+  live config — `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` (verified HTTP 200 with the current
+  `KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY` from inside `worldview-knowledge-graph-1`). Changed the default in
+  both `config.py` and the classifier constructor + added a comment noting the 0.5B variant is unserved.
+  `KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_MODEL_ID` override still applies. Cost note: 8B is larger than
+  0.5B (a small per-call cost bump), but a working classifier is strictly better than a 404→neutral degrade.
+
+- **BUG 2 [P0] → new Wave B5 — deeper-stream (CLOB/trades/OI) work-lists never populated.** Migration
+  0011 seeds the `polymarket_clob` / `polymarket_data_trades` (`config["markets"]`) and
+  `polymarket_data_oi` (`config["condition_ids"]`) sources EMPTY, and nothing ever filled them, so those
+  adapters logged `polymarket_*_no_*` and returned `[]` → the deeper streams produced ZERO rows forever.
+  Fix (**Wave B5 — deeper-stream work-list seeder**): new
+  `SeedPredictionStreamWorklistsUseCase` (content-ingestion application layer) derives the
+  `{condition_id, token_ids}` work-list from the base Gamma `/markets` fetch results (which already carry
+  each market's `conditionId` + `clobTokenIds`) and upserts it into the three source configs. The worker
+  calls it after `_emit_synthetic_documents(results)` in its own short-lived, best-effort session (never
+  fails the snapshot task). **Only OPEN markets**, **capped** at
+  `CONTENT_INGESTION_PREDICTION_STREAM_WORKLIST_MAX_MARKETS` (default 500) to bound the deeper-stream
+  fetch fan-out, **idempotent** (writes only when the derived list differs from the stored one), and
+  **deduplicated** on `condition_id`. No cross-service DB read (R9) — the base adapter already holds the data.
+
+- **BUG 5 [P1] — alert intelligence-consumer perma-unhealthy on idle topics.** The consumer only touched
+  its Docker-healthcheck heartbeat FILE in `__init__` and after each processed message. Its instance is
+  assigned only currently-empty topics (`market.prediction.signal.v1`, `intelligence.contradiction.v1`),
+  so with 0 messages the file froze at boot and the healthcheck (300s freshness window) reported
+  `unhealthy` forever even though the poll loop was alive (observed live: heartbeat age ~12,676s,
+  container `unhealthy`). Fix: refresh the heartbeat file on every idle poll cycle too — extracted
+  `_write_heartbeat_file()` and call it from the `_record_progress()` override (the base loop's BP-700
+  per-poll tick) in addition to `_touch_heartbeat()`. The message-progress marker
+  (`_last_progress_monotonic`) is intentionally left untouched by the idle path, preserving "last message
+  processed" semantics; the poll-cycle watchdog already gated on `last_poll_monotonic`.
+
+- **Tests (14 new):** knowledge-graph — `TestServedModelDefault` (config default != unserved 0.5B, ==
+  served model; env override still applies; classifier constructor default served). content-ingestion —
+  `test_seed_prediction_stream_worklists.py` (worklist mapping; only-open; cap; dedup; blank skip; writes
+  all 3 configs; idempotent no-write on re-run; empty batch no-write; preserves other config keys). alert
+  — idle poll cycle refreshes heartbeat file (+ message marker unchanged) and processed-message advances
+  both. Suites GREEN: KG classifier (19), content-ingestion seeder (9) + worker/config (46), alert
+  entrypoints (16). ruff 0.4.0 check+format clean; mypy `services/{knowledge-graph,content-ingestion,alert}/src`
+  touched files clean.
