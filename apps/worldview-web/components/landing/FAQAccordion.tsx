@@ -26,9 +26,12 @@ interface FAQ {
 }
 
 const FAQS: FAQ[] = [
+  // 2026-07 landing rework: launch framing — lead with "real, live product",
+  // keep the research origin as the honest second beat. MUST stay in lockstep
+  // with FAQ_JSONLD in app/page.tsx (structured-data parity, see that file).
   {
-    q: "Is Worldview a real product or a thesis demo?",
-    a: "Both. It's a fully working terminal with 10 production microservices, a Next.js frontend, and live data integrations — built as a university final thesis demonstrating modern microservice architecture and AI integration. You can sign up free and use it today.",
+    q: "Is Worldview a real product or a research demo?",
+    a: "It's a real, live product — a working terminal with 10 production microservices, a Next.js frontend, and live data integrations. It began as a university research project, and that research DNA is why every AI answer must be grounded and cited. You can sign up free and use it today.",
   },
   {
     q: "What data sources do you actually use?",
@@ -51,24 +54,24 @@ const FAQS: FAQ[] = [
     a: "The impact score is the model's prediction of price movement in the 4 windows after publication (t0/t1/t2/t5). It's based on price-window labelling against a curated training set. We expose the underlying t0/t1/t2/t5 returns so you can verify the model against real outcomes.",
   },
   {
-    q: "Do you support real-time data?",
-    a: "Yes on Pro and Enterprise. The free tier uses 15-min delayed quotes (sufficient for end-of-day analysis and screening). Pro upgrades to live tick data via EODHD's WebSocket feed.",
+    q: "What does the data cover?",
+    a: "End-of-day and intraday equities from EODHD, fundamentals and corporate events from Finnhub, filings from SEC EDGAR, and prediction-market odds from Polymarket. Quotes on the marketing surfaces are sample data; inside the app, market data refreshes on a short delay — plenty for research, screening, and end-of-day analysis.",
   },
   {
     q: "Can I export to CSV / connect to my own scripts?",
-    a: "Yes. Every list view (screener, watchlists, transactions, alerts) has CSV / Excel / PDF export. The S9 API gateway exposes 55+ documented endpoints so you can pull data into Python / Jupyter / Excel directly. API access is included on Pro and Enterprise tiers.",
+    a: "Yes. Every list view (screener, watchlists, transactions, alerts) has CSV / Excel / PDF export, and the S9 API gateway exposes 55+ documented endpoints so you can pull data straight into Python / Jupyter / Excel.",
   },
   {
     q: "What if I don't have a brokerage to connect?",
     a: "You don't need one. The terminal is fully usable for research, screening, alerts, and news intelligence without a connected brokerage. The brokerage sync is purely an optional convenience for tracking real positions alongside research.",
   },
   {
-    q: "Is there a free trial for Pro?",
-    a: "Yes — 14 days, no credit card required. After 14 days your account reverts to the Free tier automatically (you'll never be charged without explicit confirmation).",
+    q: "How much does it cost?",
+    a: "Nothing right now. Worldview is in public beta — every feature is unlocked with no credit card and no trial timer. Paid plans will come later, and we'll give plenty of notice before anything changes; you'll never be charged without explicit confirmation.",
   },
   {
     q: "How do I report a bug or request a feature?",
-    a: "Use the floating feedback button in the bottom-right of any authenticated page. Bugs, feature requests, and roadmap voting all flow into the public roadmap at /feedback. Direct contact: hello@worldview.local.",
+    a: "Use the floating feedback button in the bottom-right of any authenticated page. Bugs, feature requests, and roadmap voting all flow into the public roadmap at /feedback. Direct contact: support@worldview-labs.com.",
   },
 ];
 
@@ -104,10 +107,10 @@ export function FAQAccordion() {
         <p className="mt-10 text-center text-xs text-muted-foreground">
           Didn&apos;t find your answer?{" "}
           <a
-            href="mailto:hello@worldview.local"
+            href="mailto:support@worldview-labs.com"
             className="text-primary hover:underline"
           >
-            hello@worldview.local
+            support@worldview-labs.com
           </a>
         </p>
       </div>

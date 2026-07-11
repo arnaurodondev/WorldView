@@ -20,6 +20,7 @@
 
 import { ProductShot } from "./ProductShot";
 import { WeirdPathCard } from "./WeirdPathCard";
+import { ConnectionsGraphMock } from "./mocks";
 
 /**
  * The signature story, as static data. The four sub-scores multiply into the
@@ -75,13 +76,13 @@ export function KnowledgeGraphSpotlight() {
           {/* Left: real sigma.js graph screenshot in window chrome. */}
           <ProductShot
             src="/landing/graph-spotlight.png"
-            alt="Worldview knowledge-graph view showing entity nodes (companies, suppliers, regulators) connected by typed relationship edges, with a path highlighted between two selected companies."
+            alt="Stylized preview of the Worldview knowledge-graph view: entity nodes (companies, suppliers, regulators) connected by typed relationship edges, with the Apple to TSMC to ASML path highlighted (sample data)."
             label="connections"
             width={720}
             height={520}
-            // TODO(landing-shots): set placeholder={false} once
-            // capture-landing-shots.mjs has written public/landing/graph-spotlight.png.
-            placeholder
+            // TODO(landing-shots): swap `mock` for the real PNG once
+            // capture-landing-shots.mjs writes public/landing/graph-spotlight.png.
+            mock={<ConnectionsGraphMock />}
           />
 
           {/* Right: the Apple→TSMC→ASML weirdness story. */}

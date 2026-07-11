@@ -108,8 +108,11 @@ describe("KnowledgeGraphSpotlight", () => {
 
   it("renders the AAPL→TSMC→ASML path chain", () => {
     render(<KnowledgeGraphSpotlight />);
+    // 2026-07 rework: the tickers now appear in BOTH the WeirdPathCard and
+    // the ConnectionsGraphMock illustration (SVG node labels) — assert at
+    // least one occurrence of each rather than exactly one.
     ["AAPL", "TSMC", "ASML"].forEach((t) => {
-      expect(screen.getByText(t)).toBeInTheDocument();
+      expect(screen.getAllByText(t).length).toBeGreaterThanOrEqual(1);
     });
     expect(screen.getByText("/path AAPL ASML")).toBeInTheDocument();
   });
@@ -214,6 +217,26 @@ describe("ProductShot", () => {
       <ProductShot src="/landing/z.png" alt="Live shot" label="demo" live placeholder />,
     );
     expect(screen.getByText("LIVE")).toBeInTheDocument();
+  });
+
+  // 2026-07 landing rework: `mock` renders the hand-built illustration inside
+  // the chrome (role=img wrapper for a11y), takes precedence over
+  // `placeholder`, and never falls through to a broken <img>.
+  it("renders the mock inside a role=img wrapper and wins over placeholder", () => {
+    render(
+      <ProductShot
+        src="/landing/m.png"
+        alt="Mock shot"
+        label="demo"
+        placeholder
+        mock={<div data-testid="mock-content">graph</div>}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "Mock shot" })).toBeInTheDocument();
+    expect(screen.getByTestId("mock-content")).toBeInTheDocument();
+    // Neither the <img> nor the "pending capture" placeholder text renders.
+    expect(document.querySelector("img")).toBeNull();
+    expect(screen.queryByText(/pending capture/i)).toBeNull();
   });
 });
 

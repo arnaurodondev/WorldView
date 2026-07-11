@@ -1,12 +1,12 @@
 /**
- * components/landing/Testimonials.tsx — placeholder thesis case studies (T-A-1-10)
+ * components/landing/Testimonials.tsx — honest persona scenarios (T-A-1-10)
  *
- * WHY THIS EXISTS: A thesis-stage product has no real customer testimonials,
+ * WHY THIS EXISTS: A just-launched product has no real customer testimonials,
  * but the social-proof slot is conventionally there on landing pages and a
  * blank space reads as "no users". Instead, we use the slot to highlight
  * the *use cases* the system was designed for — written as "imagined trader
  * personas" so we get the visual benefit of testimonials without the
- * dishonesty of fake customer quotes.
+ * dishonesty of fake customer quotes. Swap in real quotes as they arrive.
  *
  * The word "scenario" replaces "testimonial" so we never claim these are
  * real users. This is the same pattern used by other ethically-built
@@ -51,10 +51,14 @@ export function Testimonials() {
           >
             Three traders. Three workflows.
           </h2>
+          {/* 2026-07 landing rework: launch framing. Keep the honesty (these
+              are design personas, not customer quotes) but drop the
+              "thesis project, not a marketed launch" self-deprecation now
+              that the product is live. */}
           <p className="mt-3 text-sm text-muted-foreground">
-            We built this as a thesis project, not a marketed launch — these
-            are the personas the system targets, written as scenarios rather
-            than fake testimonials.
+            No paid actors, no cherry-picked quotes — these are the three
+            workflows Worldview was designed around, written as honest
+            scenarios rather than fake testimonials.
           </p>
         </div>
 

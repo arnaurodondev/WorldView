@@ -47,11 +47,11 @@ test.describe("PLAN-0052 Wave A — landing page", () => {
       // Every named section is in the DOM (anchored by id).
       for (const id of [
         "hero",
-        "differentiators",
+        "features",
         "workflow",
         "ai",
         "compare",
-        "pricing",
+        "access",
         "faq",
       ]) {
         await expect(page.locator(`#${id}`)).toBeVisible();
@@ -101,19 +101,26 @@ test.describe("PLAN-0052 Wave A — landing page", () => {
     expect(body).toMatch(/Sitemap:/);
   });
 
-  test("monthly/annual pricing toggle works", async ({ page }) => {
-    await page.goto("/#pricing");
-    // Default = annual: Pro shows $24
-    await expect(page.getByText("$24", { exact: true })).toBeVisible();
-    // Switch to monthly
-    // QA iter-1: toggle now uses aria-pressed (button) not role="tab".
-    await page.getByRole("button", { name: /^monthly$/i }).click();
-    await expect(page.getByText("$29", { exact: true })).toBeVisible();
+  test("beta-access callout renders (replaced paid pricing tiers)", async ({
+    page,
+  }) => {
+    await page.goto("/#access");
+    // The section leads with the free-during-beta headline and a register CTA.
+    await expect(
+      page.getByRole("heading", { name: /free while we.re in beta/i }),
+    ).toBeVisible();
+    await expect(page.getByTestId("access-primary-cta")).toHaveAttribute(
+      "href",
+      "/register",
+    );
+    // Regression guard: the removed invented prices must not reappear.
+    await expect(page.getByText("$24", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("$29", { exact: true })).toHaveCount(0);
   });
 
   test("FAQ accordion expands on click", async ({ page }) => {
     await page.goto("/#faq");
-    const trigger = page.getByRole("button", { name: /thesis demo/i });
+    const trigger = page.getByRole("button", { name: /research demo/i });
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await trigger.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
