@@ -243,14 +243,56 @@ def wait_session_ready(page: Page, timeout_ms: int = 20000):
         pass
 
 
+# Keyboard chord map for GlobalHotkeyBindings.tsx (g + letter navigates to route).
+_CHORD_MAP = {
+    "/chat": "c",
+    "/news": "n",
+    "/screener": "s",
+    "/dashboard": "d",
+    "/portfolio": "p",
+    "/alerts": "a",
+    "/workspace": "w",
+    "/instruments": "i",
+}
+
+
 def click_nav(page: Page, href: str, t: Timing) -> bool:
-    """Client-side navigation via a sidebar Next.js <Link> (preserves auth)."""
-    link = page.locator(f'a[href="{href}"]').first
+    """Client-side navigation to href without a full page load (preserves auth).
+
+    Strategy:
+    1. Dismiss any open modal / command-palette (Escape) so the keyboard focus
+       is not trapped.
+    2. Try the sidebar <Link> scoped to the app-navigation <nav> (robust selector
+       that avoids matching the same href inside the command-palette).
+    3. Fall back to the GlobalHotkeyBindings `g + letter` chord, which calls
+       router.push(path) and works regardless of sidebar state.
+    """
+    # Dismiss any open modal (command palette, dialogs) before navigating.
+    page.keyboard.press("Escape")
+    time.sleep(0.15)
+
+    # --- attempt 1: sidebar link scoped to the sidebar nav ---
+    sidebar_link = page.locator(f'nav[aria-label="Main navigation"] a[href="{href}"]').first
+    clicked = False
     try:
-        link.wait_for(state="visible", timeout=15000)
-        link.click()
+        sidebar_link.wait_for(state="visible", timeout=4000)
+        sidebar_link.click()
+        clicked = True
     except PWTimeout:
-        return False
+        pass
+
+    # --- attempt 2: keyboard chord (g + letter) ---
+    if not clicked:
+        chord_key = _CHORD_MAP.get(href)
+        if chord_key is None:
+            return False
+        # Click the page body to ensure no input has focus before the chord.
+        page.locator("body").click(position={"x": 700, "y": 400})
+        time.sleep(0.1)
+        page.keyboard.press("g")
+        time.sleep(0.08)
+        page.keyboard.press(chord_key)
+
     try:
         page.wait_for_url(lambda url: href in url, timeout=15000)
     except PWTimeout:

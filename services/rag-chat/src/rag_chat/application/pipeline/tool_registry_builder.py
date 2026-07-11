@@ -1620,5 +1620,9 @@ def build_default_registry() -> ToolRegistry:
         if keep:
             registry._specs = {k: v for k, v in registry._specs.items() if k in keep}
             registry._handlers = {k: v for k, v in registry._handlers.items() if k in keep}
+            # Ablation must never serve a cached full-system answer for a
+            # restricted-tool question, so disable the completion cache in this
+            # process while the allowlist is active.
+            os.environ["RAG_COMPLETION_CACHE_DISABLED"] = "true"
 
     return registry
