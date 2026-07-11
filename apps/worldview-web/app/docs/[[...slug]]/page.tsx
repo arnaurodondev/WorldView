@@ -179,6 +179,31 @@ export default async function DocsPage({ params }: PageProps) {
           source={doc.body}
           components={mdxComponents}
           options={{
+            // WHY blockJS: false — ROOT CAUSE FIX for the next-mdx-remote
+            // 5→6 bump (MDX v3). v6 added a NEW security default, blockJS:
+            // true, which injects a remark plugin (removeJavaScriptExpressions)
+            // that STRIPS every MDX JavaScript expression before compile —
+            // including JSX *expression attributes* like
+            //   <DocsTabs items={["curl", "Python", "TypeScript"]}>
+            // The plugin deletes any attribute whose value is an expression
+            // (mdxJsxAttributeValueExpression) while KEEPING plain string
+            // literals. That is exactly why string props survived
+            // (Callout type="tip", CodeBlock filename="x.ts") but `items`
+            // arrived at DocsTabs as `undefined` — the whole `items={...}`
+            // attribute was removed from the tree, so `items.map()` crashed
+            // the static build of /docs/api-reference.
+            //
+            // Setting blockJS: false disables that stripper so expression
+            // attributes compile through normally and reach our components.
+            //
+            // WHY THIS IS SAFE HERE: our MDX is FIRST-PARTY, trusted content
+            // authored in-repo under content/docs/ and reviewed via PR — it
+            // is never user-submitted. The blockJS shield exists to defend
+            // against untrusted MDX, which is not our threat model. We keep
+            // blockDangerousJS at its default (true) as defense-in-depth: it
+            // still blocks eval/Function/process and other dangerous globals
+            // even with JS expressions enabled.
+            blockJS: false,
             mdxOptions: {
               remarkPlugins: [remarkGfm],
               rehypePlugins: [[rehypePrettyCode, rehypePrettyCodeOptions]],
