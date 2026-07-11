@@ -201,3 +201,137 @@ class TestPredictionDetail:
         detail = _compose_prediction_detail(_prediction_event(question=long_q))
         assert detail.endswith("...")
         assert len(detail) < len(long_q)
+
+
+# ── Dedup key: distinct markets must NOT collapse (PLAN-0056 QA FIX 3) ─────────
+
+
+def _make_stateful_use_case(
+    *,
+    watchers: list[WatcherInfo],
+    saved_alerts: list[Alert],
+) -> AlertFanoutUseCase:
+    """Build a use case whose dedup repo is STATEFUL across ``execute`` calls.
+
+    ``dedup_repo.exists(key)`` returns True once an alert with that ``dedup_key``
+    has been saved — mirroring the production DB unique-constraint gate. This lets
+    a test assert the real collapse/split behaviour end-to-end rather than only at
+    the pure ``compute_dedup_key`` level.
+    """
+    seen_keys: set[str] = set()
+
+    mock_ws = AsyncMock()
+    mock_ws.send_to_user = AsyncMock(return_value=True)
+    mock_cache = AsyncMock()
+    mock_cache.get_watchers = AsyncMock(return_value=watchers)
+
+    mock_dedup_repo = AsyncMock()
+    mock_dedup_repo.exists = AsyncMock(side_effect=lambda key: key in seen_keys)
+
+    mock_alert_repo = AsyncMock()
+
+    def _save(alert: Alert) -> None:
+        seen_keys.add(alert.dedup_key)
+        saved_alerts.append(alert)
+
+    mock_alert_repo.save = AsyncMock(side_effect=_save)
+    mock_pending_repo = AsyncMock()
+    mock_pending_repo.save = AsyncMock()
+    mock_outbox_repo = AsyncMock()
+    mock_outbox_repo.append = AsyncMock()
+
+    mock_session = AsyncMock()
+    mock_session.commit = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_sf = MagicMock()
+    mock_sf.return_value = mock_session
+
+    def _repo_factory(_s):  # type: ignore[no-untyped-def]
+        return mock_alert_repo, mock_pending_repo, mock_dedup_repo, mock_outbox_repo
+
+    return AlertFanoutUseCase(
+        session_factory=mock_sf,
+        watchlist_cache=mock_cache,
+        notification_publisher=mock_ws,
+        repo_factory=_repo_factory,
+    )
+
+
+class TestPredictionDedupKey:
+    @pytest.mark.unit
+    async def test_two_distinct_markets_same_entity_same_window_yield_two_alerts(self) -> None:
+        """Two DISTINCT prediction markets on the SAME entity in one 300s window
+        must each raise their own alert — market_id splits the dedup bucket."""
+        watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
+        saved: list[Alert] = []
+        uc = _make_stateful_use_case(watchers=watchers, saved_alerts=saved)
+
+        # Same entity + same occurred_at (same window bucket), different markets.
+        ev_a = _prediction_event(market_id="0xcondition-AAA", event_id=str(uuid4()))
+        ev_b = _prediction_event(market_id="0xcondition-BBB", event_id=str(uuid4()))
+        await uc.execute(ev_a, _PREDICTION_TOPIC, market_impact_score=0.72)
+        await uc.execute(ev_b, _PREDICTION_TOPIC, market_impact_score=0.72)
+
+        assert len(saved) == 2
+        assert saved[0].dedup_key != saved[1].dedup_key
+
+    @pytest.mark.unit
+    async def test_same_market_repeated_move_same_window_is_deduped(self) -> None:
+        """Repeated moves on the SAME market within one window still collapse
+        (per-market cooldown preserved) — one alert, second suppressed."""
+        watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
+        saved: list[Alert] = []
+        uc = _make_stateful_use_case(watchers=watchers, saved_alerts=saved)
+
+        ev1 = _prediction_event(market_id="0xcondition-SAME", event_id=str(uuid4()))
+        ev2 = _prediction_event(market_id="0xcondition-SAME", event_id=str(uuid4()))
+        await uc.execute(ev1, _PREDICTION_TOPIC, market_impact_score=0.72)
+        result2 = await uc.execute(ev2, _PREDICTION_TOPIC, market_impact_score=0.72)
+
+        assert len(saved) == 1
+        assert result2.suppressed is True
+        assert result2.suppression_reason == "dedup"
+
+    @pytest.mark.unit
+    async def test_different_trigger_same_market_splits(self) -> None:
+        """Distinct triggers on the same market also split the bucket so a
+        new-market signal and a material-move signal don't suppress each other."""
+        watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
+        saved: list[Alert] = []
+        uc = _make_stateful_use_case(watchers=watchers, saved_alerts=saved)
+
+        ev1 = _prediction_event(market_id="0xc", trigger="new_market", event_id=str(uuid4()))
+        ev2 = _prediction_event(market_id="0xc", trigger="material_move", event_id=str(uuid4()))
+        await uc.execute(ev1, _PREDICTION_TOPIC, market_impact_score=0.72)
+        await uc.execute(ev2, _PREDICTION_TOPIC, market_impact_score=0.72)
+
+        assert len(saved) == 2
+
+
+class TestComputeDedupKeyDiscriminator:
+    @pytest.mark.unit
+    def test_discriminator_changes_key(self) -> None:
+        from datetime import UTC, datetime
+
+        from alert.domain.entities import Alert
+
+        entity_id = uuid4()
+        ts = datetime(2026, 7, 9, 10, 0, 0, tzinfo=UTC)
+        key_a = Alert.compute_dedup_key(entity_id, AlertType.PREDICTION, ts, discriminator="0xAAA:material_move")
+        key_b = Alert.compute_dedup_key(entity_id, AlertType.PREDICTION, ts, discriminator="0xBBB:material_move")
+        assert key_a != key_b
+
+    @pytest.mark.unit
+    def test_no_discriminator_matches_legacy_key(self) -> None:
+        """discriminator=None must reproduce the historical per-entity+type key so
+        SIGNAL/GRAPH/CONTRADICTION collapse behaviour is unchanged."""
+        from datetime import UTC, datetime
+
+        from alert.domain.entities import Alert
+
+        entity_id = uuid4()
+        ts = datetime(2026, 7, 9, 10, 0, 0, tzinfo=UTC)
+        legacy = Alert.compute_dedup_key(entity_id, AlertType.SIGNAL, ts)
+        with_none = Alert.compute_dedup_key(entity_id, AlertType.SIGNAL, ts, discriminator=None)
+        assert legacy == with_none

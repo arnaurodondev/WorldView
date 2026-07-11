@@ -613,7 +613,27 @@ class AlertFanoutUseCase:
                 event_time = event_time.replace(tzinfo=UTC)
         except (ValueError, AttributeError, TypeError):
             event_time = now
-        dedup_key = Alert.compute_dedup_key(entity_uuid, alert_type, event_time, self._dedup_window)
+        # PLAN-0056 QA: for PREDICTION alerts, split the dedup bucket by the
+        # concrete market (and trigger) so two DISTINCT prediction markets about
+        # the SAME entity within one window do not collide — one would otherwise
+        # silently suppress the other. For every other alert type the
+        # discriminator stays None, preserving the intended per-entity+type
+        # collapse (SIGNAL/GRAPH/CONTRADICTION). Repeated moves on the SAME
+        # market still share a key here and are additionally rate-limited by the
+        # upstream PredictionRuleEvaluator 1h per-market cooldown.
+        dedup_discriminator: str | None = None
+        if alert_type == AlertType.PREDICTION:
+            market_id = str(event.get("market_id") or "").strip()
+            trigger = str(event.get("trigger") or "").strip().lower()
+            if market_id or trigger:
+                dedup_discriminator = f"{market_id}:{trigger}"
+        dedup_key = Alert.compute_dedup_key(
+            entity_uuid,
+            alert_type,
+            event_time,
+            self._dedup_window,
+            discriminator=dedup_discriminator,
+        )
 
         async with self._sf() as session:
             alert_repo, pending_repo, dedup_repo, outbox_repo = self._repo_factory(session)

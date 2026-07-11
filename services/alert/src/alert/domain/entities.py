@@ -123,15 +123,27 @@ class Alert:
         alert_type: AlertType,
         created_at: datetime,
         window_seconds: int = 300,
+        discriminator: str | None = None,
     ) -> str:
         """Compute dedup key per AD-9: sha256(entity_id + alert_type + window_bucket).
 
         ``source_event_id`` is intentionally excluded so that multiple events
-        about the same entity+type within one window are deduplicated.
+        about the same entity+type within one window are deduplicated (the
+        intended per-entity+type collapse for SIGNAL/GRAPH/CONTRADICTION).
+
+        ``discriminator`` (PLAN-0056 QA) is an optional extra key component that
+        splits the dedup bucket further. For PREDICTION alerts the fanout passes
+        ``market_id`` (+ ``trigger``) here so that two DISTINCT prediction
+        markets referencing the SAME entity within one window each raise their
+        own alert instead of one silently suppressing the other. When ``None``
+        the key is identical to the historical per-entity+type key, so existing
+        collapse behaviour for the other alert types is unchanged.
         """
         epoch = int(created_at.replace(tzinfo=UTC).timestamp())
         window_bucket = epoch // window_seconds
         raw = f"{entity_id}:{alert_type}:{window_bucket}"
+        if discriminator:
+            raw = f"{raw}:{discriminator}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
 
