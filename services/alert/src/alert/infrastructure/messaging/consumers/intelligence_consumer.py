@@ -199,20 +199,40 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         We advance our monotonic poll marker here so the watchdog treats an
         idle-but-cycling loop as alive, then delegate to the base to keep its
         own ``_last_progress_ts`` / Prometheus heartbeat behaviour intact.
+
+        PLAN-0056 live-QA (BUG 5): we ALSO refresh the heartbeat FILE mtime here.
+        Previously the file was only touched on construction + after each
+        processed message, so this consumer — assigned only currently-empty
+        topics (``market.prediction.signal.v1`` / ``intelligence.contradiction.v1``)
+        — never refreshed it and the Docker healthcheck (which stats the file
+        mtime with a 300s freshness window) flipped to ``unhealthy`` forever even
+        though the poll loop was perfectly alive. Refreshing the file on every
+        idle poll cycle keeps an idle-but-alive consumer healthy. We update ONLY
+        the file here (not ``_last_progress_monotonic``, the message-progress
+        marker), so the "last message processed" semantics stay intact.
         """
         self._last_poll_monotonic = time.monotonic()
+        self._write_heartbeat_file()
         super()._record_progress()
 
     def _touch_heartbeat(self) -> None:
-        """Record forward progress for both the watchdog and the healthcheck.
+        """Record message-processing progress for the watchdog + healthcheck.
 
-        Best-effort: a failure to write the heartbeat file must never break
-        message processing. The in-memory monotonic timestamp is the
-        authoritative signal for the in-process watchdog; the file exists only
-        so the *out-of-process* Docker healthcheck can observe liveness without
-        importing application state.
+        Advances the message-progress monotonic marker AND the heartbeat file.
+        Called after each successfully processed message.
         """
         self._last_progress_monotonic = time.monotonic()
+        self._write_heartbeat_file()
+
+    def _write_heartbeat_file(self) -> None:
+        """Refresh the heartbeat file mtime the Docker healthcheck stats.
+
+        Best-effort: a failure to write the heartbeat file must never break
+        message processing OR the poll loop. The in-memory monotonic timestamps
+        are the authoritative signal for the in-process watchdog; the file exists
+        only so the *out-of-process* Docker healthcheck can observe liveness
+        without importing application state.
+        """
         try:
             # `os.utime(..., None)` sets mtime to the current wall-clock time;
             # the healthcheck compares that mtime against `now` for staleness.
