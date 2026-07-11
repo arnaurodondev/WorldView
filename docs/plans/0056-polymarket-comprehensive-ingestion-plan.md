@@ -705,3 +705,32 @@ Post-D1 QA of `PredictionMoveDetector` + the A1 prediction schema (market-data o
   no-"yes"→first outcome; >LIMIT window-start correctness; None window-start skip) + new
   `test_migration_044_*`. Validation: ruff + `mypy services/market-data/src` clean; full market-data suite
   1498 passed / 33 pre-existing e2e+integration+live errors (need live DB — `market_data_db` absent).
+
+## QA fix (2026-07-10) — Waves C2b/C3: append additive Avro fields at the END (rolling-deploy safety, BP-720)
+
+Waves C2b/C3 INSERTED `external_id` (and `source_title`) **MID-record** into three shared Avro records.
+The platform deserializes with `fastavro.schemaless_reader` against the LOCAL reader schema — there is NO
+Schema-Registry writer-schema resolution — so field decode is purely **POSITIONAL**. A rolling deploy where
+the PRODUCER ships new bytes before a CONSUMER image upgrades would make the old consumer misread every
+field after the insertion point (crash or SILENT corruption) across the
+`content.article.raw.v1 → content.article.stored.v1 → nlp.article.enriched.v1` chain.
+
+- **Fix:** moved `external_id` to the END of `content.article.raw.v1.avsc` and `content.article.stored.v1.avsc`,
+  and moved BOTH `external_id` and `source_title` to the END of `nlp.article.enriched.v1.avsc` (type/default
+  unchanged — nullable union `["null","string"]` default null). Updated the byte-identical service-local copy
+  `services/content-ingestion/.../messaging/schemas/content.article.raw.v1.avsc`. Reordered the canonical model
+  `CanonicalNlpArticleEnriched` field declarations + `to_dict` emission order to mirror the new avsc.
+  Field COUNTS unchanged (reorder only) so `EXPECTED_FIELD_COUNTS` stays. Producers build event dicts BY NAME
+  (S4 `fetch_and_write`/`emit_synthetic_prediction_document`, S5 `process_article`/`_build_stored_payload`,
+  S6 `enriched_event`) and the outbox serializer loads the schema file, so serialization stays consistent with
+  no producer code change; fastavro writes from a dict by schema order, so the emitted bytes are identical.
+- **Why safe now:** the feature is NOT in production yet, so fixing field ORDER before any prod deploy means
+  prod only ever sees the END-ordered schema. Local dev may hold a few mid-record messages in Kafka, but the
+  enriched consumer is already start-at-latest + defensive-deserialize (BP-720 part 1/2) and content-store/S6
+  resume at committed offset, so any transient local backlog is already handled — no additional code needed.
+- **Tests:** `tests/contract/test_avro_schemas.py` (article field-count + C2b/C3 round-trip), plus
+  `libs/contracts/tests/test_avro_alignment.py`, `test_avro_tenant_schemas.py`, `test_events_nlp_article_enriched.py`
+  all pass (all field-set/name-based, order-independent). Service unit suites: content-store, content-ingestion,
+  nlp-pipeline (1340 passed), knowledge-graph (1737 passed) all green. Pre-existing unrelated failures logged
+  (`market.dataset.fetched`/`entity.narrative.generated.v1`/`entity.refresh.v1` count+envelope; content-store
+  `test_enums.py::TestSourceType` — untouched schemas/enum). ruff + `mypy libs/contracts` clean. See BP-720 (d).

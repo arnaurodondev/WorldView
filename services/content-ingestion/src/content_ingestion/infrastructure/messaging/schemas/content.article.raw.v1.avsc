@@ -11,7 +11,6 @@
     {"name": "doc_id",          "type": "string",                  "doc": "UUIDv7 document identifier"},
     {"name": "source_type",     "type": "string",                  "doc": "eodhd | sec_edgar | finnhub | newsapi | manual"},
     {"name": "source_url",      "type": ["null", "string"],        "default": null, "doc": "Original article URL"},
-    {"name": "external_id",     "type": ["null", "string"],        "default": null, "doc": "PLAN-0056 Wave C2b: stable upstream market/source identity carried verbatim through S5→S6→KG (e.g. 'polymarket:<condition_id>'). Forward-compat null default per R5. Lets the KG resolve a synthetic prediction doc back to its real market without an R7 cross-DB read."},
     {"name": "minio_bronze_key","type": "string",                  "doc": "MinIO bronze layer object key"},
     {"name": "content_hash",    "type": "string",                  "doc": "SHA-256 hex of raw bytes"},
     {"name": "fetch_id",        "type": "string",                  "doc": "UUIDv7 of article_fetch_log row"},
@@ -24,6 +23,7 @@
       "type": ["null", "string"],
       "default": null,
       "doc": "Owning tenant UUID string. null = public news visible to all tenants. Set only for tenant-uploaded documents."
-    }
+    },
+    {"name": "external_id",     "type": ["null", "string"],        "default": null, "doc": "PLAN-0056 Wave C2b: stable upstream market/source identity carried verbatim through S5→S6→KG (e.g. 'polymarket:<condition_id>'). Forward-compat null default per R5. Lets the KG resolve a synthetic prediction doc back to its real market without an R7 cross-DB read. QA (PLAN-0056, BP-720): APPENDED at the END of the record — with fastavro schemaless/no-registry positional decode, a mid-record insertion breaks old consumers during a rolling deploy; trailing additive fields are ignored safely by old readers."}
   ]
 }

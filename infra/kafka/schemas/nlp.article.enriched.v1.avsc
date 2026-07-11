@@ -11,8 +11,6 @@
     {"name": "doc_id",            "type": "string",                "doc": "Source document ID"},
     {"name": "source_type",       "type": "string"},
     {"name": "source_name",       "type": ["null", "string"],      "default": null, "doc": "Human-readable source label (RSS feed name, EODHD provider, etc.). Forward-compat null default per R5. Added 2026-05-09 (D-INIT-6) so KG enriched_consumer can stamp evidence rows with source provenance without an R7 cross-DB query."},
-    {"name": "external_id",       "type": ["null", "string"],      "default": null, "doc": "PLAN-0056 Wave C2b: stable upstream market/source identity threaded S4→S5→S6 verbatim (e.g. 'polymarket:<condition_id>'). Forward-compat null default per R5. PredictionEnrichedConsumer parses the condition_id out of this so temporal events resolve to a real market instead of an anonymous doc_id."},
-    {"name": "source_title",      "type": ["null", "string"],      "default": null, "doc": "PLAN-0056 Wave C3: the upstream document title copied verbatim from content.article.stored.v1.title (for Polymarket synthetic docs this IS the market question). Forward-compat null default per R5. S7 PredictionEnrichedConsumer uses it as the temporal-event title AND as the input to MarketPolarityClassifier so each (market, entity) exposure gets a bullish/bearish/neutral polarity."},
     {"name": "published_at",      "type": ["null", "string"],      "default": null},
     {"name": "is_backfill",       "type": "boolean",               "default": false},
     {"name": "routing_tier",      "type": "string",                "doc": "suppress | light | medium | deep"},
@@ -35,6 +33,8 @@
       "type": ["null", "string"],
       "default": null,
       "doc": "Owning tenant UUID string. Propagated from content.article.stored.v1."
-    }
+    },
+    {"name": "external_id",       "type": ["null", "string"],      "default": null, "doc": "PLAN-0056 Wave C2b: stable upstream market/source identity threaded S4→S5→S6 verbatim (e.g. 'polymarket:<condition_id>'). Forward-compat null default per R5. PredictionEnrichedConsumer parses the condition_id out of this so temporal events resolve to a real market instead of an anonymous doc_id. QA (PLAN-0056, BP-720): APPENDED at the END of the record — fastavro schemaless/no-registry decode is positional, so mid-record insertion breaks old consumers on a rolling deploy; trailing additive fields are ignored safely by old readers."},
+    {"name": "source_title",      "type": ["null", "string"],      "default": null, "doc": "PLAN-0056 Wave C3: the upstream document title copied verbatim from content.article.stored.v1.title (for Polymarket synthetic docs this IS the market question). Forward-compat null default per R5. S7 PredictionEnrichedConsumer uses it as the temporal-event title AND as the input to MarketPolarityClassifier so each (market, entity) exposure gets a bullish/bearish/neutral polarity. QA (PLAN-0056, BP-720): APPENDED at the END alongside external_id for rolling-deploy positional-decode safety."}
   ]
 }

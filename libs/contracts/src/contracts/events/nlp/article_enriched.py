@@ -57,6 +57,26 @@ class CanonicalNlpArticleEnriched:
     # guaranteed UndefinedTableError because the table only lives in nlp_db.
     # Nullable + default None keeps the schema forward-compatible (R5).
     source_name: str | None = None
+    published_at: str | None = None
+    is_backfill: bool = False
+    relation_count: int = 0
+    claim_count: int = 0
+    event_count: int = 0
+    provisional_entity_count: int = 0
+    extraction_model_id: str | None = None
+    raw_relations_json: str | None = None
+    raw_events_json: str | None = None
+    raw_claims_json: str | None = None
+    correlation_id: str | None = None
+    tenant_id: str | None = None
+    # PLAN-0056 QA (BP-720): external_id/source_title are declared LAST among the
+    # data fields to mirror the Avro record's END-appended order.  The wire schema
+    # is decoded positionally by fastavro (schemaless, no Schema Registry), so
+    # additive fields MUST sit at the tail of the record or a rolling deploy where
+    # the producer ships new bytes before a consumer upgrades misreads every field
+    # after the insertion point.  (Serialization is by-name via to_dict(), so this
+    # declaration order is for consistency/readability with the .avsc — the bytes
+    # come out identical regardless.)
     # PLAN-0056 Wave C2b (2026-07-10): stable upstream market/source identity
     # threaded S4→S5→S6 verbatim (e.g. "polymarket:<condition_id>").  Nullable +
     # default None keeps the schema forward-compatible (R5); legacy producers
@@ -71,18 +91,6 @@ class CanonicalNlpArticleEnriched:
     # input to MarketPolarityClassifier.  Nullable + default None keeps the schema
     # forward-compatible (R5); legacy producers decode to None.
     source_title: str | None = None
-    published_at: str | None = None
-    is_backfill: bool = False
-    relation_count: int = 0
-    claim_count: int = 0
-    event_count: int = 0
-    provisional_entity_count: int = 0
-    extraction_model_id: str | None = None
-    raw_relations_json: str | None = None
-    raw_events_json: str | None = None
-    raw_claims_json: str | None = None
-    correlation_id: str | None = None
-    tenant_id: str | None = None
     event_type: str = field(default="nlp.article.enriched")
     schema_version: int = field(default=1)
 
@@ -137,11 +145,6 @@ class CanonicalNlpArticleEnriched:
             # D-INIT-6: emit source_name even when None so the Avro union picks the
             # null branch rather than complaining about a missing field.
             "source_name": self.source_name,
-            # PLAN-0056 Wave C2b: emit external_id even when None so the Avro union
-            # picks the null branch rather than complaining about a missing field.
-            "external_id": self.external_id,
-            # PLAN-0056 Wave C3: emit source_title even when None (null-branch of the union).
-            "source_title": self.source_title,
             "published_at": self.published_at,
             "is_backfill": self.is_backfill,
             "routing_tier": self.routing_tier,
@@ -160,6 +163,11 @@ class CanonicalNlpArticleEnriched:
             "raw_claims_json": self.raw_claims_json,
             "correlation_id": self.correlation_id,
             "tenant_id": self.tenant_id,
+            # PLAN-0056 QA (BP-720): emit external_id/source_title LAST to mirror the
+            # END-appended Avro record order.  Emitted even when None so the Avro
+            # union picks the null branch rather than reporting a missing field.
+            "external_id": self.external_id,
+            "source_title": self.source_title,
         }
 
 
