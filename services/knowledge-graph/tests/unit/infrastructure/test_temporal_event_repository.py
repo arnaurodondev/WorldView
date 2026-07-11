@@ -219,6 +219,142 @@ class TestTemporalEventRepositoryUpsert:
         assert "RETURNING event_id" in sql_text
 
 
+class TestTemporalEventRepositoryRegionOnlyDedup:
+    """PLAN-0056 QA (FIX 1): dedup_by_region_only collapses a market onto ONE row.
+
+    For prediction events region==condition_id is globally unique, so a market with
+    NO close_time (whose two synthetic docs fall on different active_from days) must
+    still map to a single temporal-event row.
+    """
+
+    def test_region_only_reuses_existing_row_without_second_insert(self) -> None:
+        """An existing (event_type, region) row is UPDATEd, not duplicated by a 2nd INSERT."""
+        from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
+            TemporalEventRepository,
+        )
+
+        existing_id = uuid4()
+        # execute() call 1 = SELECT (returns the existing row); call 2 = UPDATE (no row).
+        select_result = MagicMock()
+        select_result.fetchone.return_value = (str(existing_id),)
+        update_result = MagicMock()
+        update_result.fetchone.return_value = None
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[select_result, update_result])
+        repo = TemporalEventRepository(session)
+
+        returned = _run(
+            repo.upsert_by_natural_key(
+                event_id=uuid4(),  # a fresh id — must be IGNORED in favour of the existing row
+                event_type="prediction",
+                scope="LOCAL",
+                region="0xCONDITION",
+                title="Will X miss earnings?",
+                active_from=_NOW,  # a DIFFERENT day than the first-sight doc — must not matter
+                confidence=0.5,
+                dedup_by_region_only=True,
+            ),
+        )
+
+        assert returned == existing_id  # reused, not a new row
+        assert session.execute.await_count == 2  # SELECT + UPDATE, NO second INSERT
+        first_sql = str(session.execute.call_args_list[0][0][0])
+        second_sql = str(session.execute.call_args_list[1][0][0])
+        assert "SELECT event_id" in first_sql
+        assert "UPDATE temporal_events" in second_sql
+        # active_from is NOT in the UPDATE column set (first-sight timestamp preserved).
+        assert "active_from" not in second_sql
+
+    def test_region_only_inserts_when_no_existing_row(self) -> None:
+        """No existing (event_type, region) row → INSERT (race-guarded by the day index)."""
+        from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
+            TemporalEventRepository,
+        )
+
+        new_id = uuid4()
+        select_result = MagicMock()
+        select_result.fetchone.return_value = None  # no existing market row
+        insert_result = MagicMock()
+        insert_result.fetchone.return_value = (str(new_id),)
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[select_result, insert_result])
+        repo = TemporalEventRepository(session)
+
+        returned = _run(
+            repo.upsert_by_natural_key(
+                event_id=new_id,
+                event_type="prediction",
+                scope="LOCAL",
+                region="0xCONDITION",
+                title="Will X miss earnings?",
+                active_from=_NOW,
+                confidence=0.5,
+                dedup_by_region_only=True,
+            ),
+        )
+
+        assert returned == new_id
+        assert session.execute.await_count == 2  # SELECT + INSERT
+        insert_sql = str(session.execute.call_args_list[1][0][0])
+        assert "INSERT INTO temporal_events" in insert_sql
+        assert "ON CONFLICT" in insert_sql  # same-day race still collapses
+
+    def test_region_only_ignored_when_region_none(self) -> None:
+        """dedup_by_region_only=True but region=None → falls back to the default key path."""
+        from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
+            TemporalEventRepository,
+        )
+
+        event_id = uuid4()
+        session = _make_session(fetchone_return=(str(event_id),))
+        repo = TemporalEventRepository(session)
+
+        _run(
+            repo.upsert_by_natural_key(
+                event_id=event_id,
+                event_type="prediction",
+                scope="LOCAL",
+                region=None,
+                title="anon",
+                active_from=_NOW,
+                confidence=0.5,
+                dedup_by_region_only=True,
+            ),
+        )
+
+        # Single execute (the default INSERT ... ON CONFLICT day-key path), no SELECT.
+        assert session.execute.await_count == 1
+        sql = str(session.execute.call_args[0][0])
+        assert "INSERT INTO temporal_events" in sql
+        assert "date_trunc('day'" in sql
+
+    def test_default_path_uses_date_based_key(self) -> None:
+        """Without the flag, the date-based natural key is used (corporate/earnings safe)."""
+        from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
+            TemporalEventRepository,
+        )
+
+        event_id = uuid4()
+        session = _make_session(fetchone_return=(str(event_id),))
+        repo = TemporalEventRepository(session)
+
+        _run(
+            repo.upsert_by_natural_key(
+                event_id=event_id,
+                event_type="corporate",
+                scope="LOCAL",
+                region="US",
+                title="AAPL Q3 Earnings",
+                active_from=_NOW,
+                confidence=0.9,
+            ),
+        )
+
+        assert session.execute.await_count == 1  # no SELECT — single ON CONFLICT insert
+        sql = str(session.execute.call_args[0][0])
+        assert "date_trunc('day'" in sql
+
+
 class TestTemporalEventRepositoryListActive:
     def test_list_active_empty_returns_zero_total(self) -> None:
         """Empty result set returns ([], 0)."""
@@ -485,8 +621,13 @@ class TestEntityEventExposureRepository:
         assert isinstance(result, UUID)
         session.execute.assert_awaited_once()
 
-    def test_upsert_on_conflict_do_nothing_in_sql(self) -> None:
-        """SQL must contain ON CONFLICT DO NOTHING for idempotent insert."""
+    def test_upsert_on_conflict_fills_null_polarity_in_sql(self) -> None:
+        """SQL must ON CONFLICT DO UPDATE the polarity, guarded to fill only NULLs (FIX 3).
+
+        The old DO NOTHING could never fill a NULL polarity written by an earlier
+        doc that lacked the question; the WHERE-guarded DO UPDATE fills a NULL when
+        better data arrives but never overwrites an already-classified polarity.
+        """
         from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
             EntityEventExposureRepository,
         )
@@ -506,7 +647,10 @@ class TestEntityEventExposureRepository:
 
         sql = str(session.execute.call_args[0][0])
         assert "ON CONFLICT" in sql
-        assert "DO NOTHING" in sql
+        assert "DO UPDATE" in sql
+        # Guard: only fill when the stored polarity is NULL and the incoming is not.
+        assert "entity_event_exposures.polarity IS NULL" in sql
+        assert "EXCLUDED.polarity IS NOT NULL" in sql
 
     def test_upsert_passes_all_params(self) -> None:
         """All params are bound and passed to the DB execute call."""
@@ -562,10 +706,11 @@ class TestEntityEventExposureRepository:
         assert params["evidence_text"] is None
 
     def test_upsert_idempotent_second_call(self) -> None:
-        """Second call with same (event_id, entity_id, exposure_type) is a no-op.
+        """Second call with same (event_id, entity_id, exposure_type) is (near) no-op.
 
-        The SQL ON CONFLICT DO NOTHING ensures no error is raised.
-        Both calls succeed and return the provided exposure_id.
+        The SQL ON CONFLICT DO UPDATE (WHERE polarity IS NULL) ensures no error is
+        raised on the duplicate triple; both calls succeed and return the provided
+        exposure_id (FIX 3 only fills a NULL polarity, never overwrites).
         """
         from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
             EntityEventExposureRepository,

@@ -384,6 +384,15 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 active_until=None,  # market close_time not recoverable from enriched event
                 residual_impact_days=_RESIDUAL_IMPACT_DAYS,
                 confidence=_DEFAULT_EVENT_CONFIDENCE,
+                # PLAN-0056 QA (FIX 1): when the real market identity (condition_id)
+                # is known, region==condition_id is globally unique, so dedup on
+                # (event_type, region) alone — WITHOUT the active_from::day component.
+                # This collapses the first-sight and resolution synthetic docs onto
+                # ONE row even when the market has no close_time (published_at is then
+                # None and each doc falls back to its own occurred_at day). The legacy
+                # anonymous path (condition_id None) keeps the date-based key so
+                # distinct legacy docs are not wrongly merged under region='prediction'.
+                dedup_by_region_only=condition_id is not None,
             )
 
             # (b) ONE exposure per resolved entity (DIRECTLY_AFFECTED). Polarity is
@@ -582,6 +591,14 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         path = schema_path or _ARTICLE_ENRICHED_SCHEMA_PATH
         if raw and raw[:1] == b"\x00" and path:
             return deserialize_confluent_avro(path, raw)  # type: ignore[no-any-return]
+        # R28: log every JSON-fallback hit so a silent decode-path switch is visible
+        # (the Confluent-Avro magic byte 0x00 is absent → this is a plain-JSON record).
+        logger.warning(
+            "prediction_enriched_consumer_json_fallback",
+            schema_path=path,
+            size=len(raw) if raw else 0,
+            first_byte=(raw[:1].hex() if raw else ""),
+        )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:

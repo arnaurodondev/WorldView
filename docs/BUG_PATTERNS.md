@@ -19,7 +19,7 @@
 | [Testing](bug-patterns/testing.md) | `bug-patterns/testing.md` | 28 | pytest, AsyncMock, fixtures, Vitest, pre-commit, CI |
 | [Frontend](bug-patterns/frontend.md) | `bug-patterns/frontend.md` | 48 | React, Next.js, WebSocket/SSE, TypeScript, CSS |
 | [Config & Docker](bug-patterns/config-docker.md) | `bug-patterns/config-docker.md` | 32 | pydantic-settings, Docker, Compose, env vars, images |
-| [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 28 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
+| [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 29 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
 | [Observability](bug-patterns/observability.md) | `bug-patterns/observability.md` | 10 | Prometheus, Grafana, Alertmanager, structlog, OTel |
 | [Workers & Schedulers](bug-patterns/worker-scheduler.md) | `bug-patterns/worker-scheduler.md` | 43 | task scheduling, lease patterns, backfill, watermarks, rate limiting |
 | [API & Contracts](bug-patterns/api-contracts.md) | `bug-patterns/api-contracts.md` | 38 | FastAPI, Pydantic, API contract drift, PRD assumptions, gateways |

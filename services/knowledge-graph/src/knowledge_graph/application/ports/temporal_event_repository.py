@@ -33,6 +33,7 @@ class TemporalEventRepositoryPort(ABC):
         source_url: str | None = None,
         active_until: datetime | None = None,
         residual_impact_days: int = 90,
+        dedup_by_region_only: bool = False,
     ) -> UUID:
         """Upsert a temporal event using the natural deduplication key.
 
@@ -40,6 +41,14 @@ class TemporalEventRepositoryPort(ABC):
         On conflict: updates description, scope, active_until, residual_impact_days,
         confidence, and source_url; leaves event_id, event_type, region, title,
         active_from, and created_at unchanged.
+
+        ``dedup_by_region_only`` (PLAN-0056 QA — FIX 1): when True AND ``region`` is
+        non-NULL, dedup collapses on ``(event_type, region)`` alone (ignoring the
+        ``active_from::day`` component).  Used ONLY for PREDICTION events, where
+        ``region`` is the globally-unique Polymarket condition_id and a missing
+        ``close_time`` would otherwise split one market into duplicate rows across
+        the first-sight and resolution synthetic docs.  Other event types leave this
+        False and keep the date-based key.
 
         Region must be ``None`` (not empty string) for events without a region tag.
         The Avro consumer must convert ``""`` → ``None`` before calling this method.
@@ -123,11 +132,14 @@ class EntityEventExposureRepositoryPort(ABC):
         polarity: str | None = None,
         polarity_confidence: float | None = None,
     ) -> UUID:
-        """Upsert an entity-event exposure link — ON CONFLICT DO NOTHING.
+        """Upsert an entity-event exposure link — ON CONFLICT fills a NULL polarity.
 
         Unique constraint: ``(event_id, entity_id, exposure_type)``.
-        If a row already exists for the triple, the call is a no-op and
-        the existing exposure_id is returned.
+        If a row already exists for the triple, the call is a no-op EXCEPT that a
+        NULL stored polarity is filled when the incoming polarity is non-NULL
+        (PLAN-0056 QA — FIX 3: late-arriving polarity from a later synthetic doc).
+        An already-classified polarity is never overwritten; the existing
+        exposure_id is returned in all cases.
 
         Args:
         ----

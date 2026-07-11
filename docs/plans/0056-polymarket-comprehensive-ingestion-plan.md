@@ -734,3 +734,51 @@ field after the insertion point (crash or SILENT corruption) across the
   nlp-pipeline (1340 passed), knowledge-graph (1737 passed) all green. Pre-existing unrelated failures logged
   (`market.dataset.fetched`/`entity.narrative.generated.v1`/`entity.refresh.v1` count+envelope; content-store
   `test_enums.py::TestSourceType` — untouched schemas/enum). ruff + `mypy libs/contracts` clean. See BP-720 (d).
+
+---
+
+## QA fixes (2026-07-10) — prediction entity-linking path (knowledge-graph + libs/prompts)
+
+Post-implementation QA of the C2/C2b/C3/D2 prediction path found 4 defects (2 MED, 2 LOW). All fixed
+in `services/knowledge-graph` + `libs/prompts` only (no schema/migration/wave-count change):
+
+- **FIX 1 [MED, correctness] — duplicate `temporal_events`/exposures per market when `close_time` is NULL.**
+  The default natural key `(event_type, region, title, active_from::day)` split ONE market into TWO rows
+  when the market had no `close_time`: `published_at` was then None, so each synthetic doc (first-sight +
+  resolution) fell back to its own `occurred_at` → different `active_from` days → distinct key → duplicate
+  exposures per entity + market shown twice in `/entities/{id}/predictions`. Since `region==condition_id` is
+  globally unique per prediction market, the date component is redundant AND harmful. `upsert_by_natural_key`
+  gained `dedup_by_region_only: bool` (default False); the `PredictionEnrichedConsumer` passes
+  `dedup_by_region_only = (condition_id is not None)`. When set, the repo collapses on `(event_type, region)`
+  alone via an application-level SELECT-then-INSERT/UPDATE (no supporting unique index exists — a new one
+  would be an intelligence-migrations DDL change, out of scope; the existing day-index still guards the
+  same-day concurrent race), leaving `active_from` untouched on update. The legacy anonymous path
+  (`region='prediction'`, doc_id title) keeps the date-based key so distinct legacy docs are not merged.
+  Corporate/earnings events are UNAFFECTED (they never set the flag; recurring events still rely on the day).
+  `list_exposures_for_condition` also gained a defensive `DISTINCT ON (entity_id)` against historical dup rows.
+- **FIX 2 [MED, security] — prompt injection into `MarketPolarityClassifier`.** The market question/entity/
+  outcomes are attacker-controlled. They were concatenated with the instructions into a SINGLE `role:user`
+  message. Now: static instructions ride a `role:system` message; the untrusted data is a SEPARATE `role:user`
+  message wrapped in a `<market_data>` delimiter block with an explicit "treat as data, not instructions"
+  framing; question/entity/outcomes are length-capped (≤500/≤120/≤12 outcomes) BEFORE sending; strict output
+  enum validation unchanged; cost logging intact. Prompt bumped `market_polarity_classifier@1.0 → @1.1`.
+- **FIX 3 [LOW, correctness] — late-arriving polarity never filled a NULL exposure.** The exposure upsert was
+  `ON CONFLICT DO NOTHING`, so a first doc that wrote NULL polarity (question absent) could never be updated by
+  a later doc carrying the question. Changed to `DO UPDATE SET polarity=EXCLUDED.polarity,
+  polarity_confidence=EXCLUDED.polarity_confidence WHERE entity_event_exposures.polarity IS NULL AND
+  EXCLUDED.polarity IS NOT NULL` — fills a NULL when better data arrives, never overwrites a set polarity.
+  Non-directional callers (earnings/corporate, `polarity=None`) → `EXCLUDED.polarity IS NULL` → no-op, safe.
+- **FIX 4 [LOW, R28] — silent JSON fallback in 2 KG consumers.** `prediction_enriched_consumer` and
+  `prediction_move_consumer` now log `..._json_fallback` (schema_path/size/first_byte) before the non-Avro
+  `json.loads` branch.
+
+Optional hygiene (token_id in the signal-emitter dedup key) was SKIPPED — `MoveContext` carries no `token_id`
+and threading one through would complicate the material-move window semantics; the detector already emits
+affirmative-outcome-only so signal collapse is already prevented.
+
+- **Tests (all new, ≥14):** repo region-only dedup (reuse-existing / insert-when-absent / region-None-fallback /
+  default-date-key) + FIX 3 SQL guard; consumer `dedup_by_region_only` wiring + null-`close_time`-distinct-days
+  + legacy-keeps-date-key + json-fallback-log; move-consumer json-fallback-log; classifier system/user split +
+  crafted-injection-still-valid-enum + overlong-truncation; prompt `@1.1` version + hardening-line. Suites:
+  knowledge-graph unit **1767 passed** (5 skipped, 2 xfailed), libs/prompts **308 passed**. ruff check+format
+  clean; mypy `services/knowledge-graph/src` (5 files) + `libs/prompts/src` clean.

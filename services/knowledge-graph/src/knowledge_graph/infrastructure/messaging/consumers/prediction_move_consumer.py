@@ -237,6 +237,14 @@ class PredictionMoveConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         path = schema_path or _MOVE_SCHEMA_PATH
         if raw and raw[:1] == b"\x00" and path:
             return deserialize_confluent_avro(path, raw)  # type: ignore[no-any-return]
+        # R28: log every JSON-fallback hit so a silent decode-path switch is visible
+        # (the Confluent-Avro magic byte 0x00 is absent → this is a plain-JSON record).
+        logger.warning(
+            "prediction_move_consumer_json_fallback",
+            schema_path=path,
+            size=len(raw) if raw else 0,
+            first_byte=(raw[:1].hex() if raw else ""),
+        )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:

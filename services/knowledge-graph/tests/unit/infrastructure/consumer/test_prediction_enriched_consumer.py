@@ -363,6 +363,73 @@ class TestPredictionEnrichedConsumerExternalId:
         assert kwargs["region"] == _CONDITION_ID
         assert kwargs["title"] == f"Prediction market {_CONDITION_ID}"
 
+    def test_condition_id_sets_dedup_by_region_only(self) -> None:
+        """PLAN-0056 QA (FIX 1): a recovered condition_id → dedup_by_region_only=True.
+
+        This is what makes a market with NO close_time collapse onto one temporal
+        row: region==condition_id is globally unique, so the active_from::day
+        component of the natural key is dropped for prediction events.
+        """
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+        ):
+            asyncio.run(
+                consumer.process_message(
+                    None,
+                    _make_message(external_id=f"polymarket:{_CONDITION_ID}"),
+                    {},
+                ),
+            )
+        assert event_repo.upsert_by_natural_key.call_args.kwargs["dedup_by_region_only"] is True
+
+    def test_null_close_time_distinct_days_still_one_market_key(self) -> None:
+        """No close_time (published_at absent) + two docs on different days → same region-only key.
+
+        Reproduces the FIX 1 bug scenario: with published_at None each doc falls back
+        to its OWN occurred_at (different wall-clock days), but because the recovered
+        condition_id sets dedup_by_region_only=True and region is identical, both docs
+        target the SAME market row (the repo ignores the differing active_from day).
+        """
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        ext = f"polymarket:{_CONDITION_ID}"
+        # First-sight doc: no close_time (published_at None), occurred_at on day 1.
+        first = _make_message(doc_id=_DOC_ID, external_id=ext, published_at=None)
+        first["occurred_at"] = "2026-07-01T09:00:00+00:00"
+        # Resolution doc: still no close_time, occurred_at on a LATER day.
+        second = _make_message(
+            doc_id="01920000-0000-7000-8000-0000000000dd",
+            external_id=f"polymarket:{_CONDITION_ID}:resolved",
+            published_at=None,
+        )
+        second["occurred_at"] = "2026-07-08T17:00:00+00:00"
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+        ):
+            asyncio.run(consumer.process_message(None, first, {}))
+            asyncio.run(consumer.process_message(None, second, {}))
+
+        k1 = event_repo.upsert_by_natural_key.call_args_list[0].kwargs
+        k2 = event_repo.upsert_by_natural_key.call_args_list[1].kwargs
+        # active_from differs (different occurred_at days) …
+        assert k1["active_from"] != k2["active_from"]
+        # … but both use the region-only key on the SAME condition_id → one market row.
+        assert k1["dedup_by_region_only"] is True
+        assert k2["dedup_by_region_only"] is True
+        assert k1["region"] == k2["region"] == _CONDITION_ID
+
+    def test_legacy_no_condition_id_keeps_date_based_key(self) -> None:
+        """No external_id → dedup_by_region_only=False (legacy anonymous docs stay distinct)."""
+        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+        assert event_repo.upsert_by_natural_key.call_args.kwargs["dedup_by_region_only"] is False
+
     def test_malformed_external_id_falls_back_to_anonymous(self) -> None:
         """A malformed external_id → old anonymous behaviour (region='prediction', doc_id title)."""
         consumer, event_repo, exposure_repo, _ = _make_consumer()
@@ -483,6 +550,18 @@ class TestPredictionEnrichedConsumerResilientDeserialize:
             asyncio.run(consumer._handle_message(msg))
         # Sanity: the base really does classify this as MalformedDataError.
         assert issubclass(MalformedDataError, Exception)
+
+    def test_json_fallback_logs_warning_r28(self) -> None:
+        """R28 (FIX 4): the non-Avro (plain JSON) decode path logs a warning."""
+        import knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer as mod
+
+        consumer, _, _, _ = _make_consumer()
+        raw = b'{"event_id": "x", "source_type": "eodhd"}'  # no 0x00 magic byte → JSON path
+        with patch.object(mod.logger, "warning") as warn:
+            decoded = consumer.deserialize_value(raw)
+        assert decoded["source_type"] == "eodhd"
+        warn.assert_called_once()
+        assert warn.call_args.args[0] == "prediction_enriched_consumer_json_fallback"
 
     def test_non_deserialize_exception_still_propagates(self) -> None:
         """Only deserialize failures are swallowed — genuine processing errors bubble up."""

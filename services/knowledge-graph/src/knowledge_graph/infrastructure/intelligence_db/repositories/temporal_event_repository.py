@@ -48,6 +48,7 @@ class TemporalEventRepository(TemporalEventRepositoryPort):
         source_url: str | None = None,
         active_until: datetime | None = None,
         residual_impact_days: int = 90,
+        dedup_by_region_only: bool = False,
     ) -> UUID:
         """Upsert a temporal event using the natural deduplication key.
 
@@ -66,7 +67,43 @@ class TemporalEventRepository(TemporalEventRepositoryPort):
         independently-triggered NLP enrichment of the same content are
         theoretically possible but rare.  A future ``NULLS NOT DISTINCT`` index
         (PG 15+) would eliminate this gap.
+
+        ``dedup_by_region_only`` (PLAN-0056 QA — FIX 1): for PREDICTION events the
+        ``region`` IS the Polymarket ``condition_id``, which is GLOBALLY UNIQUE per
+        market.  The ``active_from::day`` component of the default natural key is
+        therefore redundant AND harmful: when a market has no ``close_time`` the two
+        synthetic docs (first-sight + resolution) fall back to their own
+        ``occurred_at`` — different wall-clock days — so the day component splits the
+        SAME market into TWO ``temporal_events`` rows, which doubles the entity
+        exposures and shows the market twice in the entity-predictions API.  When
+        this flag is True (and ``region`` is non-NULL) we collapse on
+        ``(event_type, region)`` alone via an application-level upsert (no supporting
+        unique index exists — adding one is an intelligence-migrations DDL change,
+        out of scope here — so we SELECT-then-INSERT/UPDATE, with the existing
+        day-index guarding the same-day concurrent race).  ``active_from`` is left
+        untouched on update so it stays the first-sight timestamp.  The caller sets
+        this ONLY when the real market identity (condition_id) was recovered; the
+        legacy anonymous path (region=='prediction' constant, doc_id in the title)
+        keeps the default date-based key so distinct legacy docs do NOT collapse.
+        Corporate/earnings/macro events keep the default date-based key (their
+        recurring events rely on the day component to stay distinct).
         """
+        if dedup_by_region_only and region is not None:
+            return await self._upsert_by_region_only(
+                event_id=event_id,
+                event_type=event_type,
+                scope=scope,
+                region=region,
+                title=title,
+                active_from=active_from,
+                confidence=confidence,
+                description=description,
+                source_article_ids=source_article_ids,
+                source_url=source_url,
+                active_until=active_until,
+                residual_impact_days=residual_impact_days,
+            )
+
         ids: list[str] = [str(uid) for uid in (source_article_ids or [])]
 
         result = await self._session.execute(
@@ -107,6 +144,124 @@ RETURNING event_id
         )
         from uuid import UUID as _UUID
 
+        row = result.fetchone()
+        return _UUID(str(row[0]))  # type: ignore[index]
+
+    async def _upsert_by_region_only(
+        self,
+        *,
+        event_id: UUID,
+        event_type: str,
+        scope: str,
+        region: str,
+        title: str,
+        active_from: datetime,
+        confidence: float,
+        description: str | None,
+        source_article_ids: list[str] | None,
+        source_url: str | None,
+        active_until: datetime | None,
+        residual_impact_days: int,
+    ) -> UUID:
+        """Upsert collapsing on ``(event_type, region)`` alone (PLAN-0056 QA — FIX 1).
+
+        For PREDICTION events ``region`` is the globally-unique condition_id, so the
+        date component of the default natural key must be ignored (see the caller's
+        docstring).  No unique index backs ``(event_type, region)`` (that would need
+        an intelligence-migrations DDL change), so this does an application-level
+        upsert:
+
+          1. SELECT the existing row for ``(event_type, region)`` (oldest wins — the
+             first-sight doc).  If found, UPDATE the mutable columns on it (leaving
+             ``active_from`` = the first-sight timestamp) and return its event_id.
+          2. Otherwise INSERT a new row.  The INSERT still carries the existing
+             ``ON CONFLICT (event_type, region, title, active_from::day)`` clause so a
+             same-day concurrent race between the two docs collapses to one row
+             rather than raising a duplicate-key error.
+
+        This is not fully race-free across DIFFERENT days under true concurrency, but
+        this consumer is a low-volume (one/two docs per market) single-writer stream
+        with Valkey event-id dedup, so the SELECT-then-INSERT window is safe in
+        practice — and it is strictly better than the previous unconditional
+        duplicate-row behaviour.
+        """
+        from uuid import UUID as _UUID
+
+        existing = await self._session.execute(
+            text("""
+SELECT event_id FROM temporal_events
+WHERE event_type = :event_type AND region = :region
+ORDER BY created_at ASC
+LIMIT 1
+"""),
+            {"event_type": event_type, "region": region},
+        )
+        existing_row = existing.fetchone()
+        if existing_row is not None:
+            existing_id = _UUID(str(existing_row[0]))
+            await self._session.execute(
+                text("""
+UPDATE temporal_events SET
+    scope                = :scope,
+    title                = :title,
+    description          = :description,
+    source_url           = :source_url,
+    active_until         = :active_until,
+    residual_impact_days = :residual_impact_days,
+    confidence           = :confidence,
+    updated_at           = now()
+WHERE event_id = :existing_id
+"""),
+                {
+                    "existing_id": str(existing_id),
+                    "scope": scope,
+                    "title": title,
+                    "description": description,
+                    "source_url": source_url,
+                    "active_until": active_until,
+                    "residual_impact_days": residual_impact_days,
+                    "confidence": confidence,
+                },
+            )
+            return existing_id
+
+        ids: list[str] = [str(uid) for uid in (source_article_ids or [])]
+        result = await self._session.execute(
+            text("""
+INSERT INTO temporal_events (
+    event_id, event_type, scope, region, title, description,
+    source_article_ids, source_url, active_from, active_until,
+    residual_impact_days, confidence
+) VALUES (
+    :event_id, :event_type, :scope, :region, :title, :description,
+    :source_article_ids, :source_url, :active_from, :active_until,
+    :residual_impact_days, :confidence
+)
+ON CONFLICT (event_type, region, title, date_trunc('day', timezone('UTC', active_from))) DO UPDATE SET
+    scope                = EXCLUDED.scope,
+    description          = EXCLUDED.description,
+    source_url           = EXCLUDED.source_url,
+    active_until         = EXCLUDED.active_until,
+    residual_impact_days = EXCLUDED.residual_impact_days,
+    confidence           = EXCLUDED.confidence,
+    updated_at           = now()
+RETURNING event_id
+"""),
+            {
+                "event_id": str(event_id),
+                "event_type": event_type,
+                "scope": scope,
+                "region": region,
+                "title": title,
+                "description": description,
+                "source_article_ids": ids,
+                "source_url": source_url,
+                "active_from": active_from,
+                "active_until": active_until,
+                "residual_impact_days": residual_impact_days,
+                "confidence": confidence,
+            },
+        )
         row = result.fetchone()
         return _UUID(str(row[0]))  # type: ignore[index]
 
@@ -266,6 +421,16 @@ class EntityEventExposureRepository(EntityEventExposureRepositoryPort):
         default to None so existing non-directional callers (earnings, macro,
         geopolitical) keep NULL polarity — the ``ck_exposure_polarity`` CHECK
         allows NULL. The Wave C3 classifier supplies 'bullish'/'bearish'/'neutral'.
+
+        Late-arriving polarity (PLAN-0056 QA — FIX 3): the first synthetic doc for a
+        market may lack the question (source_title) so the classifier is skipped and
+        the exposure is written with NULL polarity.  A later doc that DOES carry the
+        question must be able to fill that NULL.  The ON CONFLICT therefore
+        ``DO UPDATE`` the polarity, but ONLY when the stored polarity is NULL and the
+        incoming polarity is non-NULL — so a NULL is filled by better data while an
+        already-classified polarity is NEVER overwritten.  Non-directional callers
+        pass ``polarity=None`` → ``EXCLUDED.polarity IS NULL`` → the WHERE clause is
+        false → no-op (identical to the old DO NOTHING, safe for earnings/macro).
         """
         await self._session.execute(
             text("""
@@ -276,7 +441,11 @@ INSERT INTO entity_event_exposures (
     :exposure_id, :event_id, :entity_id, :exposure_type, :confidence, :evidence_text,
     :polarity, :polarity_confidence
 )
-ON CONFLICT (event_id, entity_id, exposure_type) DO NOTHING
+ON CONFLICT (event_id, entity_id, exposure_type) DO UPDATE SET
+    polarity            = EXCLUDED.polarity,
+    polarity_confidence = EXCLUDED.polarity_confidence
+WHERE entity_event_exposures.polarity IS NULL
+  AND EXCLUDED.polarity IS NOT NULL
 """),
             {
                 "exposure_id": str(exposure_id),
@@ -306,10 +475,16 @@ ON CONFLICT (event_id, entity_id, exposure_type) DO NOTHING
 
         Returns ``(question, rows)``; ``rows`` is empty (and ``question`` None)
         when the market is not linked to any entity — the caller no-ops.
+
+        PLAN-0056 QA (FIX 1): the write-side natural-key fix guarantees ONE
+        temporal-event row per market, but ``DISTINCT ON (eee.entity_id)`` is kept as
+        belt-and-suspenders against any historical duplicate rows left by the old
+        bug — so an entity is returned at most once (preferring the most-recently
+        classified exposure).
         """
         result = await self._session.execute(
             text("""
-SELECT
+SELECT DISTINCT ON (eee.entity_id)
     eee.entity_id,
     eee.polarity,
     eee.polarity_confidence,
@@ -319,6 +494,7 @@ FROM entity_event_exposures eee
 JOIN temporal_events te ON te.event_id = eee.event_id
 WHERE te.event_type = 'prediction'
   AND te.region = :condition_id
+ORDER BY eee.entity_id, eee.polarity IS NULL, te.created_at DESC
 """),
             {"condition_id": condition_id},
         )

@@ -192,3 +192,15 @@ class TestPredictionMoveConsumerPlumbing:
         consumer, _, _, _ = _make_consumer()
         assert consumer.get_schema_path("market.prediction.move.v1") is not None
         assert consumer.get_schema_path("other.topic") is None
+
+    def test_json_fallback_logs_warning_r28(self) -> None:
+        """R28 (FIX 4): the non-Avro (plain JSON) decode path logs a warning."""
+        import knowledge_graph.infrastructure.messaging.consumers.prediction_move_consumer as mod
+
+        consumer, _, _, _ = _make_consumer()
+        raw = b'{"event_id": "x", "market_id": "0xabc"}'  # no 0x00 magic byte → JSON path
+        with patch.object(mod.logger, "warning") as warn:
+            decoded = consumer.deserialize_value(raw)
+        assert decoded["market_id"] == "0xabc"
+        warn.assert_called_once()
+        assert warn.call_args.args[0] == "prediction_move_consumer_json_fallback"
