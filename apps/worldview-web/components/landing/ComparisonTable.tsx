@@ -126,7 +126,9 @@ const ROWS: Row[] = [
 ];
 
 const PRICES = {
-  worldview: "$0–49",
+  // 2026-07 rework: Worldview is free during public beta — no invented price
+  // band (the old "$0–49" implied a paid plan that isn't backed by billing).
+  worldview: "Free · beta",
   bloomberg: "$2,000+",
   ibkr: "$0",
   tradingview: "$15–60",

@@ -21,7 +21,7 @@ const COLUMNS: Array<{ heading: string; links: Array<{ label: string; href: stri
       { label: "Workspace", href: "/login" },
       { label: "Screener", href: "/login?next=/screener" },
       { label: "AI chat", href: "/login?next=/chat" },
-      { label: "Pricing", href: "/#pricing" },
+      { label: "Beta access", href: "/#access" },
     ],
   },
   {
@@ -38,7 +38,7 @@ const COLUMNS: Array<{ heading: string; links: Array<{ label: string; href: stri
     links: [
       { label: "About", href: "/docs/about" },
       { label: "Status", href: "/status" },
-      { label: "Contact", href: "mailto:hello@worldview-labs.com" },
+      { label: "Contact", href: "mailto:support@worldview-labs.com" },
       { label: "Feedback", href: "/feedback" },
     ],
   },

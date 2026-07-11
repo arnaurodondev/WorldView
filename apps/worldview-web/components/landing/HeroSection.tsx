@@ -96,7 +96,7 @@ export function HeroSection() {
               text-muted-foreground for AA contrast on this informational
               sub-CTA copy. */}
           <p className="mt-5 text-xs text-muted-foreground">
-            No credit card · 5-minute setup · Free tier included
+            No credit card · 5-minute setup · Free during beta
           </p>
         </div>
 
