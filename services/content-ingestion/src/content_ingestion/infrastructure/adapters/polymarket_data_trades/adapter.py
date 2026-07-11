@@ -146,12 +146,39 @@ class PolymarketTradesAdapter:
                     limit=self._settings.page_size,
                     offset=offset,
                 )
-            except AdapterError:
+            except AdapterError as exc:
+                # End-of-data fallback: the Data-API ``/trades`` endpoint returns
+                # HTTP 400 once the paginated offset exceeds available history
+                # (~offset 3500 for high-volume markets). This is a NORMAL
+                # end-of-pagination signal, NOT a fatal error — treating it as
+                # fatal previously DISCARDED every trade collected this cycle and
+                # failed the whole task (prediction_market_trades stuck at 0).
+                #
+                # We cannot cleanly distinguish an offset-exhausted 400 from a
+                # genuine bad-request 400 by body shape, so we mirror the CLOB
+                # resolved-market benign-400 handling: a 400 AFTER at least one
+                # successful page is end-of-data (break, keep collected trades);
+                # a 400 on the FIRST page is a real error (re-raise → retryable).
+                if exc.status_code == 400 and page_count >= 1:
+                    logger.info(
+                        "polymarket_trades_end_of_data_400",
+                        condition_id=condition_id,
+                        offset=offset,
+                        pages=page_count,
+                        collected=len(results),
+                    )
+                    break
                 raise
             except Exception as exc:
                 raise AdapterError(f"Trades API fetch failed: {exc}") from exc
 
             page_count += 1
+
+            # Empty page → no more trades to paginate. ``has_more`` already
+            # covers the full-page heuristic, but an explicitly empty page is an
+            # unambiguous end-of-data signal; break and keep collected trades.
+            if not page.trades:
+                break
 
             for trade in page.trades:
                 # B4: thread the parent conditionId so the trade carries market_id.

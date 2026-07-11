@@ -189,6 +189,70 @@ class TestPolymarketTradesAdapter:
         # stub returning False, so each of 3 pages yields the trade (dedup is DB-level).
         assert len(results) == 3
 
+    async def test_end_of_data_400_after_page_returns_collected(self) -> None:
+        """PLAN-0056 QA: a 400 after ≥1 successful page = end-of-data, keep trades.
+
+        The Data-API ``/trades`` endpoint returns HTTP 400 once the paginated
+        offset exceeds available history. Page 1 returns trades (200), page 2
+        returns 400 → the adapter must break and RETURN the page-1 trades, NOT
+        raise (which previously discarded all collected trades + failed the task).
+        """
+        client = MagicMock()
+        client.fetch_trades_page = AsyncMock(
+            side_effect=[
+                TradesPage(trades=[_trade("0xt1")], has_more=True),
+                AdapterError("Trades API HTTP 400", status_code=400),
+            ]
+        )
+        adapter = _make_adapter(client, settings=_adapter_settings(page_size=1, max_pages=20))
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source(["cond_eod"]))
+
+        assert len(results) == 1
+        assert results[0].trade_id == "0xt1"
+        assert client.fetch_trades_page.await_count == 2
+
+    async def test_400_on_first_page_still_raises(self) -> None:
+        """A 400 on the FIRST page is a genuine error and must re-raise."""
+        client = MagicMock()
+        client.fetch_trades_page = AsyncMock(side_effect=AdapterError("Trades API HTTP 400", status_code=400))
+        adapter = _make_adapter(client)
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT), pytest.raises(AdapterError, match="400"):
+            await adapter.fetch(_source(["cond_bad"]))
+
+    async def test_empty_page_breaks_pagination(self) -> None:
+        """An explicitly empty page ends pagination and keeps collected trades."""
+        client = MagicMock()
+        client.fetch_trades_page = AsyncMock(
+            side_effect=[
+                TradesPage(trades=[_trade("0xt1")], has_more=True),
+                TradesPage(trades=[], has_more=True),
+            ]
+        )
+        adapter = _make_adapter(client, settings=_adapter_settings(page_size=1, max_pages=20))
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source(["cond_empty"]))
+
+        assert len(results) == 1
+        assert client.fetch_trades_page.await_count == 2
+
+    async def test_non_400_error_still_raises(self) -> None:
+        """A non-400 AdapterError (e.g. 500) after a page still re-raises."""
+        client = MagicMock()
+        client.fetch_trades_page = AsyncMock(
+            side_effect=[
+                TradesPage(trades=[_trade("0xt1")], has_more=True),
+                AdapterError("Trades API HTTP 500", status_code=500),
+            ]
+        )
+        adapter = _make_adapter(client, settings=_adapter_settings(page_size=1, max_pages=20))
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT), pytest.raises(AdapterError, match="500"):
+            await adapter.fetch(_source(["cond_500"]))
+
     async def test_dedup_skips_existing_trade(self) -> None:
         client = MagicMock()
         client.fetch_trades_page = AsyncMock(return_value=TradesPage(trades=[_trade("0xdup")], has_more=False))
