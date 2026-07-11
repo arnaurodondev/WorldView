@@ -290,6 +290,7 @@ async def _complete_oidc_login(request: Request, code: str, code_verifier: str) 
 
     access_token: str = token_data.get("access_token", "")
     refresh_token_value: str = token_data.get("refresh_token", "")
+    id_token_value: str = token_data.get("id_token", "")
     expires_in: int = int(token_data.get("expires_in", 900))
 
     # 5. Validate access_token signature using Zitadel JWKS
@@ -314,11 +315,34 @@ async def _complete_oidc_login(request: Request, code: str, code_verifier: str) 
             content={"error": "invalid_token", "detail": "Access token validation failed"},
         )
 
-    # 6. Extract user claims
+    # 5b. Decode the ID token for profile claims. Zitadel's JWT ACCESS token does NOT
+    # carry email/profile — those live in the ID token (standard OIDC). Provisioning
+    # needs a valid email (S1 rejects an empty one with 422). Validate the ID token
+    # against the same JWKS (aud = client_id) and prefer its claims; fall back to the
+    # access-token claims if the ID token is absent/invalid.
+    id_claims: dict[str, Any] = {}
+    if id_token_value:
+        try:
+            id_header = jwt.get_unverified_header(id_token_value)
+            id_key = oidc_config.public_keys.get(id_header.get("kid", "default")) or public_key
+            id_claims = jwt.decode(  # type: ignore[assignment]
+                id_token_value,
+                id_key,
+                algorithms=["RS256"],
+                options={"require": ["sub", "exp", "iss"]},
+                audience=settings.oidc_client_id,
+                issuer=oidc_config.issuer,
+            )
+        except jwt.InvalidTokenError as exc:
+            logger.warning("id_token_invalid", action="login", result="error", reason=str(exc))
+            id_claims = {}
+
+    # 6. Extract user claims — prefer the ID token for profile fields (email/username).
+    profile: dict[str, Any] = id_claims or claims
     sub: str = claims["sub"]
-    email: str = claims.get("email", "")
-    email_verified: bool = bool(claims.get("email_verified", False))
-    preferred_username: str = claims.get("preferred_username", "")
+    email: str = profile.get("email", "") or claims.get("email", "")
+    email_verified: bool = bool(profile.get("email_verified", claims.get("email_verified", False)))
+    preferred_username: str = profile.get("preferred_username", "") or claims.get("preferred_username", "")
     # F-Q2-01: resolve the OIDC role claim once at callback time so we can
     # cache it alongside user_id/tenant_id. OIDCAuthMiddleware also resolves
     # role on every request, but caching it here means /v1/auth/me and any
