@@ -72,15 +72,18 @@ class Timing:
     def __init__(self, fast: bool):
         self.fast = fast
         self.short = 0.5 if fast else 1.5
-        self.medium = 0.5 if fast else 3.0
-        self.long = 0.5 if fast else 5.0
-        self.type_delay_ms = 0 if fast else 45
-        # How long to wait for a streamed chat answer before giving up on the
-        # "Stop generating" affordance and moving on.
-        # Even in --fast we must let a real streamed answer finish before the
-        # next message (the composer is disabled mid-stream), so keep this
-        # generous in both modes; only the pauses/typing are collapsed.
-        self.stream_timeout_ms = 45000 if fast else 90000
+        self.medium = 0.5 if fast else 2.5
+        self.long = 0.5 if fast else 3.5
+        self.type_delay_ms = 0 if fast else 35
+        # Maximum wait for streaming to *start* (first "Stop generating" appearance).
+        self.stream_start_timeout_ms = 6000 if fast else 15000
+        # How long to *show* the streaming answer before clicking "Stop generating".
+        # We interrupt mid-stream deliberately to keep the demo under 2.5 minutes;
+        # the partial answer is still inspectable and demonstrates the capability.
+        self.stream_show_s = 3 if fast else 25
+        # Fallback wait when no "Stop generating" button ever appears (very fast or
+        # cached answer delivered synchronously before button can render).
+        self.stream_timeout_ms = 45000 if fast else 60000
 
 
 # ---------------------------------------------------------------------------
@@ -405,11 +408,26 @@ def _send_chat(page: Page, question: str, t: Timing, step: str) -> bool:
     # Streaming shows a "Stop generating" button; wait for it to appear then
     # disappear. If it never appears (very fast answer / non-streaming), just
     # fall through after a fixed wait.
+    # Wait for streaming to start (Stop-generating button appears).
     stop_btn = page.get_by_role("button", name="Stop generating")
+    streaming_started = False
     try:
-        stop_btn.wait_for(state="visible", timeout=6000)
-        stop_btn.wait_for(state="hidden", timeout=t.stream_timeout_ms)
+        stop_btn.wait_for(state="visible", timeout=t.stream_start_timeout_ms)
+        streaming_started = True
     except PWTimeout:
+        pass
+
+    if streaming_started:
+        # Show the streaming answer for demo_show_s seconds, then interrupt.
+        time.sleep(t.stream_show_s)
+        try:
+            if stop_btn.is_visible():
+                stop_btn.click()  # clean stop — composer re-enables faster than an abandon
+                stop_btn.wait_for(state="hidden", timeout=6000)
+        except Exception as exc:
+            _ = exc  # best-effort stop; compose re-enables on its own if this fails
+    else:
+        # Button never appeared; either answer was instant or stream failed.
         time.sleep(t.medium if t.fast else t.long)
     return True
 
@@ -417,6 +435,9 @@ def _send_chat(page: Page, question: str, t: Timing, step: str) -> bool:
 def step_chat_exposure(page: Page, t: Timing) -> bool:
     """Workflow II: portfolio/graph exposure question."""
     step = "03-chat"
+    # Scroll back to top so the sidebar link is not behind the bottom of the viewport.
+    page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
+    time.sleep(0.3)
     if not click_nav(page, "/chat", t):
         log_fail(step, "could not client-side navigate to /chat")
         shot(page, step)
