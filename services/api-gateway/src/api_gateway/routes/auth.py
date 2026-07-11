@@ -343,6 +343,60 @@ async def _complete_oidc_login(request: Request, code: str, code_verifier: str) 
     email: str = profile.get("email", "") or claims.get("email", "")
     email_verified: bool = bool(profile.get("email_verified", claims.get("email_verified", False)))
     preferred_username: str = profile.get("preferred_username", "") or claims.get("preferred_username", "")
+
+    # 6b. UserInfo fallback. Zitadel by default does NOT embed the email/profile
+    # claims in either the access token or the ID token — it exposes them only at the
+    # OIDC /userinfo endpoint (the app-level "Userinfo inside ID Token" toggle is off
+    # by default). S1 provisioning requires a real email (EmailStr), so an empty one
+    # 422s the whole login. When the tokens didn't carry an email, fetch it from
+    # /userinfo with the access token as Bearer — the canonical, config-independent
+    # source of the user's profile claims.
+    if not email:
+        userinfo_url = f"{oidc_config.issuer.rstrip('/')}/oidc/v1/userinfo"
+        try:
+            ui_resp = await httpx_client.get(
+                userinfo_url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10.0,
+            )
+            if ui_resp.status_code == 200:
+                userinfo: dict[str, Any] = ui_resp.json()
+                email = userinfo.get("email", "") or email
+                email_verified = bool(userinfo.get("email_verified", email_verified))
+                preferred_username = (
+                    userinfo.get("preferred_username", "")
+                    or userinfo.get("name", "")
+                    or preferred_username
+                )
+            else:
+                logger.warning(
+                    "userinfo_fetch_failed",
+                    action="login",
+                    status=ui_resp.status_code,
+                    result="error",
+                )
+        except Exception as exc:  # — userinfo is best-effort; provision still guards email
+            logger.warning("userinfo_error", action="login", error=str(exc), result="error")
+
+    # If the email is STILL unresolved, fail fast with a precise reason. This means
+    # Zitadel released no email claim anywhere (token or userinfo) — an IdP-config
+    # issue (missing email scope grant, or the user has no verified email), NOT a
+    # transient outage. Surfacing it distinctly avoids masquerading as a 503.
+    if not email:
+        logger.error(
+            "email_unresolved",
+            action="login",
+            sub=sub,
+            has_id_token=bool(id_token_value),
+            result="error",
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "email_unresolved",
+                "detail": "Identity provider returned no email claim for this user",
+            },
+        )
     # F-Q2-01: resolve the OIDC role claim once at callback time so we can
     # cache it alongside user_id/tenant_id. OIDCAuthMiddleware also resolves
     # role on every request, but caching it here means /v1/auth/me and any
