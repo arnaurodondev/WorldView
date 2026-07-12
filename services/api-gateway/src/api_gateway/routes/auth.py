@@ -364,9 +364,7 @@ async def _complete_oidc_login(request: Request, code: str, code_verifier: str) 
                 email = userinfo.get("email", "") or email
                 email_verified = bool(userinfo.get("email_verified", email_verified))
                 preferred_username = (
-                    userinfo.get("preferred_username", "")
-                    or userinfo.get("name", "")
-                    or preferred_username
+                    userinfo.get("preferred_username", "") or userinfo.get("name", "") or preferred_username
                 )
             else:
                 logger.warning(
