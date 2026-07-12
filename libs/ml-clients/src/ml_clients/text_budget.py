@@ -65,12 +65,14 @@ _UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
 _TOKENS_PER_UNICODE_ESCAPE = 6
 
 # Conservative token budget for BAAI/bge-large-en-v1.5 (hard limit 512).
-# 480 leaves >=32 tokens of headroom below the model's 512-token ceiling so that
-# the estimator's residual error (it under-counts only for exotic Unicode, which
-# our financial corpus barely contains) can never push the REAL count over 512.
-# The audit proved 1100 dense chars (real ~<512 tokens) returns 200; our 480-token
-# budget truncates dense text well below that boundary (~870 chars) — strictly safer.
-MAX_TOKENS = 480
+# BP-723: 480 was NOT safe for dense SEC-filing XBRL. The estimator's ceil(word_len/3)
+# (~3 chars/token) under-counts BGE WordPiece tokens for concatenated PascalCase XBRL
+# tags, long CIK/date digit-runs, and URLs (~2.3 chars/token), so truncating to est-480
+# left ~513 REAL tokens → DeepInfra HTTP 400 ("513 input tokens... context is only 512").
+# This abandoned 664 embeddings (all at retry_count=5) from one filings backfill.
+# 360 was proven on 48 real stuck rows (0 failures; ~50-token real headroom under 512);
+# normal news/earnings chunks are 280-325 tokens and never hit the cap.
+MAX_TOKENS = 360
 
 # Hard character backstop applied IN ADDITION to the token budget.  Even though
 # the token budget is the binding constraint for dense text, a char cap bounds the
