@@ -89,7 +89,7 @@ groups:
       #
       # Root cause: the shared OutboxDispatcher component registers its own
       # outbox_dispatcher_outbox_dispatched_total metric, which is re-exported
-      # on the host service's scrape endpoint (e.g., portfolio:8000). That
+      # on the host service's scrape endpoint (e.g., portfolio:8001). That
       # produces two matching __name__ values per (job, instance) pair — the
       # service-prefixed metric AND outbox_dispatcher_outbox_dispatched_total.
       # After rate() drops __name__, both series are identical, causing the

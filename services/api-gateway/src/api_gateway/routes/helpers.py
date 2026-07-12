@@ -205,7 +205,7 @@ def _infer_service_name(resp: httpx.Response) -> str:
 
     Used only for the server-side log entry when sanitizing a 5xx — never
     surfaced to the client. The downstream httpx clients are constructed with
-    per-service base URLs (e.g. ``http://portfolio:8000``), so the URL host is a
+    per-service base URLs (e.g. ``http://portfolio:8001``), so the URL host is a
     reliable, zero-maintenance label that stays correct even for route files
     that fan out to several services. Falls back to ``"upstream"`` if the
     request URL is unavailable (e.g. a synthesised response in a unit test).

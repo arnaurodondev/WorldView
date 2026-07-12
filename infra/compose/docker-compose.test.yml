@@ -266,10 +266,12 @@ services:
         condition: service_completed_successfully
     env_file:
       - ../../services/portfolio/configs/docker.env
+    # Portfolio (S1) binds 8001 in-container (Dockerfile CMD --port 8001). Publish +
+    # probe 8001 so the healthcheck matches the listener (prod-readiness port fix).
     ports:
-      - "8001:8000"
+      - "8001:8001"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/readyz')"]
       interval: 10s
       timeout: 5s
       start_period: 20s

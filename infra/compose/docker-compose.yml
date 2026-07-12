@@ -426,12 +426,19 @@ services:
         condition: service_completed_successfully
       api-gateway:
         condition: service_healthy
+    # Portfolio (S1) binds 8001 inside the container — the platform convention
+    # (config.py default port=8001, every inter-service client, the gateway
+    # API_GATEWAY_PORTFOLIO_URL, and the Dockerfile CMD/EXPOSE/HEALTHCHECK all use
+    # 8001). Prod-readiness fix: 8759c547d moved the Dockerfile CMD to --port 8001
+    # but left this ``8001:8000`` mapping + the :8000 healthcheck, so the container
+    # listened on 8001 while the healthcheck (and gateway) dialed 8000 → refused →
+    # container false-unhealthy and /v1/portfolios 500. Publish + probe 8001.
     ports:
-      - "8001:8000"
+      - "8001:8001"
     env_file:
       - ../../services/portfolio/configs/docker.env
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/readyz')"]
       interval: 30s
       timeout: 5s
       start_period: 20s
