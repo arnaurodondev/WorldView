@@ -217,6 +217,30 @@ class PolymarketTradesProviderSettings(BaseModel):
     # Poll cadence (PRD-0033 §4.2): trades are high-churn — hourly.
     poll_interval_seconds: float = Field(default=3600.0, ge=60.0)
 
+    # ── PLAN-0056 QA — incremental + bounded trades ingestion ────────────────
+    # ROOT CAUSE of ``prediction_market_trades = 0`` forever: the trades task
+    # re-fetched the FULL trade history (offset 0 → ~3500) for EVERY work-list
+    # market EVERY cycle, doing a per-trade MinIO put + one final commit. With
+    # ~100 markets this blew even the 900s Polymarket task timeout → the task was
+    # marked RETRY, restarted from market 1, and — because nothing committed
+    # before the timeout — the cursor/fetch_log never bootstrapped → deterministic
+    # deadlock (0 trades EVER persisted).
+    #
+    # Fix = INCREMENTAL (per-market cursor: only NEW trades since last-seen ts) +
+    # BOUNDED (a rotating window of markets per cycle, a trade cap per market) +
+    # INCREMENTALLY-COMMITTED (per-market cursor commit survives a timeout/retry).
+    #
+    # ``markets_per_cycle``: how many work-list markets one trades task processes
+    # per run (round-robin via the ``trades_market_offset`` config cursor). Bounds
+    # the per-cycle fan-out so a task comfortably fits under the 900s timeout.
+    markets_per_cycle: int = Field(default=25, ge=1, le=1000)
+    # ``max_trades_per_market_per_cycle``: cap on NEW trades collected per market
+    # per cycle. On the FIRST cycle for a market (no cursor) this bounds the
+    # backfill to the most-recent N trades within ``backfill_days`` — a BOUNDED
+    # backfill, NOT the full historical depth. In steady state (hourly cadence) a
+    # market rarely accrues this many trades, so the cap is a safety backstop.
+    max_trades_per_market_per_cycle: int = Field(default=500, ge=1, le=50000)
+
 
 class PolymarketOIProviderSettings(BaseModel):
     """Operational parameters for the Polymarket Data-API open-interest stream (daily)."""

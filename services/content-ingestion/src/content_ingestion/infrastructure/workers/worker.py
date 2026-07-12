@@ -308,6 +308,14 @@ class WorkerProcess:
             await self._execute_polymarket_task(task)
             return
 
+        # PLAN-0056 QA: trades get a DEDICATED incremental+bounded path (per-market
+        # cursor, rotating market window, per-market commit) to fix the 900s
+        # timeout deadlock that kept prediction_market_trades stuck at 0. The
+        # other three deeper streams keep the generic single-pass path.
+        if task.source_type == SourceType.POLYMARKET_DATA_TRADES:
+            await self._execute_trades_stream_task(task)
+            return
+
         if task.source_type in _PREDICTION_STREAM_SOURCE_TYPES:
             await self._execute_prediction_stream_task(task)
             return
@@ -937,6 +945,212 @@ class WorkerProcess:
                 skipped=summary.skipped,
                 failed=summary.failed,
                 duration=summary.duration_seconds,
+            )
+
+    # ── PLAN-0056 QA — incremental + bounded trades stream ────────────────────
+
+    async def _execute_trades_stream_task(self, task: ContentIngestionTask) -> None:
+        """Execute the Polymarket ``/trades`` task INCREMENTALLY and BOUNDED.
+
+        ROOT CAUSE (fixed here): the generic single-pass path re-fetched the FULL
+        trade history (offset 0 → ~3500) for EVERY work-list market EVERY cycle
+        with a per-trade MinIO put + one final commit. With ~100 markets that blew
+        even the 900s Polymarket timeout → RETRY → restart from market 1 → nothing
+        committed → the cursor never bootstrapped → 0 trades EVER persisted.
+
+        This path instead:
+        1. Marks RUNNING.
+        2. Reads the ``markets`` work-list + persisted ``trade_cursors`` +
+           ``trades_market_offset`` from ``sources.config`` (short session, closed
+           before I/O — R24).
+        3. Processes a ROTATING WINDOW of ``markets_per_cycle`` markets (round-robin
+           via ``trades_market_offset``) so one task fits comfortably under 900s.
+        4. Per market: fetches ONLY NEW trades since the cursor (bounded by the
+           trade cap), writes them under the ``s4:fetch`` advisory lock (the use
+           case commits per trade — R8 outbox), then COMMITS the advanced cursor +
+           rotation offset. A timeout after market K leaves markets 1..K's trades
+           AND cursors durably committed and resumes at K+1 next cycle.
+        """
+        import time as _time
+
+        from content_ingestion.application.use_cases.fetch_and_write_prediction_streams import (
+            PREDICTION_TRADE_SPEC,
+            FetchAndWritePredictionStreamUseCase,
+        )
+        from content_ingestion.domain.entities import Source
+        from content_ingestion.infrastructure.adapters.polymarket_data_trades.adapter import PolymarketTradesAdapter
+        from content_ingestion.infrastructure.adapters.polymarket_data_trades.client import PolymarketTradesClient
+
+        # SourceRepository is imported at module level (patchable in tests).
+
+        # 1. Mark RUNNING.
+        async with self._write_factory() as session:
+            task_repo = TaskRepository(session)
+            try:
+                task.start()
+                await task_repo.update_status(task.id, task.status)
+                await session.commit()
+            except Exception as exc:
+                await session.rollback()
+                logger.error("trades_stream_task_start_failed", task_id=str(task.id), error=str(exc))
+                return
+
+        # 2. Load the live source config (work-list + cursors + rotation offset).
+        async with self._write_factory() as config_session:
+            source_model = await SourceRepository(config_session).get_by_id(task.source_id)
+            source_config = dict(source_model.config) if source_model and source_model.config else {}
+        source = Source(
+            id=task.source_id,
+            name=task.source_name,
+            source_type=task.source_type,
+            enabled=True,
+            config=source_config,
+        )
+        all_cids = PolymarketTradesAdapter._extract_condition_ids(source)
+        if not all_cids:
+            logger.info("trades_stream_no_markets", task_id=str(task.id), source=task.source_name)
+            await self._mark_trades_task_succeeded(task)
+            return
+
+        # 3. Select the rotating per-cycle market window.
+        trades_cfg = self._settings.polymarket_trades
+        n = len(all_cids)
+        per_cycle = min(trades_cfg.markets_per_cycle, n)
+        offset = int(source_config.get("trades_market_offset", 0) or 0)
+        if offset < 0 or offset >= n:
+            offset = 0
+        window = [all_cids[(offset + i) % n] for i in range(per_cycle)]
+        cursors: dict[str, Any] = dict(source_config.get("trade_cursors") or {})
+
+        # 4. Build the adapter (window from settings; NO session held during I/O).
+        trades_settings = trades_cfg.model_copy(
+            update={"backfill_days": self._settings.polymarket_trades_backfill_days}
+        )
+        adapter = PolymarketTradesAdapter(
+            client=PolymarketTradesClient(http_client=self._http_client, settings=trades_settings),
+            fetch_log_exists_fn=self._make_dedup_exists_fn(),
+            settings=trades_settings,
+            storage=self._storage,
+        )
+        is_backfill = self._settings.backfill_on_startup
+
+        total_fetched = 0
+        total_emitted = 0
+        total_skipped = 0
+        total_failed = 0
+        markets_failed = 0
+        start = _time.monotonic()
+
+        for i, cid in enumerate(window):
+            try:
+                market_result = await adapter.fetch_market(cid, cursors.get(cid), is_backfill=is_backfill)
+            except Exception as exc:
+                # A single market's fetch error is non-fatal — advance rotation past
+                # it (persist the resume offset) so the cycle keeps making progress.
+                logger.error("trades_market_fetch_failed", condition_id=cid, error=str(exc))
+                markets_failed += 1
+                await self._persist_trades_progress(task.source_id, cid, None, (offset + i + 1) % n)
+                continue
+
+            if market_result.results:
+                async with (
+                    self._write_factory() as session,
+                    pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
+                ):
+                    if acquired:
+                        write_use_case = FetchAndWritePredictionStreamUseCase(
+                            fetch_log_repo=PredictionMarketFetchLogRepository(session),
+                            outbox_repo=OutboxRepository(session),
+                            spec=PREDICTION_TRADE_SPEC,
+                            commit_fn=session.commit,
+                            rollback_fn=session.rollback,  # M-02: unpoison on failure
+                        )
+                        summary = await write_use_case.execute(
+                            market_result.results, source_id=task.source_id, is_backfill=is_backfill
+                        )
+                        total_fetched += summary.fetched
+                        total_emitted += summary.emitted
+                        total_skipped += summary.skipped
+                        total_failed += summary.failed
+
+            # INCREMENTAL COMMIT: persist this market's advanced cursor + the
+            # resume offset so a later timeout/retry does not re-do this market.
+            await self._persist_trades_progress(task.source_id, cid, market_result.new_cursor, (offset + i + 1) % n)
+
+        duration = _time.monotonic() - start
+        record_fetch(
+            task.source_name,
+            fetched=total_fetched,
+            skipped=total_skipped,
+            failed=total_failed,
+            duration=duration,
+        )
+        logger.info(
+            "trades_stream_cycle_complete",
+            task_id=str(task.id),
+            markets=len(window),
+            markets_failed=markets_failed,
+            fetched=total_fetched,
+            emitted=total_emitted,
+            duration_seconds=round(duration, 3),
+        )
+
+        # 5. Final status: only fail when EVERY windowed market errored (nothing
+        # written), so the scheduler retries; otherwise SUCCEEDED (partial progress
+        # is already durably committed per market).
+        if window and markets_failed == len(window) and total_fetched == 0:
+            async with self._write_factory() as fail_session:
+                fail_repo = TaskRepository(fail_session)
+                task.fail(f"all_{markets_failed}_trades_markets_failed")
+                await fail_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+                await fail_session.commit()
+            return
+        await self._mark_trades_task_succeeded(task)
+
+    async def _mark_trades_task_succeeded(self, task: ContentIngestionTask) -> None:
+        """Write SUCCEEDED for a trades task in a fresh short-lived session."""
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        async with self._write_factory() as session:
+            task_repo = TaskRepository(session)
+            await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+            await session.commit()
+            task.succeed()
+
+    async def _persist_trades_progress(
+        self,
+        source_id: Any,
+        condition_id: str,
+        cursor: dict[str, Any] | None,
+        resume_offset: int,
+    ) -> None:
+        """Durably commit one market's advanced cursor + the rotation offset.
+
+        Read-modify-write on ``sources.config`` so a concurrent work-list seeder's
+        ``markets`` update (and other markets' cursors) is preserved. Best-effort:
+        a persist failure is logged but never fails the task — the market's trades
+        are already committed and the next cycle re-fetches (deduped by the S3
+        ``ON CONFLICT`` + the use-case fetch_log check).
+        """
+        try:
+            async with self._write_factory() as session:
+                repo = SourceRepository(session)
+                model = await repo.get_by_id(source_id)
+                if model is None:
+                    return
+                cfg = dict(model.config or {})
+                stored_cursors = dict(cfg.get("trade_cursors") or {})
+                if cursor is not None:
+                    stored_cursors[condition_id] = cursor
+                cfg["trade_cursors"] = stored_cursors
+                cfg["trades_market_offset"] = resume_offset
+                await repo.update(source_id, config=cfg)
+                await session.commit()
+        except Exception as exc:
+            logger.error(
+                "trades_progress_persist_failed",
+                condition_id=condition_id,
+                error=str(exc),
             )
 
 

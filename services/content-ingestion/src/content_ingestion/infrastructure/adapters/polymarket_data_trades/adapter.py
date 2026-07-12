@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import common.time
@@ -42,10 +43,43 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 _BRONZE_BUCKET = "worldview-bronze"
 
 
+@dataclass(frozen=True, slots=True)
+class MarketTradesResult:
+    """Outcome of one INCREMENTAL per-market trades fetch (PLAN-0056 QA).
+
+    Attributes:
+        results: The NEW (post-cursor) trade fetch-results collected this cycle.
+        new_cursor: The advanced per-market cursor to persist durably so the next
+            cycle fetches only trades newer than it — ``{"last_trade_ts": int,
+            "last_trade_id": str}``. ``None`` when nothing new was collected AND
+            there was no prior cursor (leave the stored cursor untouched).
+    """
+
+    results: list[PredictionTradeFetchResult]
+    new_cursor: dict[str, Any] | None
+
+
 def _build_bronze_key(trade_id: str, snapshot_at: datetime) -> str:
-    """Build the MinIO bronze key for a single Polymarket trade."""
+    """Build the MinIO bronze key for a single Polymarket trade (legacy path)."""
     d = snapshot_at
     return f"content-ingestion/polymarket-trades/{d.year}/{d.month:02d}/{d.day:02d}/{trade_id}.json"
+
+
+def _build_batch_bronze_key(condition_id: str, snapshot_at: datetime) -> str:
+    """Build the MinIO bronze key for ONE batched market-cycle trade payload.
+
+    PLAN-0056 QA: the incremental path writes a SINGLE bronze object per
+    market-cycle holding all new raw trades (mirroring how the CLOB/history
+    adapter writes one object per token-cycle), instead of one object per trade.
+    A per-trade object for ~350k trades was the dominant cost driver behind the
+    900s timeout deadlock; the Kafka trade event + the S3 trades table are the
+    authoritative silver/gold copies, so a batched bronze snapshot is sufficient.
+    """
+    d = snapshot_at
+    return (
+        f"content-ingestion/polymarket-trades/{d.year}/{d.month:02d}/{d.day:02d}/"
+        f"{condition_id}_{snapshot_at.isoformat()}.json"
+    )
 
 
 def _round_to_minute(dt: datetime) -> datetime:
@@ -113,6 +147,216 @@ class PolymarketTradesAdapter:
             new=len(results),
         )
         return results
+
+    # ── PLAN-0056 QA — INCREMENTAL + BOUNDED per-market fetch ─────────────────
+    #
+    # ``fetch_market`` is the path the worker now drives (one market at a time,
+    # round-robin windowed, committing a cursor per market). The legacy ``fetch``
+    # above is retained for the flat-config / backfill callers and existing tests
+    # but is NO LONGER on the steady-state cadence — it re-pulls full history and
+    # was the source of the 900s timeout deadlock.
+
+    async def fetch_market(
+        self,
+        condition_id: str,
+        cursor: dict[str, Any] | None,
+        *,
+        is_backfill: bool = False,
+    ) -> MarketTradesResult:
+        """Fetch ONLY new trades for one market since ``cursor`` (bounded).
+
+        Trades are append-only, so a per-market high-watermark (last-seen trade
+        timestamp) lets each cycle fetch only what is new instead of paginating
+        the full 0→~3500 history every time.
+
+        Bounds (all config-driven, no magic numbers):
+        - ``max_pages_per_cycle`` pages of ``page_size`` each,
+        - ``max_trades_per_market_per_cycle`` NEW trades collected.
+
+        First cycle for a market (no cursor): the watermark floor is
+        ``now - backfill_days`` so the initial pull is a BOUNDED backfill of the
+        recent window (capped by the trade cap), NEVER the full historical depth.
+
+        Args:
+            condition_id: The market ``conditionId`` (the ``market`` query param).
+            cursor: The persisted ``{"last_trade_ts", "last_trade_id"}`` or None.
+            is_backfill: Unused here (the window is always cursor/backfill_days
+                derived); accepted for a uniform call signature.
+
+        Returns:
+            :class:`MarketTradesResult` with the new trades + the advanced cursor.
+        """
+        fetched_at = _round_to_minute(common.time.utc_now())
+        floor_ts = self._cursor_floor_ts(cursor, fetched_at)
+
+        collected: list[PredictionTradeFetchResult] = []
+        raw_new: list[dict[str, Any]] = []
+        max_ts = floor_ts
+        max_ts_trade_id: str | None = cursor.get("last_trade_id") if cursor else None
+        cap = self._settings.max_trades_per_market_per_cycle
+
+        offset = 0
+        page_count = 0
+        while True:
+            try:
+                page = await self._client.fetch_trades_page(
+                    market=condition_id,
+                    limit=self._settings.page_size,
+                    offset=offset,
+                )
+            except AdapterError as exc:
+                # End-of-data 400 AFTER ≥1 good page = benign end of pagination
+                # (mirrors the legacy path). A 400 on the FIRST page is a real
+                # error → re-raise (retryable).
+                if exc.status_code == 400 and page_count >= 1:
+                    logger.info(
+                        "polymarket_trades_end_of_data_400",
+                        condition_id=condition_id,
+                        offset=offset,
+                        pages=page_count,
+                        collected=len(collected),
+                    )
+                    break
+                raise
+            except Exception as exc:
+                raise AdapterError(f"Trades API fetch failed: {exc}") from exc
+
+            page_count += 1
+            if not page.trades:
+                break
+
+            new_in_page = 0
+            cap_hit = False
+            for trade in page.trades:
+                ts = self._trade_epoch(trade)
+                # Skip trades at/older than the watermark — already ingested (or
+                # outside the first-backfill window). ``ts is None`` (unparseable
+                # timestamp) is treated as new so we never silently drop a fill.
+                if ts is not None and ts <= floor_ts:
+                    continue
+                new_in_page += 1
+                result = self._parse_trade(trade, fetched_at, condition_id)
+                if result is None:
+                    continue
+                collected.append(result)
+                raw_new.append(trade)
+                if ts is not None and ts > max_ts:
+                    max_ts = ts
+                    max_ts_trade_id = result.trade_id
+                if len(collected) >= cap:
+                    cap_hit = True
+                    break
+
+            offset += self._settings.page_size
+            if cap_hit:
+                # BOUNDED backfill / high-churn backstop: stop at the cap and let
+                # the cursor advance to the newest seen ts. On a deep first
+                # backfill this intentionally ingests only the most-recent ``cap``
+                # trades (bounded), not the full depth.
+                break
+            # Newest-first feeds: a page with zero new trades means we have paged
+            # past the watermark → stop. (For an oldest-first feed this never
+            # trips early and we simply stop at max_pages — still bounded.)
+            if new_in_page == 0:
+                break
+            if not page.has_more or page_count >= self._settings.max_pages_per_cycle:
+                break
+
+        await self._store_batch_bronze(condition_id, raw_new, fetched_at, collected)
+
+        new_cursor: dict[str, Any] | None
+        if collected and max_ts_trade_id is not None:
+            new_cursor = {"last_trade_ts": max_ts, "last_trade_id": max_ts_trade_id}
+        else:
+            # Nothing new this cycle → keep the prior cursor unchanged.
+            new_cursor = cursor
+
+        logger.info(
+            "polymarket_trades_market_fetch_complete",
+            condition_id=condition_id,
+            pages=page_count,
+            new=len(collected),
+            floor_ts=floor_ts,
+            new_cursor_ts=new_cursor.get("last_trade_ts") if new_cursor else None,
+        )
+        return MarketTradesResult(results=collected, new_cursor=new_cursor)
+
+    def _cursor_floor_ts(self, cursor: dict[str, Any] | None, fetched_at: datetime) -> int:
+        """Return the watermark floor epoch-seconds for an incremental fetch.
+
+        Uses the persisted cursor when present; otherwise the first-cycle
+        BOUNDED-backfill floor of ``now - backfill_days``.
+        """
+        if cursor and cursor.get("last_trade_ts") is not None:
+            return int(cursor["last_trade_ts"])
+        window = timedelta(days=self._settings.backfill_days)
+        return int((fetched_at - window).timestamp())
+
+    @staticmethod
+    def _trade_epoch(trade: dict[str, Any]) -> int | None:
+        """Extract the trade's Unix epoch-seconds timestamp, or None if absent."""
+        raw = trade.get("timestamp")
+        if raw is None:
+            return None
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_trade(
+        trade: dict[str, Any],
+        fetched_at: datetime,
+        condition_id: str | None,
+    ) -> PredictionTradeFetchResult | None:
+        """Parse one trade dict into a fetch-result (no dedup, no bronze I/O).
+
+        Cross-cycle idempotency is handled by the persisted cursor (skips already
+        seen trades) plus the S3 consumer's ``ON CONFLICT (market_id, trade_id)``;
+        the use case still performs the authoritative fetch_log dedup at write
+        time. So the incremental path does NOT do a per-trade DB dedup round-trip.
+        """
+        trade_id = str(trade.get("transactionHash") or trade.get("id") or "")
+        if not trade_id:
+            logger.debug("polymarket_trades_skip_no_id")
+            return None
+        try:
+            return PredictionTradeFetchResult.from_api_response(trade, fetched_at, condition_id=condition_id)
+        except Exception:
+            logger.warning("polymarket_trades_parse_failed", trade_id=trade_id, exc_info=True)
+            return None
+
+    async def _store_batch_bronze(
+        self,
+        condition_id: str,
+        raw_new: list[dict[str, Any]],
+        fetched_at: datetime,
+        results: list[PredictionTradeFetchResult],
+    ) -> None:
+        """Store ONE batched bronze object for this market-cycle (non-fatal).
+
+        Replaces the legacy per-trade MinIO put (the dominant cost driver behind
+        the timeout deadlock) with a single object holding all new raw trades,
+        and stamps that shared key onto every collected result. A MinIO failure
+        is non-fatal — ``minio_bronze_key`` stays None and ingestion continues.
+        """
+        if not raw_new:
+            return
+        key = _build_batch_bronze_key(condition_id, fetched_at)
+        try:
+            payload = json.dumps(raw_new).encode("utf-8")
+            await self._storage.put_bytes(
+                self._bucket,
+                key,
+                payload,
+                content_type="application/json",
+            )
+        except Exception:
+            logger.warning("polymarket_trades_bronze_store_failed", condition_id=condition_id, exc_info=True)
+            return
+        # Stamp the shared batch key onto every collected result.
+        for i, result in enumerate(results):
+            results[i] = dataclasses.replace(result, minio_bronze_key=key)
 
     @staticmethod
     def _extract_condition_ids(source: Source) -> list[str]:

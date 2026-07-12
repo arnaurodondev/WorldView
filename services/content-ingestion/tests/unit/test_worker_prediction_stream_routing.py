@@ -75,17 +75,41 @@ def test_stream_source_type_set_has_exactly_four() -> None:
     assert SourceType.POLYMARKET not in _PREDICTION_STREAM_SOURCE_TYPES
 
 
-@pytest.mark.parametrize("source_type", _NEW_STREAM_TYPES)
+# PLAN-0056 QA: trades now route to the DEDICATED incremental+bounded path.
+_GENERIC_STREAM_TYPES = [
+    SourceType.POLYMARKET_GAMMA_EVENTS,
+    SourceType.POLYMARKET_CLOB,
+    SourceType.POLYMARKET_DATA_OI,
+]
+
+
+@pytest.mark.parametrize("source_type", _GENERIC_STREAM_TYPES)
 async def test_execute_task_routes_to_prediction_stream(source_type: SourceType) -> None:
     worker = _build_worker()
     worker._execute_prediction_stream_task = AsyncMock()  # type: ignore[method-assign]
+    worker._execute_trades_stream_task = AsyncMock()  # type: ignore[method-assign]
     worker._execute_polymarket_task = AsyncMock()  # type: ignore[method-assign]
 
     task = _make_task(source_type)
     await worker._execute_task(task)
 
     worker._execute_prediction_stream_task.assert_awaited_once_with(task)
+    worker._execute_trades_stream_task.assert_not_awaited()
     worker._execute_polymarket_task.assert_not_awaited()
+
+
+async def test_execute_task_routes_trades_to_dedicated_incremental_path() -> None:
+    """PLAN-0056 QA: DATA_TRADES routes to the incremental trades path, NOT the
+    generic single-pass stream path (which caused the 900s timeout deadlock)."""
+    worker = _build_worker()
+    worker._execute_prediction_stream_task = AsyncMock()  # type: ignore[method-assign]
+    worker._execute_trades_stream_task = AsyncMock()  # type: ignore[method-assign]
+
+    task = _make_task(SourceType.POLYMARKET_DATA_TRADES)
+    await worker._execute_task(task)
+
+    worker._execute_trades_stream_task.assert_awaited_once_with(task)
+    worker._execute_prediction_stream_task.assert_not_awaited()
 
 
 async def test_base_polymarket_still_routes_to_polymarket_task() -> None:

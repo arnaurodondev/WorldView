@@ -276,6 +276,36 @@ class TestFetchAndWritePredictionStreamUseCase:
         assert kwargs["aggregate_type"] == "prediction_event"
         commit.assert_awaited_once()
 
+    async def test_incremental_commit_persists_partial_progress_on_midstream_failure(self) -> None:
+        """PLAN-0056 QA: the use case commits PER trade, so a mid-list failure keeps
+        already-committed trades (no all-or-nothing deadlock).
+
+        Simulates the 3rd commit failing: the first 2 trades stay committed, the
+        3rd rolls back, and the summary reports 2 fetched / 1 failed.
+        """
+        import dataclasses
+
+        trades = [dataclasses.replace(_trade(), trade_id=f"0x{i}") for i in range(3)]
+        fetch_log = _mock_fetch_log()
+        outbox = AsyncMock(append=AsyncMock())
+        rollback = AsyncMock()
+        # 3rd commit raises → the first two are already durably committed.
+        commit = AsyncMock(side_effect=[None, None, RuntimeError("timeout mid-write")])
+        uc = FetchAndWritePredictionStreamUseCase(
+            fetch_log_repo=fetch_log,
+            outbox_repo=outbox,
+            spec=PREDICTION_TRADE_SPEC,
+            commit_fn=commit,
+            rollback_fn=rollback,
+        )
+
+        summary = await uc.execute(trades, source_id=common.ids.new_uuid7())
+
+        assert summary.fetched == 2  # first two committed and survive
+        assert summary.failed == 1  # the third failed
+        assert commit.await_count == 3  # attempted on every trade
+        rollback.assert_awaited_once()  # only the failed trade rolls back
+
     async def test_history_emits_multiple_outbox_events_single_fetch_log(self) -> None:
         fetch_log = _mock_fetch_log()
         outbox = AsyncMock(append=AsyncMock())

@@ -891,3 +891,54 @@ paths silently dead. All fixed on `feat/prediction-data-activation`; one new cor
   both. Suites GREEN: KG classifier (19), content-ingestion seeder (9) + worker/config (46), alert
   entrypoints (16). ruff 0.4.0 check+format clean; mypy `services/{knowledge-graph,content-ingestion,alert}/src`
   touched files clean.
+
+## QA fix (2026-07-12) — incremental + bounded trades ingestion (`prediction_market_trades`=0 deadlock)
+
+Live QA found `prediction_market_trades` stuck at **0 forever**. Root cause: the deeper-stream trades task
+(`_execute_prediction_stream_task` → `PolymarketTradesAdapter.fetch`) re-fetched the FULL `/trades` history
+(offset 0 → ~3500) for EVERY one of the ~100 seeded work-list markets EVERY cycle, doing a per-trade
+`fetch_log` dedup check + individual MinIO bronze `put`, then committing ONCE at the very end. With ~100
+markets this exceeded even the dedicated `worker_polymarket_task_timeout_seconds=900` → the task hit
+`worker_task_timeout` at 900s → marked RETRY → restarted from market 1 → because nothing was committed
+before the timeout, the cursor/`fetch_log` never bootstrapped → **deterministic deadlock, 0 trades ever
+persisted**. (The already-committed `eac0fb07f` end-of-data-400 fix was a prerequisite, not the cure.)
+
+Fix (content-ingestion only; no wave-count change) — make trades ingestion INCREMENTAL + BOUNDED +
+INCREMENTALLY-COMMITTED. Trades now route to a DEDICATED `WorkerProcess._execute_trades_stream_task`
+(not the generic single-pass path):
+
+- **Incremental cursor (primary fix)** — `PolymarketTradesAdapter.fetch_market(condition_id, cursor)`
+  (trades are append-only) fetches only trades newer than the persisted `cursor.last_trade_ts`, returning
+  `MarketTradesResult(results, new_cursor)`. First cycle for a market (no cursor) uses a floor of
+  `now - backfill_days` — a BOUNDED backfill of the recent window (capped), never the full depth.
+- **Bounded per-cycle work** — a ROTATING window of `polymarket_trades.markets_per_cycle` markets
+  (default 25, round-robin via `config["trades_market_offset"]`) + `max_trades_per_market_per_cycle` cap
+  (default 500).
+- **Incremental commit** — the use case commits per-trade (R8 outbox); `_persist_trades_progress`
+  read-modify-writes the advanced cursor (`config["trade_cursors"][cid]`) + rotation offset PER MARKET so a
+  timeout/retry resumes at the next market. These are SEPARATE config keys the Wave B5 seeder preserves
+  (it only rewrites `config["markets"]`).
+- **Batched bronze** — ONE MinIO object per market-cycle (all new raw trades), replacing the per-trade put
+  (the dominant cost driver); Kafka trade event + S3 table are the authoritative copies.
+- Idempotency unchanged: use-case `prediction_market_fetch_log` dedup + S3 `ON CONFLICT (market_id, trade_id)`.
+  Legacy `fetch()` retained for flat-config/tests but off the steady-state cadence.
+
+Config (nested provider settings, env-overridable): `CONTENT_INGESTION_POLYMARKET_TRADES__MARKETS_PER_CYCLE`
+(default 25), `…__MAX_TRADES_PER_MARKET_PER_CYCLE` (default 500).
+
+**Tests (13 new):** `test_polymarket_trades_incremental.py` (11 — first-cycle bounded backfill, backfill-window
+exclusion, deep-history trade-cap completes, incremental-only-since-cursor, cursor-unchanged-when-nothing-new,
+cursor-advances-to-newest, second-cycle-only-new via threaded cursor, batched-bronze-one-put, bronze non-fatal,
+end-of-data-400, first-page-400-raises); `test_worker_trades_incremental.py` (2 — per-cycle market cap +
+per-market incremental progress commit; `_persist_trades_progress` preserves markets + other cursors);
+`test_fetch_and_write_prediction_streams.py` +1 (mid-stream commit failure keeps already-committed trades);
+routing test updated (trades → dedicated path). content-ingestion unit suite 1037 pass (1 pre-existing
+unrelated ticker-news ordering flake). ruff+format+mypy clean on touched files.
+
+**Live-verified** (rebuilt image, recreated worker/scheduler/dispatcher): trades task **completes in ~20-27s**
+(was 900s timeout), 25 markets/cycle (cap respected), ~5k trades fetched+emitted/cycle, **0 `worker_task_timeout`**,
+tasks SUCCEED; `config["trade_cursors"]` + `trades_market_offset` advance each cycle (75 cursors / offset 75
+after 3 cycles). Downstream `prediction_market_trades` persistence is gated only by a PRE-EXISTING, UNRELATED
+outbox-dispatcher throughput backlog (~20 events/s with ~128k `market.prediction.history` events queued ahead
+in created_at order) — the trade events serialize without error and are queued in the outbox; not a trades-fix
+regression.
