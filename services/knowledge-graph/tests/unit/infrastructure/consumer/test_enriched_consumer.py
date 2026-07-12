@@ -809,3 +809,111 @@ class TestValidToThreading:
             ]
         )
         assert rels[0].valid_to is None  # absence must NOT coerce to now()
+
+
+# ---------------------------------------------------------------------------
+# Prod-readiness fix (BP-720): main enriched-consumer resilient deserialize.
+#
+# 66b0b6416 appended nullable external_id/source_title to the enriched Avro
+# schema; the no-registry schemaless_reader raises EOFError on pre-append
+# backlog records → base wraps as MalformedDataError → inline dead-letter →
+# dead_letter_cap (5000) force-restart → re-read the same 5000 forever, never
+# reaching the new-schema NEWS tail. The override must SKIP an un-decodable
+# record (offset advances) while still processing good ones and propagating
+# genuine processing failures.
+# ---------------------------------------------------------------------------
+
+
+class _FakeKafkaMessage:
+    """Minimal confluent-Kafka message stand-in for ``_handle_message`` tests."""
+
+    def __init__(self, raw_value: bytes, *, offset: int = 6858, partition: int = 0) -> None:
+        self._value = raw_value
+        self._offset = offset
+        self._partition = partition
+
+    def topic(self) -> str:
+        return "nlp.article.enriched.v1"
+
+    def value(self) -> bytes:
+        return self._value
+
+    def key(self) -> bytes | None:
+        return None
+
+    def headers(self) -> list[tuple[str, bytes]]:
+        return []
+
+    def offset(self) -> int:
+        return self._offset
+
+    def partition(self) -> int:
+        return self._partition
+
+
+class TestEnrichedConsumerResilientDeserialize:
+    """An un-decodable OLD-schema record must be SKIPPED, not crash-loop the group."""
+
+    @pytest.mark.unit
+    def test_undecodable_old_schema_record_is_skipped_not_raised(self) -> None:
+        import asyncio
+
+        consumer = _make_consumer()
+        # Confluent magic byte (0x00) + a truncated body a schemaless_reader with the
+        # NEW (external_id/source_title-extended) schema under-runs → EOFError →
+        # base wraps in MalformedDataError. Must NOT raise (offset would advance).
+        msg = _FakeKafkaMessage(b"\x00\x00\x00\x00\x01truncated")
+        with capture_logs() as logs:
+            asyncio.run(consumer._handle_message(msg))
+        assert any(e["event"] == "enriched_consumer_deserialize_skipped" for e in logs)
+        skip = next(e for e in logs if e["event"] == "enriched_consumer_deserialize_skipped")
+        assert skip["offset"] == 6858  # offset carried through so the run loop commits it
+
+    @pytest.mark.unit
+    def test_raw_eoferror_from_deserialize_is_swallowed(self) -> None:
+        import asyncio
+
+        consumer = _make_consumer()
+        msg = _FakeKafkaMessage(b"\x00whatever")
+        # Simulate a path surfacing EOFError un-wrapped (defence-in-depth branch).
+        with patch.object(consumer, "deserialize_value", side_effect=EOFError("short read")):
+            asyncio.run(consumer._handle_message(msg))  # must not raise
+
+    @pytest.mark.unit
+    def test_valid_new_schema_message_processed_normally_after_poison(self) -> None:
+        import asyncio
+
+        consumer = _make_consumer()
+        good_value = {"doc_id": str(uuid4())}
+        good_msg = _FakeKafkaMessage(b"\x00good", offset=6900)
+        with (
+            patch.object(consumer, "deserialize_value", return_value=good_value),
+            patch.object(consumer, "process_message", new=AsyncMock()) as proc,
+        ):
+            asyncio.run(consumer._handle_message(good_msg))
+        proc.assert_awaited_once()
+
+    @pytest.mark.unit
+    def test_run_of_poison_records_never_wedges_no_dead_letter(self) -> None:
+        import asyncio
+
+        consumer = _make_consumer()
+        # Skips must NOT touch the dead-letter counter → cap can never trip.
+        assert consumer._dead_letter_count == 0
+        with patch.object(consumer, "deserialize_value", side_effect=EOFError("boom")):
+            for off in range(6858, 6858 + 6000):  # more than dead_letter_cap (5000)
+                asyncio.run(consumer._handle_message(_FakeKafkaMessage(b"\x00x", offset=off)))
+        assert consumer._dead_letter_count == 0  # never dead-lettered → never force-restarts
+
+    @pytest.mark.unit
+    def test_genuine_processing_error_still_propagates(self) -> None:
+        import asyncio
+
+        consumer = _make_consumer()
+        msg = _FakeKafkaMessage(b"\x00good")
+        with (
+            patch.object(consumer, "deserialize_value", return_value={"doc_id": str(uuid4())}),
+            patch.object(consumer, "process_message", side_effect=RuntimeError("db down")),
+        ):
+            with pytest.raises(RuntimeError, match="db down"):
+                asyncio.run(consumer._handle_message(msg))

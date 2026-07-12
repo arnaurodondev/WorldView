@@ -671,13 +671,44 @@ Two blockers found during local Docker validation of the code-complete branch, b
   `kafka-consumer-groups --group kg-prediction-enriched-group --topic nlp.article.enriched.v1
   --reset-offsets --to-latest --execute`. Verified live: 0 restarts / 0 dead-letters over ~70s, group
   at LATEST (LAG 0).
-- **BLOCKER-2 (Sub-Plan B) — migration 0011 revision id > 32 chars.** The Wave B3 revision id
+- **BLOCKER-2 (Sub-Plan B) — migration 0011 revision id > 32 chars.**
+ The Wave B3 revision id
   `0011_seed_polymarket_wave2_sources` (34 chars) overflows `alembic_version.version_num varchar(32)`
   → `StringDataRightTruncationError` on a fresh DB (whole migration rolls back). Fix: renamed the id
   (and file) to `0011_seed_pm_wave2_sources` (26 chars ≤ 32); prefer shortening the id over widening
   the column. The live content_ingestion_db had a deploy-time `ALTER COLUMN … varchar(255)` workaround
   + the old 34-char id recorded — reconciled to the shortened id and reverted the column to varchar(32).
   Verified: `content-ingestion-migrate` sidecar exits 0 on the rebuilt image.
+
+# QA fixes (2026-07-12) — prod-readiness blockers (integration branch)
+
+Two CRITICAL blockers found by dev prod-readiness QA on `feat/prediction-data-activation`, both fixed (BP-720):
+
+- **BLOCKER-A (Sub-Plan C, my regression) — MAIN `enriched-consumer` crash-loop (193 restarts, news→KG 100% halted).**
+  Commit `66b0b6416` appended nullable `external_id`/`source_title` to `nlp.article.enriched.v1.avsc`. The
+  prediction sibling got the resilient-deserialize fix (`f0ebd24b0`) but the MAIN `EnrichedArticleConsumer`
+  never did. Unlike the forward-only prediction group, the main group is an EXISTING consumer whose committed
+  offset (~6857) is still BEHIND the ~10.7k tail — so it MUST re-read the pre-append backlog to reach today's
+  news, and those old (fewer-field) records make the no-registry `schemaless_reader` under-run → **`EOFError`**
+  (base-wrapped `MalformedDataError`, empty error string) → every old record dead-lettered → `dead_letter_cap`
+  (5000) → force-restart BEFORE committing → re-read the same 5000 forever. **Append-at-END was NOT sufficient
+  here** (it only makes NEW records readable by OLD readers, not OLD records readable by NEW readers). Fix:
+  override `EnrichedArticleConsumer._handle_message` to catch `(MalformedDataError, EOFError, struct.error)`,
+  log `enriched_consumer_deserialize_skipped` with topic/partition/offset, and return so the run loop commits
+  past the poison record — **without** start-at-latest (the main consumer must still process the un-reached
+  NEW-schema NEWS backlog). Skips never call `dead_letter`, so the cap can never trip. Other consumers of
+  `nlp.article.enriched.v1` audited: only the prediction sibling (already fixed) shares the topic;
+  `structured_enrichment_consumer` reads a different topic; nlp `enriched_event.py` is a producer.
+- **BLOCKER-B (deploy, sibling commit `8759c547d`) — portfolio unreachable (`/v1/portfolios` 500, all
+  portfolio containers unhealthy).** `8759c547d` correctly moved the portfolio Dockerfile CMD/EXPOSE/HEALTHCHECK
+  to `--port 8001` (the S1 convention: `config.py` default `port=8001`, every inter-service client) but left
+  the compose `ports: "8001:8000"` + `:8000` healthcheck, the gateway `API_GATEWAY_PORTFOLIO_URL=…:8000`, and
+  the prometheus scrape target on 8000 → the container listened on 8001 while the healthcheck + gateway dialed
+  8000 → refused. **Port choice: 8001 everywhere** (align dev to the already-committed 8001 listener). Fixed:
+  `docker-compose.yml` + `docker-compose.test.yml` portfolio `ports:`→`8001:8001` and healthcheck→`:8001`,
+  `api-gateway/configs/docker.env` `…PORTFOLIO_URL`→`:8001`, `prometheus.yml`+`recording-rules.yml`
+  scrape/comment→`:8001`, `routes/helpers.py` docstring example→`:8001`. No in-repo k8s manifest references the
+  portfolio port (gitops is a separate repo).
 
 # QA fixes (2026-07-10) — Wave D1 correctness + prediction-data hygiene
 
