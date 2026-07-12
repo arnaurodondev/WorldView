@@ -115,6 +115,60 @@ while IFS= read -r svc; do
   fi
 done <<< "$ALL_SERVICES"
 
+# ── FULL-FAMILY recreate set (the stale-image fix, 2026-07-12) ────────────────
+# CRITICAL: only the family BASE service carries a `build:` block; every other
+# variant (*-migrate / *-consumer / *-worker / *-scheduler / *-dispatcher /
+# *-detector / *-poller) is defined with `image: worldview-<family>:latest` and
+# NO build block. The old SERVICES list (build-blocks only) therefore recreated
+# ONLY the base service, leaving all consumers/workers/dispatchers pinned to the
+# OLD image after a rebuild — the exact deploy-staleness bug this script claims
+# to prevent (observed live: alert-dispatcher/rule-poller/watchlist-consumer
+# running a stale image hash while worldview-alert:latest had moved on).
+#
+# We therefore parse EVERY compose service (not just buildable ones) matching
+# the family prefix, together with the image tag it runs, and force-recreate the
+# whole set onto the freshly built shared image. SERVICES (build-blocks only) is
+# still used for the BUILD loop — you can only `compose build` a service that
+# has a build: block.
+#
+# Parsing: walk the `services:` section (stop at the top-level `volumes:` key)
+# tracking the current 2-space-indented service key; for each `image:` under it
+# emit "<svc> <image>". Every family member declares an image, so this yields a
+# svc→image map we filter by family prefix.
+FAMILY_MAP="$(awk '
+  /^volumes:/ { exit }
+  /^  [a-zA-Z0-9_-]+:$/ { svc=substr($1, 1, length($1)-1); next }
+  /^    image:/ { if (svc != "") print svc, $2 }
+' "$COMPOSE_DIR/docker-compose.yml")"
+
+RECREATE_SERVICES=()
+declare -a RECREATE_IMAGES=()   # parallel array: image tag per recreate service
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  svc="${line%% *}"
+  img="${line##* }"
+  if [[ "$svc" == "$FAMILY" || "$svc" == "$FAMILY-"* ]]; then
+    RECREATE_SERVICES+=("$svc")
+    RECREATE_IMAGES+=("$img")
+  fi
+done <<< "$FAMILY_MAP"
+
+# Some buildable services declare NO explicit `image:` line (e.g.
+# intelligence-migrations) — Compose then names the built image
+# worldview-<service>:latest by convention. Ensure every buildable service is in
+# the recreate set (with that conventional tag) so a build-only family without
+# an image: line is still recreated + verified rather than skipped.
+for bsvc in "${SERVICES[@]}"; do
+  present=0
+  for rsvc in ${RECREATE_SERVICES[@]+"${RECREATE_SERVICES[@]}"}; do
+    [[ "$rsvc" == "$bsvc" ]] && { present=1; break; }
+  done
+  if [[ "$present" -eq 0 ]]; then
+    RECREATE_SERVICES+=("$bsvc")
+    RECREATE_IMAGES+=("worldview-${bsvc}:latest")
+  fi
+done
+
 if [[ "${#SERVICES[@]}" -eq 0 ]]; then
   echo "ERROR: no compose services match family '$FAMILY'." >&2
   echo "Known families/services:" >&2
@@ -122,8 +176,10 @@ if [[ "${#SERVICES[@]}" -eq 0 ]]; then
   exit 1
 fi
 
-echo "==> Family '$FAMILY' resolves to ${#SERVICES[@]} compose service(s):"
+echo "==> Family '$FAMILY' resolves to ${#SERVICES[@]} buildable service(s):"
 printf '      %s\n' "${SERVICES[@]}"
+echo "==> Family '$FAMILY' resolves to ${#RECREATE_SERVICES[@]} runnable variant(s) to recreate:"
+printf '      %s\n' "${RECREATE_SERVICES[@]}"
 
 BUILD_FLAGS=()
 if [[ "$USE_CACHE" -eq 0 ]]; then
@@ -280,8 +336,10 @@ if [[ -n "$ondisk_prompts_ver" ]]; then
 fi
 
 if [[ "$RECREATE" -eq 1 ]]; then
-  echo "==> Recreating containers (--force-recreate)..."
-  "${COMPOSE[@]}" up -d --force-recreate --no-deps "${SERVICES[@]}"
+  echo "==> Recreating ALL ${#RECREATE_SERVICES[@]} family variant(s) (--force-recreate)..."
+  # Recreate the FULL family (base + every consumer/worker/dispatcher/migrate),
+  # not just buildable services — otherwise variants stay on the OLD image.
+  "${COMPOSE[@]}" up -d --force-recreate --no-deps "${RECREATE_SERVICES[@]}"
 
   # ── Post-recreate deploy verification ──────────────────────────────────────
   # Two failure classes this catches:
@@ -292,12 +350,18 @@ if [[ "$RECREATE" -eq 1 ]]; then
   #   (2) Created-but-never-started / crashed migrations — a *-migrate sidecar
   #       runs to completion; if it never reached exited(0) the schema is not
   #       applied and dependent services will crashloop. We assert exited(0).
-  echo "==> Verifying recreated containers run the freshly built image..."
+  echo "==> Verifying ALL recreated variants run the freshly built image..."
   verify_fail=0
-  for svc in "${SERVICES[@]}"; do
-    built_id="$(docker image inspect --format '{{.Id}}' "worldview-${svc}:latest" 2>/dev/null || true)"
+  for idx in "${!RECREATE_SERVICES[@]}"; do
+    svc="${RECREATE_SERVICES[$idx]}"
+    # Variants share the family base image (worldview-<family>:latest); resolve
+    # each service's declared image from the compose map so we verify variants
+    # against the SHARED freshly built image, not a per-variant tag that doesn't
+    # exist.
+    ref_img="${RECREATE_IMAGES[$idx]}"
+    built_id="$(docker image inspect --format '{{.Id}}' "$ref_img" 2>/dev/null || true)"
     if [[ -z "$built_id" ]]; then
-      echo "    (skip) $svc: no worldview-${svc}:latest image found locally."
+      echo "    (skip) $svc: image '$ref_img' not found locally."
       continue
     fi
 
@@ -331,7 +395,7 @@ if [[ "$RECREATE" -eq 1 ]]; then
       # Image-digest match (both are sha256:... image IDs from the same daemon).
       if [[ "$run_id" != "$built_id" ]]; then
         echo "ERROR: STALE CONTAINER — $svc ($cid) runs image '$run_id'" >&2
-        echo "       but freshly built worldview-${svc}:latest is '$built_id'." >&2
+        echo "       but freshly built '$ref_img' is '$built_id'." >&2
         verify_fail=1
       fi
 
@@ -362,7 +426,7 @@ if [[ "$RECREATE" -eq 1 ]]; then
     exit 4
   fi
 
-  echo "==> Done. All ${#SERVICES[@]} variant(s) of '$FAMILY' verified on the new image."
+  echo "==> Done. All ${#RECREATE_SERVICES[@]} variant(s) of '$FAMILY' verified on the new image."
 else
   echo "==> Build complete (--no-recreate: containers NOT restarted)."
 fi
