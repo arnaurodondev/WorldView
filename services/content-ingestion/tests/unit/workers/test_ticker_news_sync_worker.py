@@ -384,4 +384,9 @@ class TestTickerNewsWorkerJWT:
 
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(_test())
+        # Use asyncio.run (not the deprecated get_event_loop().run_until_complete):
+        # under Python 3.12 get_event_loop() raises "no current event loop" when a
+        # prior test in collection order has closed the loop (e.g. its own
+        # asyncio.run), making this test order-dependent. asyncio.run creates and
+        # manages its own loop, so the test passes regardless of collection order.
+        asyncio.run(_test())
