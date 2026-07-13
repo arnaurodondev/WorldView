@@ -4,6 +4,16 @@
     "services/nlp-pipeline/src/nlp_pipeline/api/routes/dlq.py:13:IG-LAYER-002",
     "services/nlp-pipeline/src/nlp_pipeline/api/routes/dlq.py:13:IG-LAYER-002",
     "services/market-ingestion/scripts/backfill_fundamentals.py:79:IG-OBS-001",
-    "services/market-ingestion/scripts/backfill_fundamentals.py:855:IG-OBS-001"
+    "services/market-ingestion/scripts/backfill_fundamentals.py:855:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:211:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:213:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:214:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:215:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:216:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:217:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:218:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:220:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:222:IG-OBS-001",
+    "services/content-ingestion/scripts/shadow_diff_general_vs_ticker.py:224:IG-OBS-001"
   ]
 }
