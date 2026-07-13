@@ -24,6 +24,10 @@ from uuid import uuid4
 import pytest
 from nlp_pipeline.infrastructure.nlp_db.repositories.chunk_search import ChunkANNRepository
 
+# Module-level marker required by the architecture guard (TI-8, STANDARDS.md §20):
+# every unit test file must declare its tier so `-m unit` collection is complete.
+pytestmark = pytest.mark.unit
+
 
 def _make_session() -> AsyncMock:
     """Session mock for the accel path: [set_config(ef), main query, COUNT]."""
