@@ -8,9 +8,10 @@
  * markets, multi-source fusion) over generic "AI-powered" claims.
  *
  * WHY SERVER COMPONENT: All sections are static; pre-rendered at build time.
- * The two interactive sections (PricingTiers monthly/annual toggle,
- * FAQAccordion) are isolated as "use client" leaves so the rest of the page
- * ships zero JS to the client.
+ * The one interactive section (FAQAccordion) is isolated as a "use client"
+ * leaf so the rest of the page ships zero JS to the client. (The former
+ * PricingTiers "use client" toggle was removed in the 2026-07 launch rework —
+ * see BetaAccess.tsx.)
  *
  * WHY JSON-LD INLINE: Search engines (Google, Bing) index Organization
  * schema for sitelinks and rich knowledge-panel results. Embedding the JSON
@@ -34,7 +35,7 @@
  *   9. HowItWorks            — hybrid-retrieval pipeline + 4 credibility pillars
  *  10. ComparisonTable       — Worldview vs Bloomberg / IBKR / TV / Finviz
  *  11. TrustBadges           — data-source attributions
- *  12. PricingTiers          — Free / Pro / Enterprise + monthly/annual toggle
+ *  12. BetaAccess           — "free during beta, no card" access callout
  *  13. Testimonials          — 3 persona scenarios (no fake customer quotes)
  *  14. FAQAccordion          — 11 hardcoded Q&A
  *  15. FinalCTA              — closing "open the terminal" CTA
@@ -56,7 +57,7 @@ import { AIDemoSection } from "@/components/landing/AIDemoSection";
 import { HowItWorks } from "@/components/landing/HowItWorks";
 import { ComparisonTable } from "@/components/landing/ComparisonTable";
 import { TrustBadges } from "@/components/landing/TrustBadges";
-import { PricingTiers } from "@/components/landing/PricingTiers";
+import { BetaAccess } from "@/components/landing/BetaAccess";
 import { Testimonials } from "@/components/landing/Testimonials";
 import { FAQAccordion } from "@/components/landing/FAQAccordion";
 import { FinalCTA } from "@/components/landing/FinalCTA";
@@ -81,7 +82,10 @@ const ORG_JSONLD = {
   logo: `${SITE_URL}/icon-512.png`,
   description:
     "Market intelligence terminal that fuses real-time market data, impact-scored news, and an entity knowledge graph with a grounded, citation-backed AI assistant. Knowledge-graph path discovery, portfolio analytics, and a fundamentals screener in one workspace.",
-  sameAs: ["https://github.com"],
+  // 2026-07 landing rework: removed the placeholder sameAs entry — a bare
+  // "https://github.com" is structured-data noise Google treats as a broken
+  // profile link. Re-add real profile URLs (GitHub org, X, LinkedIn) when
+  // they exist.
 };
 
 /**
@@ -111,10 +115,10 @@ const FAQ_JSONLD = {
   mainEntity: [
     {
       "@type": "Question",
-      name: "Is Worldview a real product or a thesis demo?",
+      name: "Is Worldview a real product or a research demo?",
       acceptedAnswer: {
         "@type": "Answer",
-        text: "Both. It's a fully working terminal with 10 production microservices, a Next.js frontend, and live data integrations — built as a university final thesis demonstrating modern microservice architecture and AI integration. You can sign up free and use it today.",
+        text: "It's a real, live product — a working terminal with 10 production microservices, a Next.js frontend, and live data integrations. It began as a university research project, and that research DNA is why every AI answer must be grounded and cited. You can sign up free and use it today.",
       },
     },
     {
@@ -159,10 +163,10 @@ const FAQ_JSONLD = {
     },
     {
       "@type": "Question",
-      name: "Do you support real-time data?",
+      name: "What does the data cover?",
       acceptedAnswer: {
         "@type": "Answer",
-        text: "Yes on Pro and Enterprise. The free tier uses 15-min delayed quotes (sufficient for end-of-day analysis and screening). Pro upgrades to live tick data via EODHD's WebSocket feed.",
+        text: "End-of-day and intraday equities from EODHD, fundamentals and corporate events from Finnhub, filings from SEC EDGAR, and prediction-market odds from Polymarket. Inside the app, market data refreshes on a short delay — plenty for research, screening, and end-of-day analysis.",
       },
     },
     {
@@ -183,10 +187,10 @@ const FAQ_JSONLD = {
     },
     {
       "@type": "Question",
-      name: "Is there a free trial for Pro?",
+      name: "How much does it cost?",
       acceptedAnswer: {
         "@type": "Answer",
-        text: "Yes — 14 days, no credit card required. After 14 days your account reverts to the Free tier automatically. You'll never be charged without explicit confirmation.",
+        text: "Nothing right now. Worldview is in public beta — every feature is unlocked with no credit card and no trial timer. Paid plans will come later, and we'll give plenty of notice before anything changes; you'll never be charged without explicit confirmation.",
       },
     },
     {
@@ -254,7 +258,7 @@ export default async function LandingPage() {
         <HowItWorks />
         <ComparisonTable />
         <TrustBadges />
-        <PricingTiers />
+        <BetaAccess />
         <Testimonials />
         <FAQAccordion />
         <FinalCTA />

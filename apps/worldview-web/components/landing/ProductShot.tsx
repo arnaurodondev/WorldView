@@ -19,6 +19,15 @@
  * captures run, callers can pass `placeholder` — when set, we render a tasteful
  * mono placeholder panel instead of the <Image>. The caller decides per-shot.
  *
+ * WHY A `mock` SLOT (2026-07 landing rework): the launch page cannot show
+ * "screenshot pending capture" text to real users. Until the Playwright
+ * capture pipeline runs against production, each caller passes a hand-built,
+ * pure-CSS/SVG product illustration (see ./mocks.tsx) via `mock`. It renders
+ * inside the same window chrome as a real screenshot would, reserves the same
+ * aspect ratio (zero CLS when the real PNG eventually drops in), and ships
+ * ZERO client JavaScript because everything is a Server Component. Precedence:
+ * mock > placeholder > <Image>.
+ *
  * DESIGN REFERENCE: docs/design/2026-06-23-landing-page-redesign.md §2
  * (ProductShot row), §0 design-system guardrails (rounded-[2px], semantic
  * tokens, mono labels).
@@ -53,6 +62,14 @@ export interface ProductShotProps {
    * the build green and the layout intact with zero broken-image icons.
    */
   placeholder?: boolean;
+  /**
+   * Hand-built product illustration (Server Component JSX) rendered inside the
+   * window chrome instead of an <Image>. Takes precedence over `placeholder`.
+   * The wrapper carries role="img" + aria-label={alt} so screen readers get
+   * one coherent description; the mock's internals are marked aria-hidden by
+   * the callers in ./mocks.tsx (they are decorative sample data).
+   */
+  mock?: React.ReactNode;
   /** Extra classes applied to the outer frame (e.g. shadow tuning per usage). */
   className?: string;
 }
@@ -66,6 +83,7 @@ export function ProductShot({
   live = false,
   priority = false,
   placeholder = false,
+  mock,
   className = "",
 }: ProductShotProps) {
   return (
@@ -95,7 +113,21 @@ export function ProductShot({
         )}
       </div>
 
-      {placeholder ? (
+      {mock ? (
+        // ── Hand-built product illustration (see ./mocks.tsx) ────────────────
+        // Same aspect-ratio reservation as the placeholder/image paths so the
+        // page layout is identical whichever rendering mode a caller picks.
+        // overflow-hidden clips any mock content that slightly overshoots the
+        // ratio box (e.g. dense table rows) instead of breaking the frame.
+        <div
+          role="img"
+          aria-label={alt}
+          style={{ aspectRatio: `${width} / ${height}` }}
+          className="w-full overflow-hidden"
+        >
+          {mock}
+        </div>
+      ) : placeholder ? (
         // ── Fallback panel (screenshot not captured yet) ─────────────────────
         // A tasteful mono panel that fills the same aspect ratio the real
         // image will occupy, so swapping in the PNG later causes no reflow.

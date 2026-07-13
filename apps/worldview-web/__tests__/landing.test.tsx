@@ -10,12 +10,11 @@
  *   T-A-1-01 HeroSection         — primary CTA href + headline
  *   T-A-1-02 LiveDataStrip       — renders all 6 sample tickers
  *   T-A-1-03 SectorHeatmapPreview — renders 6 sector tiles + heading
- *   T-A-1-04 DifferentiatorsSection — 3 differentiator cards
  *   T-A-1-05 WorkflowSection      — ordered list with 4 steps
  *   T-A-1-06 AIDemoSection        — citations match question
  *   T-A-1-07 ComparisonTable      — header lists 4 competitors + Worldview
  *   T-A-1-08 TrustBadges          — lists 5 data sources
- *   T-A-1-09 PricingTiers         — toggle switches monthly/annual price
+ *   T-A-1-09 BetaAccess           — free-during-beta callout (replaced pricing)
  *   T-A-1-10 Testimonials         — renders 3 personas
  *   T-A-1-11 FAQAccordion         — accordion items toggle on click
  *   T-A-1-12 Footer               — has docs / status / legal links
@@ -44,12 +43,11 @@ vi.mock("next/link", () => ({
 import { HeroSection } from "@/components/landing/HeroSection";
 import { LiveDataStrip } from "@/components/landing/LiveDataStrip";
 import { SectorHeatmapPreview } from "@/components/landing/SectorHeatmapPreview";
-import { DifferentiatorsSection } from "@/components/landing/DifferentiatorsSection";
 import { WorkflowSection } from "@/components/landing/WorkflowSection";
 import { AIDemoSection } from "@/components/landing/AIDemoSection";
 import { ComparisonTable } from "@/components/landing/ComparisonTable";
 import { TrustBadges } from "@/components/landing/TrustBadges";
-import { PricingTiers } from "@/components/landing/PricingTiers";
+import { BetaAccess } from "@/components/landing/BetaAccess";
 import { Testimonials } from "@/components/landing/Testimonials";
 import { FAQAccordion } from "@/components/landing/FAQAccordion";
 import { Footer } from "@/components/landing/Footer";
@@ -69,10 +67,10 @@ describe("T-A-1-01 — HeroSection", () => {
   });
 
   it("renders the hero product screenshot frame (intelligence surface)", () => {
-    // Redesign (2026-06-23): the ASCII <pre> mock was replaced by a real
-    // product screenshot in a ProductShot window-chrome frame. While the PNG
-    // is pending capture the frame renders a placeholder panel exposing the
-    // descriptive alt as role="img".
+    // Redesign (2026-06-23): the ASCII <pre> mock was replaced by a
+    // ProductShot window-chrome frame. 2026-07 rework: while the real PNG is
+    // pending capture, the frame renders a hand-built CSS/SVG illustration
+    // (mocks.tsx) exposing the descriptive alt as role="img".
     render(<HeroSection />);
     expect(
       screen.getByRole("img", { name: /instrument Intelligence tab/i }),
@@ -107,15 +105,6 @@ describe("T-A-1-03 — SectorHeatmapPreview", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: /heatmap/i }),
     ).toBeInTheDocument();
-  });
-});
-
-describe("T-A-1-04 — DifferentiatorsSection", () => {
-  it("renders 3 differentiator cards with all titles", () => {
-    render(<DifferentiatorsSection />);
-    expect(screen.getByText(/News intelligence, not aggregation/i)).toBeInTheDocument();
-    expect(screen.getByText(/Knowledge graph over flat tickers/i)).toBeInTheDocument();
-    expect(screen.getByText(/Multi-source data fusion/i)).toBeInTheDocument();
   });
 });
 
@@ -177,29 +166,32 @@ describe("T-A-1-08 — TrustBadges", () => {
   });
 });
 
-describe("T-A-1-09 — PricingTiers monthly/annual toggle", () => {
-  it("defaults to annual billing and shows the discounted Pro price", () => {
-    render(<PricingTiers />);
-    // Annual Pro = $24/mo
-    expect(screen.getByText("$24")).toBeInTheDocument();
+// T-A-1-09: PricingTiers was removed in the 2026-07 launch rework (the paid
+// Free/Pro/Enterprise tiers, $ prices, and 14-day trial were not backed by a
+// real billing system). It's replaced by the honest free-during-beta callout.
+describe("T-A-1-09 — BetaAccess callout", () => {
+  it("renders the free-during-beta heading and no invented prices", () => {
+    render(<BetaAccess />);
+    expect(
+      screen.getByRole("heading", { level: 2, name: /free while we.re in beta/i }),
+    ).toBeInTheDocument();
+    // Regression guard: none of the removed price/trial claims may reappear.
+    expect(screen.queryByText("$24")).not.toBeInTheDocument();
+    expect(screen.queryByText("$29")).not.toBeInTheDocument();
+    expect(screen.queryByText(/14-day/i)).not.toBeInTheDocument();
   });
 
-  it("switches to monthly when the Monthly toggle is clicked", () => {
-    render(<PricingTiers />);
-    // After QA iter-1: toggle uses aria-pressed (toggle-button pattern), not
-    // role="tab" — see PricingTiers.tsx comment for rationale.
-    const monthlyButton = screen.getByRole("button", { name: /monthly/i });
-    fireEvent.click(monthlyButton);
-    expect(monthlyButton).toHaveAttribute("aria-pressed", "true");
-    // Monthly Pro = $29
-    expect(screen.getByText("$29")).toBeInTheDocument();
+  it("exposes a primary CTA to /register", () => {
+    render(<BetaAccess />);
+    expect(screen.getByTestId("access-primary-cta")).toHaveAttribute(
+      "href",
+      "/register",
+    );
   });
 
-  it("renders all 3 tiers", () => {
-    render(<PricingTiers />);
-    expect(screen.getByRole("heading", { level: 3, name: /^free$/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 3, name: /^pro$/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 3, name: /^enterprise$/i })).toBeInTheDocument();
+  it("is anchored at id=access for the nav link", () => {
+    const { container } = render(<BetaAccess />);
+    expect(container.querySelector("#access")).not.toBeNull();
   });
 });
 
@@ -221,7 +213,7 @@ describe("T-A-1-11 — FAQAccordion", () => {
   it("expands an item when its trigger is clicked", () => {
     render(<FAQAccordion />);
     const trigger = screen.getByRole("button", {
-      name: /thesis demo/i,
+      name: /research demo/i,
     });
     fireEvent.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");

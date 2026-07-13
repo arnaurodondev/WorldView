@@ -21,6 +21,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { ProductShot } from "./ProductShot";
+import { IntelligenceTabMock } from "./mocks";
 
 export function HeroSection() {
   return (
@@ -95,7 +96,7 @@ export function HeroSection() {
               text-muted-foreground for AA contrast on this informational
               sub-CTA copy. */}
           <p className="mt-5 text-xs text-muted-foreground">
-            No credit card · 5-minute setup · Connect EODHD or use sample data
+            No credit card · 5-minute setup · Free during beta
           </p>
         </div>
 
@@ -117,16 +118,17 @@ export function HeroSection() {
 
           <ProductShot
             src="/landing/hero-intelligence.png"
-            alt="Worldview instrument Intelligence tab: an entity knowledge graph with a node selected, alongside its top related entities and relationship types."
+            alt="Stylized preview of the Worldview instrument Intelligence tab: an entity knowledge graph with the Apple to TSMC to ASML supply-chain path highlighted, alongside Apple's top related entities (sample data)."
             label="intelligence"
             width={640}
             height={440}
             live
-            // Hero is above the fold — eager-load for LCP. (Placeholder on
-            // until capture-landing-shots.mjs writes the real PNG.)
             priority
-            // TODO(landing-shots): set placeholder={false} after captures run.
-            placeholder
+            // 2026-07 landing rework: hand-built CSS/SVG illustration until
+            // capture-landing-shots.mjs produces the real production PNG —
+            // never show "screenshot pending capture" to real visitors.
+            // TODO(landing-shots): drop `mock` once the capture pipeline runs.
+            mock={<IntelligenceTabMock />}
           />
         </div>
       </div>

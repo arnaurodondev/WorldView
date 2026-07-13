@@ -12,7 +12,7 @@
  */
 
 import Link from "next/link";
-import { Github, Globe } from "lucide-react";
+import { Globe } from "lucide-react";
 
 const COLUMNS: Array<{ heading: string; links: Array<{ label: string; href: string }> }> = [
   {
@@ -21,7 +21,7 @@ const COLUMNS: Array<{ heading: string; links: Array<{ label: string; href: stri
       { label: "Workspace", href: "/login" },
       { label: "Screener", href: "/login?next=/screener" },
       { label: "AI chat", href: "/login?next=/chat" },
-      { label: "Pricing", href: "/#pricing" },
+      { label: "Beta access", href: "/#access" },
     ],
   },
   {
@@ -38,7 +38,7 @@ const COLUMNS: Array<{ heading: string; links: Array<{ label: string; href: stri
     links: [
       { label: "About", href: "/docs/about" },
       { label: "Status", href: "/status" },
-      { label: "Contact", href: "mailto:hello@worldview.local" },
+      { label: "Contact", href: "mailto:support@worldview-labs.com" },
       { label: "Feedback", href: "/feedback" },
     ],
   },
@@ -71,20 +71,12 @@ export function Footer() {
             <p className="mb-4 text-xs text-muted-foreground">
               Bloomberg-grade research, without the Bloomberg bill.
             </p>
-            {/* External links: rel="noopener noreferrer" defends against
-                tabnabbing if these are ever changed to target="_blank"; no
-                cost on same-tab links. lucide icons are decorative —
-                aria-hidden so SR announces only the parent aria-label.
-                QA iter-1 (security MINOR + a11y polish). */}
+            {/* 2026-07 landing rework: removed the GitHub icon — it pointed at
+                bare github.com (the repo is private), which reads as a broken
+                promise to a technical visitor. Re-add only when there is a
+                real public org/repo to link. lucide icons are decorative —
+                aria-hidden so SR announces only the parent aria-label. */}
             <div className="flex items-center gap-3">
-              <a
-                href="https://github.com"
-                rel="noopener noreferrer"
-                aria-label="GitHub"
-                className="text-muted-foreground hover:text-primary"
-              >
-                <Github className="h-4 w-4" aria-hidden="true" />
-              </a>
               <Link
                 href="/status"
                 aria-label="Status page"
@@ -137,12 +129,17 @@ export function Footer() {
         </div>
 
         <div className="mt-12 flex flex-col items-start justify-between gap-3 border-t border-border/30 pt-8 sm:flex-row sm:items-center">
+          {/* 2026-07 landing rework: launch framing. "Born as university
+              research" keeps the origin story honest without leading with
+              "thesis project" (which reads as "unmaintained demo" to a real
+              user deciding whether to trust the product with their money). */}
           <p className="text-[11px] text-muted-foreground/70">
-            © 2026 Worldview · University final thesis project · Built on
-            EODHD, Finnhub, SEC EDGAR, and Polymarket data.
+            © 2026 Worldview · Born as university research, now live in
+            production · Market data by EODHD, Finnhub, SEC EDGAR &
+            Polymarket.
           </p>
           <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/50">
-            v0.59 · build 2026.05.01
+            v1.0 · build 2026.07
           </p>
         </div>
       </div>

@@ -29,6 +29,12 @@ interface DocsTabsProps {
   storeKey?: string;
 }
 
+// NOTE: `items = []` is kept as DEFENSE-IN-DEPTH, not the primary fix. The
+// real bug (items arriving undefined) was next-mdx-remote v6's blockJS default
+// stripping the `items={[...]}` expression attribute during MDX compile — now
+// fixed at the source in app/docs/[[...slug]]/page.tsx via `blockJS: false`.
+// The default here just guarantees we degrade to an empty tab bar rather than
+// crash the build if a future config change ever re-strips expression props.
 export function DocsTabs({ items = [], children, storeKey }: DocsTabsProps) {
   // Lazy initial state reads localStorage only on first render to avoid
   // SSR mismatch — the value is applied after hydration via useEffect-free

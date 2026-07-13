@@ -8,8 +8,10 @@
  * tiles deep-link down to the showcases (#intelligence, #ai), so the grid also
  * doubles as a table of contents.
  *
- * WHY STATIC / SERVER COMPONENT: no live data; all six thumbnails are captured
- * screenshots (capture-landing-shots.mjs). Pre-rendered for fast TTFB.
+ * WHY STATIC / SERVER COMPONENT: no live data; all six thumbnails are
+ * hand-built CSS/SVG illustrations (./mocks.tsx) until the Playwright capture
+ * pipeline (capture-landing-shots.mjs) produces real PNGs. Pre-rendered for
+ * fast TTFB either way.
  *
  * DESIGN REFERENCE: docs/design/2026-06-23-landing-page-redesign.md §5.
  */
@@ -25,6 +27,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ProductShot } from "./ProductShot";
+import {
+  ChatMock,
+  ConnectionsGraphMock,
+  InstrumentMock,
+  NewsMock,
+  PortfolioMock,
+  ScreenerMock,
+} from "./mocks";
 
 interface Feature {
   icon: LucideIcon;
@@ -35,6 +45,11 @@ interface Feature {
   img: string;
   /** Mono label for the screenshot's window chrome. */
   label: string;
+  /**
+   * Hand-built CSS/SVG illustration shown until capture-landing-shots.mjs
+   * produces the real PNG (2026-07 landing rework — see ./mocks.tsx).
+   */
+  mock: React.ReactNode;
   /** Optional in-page anchor this tile deep-links to (tiles 1 & 2). */
   href?: string;
 }
@@ -46,6 +61,7 @@ const FEATURES: Feature[] = [
     body: "Entities, suppliers, executives and regulators as a queryable graph — plus path discovery between any two names.",
     proof: "AGE graph · ~80K canonical entities · weirdness-ranked paths",
     img: "/landing/feat-graph.png",
+    mock: <ConnectionsGraphMock />,
     label: "intelligence",
     href: "#intelligence",
   },
@@ -55,6 +71,7 @@ const FEATURES: Feature[] = [
     body: "Cited answers with a per-source confidence bar; if it can't ground a claim, it says so.",
     proof: "Hybrid RAG · citation confidence · slash-commands",
     img: "/landing/feat-chat.png",
+    mock: <ChatMock />,
     label: "chat",
     href: "#ai",
   },
@@ -64,6 +81,7 @@ const FEATURES: Feature[] = [
     body: "Equity curve, realized P&L, sector allocation and cash-vs-invested exposure against the same intelligence layer.",
     proof: "Equity curve · realized P&L · colour-blind-safe",
     img: "/landing/feat-portfolio.png",
+    mock: <PortfolioMock />,
     label: "portfolio",
   },
   {
@@ -72,6 +90,7 @@ const FEATURES: Feature[] = [
     body: "Faceted filters, saved screens, inline sparklines, CSV/Excel/PDF export.",
     proof: "8K+ instruments · saved screens · 1-click export",
     img: "/landing/feat-screener.png",
+    mock: <ScreenerMock />,
     label: "screener",
   },
   {
@@ -80,6 +99,7 @@ const FEATURES: Feature[] = [
     body: "Impact-scored headlines across four price windows, ranked by a market + LLM + routing relevance blend.",
     proof: "Impact windows t0/t1/t2/t5 · Top-Today ranking",
     img: "/landing/feat-news.png",
+    mock: <NewsMock />,
     label: "news",
   },
   {
@@ -88,6 +108,7 @@ const FEATURES: Feature[] = [
     body: "Quote, Financials and Intelligence in one 3-tab page — live quote, 52-wk range, fundamentals, indicators, entity graph.",
     proof: "Quote · Financials · Intelligence",
     img: "/landing/feat-instrument.png",
+    mock: <InstrumentMock />,
     label: "instrument",
   },
 ];
@@ -115,16 +136,17 @@ function Tile({ feature }: { feature: Feature }) {
         {feature.body}
       </p>
 
-      {/* 16:10 thumbnail in window chrome. Lazy-loaded (all below the fold). */}
+      {/* 16:10 thumbnail in window chrome. All below the fold; the mocks are
+          pure server-rendered markup so there is nothing to lazy-load. */}
       <ProductShot
         src={feature.img}
-        alt={`${feature.title} — screenshot of the Worldview ${feature.label} surface.`}
+        alt={`${feature.title} — stylized preview of the Worldview ${feature.label} surface (sample data).`}
         label={feature.label}
         width={640}
         height={400}
-        // TODO(landing-shots): flip placeholder off once
-        // capture-landing-shots.mjs has written these PNGs.
-        placeholder
+        // TODO(landing-shots): swap `mock` for the real PNG once
+        // capture-landing-shots.mjs has written these captures.
+        mock={feature.mock}
         className="shadow-none"
       />
 

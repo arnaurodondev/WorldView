@@ -13,14 +13,16 @@
 import Link from "next/link";
 
 // Anchor order mirrors the redesigned section flow (§1): Features ·
-// Intelligence (KG spotlight) · Chat · Workflow · Compare · Pricing · FAQ.
+// Intelligence (KG spotlight) · Chat · Workflow · Compare · Access · FAQ.
+// 2026-07 rework: "Pricing" → "Access" (the paid tiers were removed; the
+// section is now the free-during-beta callout at id="access").
 const NAV_ITEMS: Array<{ label: string; href: string }> = [
   { label: "Features", href: "/#features" },
   { label: "Intelligence", href: "/#intelligence" },
   { label: "Chat", href: "/#ai" },
   { label: "Workflow", href: "/#workflow" },
   { label: "Compare", href: "/#compare" },
-  { label: "Pricing", href: "/#pricing" },
+  { label: "Access", href: "/#access" },
   { label: "FAQ", href: "/#faq" },
 ];
 
