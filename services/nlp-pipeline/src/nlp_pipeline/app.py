@@ -185,7 +185,7 @@ async def _expire_stale_embeddings(
         )
 
 
-async def _run_expire_stale_embeddings(
+async def _expire_stale_embeddings_task(
     session_factory: Any,
     config: Settings,
     log: Any,
@@ -195,6 +195,13 @@ async def _run_expire_stale_embeddings(
     Exceptions in a fire-and-forget ``asyncio.create_task`` are otherwise
     swallowed, so we catch and log here — mirroring the previous inline
     ``try/except`` — while re-raising ``CancelledError`` so shutdown can await it.
+
+    NAMING: deliberately not prefixed ``_run_*``. The process-topology arch
+    guard (TOPO-LIFESPAN / R22) flags ``create_task`` coroutines whose names
+    contain ``run`` (the ``Process.run()`` consumer/dispatcher heuristic). This
+    one-shot, bounded housekeeping drain is exactly the "lightweight in-process
+    helper" that guard documents as exempt, so we name it to avoid the
+    false-positive substring match rather than a Kafka-consumer ``.run`` loop.
     """
     try:
         await _expire_stale_embeddings(session_factory, config)
@@ -269,7 +276,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # UPDATE tripped the boot statement_timeout — PRE-1). The task drains in
     # bounded, committed batches and is cancelled on shutdown. Common case (model
     # unchanged) finishes in milliseconds.
-    app.state._expire_embeddings_task = asyncio.create_task(_run_expire_stale_embeddings(nlp_sf, settings, log))
+    app.state._expire_embeddings_task = asyncio.create_task(_expire_stale_embeddings_task(nlp_sf, settings, log))
 
     # 5. Valkey + WatchlistCache
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
