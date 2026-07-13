@@ -372,10 +372,20 @@ async def _safe_prediction_brief_leg(request: Request) -> Any | None:
         clients = _clients(request)
         # Fresh JWT (unique JTI) for this leg — do NOT reuse the brief's headers,
         # or InternalJWTMiddleware replay-detection could reject one of the calls.
+        #
+        # Short per-request timeout (overrides the client-wide 30s): this leg is
+        # decorative, but the market_data client shares a bounded connection pool
+        # whose pool_timeout is 30s. If that pool is momentarily saturated (a
+        # dashboard fan-out, or leaked connections on a long-lived gateway), a
+        # default-timeout call here would block the WHOLE brief for 30s — long
+        # enough for the frontend proxy to give up and surface a 500. Capping the
+        # leg at 4s means a busy pool degrades it to None almost immediately and
+        # the brief still returns fast.
         resp = await clients.market_data.get(
             "/api/v1/prediction-markets",
             params={"limit": 5, "status": "open"},
             headers=_auth_headers(request),
+            timeout=httpx.Timeout(4.0, connect=2.0),
         )
         if resp.status_code != 200:
             logger.warning("morning_brief_prediction_leg_failed", status=resp.status_code)
