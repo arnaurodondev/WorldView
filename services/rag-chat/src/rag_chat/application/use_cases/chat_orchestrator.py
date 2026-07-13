@@ -3233,6 +3233,22 @@ class ChatOrchestratorUseCase:
         )
         system_prompt = tool_executor._registry.to_system_prompt_section() + "\n\n" + _tool_use_prompt
 
+        # EMNLP ablation (evaluation-only): when the registry has been pruned to
+        # a small allowlist, the static tool-use prompt above still references
+        # the removed tools, so tell the planner explicitly which tools exist.
+        # This turns the document-only baseline into a clean comparison rather
+        # than a tool-removal stress test. No-op in production (29 tools).
+        _ablation_tools = sorted(s.name for s in tool_executor._registry.all_specs())
+        if len(_ablation_tools) < 10:
+            system_prompt += (
+                "\n\nTOOL RESTRICTION (evaluation mode): the ONLY tools that exist "
+                "are: " + ", ".join(_ablation_tools) + ". Ignore every other tool "
+                "name mentioned above; those tools do not exist in this "
+                "configuration. If the question cannot be answered with the "
+                "available tools, say so briefly instead of calling an "
+                "unavailable tool."
+            )
+
         # ── 2026-06-26 #6: language-agnostic tool routing ─────────────────────
         # The Spanish variant of an answerable question mis-routed where the
         # English sibling passed (iter3_apple_competitors_spanish: routed to
