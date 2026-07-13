@@ -169,6 +169,12 @@ demo/
 # Personal contact list (not a project artifact)
 contacts.md
 
+# Terraform / OpenTofu local plugin cache + state (machine-generated; state may hold secrets).
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored — the dependency lock should be committed.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+
 # Presentation build tooling + generated output (not product code)
 presentation/script_to_html.py
 presentation/script.html
