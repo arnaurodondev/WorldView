@@ -680,6 +680,42 @@ Two blockers found during local Docker validation of the code-complete branch, b
   + the old 34-char id recorded — reconciled to the shortened id and reverted the column to varchar(32).
   Verified: `content-ingestion-migrate` sidecar exits 0 on the rebuilt image.
 
+# QA fix (2026-07-13) — prediction-markets LIST endpoint 500 (frontend rows stuck as skeletons)
+
+Live QA: `GET /v1/signals/prediction-markets?limit=N` (the LIST that renders market rows) returned
+`{"detail":"upstream service error"}` — market-data (S3) 500 on `GET /api/v1/prediction-markets` — while
+`/categories` and `/events` were fine. Frontend prediction-markets table never populated (rows stayed
+skeletons; MarketDetailSheet/ProbabilityChart unreachable).
+
+- **ROOT CAUSE — unbounded latest-volume LATERAL cold-scans the whole snapshot hypertable.**
+  `list_markets` LEFT JOIN LATERALs the newest snapshot per market for `volume_24h` (which drives the
+  `ORDER BY volume_24h DESC` "recently-traded first" sort). `prediction_market_snapshots` is a TimescaleDB
+  hypertable (~1.8M rows, weekly chunks). The LATERAL's `ORDER BY snapshot_at DESC LIMIT 1` **cannot stop
+  early** for a market whose newest snapshot is in an old chunk — and 399 of 527 open markets have no
+  snapshot in the last 14 days (they stopped being polled). For each of those, `ChunkAppend` descends
+  EVERY chunk (`EXPLAIN`: `loops=527` over ~10 chunks, `Buffers: read=1866 written=153` = cold disk).
+  Cold latency ~1.8 s/call; warm 44 ms. Under concurrent load the cold 1.8 s queries pile up and exhaust
+  the async DB pool → 500. (Diagnosis matches the greenlet/pool-exhaustion class of `3ed0ddb3d`, but the
+  trigger is the slow query, not session misuse.)
+- **FIX — time-bound BOTH hypertable reads so TimescaleDB prunes chunks.** New config
+  `prediction_market_list_volume_window_days` (default 30) threaded config → `get_list_prediction_markets_uc`
+  → `ListPredictionMarketsUseCase(volume_window_days=…)` → both `list_markets` **and**
+  `get_latest_prices_batch`. (1) The volume LATERAL adds
+  `AND s.snapshot_at >= now() - make_interval(days => :volume_window_days)` (bound param — no interpolation,
+  and the planner folds it for chunk exclusion). `EXPLAIN` confirms **"Chunks excluded during startup: 5"**;
+  warm exec ~60 ms, cold ~370 ms (vs 1.8 s). (2) `get_latest_prices_batch` (the row-price fetch for the page)
+  was the residual cold cost — an unbounded `DISTINCT ON (market_id)` SkipScans every chunk per page market;
+  it now takes the same `window_days` bound, so a row's prices come from the SAME recent-window snapshot as
+  its `volume_24h` (consistent recency). Markets with no in-window snapshot get `volume_24h=NULL` (and no
+  prices) → sort last, which is the DOCUMENTED intent (a >30-day-old "24h volume" is stale and must not float
+  a dead market to the top). `<= 0` / `None` = unbounded (legacy). R25/R27 preserved (read use case on
+  `ReadOnlyUnitOfWork`). Live: 20 concurrent list requests → **all 200, no 500** (the old unbounded path
+  exhausted the pool → 500); warm single ~45 ms.
+- **Tests**: `test_prediction_markets_use_cases.py` (window forwarded / defaults to None) +
+  `test_repositories.py::TestPredictionMarketListVolumeWindow` (bound predicate present as bound-param when
+  set, unbounded LATERAL when None, `<=0` ignored). Live-verified: LIST 200 with real rows, history
+  `?interval=1h` returns points.
+
 # QA fixes (2026-07-12) — prod-readiness blockers (integration branch)
 
 Two CRITICAL blockers found by dev prod-readiness QA on `feat/prediction-data-activation`, both fixed (BP-720):

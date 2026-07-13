@@ -311,6 +311,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         limit: int,
         offset: int,
         category: str | None = None,
+        volume_window_days: int | None = None,
     ) -> tuple[list[tuple[PredictionMarket, Decimal | None]], int]:
         """Return paginated ``(market, latest_volume_24h)`` pairs and total count.
 
@@ -322,11 +323,35 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         row.  LATERAL keeps the join evaluated per-row (uses the partial
         per-market index on snapshot_at) instead of a window function over
         the whole snapshot table.
+
+        PLAN-0056 QA — perf/500 fix: when ``volume_window_days`` is a positive
+        int, the LATERAL is bounded to ``snapshot_at >= now() - N days``. On the
+        TimescaleDB hypertable (weekly chunks, ~1.8M rows) the unbounded
+        ``ORDER BY snapshot_at DESC LIMIT 1`` cannot stop early for a market
+        whose newest snapshot lives in an old chunk (or that stopped being
+        polled): ChunkAppend descends EVERY chunk per market x 527 markets,
+        cold-reading off disk (~1.8 s) — under load these pile up and exhaust
+        the DB pool, so the endpoint 500s and the frontend rows stay skeletons.
+        A time bound lets TimescaleDB prune to the in-window chunks (chunk
+        exclusion), keeping the query bounded (~60-370 ms) regardless of history
+        depth.  Uses the ``ix_pms_market_time (market_id, snapshot_at DESC)``
+        index (Wave A1).  Markets with no in-window snapshot get NULL volume and
+        sort to the bottom — the desired "recently-traded first" behaviour.
         """
         # F-101: build WHERE clause from static string segments only; all user
         # values are bound via named parameters — no f-string interpolation of
         # user data.
         params: dict[str, Any] = {"limit": limit, "offset": offset}
+
+        # PLAN-0056 QA: optional recent-window bound on the latest-snapshot
+        # LATERAL (see docstring). The interval is a *bound parameter* cast to an
+        # INTERVAL of N days — no user/int data is interpolated into the SQL
+        # string, and `now() - :window` is a stable expression the planner uses
+        # for TimescaleDB chunk exclusion.
+        lateral_time_predicate = ""
+        if volume_window_days is not None and volume_window_days > 0:
+            lateral_time_predicate = "    AND s.snapshot_at >= now() - make_interval(days => :volume_window_days) "
+            params["volume_window_days"] = volume_window_days
 
         # Base query — always-true predicate allows clean appending below.
         # WHY LEFT JOIN LATERAL (not DISTINCT ON over snapshots): we want at
@@ -345,8 +370,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
             "LEFT JOIN LATERAL ("
             "  SELECT volume_24h "
             "  FROM prediction_market_snapshots s "
-            "  WHERE s.market_id = m.market_id "
-            "  ORDER BY s.snapshot_at DESC "
+            "  WHERE s.market_id = m.market_id " + lateral_time_predicate + "  ORDER BY s.snapshot_at DESC "
             "  LIMIT 1"
             ") latest ON TRUE"
         )
@@ -544,16 +568,32 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
     async def get_latest_prices_batch(
         self,
         market_ids: list[str],
+        *,
+        window_days: int | None = None,
     ) -> dict[str, dict[str, float]]:
-        """Return latest ``outcomes_prices`` per market using a single DISTINCT ON query."""
+        """Return latest ``outcomes_prices`` per market using a single DISTINCT ON query.
+
+        PLAN-0056 QA: ``window_days`` bounds the scan to a recent time window so
+        the TimescaleDB hypertable prunes chunks (the unbounded DISTINCT ON
+        SkipScans every chunk per market — the residual cold cost after the
+        list-LATERAL fix). See the port docstring for the behaviour contract.
+        """
         if not market_ids:
             return {}
+        params: dict[str, Any] = {"market_ids": market_ids}
+        # F-101: static SQL; the window is a bound param (never interpolated) so
+        # the planner can fold `now() - :window` for TimescaleDB chunk exclusion.
+        time_predicate = ""
+        if window_days is not None and window_days > 0:
+            time_predicate = "AND snapshot_at >= now() - make_interval(days => :window_days) "
+            params["window_days"] = window_days
         sql = text(
             "SELECT DISTINCT ON (market_id) market_id, outcomes_prices "
             "FROM prediction_market_snapshots "
             "WHERE market_id = ANY(CAST(:market_ids AS TEXT[])) "
-            "ORDER BY market_id, snapshot_at DESC"
-        ).bindparams(market_ids=market_ids)
+            + time_predicate
+            + "ORDER BY market_id, snapshot_at DESC"
+        ).bindparams(**params)
         result = await self._session.execute(sql)
         return {
             row.market_id: (row.outcomes_prices if row.outcomes_prices is not None else {}) for row in result.fetchall()

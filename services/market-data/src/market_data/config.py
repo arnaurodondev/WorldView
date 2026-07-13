@@ -80,6 +80,29 @@ class Settings(BaseSettings):
     prediction_move_market_page_size: int = 200
     prediction_move_snapshot_limit: int = 500
 
+    # ── Prediction-market LIST endpoint latest-volume window (PLAN-0056 QA) ─────
+    # The ``GET /api/v1/prediction-markets`` list endpoint LEFT JOIN LATERALs the
+    # newest snapshot per market to surface ``volume_24h`` (which drives the
+    # "recently traded first" ordering). ``prediction_market_snapshots`` is a
+    # TimescaleDB hypertable partitioned by ``snapshot_at`` into weekly chunks
+    # (~1.8M rows / 64 days). WITHOUT a time bound the LATERAL's
+    # ``ORDER BY snapshot_at DESC LIMIT 1`` cannot stop early for a market whose
+    # newest snapshot lives in an OLD chunk (or that has stopped being polled):
+    # ChunkAppend descends EVERY chunk per market x 527 open markets, reading
+    # cold pages off disk (~1.8 s cold). Under concurrent load these slow queries
+    # pile up and exhaust the async DB pool -> the endpoint 500s ("upstream
+    # service error") and the frontend prediction rows stay stuck as skeletons.
+    #
+    # Bounding the lookup to a recent window lets Postgres/TimescaleDB prune to
+    # the few in-window chunks (chunk exclusion), so the query stays bounded
+    # (~60-370 ms) regardless of history depth. Markets with NO snapshot inside
+    # the window fall to ``volume_24h = NULL`` -> sort to the bottom, which is
+    # the DESIRED behaviour: a "24-hour volume" older than this window is stale
+    # and must not float a dead market to the top of the dashboard (this is the
+    # documented intent of the ORDER BY — surface recently-traded markets first).
+    # 0 or negative disables the bound (unbounded LATERAL — legacy behaviour).
+    prediction_market_list_volume_window_days: int = 30
+
     # ── Outbox dispatcher (BUG-4 / BP-612) ─────────────────────────────────────
     # These tune the ``DispatcherConfig`` built in ``dispatcher_main`` /
     # ``create_dispatcher``. Historically market-data built ``DispatcherConfig()``

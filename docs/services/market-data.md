@@ -68,7 +68,7 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
-| GET | `/api/v1/prediction-markets` | List prediction markets — query params: `status` (`open`/`resolved`/`cancelled`/`all`), `limit`, `offset` | — |
+| GET | `/api/v1/prediction-markets` | List prediction markets — query params: `status` (`open`/`resolved`/`cancelled`/`all`), `limit`, `offset`, `category`, `query`. Ordered by latest `volume_24h` DESC (recently-traded first). The latest-volume `LEFT JOIN LATERAL` over `prediction_market_snapshots` is time-bounded to `prediction_market_list_volume_window_days` (default 30d) so the TimescaleDB hypertable prunes to recent chunks — an **unbounded** LATERAL cold-scans every weekly chunk per market and 500s the endpoint under load (PLAN-0056 QA). Markets with no snapshot in-window get `volume_24h=null` and sort last. | — |
 | GET | `/api/v1/prediction-markets/categories` | Per-category counts of currently-open markets (PLAN-0053) | — |
 | GET | `/api/v1/prediction-markets/events` | List Polymarket event groups (newest first) — query params: `limit` (1..200), `offset` (PLAN-0056 A4) | — |
 | GET | `/api/v1/prediction-markets/events/{event_id}` | Single event group (HTTP 404 if unknown) (PLAN-0056 A4) | — |

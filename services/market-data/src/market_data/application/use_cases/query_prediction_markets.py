@@ -32,8 +32,15 @@ class ListPredictionMarketsUseCase:
     so no extra round-trip is needed for that field (PLAN-0048 D-1).
     """
 
-    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork, volume_window_days: int | None = None) -> None:
         self._uow = uow
+        # PLAN-0056 QA: recent-window bound (days) for the latest-volume LATERAL
+        # in ``list_markets``.  Snapshotted from ``Settings`` at construction so
+        # a single request uses one consistent bound.  ``None`` / ``<= 0`` =
+        # unbounded (legacy behaviour).  See config
+        # ``prediction_market_list_volume_window_days`` for the rationale (the
+        # TimescaleDB chunk-scan 500 this prevents).
+        self._volume_window_days = volume_window_days
 
     async def execute(
         self,
@@ -63,12 +70,20 @@ class ListPredictionMarketsUseCase:
             limit=limit,
             offset=offset,
             category=category,
+            volume_window_days=self._volume_window_days,
         )
         if not pairs:
             return [], total
 
         market_ids = [m.market_id for m, _vol in pairs]
-        prices_by_market = await self._uow.prediction_market_snapshots_read.get_latest_prices_batch(market_ids)
+        # PLAN-0056 QA: bound the batch price scan to the same recent window as
+        # the volume LATERAL so (a) the hypertable prunes chunks (no cold
+        # SkipScan across all chunks) and (b) a row's prices come from the SAME
+        # snapshot that produced its volume_24h (consistent recency).
+        prices_by_market = await self._uow.prediction_market_snapshots_read.get_latest_prices_batch(
+            market_ids,
+            window_days=self._volume_window_days,
+        )
         return [(m, prices_by_market.get(m.market_id, {}), vol) for m, vol in pairs], total
 
 

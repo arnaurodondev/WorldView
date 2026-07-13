@@ -364,10 +364,19 @@ def get_screen_fields_uc(
 # ── Prediction market use case deps ──────────────────────────────────────────
 
 
-def get_list_prediction_markets_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> ListPredictionMarketsUseCase:
+def get_list_prediction_markets_uc(
+    request: Request,
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> ListPredictionMarketsUseCase:
     from market_data.application.use_cases.query_prediction_markets import ListPredictionMarketsUseCase
 
-    return ListPredictionMarketsUseCase(uow)
+    # PLAN-0056 QA: bound the latest-volume LATERAL to a recent window so the
+    # TimescaleDB hypertable prunes to recent chunks (prevents the cold
+    # full-chunk-scan that 500s this endpoint under load). getattr keeps this
+    # forward-compatible with settings objects that predate the field.
+    settings = request.app.state.settings
+    window_days: int = getattr(settings, "prediction_market_list_volume_window_days", 30)
+    return ListPredictionMarketsUseCase(uow, volume_window_days=window_days)
 
 
 def get_prediction_market_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetPredictionMarketUseCase:

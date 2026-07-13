@@ -687,6 +687,7 @@ class PredictionMarketRepository(ABC):
         limit: int,
         offset: int,
         category: str | None = None,
+        volume_window_days: int | None = None,
     ) -> tuple[list[tuple[PredictionMarket, Decimal | None]], int]:
         """Return a paginated list of ``(market, latest_volume_24h)`` pairs and total.
 
@@ -701,6 +702,14 @@ class PredictionMarketRepository(ABC):
         (``LEFT JOIN LATERAL ... ORDER BY snapshot_at DESC LIMIT 1``); ``None``
         when the market has no snapshots or the latest snapshot has no volume.
         Forward-compatible: callers tolerating ``None`` continue to work.
+
+        ``volume_window_days`` (PLAN-0056 QA): when a positive int, bound the
+        latest-snapshot LATERAL to ``snapshot_at >= now() - N days`` so the
+        TimescaleDB hypertable prunes to recent chunks instead of descending
+        every chunk per market (which cold-scans ~1.8M rows and 500s the
+        endpoint under load). Markets with no in-window snapshot get
+        ``latest_volume_24h = None`` and sort to the bottom (stale volume must
+        not float a dead market to the top). ``None`` / ``<= 0`` = unbounded.
         """
 
     @abstractmethod
@@ -759,6 +768,8 @@ class PredictionMarketSnapshotRepository(ABC):
     async def get_latest_prices_batch(
         self,
         market_ids: list[str],
+        *,
+        window_days: int | None = None,
     ) -> dict[str, dict[str, float]]:
         """Return the latest ``outcomes_prices`` for each market in ``market_ids``.
 
@@ -766,6 +777,16 @@ class PredictionMarketSnapshotRepository(ABC):
         query regardless of how many markets are requested (avoids N+1).
 
         Returns a dict keyed by ``market_id``; missing markets are not included.
+
+        ``window_days`` (PLAN-0056 QA): when a positive int, bound the scan to
+        ``snapshot_at >= now() - N days`` so the TimescaleDB hypertable prunes to
+        recent chunks instead of ``DISTINCT ON``-SkipScanning every chunk per
+        market (a cold second contributor to the list-endpoint pool exhaustion).
+        Kept in lock-step with the list use case's ``volume_window_days`` so a
+        market's row shows prices from the SAME recent-window snapshot that
+        produced its ``volume_24h``; a market with no in-window snapshot is
+        simply omitted (its row already carries ``volume_24h=None`` and sorts
+        last).  ``None`` / ``<= 0`` = unbounded (legacy behaviour).
         """
 
 

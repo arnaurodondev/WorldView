@@ -267,6 +267,68 @@ async def test_list_markets_omits_category_when_not_provided() -> None:
     assert call_kwargs["category"] is None
 
 
+# ── PLAN-0056 QA: latest-volume window bound (500 / perf fix) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_markets_forwards_volume_window_to_repo() -> None:
+    """A configured ``volume_window_days`` is passed to ``list_markets``.
+
+    PLAN-0056 QA: this is the perf/500 fix — the repo must receive the window so
+    its latest-volume LATERAL is time-bounded and TimescaleDB can prune chunks.
+    If a refactor drops the plumbing, the endpoint silently reverts to the
+    unbounded full-chunk-scan that 500s under load, and no other test catches it.
+    """
+    uow = _make_uow(markets=[], total=0)
+    uc = ListPredictionMarketsUseCase(uow, volume_window_days=30)
+
+    await uc.execute(status="open")
+
+    call_kwargs = uow.prediction_markets_read.list_markets.call_args.kwargs
+    assert call_kwargs["volume_window_days"] == 30
+
+
+@pytest.mark.asyncio
+async def test_list_markets_forwards_window_to_price_batch() -> None:
+    """The batch price fetch is bounded to the SAME window as the volume LATERAL.
+
+    PLAN-0056 QA: ``get_latest_prices_batch`` is the residual cold
+    hypertable-scan after the LATERAL fix. It must receive ``window_days`` so it
+    prunes chunks AND so a row's prices come from the same recent-window
+    snapshot as its ``volume_24h`` (consistent recency).
+    """
+    market = _make_market()
+    uow = _make_uow(
+        markets=[market],
+        total=1,
+        latest_prices={"mkt-001": {"Yes": 0.7, "No": 0.3}},
+        volumes_by_market={"mkt-001": Decimal("100")},
+    )
+    uc = ListPredictionMarketsUseCase(uow, volume_window_days=30)
+
+    await uc.execute(status="open")
+
+    batch_call = uow.prediction_market_snapshots_read.get_latest_prices_batch.call_args
+    assert batch_call.kwargs["window_days"] == 30
+
+
+@pytest.mark.asyncio
+async def test_list_markets_defaults_volume_window_to_none() -> None:
+    """When no window is configured the use case forwards ``None`` (unbounded).
+
+    Pins the default so a legacy/tests-only construction keeps the previous
+    unbounded behaviour rather than accidentally bounding to 0 days (which would
+    return NULL volume for every market).
+    """
+    uow = _make_uow(markets=[], total=0)
+    uc = ListPredictionMarketsUseCase(uow)
+
+    await uc.execute(status="open")
+
+    call_kwargs = uow.prediction_markets_read.list_markets.call_args.kwargs
+    assert call_kwargs["volume_window_days"] is None
+
+
 # ── GetPredictionMarketUseCase ────────────────────────────────────────────────
 
 

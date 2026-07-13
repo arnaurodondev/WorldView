@@ -701,6 +701,114 @@ class TestPredictionMarketListQueryEscape:
         assert "ESCAPE '\\\\'" not in sql, f"two-backslash ESCAPE must not appear: {sql}"
 
 
+class TestPredictionMarketListVolumeWindow:
+    """PLAN-0056 QA — the latest-volume LATERAL time-window bound.
+
+    ``prediction_market_snapshots`` is a TimescaleDB hypertable (~1.8M rows,
+    weekly chunks). The unbounded ``ORDER BY snapshot_at DESC LIMIT 1`` LATERAL
+    cannot stop early for markets whose newest snapshot is in an old chunk, so
+    it cold-scans every chunk per market x 527 markets (~1.8 s) and 500s the
+    endpoint under load. ``volume_window_days`` bounds the LATERAL so
+    TimescaleDB prunes to recent chunks (verified live: 5 chunks excluded,
+    ~60-370 ms). These tests pin that the SQL is emitted (bound param, not
+    interpolated) when a window is set and stays unbounded otherwise.
+    """
+
+    async def _run(self, *, volume_window_days):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketRepository,
+        )
+
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = []
+        session.execute.return_value = result
+
+        repo = PgPredictionMarketRepository(session)
+        await repo.list_markets(
+            status="open",
+            query=None,
+            limit=10,
+            offset=0,
+            volume_window_days=volume_window_days,
+        )
+        text_clause = session.execute.call_args[0][0]
+        params = {k: v.value for k, v in text_clause._bindparams.items()}
+        return text_clause.text, params
+
+    async def test_window_adds_bounded_snapshot_predicate(self):
+        """A positive window emits a bound-param time predicate inside the LATERAL."""
+        sql, params = await self._run(volume_window_days=30)
+
+        # The LATERAL is time-bounded so TimescaleDB can prune chunks.
+        assert "s.snapshot_at >= now() - make_interval(days => :volume_window_days)" in sql
+        # The window is a *bound parameter* — never interpolated into the SQL
+        # string (no injection surface, and the planner still folds it for
+        # chunk exclusion).
+        assert params["volume_window_days"] == 30
+        assert "30" not in sql
+        # Predicate lives inside the LATERAL (before its ORDER BY), not in the
+        # outer WHERE — so it bounds the per-market snapshot lookup, not the
+        # market set.
+        assert sql.index("make_interval") < sql.index("ORDER BY s.snapshot_at DESC")
+
+    async def test_no_window_keeps_unbounded_lateral(self):
+        """``None`` window preserves the legacy unbounded LATERAL (no time bound)."""
+        sql, params = await self._run(volume_window_days=None)
+
+        assert "make_interval" not in sql
+        assert "volume_window_days" not in params
+        # The LATERAL still pulls the newest snapshot per market.
+        assert "ORDER BY s.snapshot_at DESC" in sql
+
+    async def test_non_positive_window_is_ignored(self):
+        """``0`` / negative disables the bound (defensive — never a 0-day window).
+
+        A 0-day window would return NULL volume for every market (nothing is
+        ``>= now()``), so the code treats ``<= 0`` as "unbounded" rather than
+        applying a self-defeating predicate.
+        """
+        for bad in (0, -5):
+            sql, params = await self._run(volume_window_days=bad)
+            assert "make_interval" not in sql, f"window={bad} must be ignored"
+            assert "volume_window_days" not in params
+
+    async def _run_price_batch(self, *, window_days):
+        """Execute ``get_latest_prices_batch`` against a mock session; return (sql, params)."""
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketSnapshotRepository,
+        )
+
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = []
+        session.execute.return_value = result
+
+        repo = PgPredictionMarketSnapshotRepository(session)
+        await repo.get_latest_prices_batch(["mkt-1", "mkt-2"], window_days=window_days)
+        text_clause = session.execute.call_args[0][0]
+        params = {k: v.value for k, v in text_clause._bindparams.items()}
+        return text_clause.text, params
+
+    async def test_price_batch_window_bounds_scan(self):
+        """A positive window bounds the batch price scan with a bound param."""
+        sql, params = await self._run_price_batch(window_days=30)
+
+        assert "snapshot_at >= now() - make_interval(days => :window_days)" in sql
+        assert params["window_days"] == 30
+        assert "30" not in sql
+        # Bound still lives before the DISTINCT ON's ORDER BY.
+        assert sql.index("make_interval") < sql.index("ORDER BY market_id")
+
+    async def test_price_batch_no_window_is_unbounded(self):
+        """``None`` window keeps the legacy unbounded DISTINCT ON batch scan."""
+        sql, params = await self._run_price_batch(window_days=None)
+
+        assert "make_interval" not in sql
+        assert "window_days" not in params
+        assert "DISTINCT ON (market_id)" in sql
+
+
 class TestPredictionMarketQueryTokenizer:
     """R2 fix — tokenised multi-word free-text search.
 
