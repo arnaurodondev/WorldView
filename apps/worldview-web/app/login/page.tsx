@@ -116,43 +116,50 @@ function LoginContent() {
   // Only same-origin relative paths (starting with "/") are allowed.
   const redirectTo = sanitizeRedirect(searchParams.get("redirect_to"));
 
-  // ── Probe whether Zitadel is available ────────────────────────────────
+  // ── Probe whether Zitadel OIDC is available ───────────────────────────
   //
-  // PLAN-0053 T-F-6-12: tightened — the dev-login affordance now requires
-  // BOTH conditions (logical AND, was OR):
-  //   1. The S9 gateway returns 502 on /v1/auth/login (OIDC discovery failed)
-  //   2. NEXT_PUBLIC_ZITADEL_URL is missing
+  // BUGFIX (local-dev login blocker): the gateway's OIDC-init route
+  // (`GET /api/v1/auth/login`) is the AUTHORITATIVE signal for whether real
+  // OIDC login works. When Zitadel is configured it returns a 302 redirect to
+  // Zitadel; when OIDC is NOT configured (local dev) it returns 502 with body
+  // `{"error":"oidc_discovery_failed"}`. The correct semantics for that 502 is
+  // "OIDC unavailable → OFFER dev login", not "auth broken → hide everything".
   //
-  // WHY both: prevents the dev-login button from appearing in production
-  // deployments where the env var is set but the gateway has a transient
-  // upstream hiccup. Previously, a single 502 from S9 (e.g. Zitadel
-  // momentarily unreachable) was enough to flip a real user into a "dev
-  // login bypass available" state — which is a security concern even if
-  // the dev-login endpoint itself rejects the request when Zitadel is
-  // actually configured. Tightening the probe means dev-login can ONLY
-  // appear in genuine local-dev scenarios where the env var isn't set.
+  // WHY THIS CHANGED (was PLAN-0053 T-F-6-12 AND-gate):
+  // The previous logic required BOTH a 502 probe AND `NEXT_PUBLIC_ZITADEL_URL`
+  // to be unset, with an early return that skipped the probe entirely whenever
+  // the env var WAS set. That AND-gate silently hid the Dev Login button for a
+  // very common local setup: a developer who sets `NEXT_PUBLIC_ZITADEL_URL`
+  // (as `.env.example` shows for PKCE testing) but does NOT actually have
+  // Zitadel running. In that case the OIDC-init route 502s, real login is
+  // impossible, AND the dev-login button was hidden — leaving no way to log in
+  // through the UI at all. It also made the affordance depend on a client-side
+  // env var whose absence is easy to get wrong.
+  //
+  // NEW SEMANTICS — the gateway probe decides, so prod stays safe:
+  //   • 502  → OIDC is explicitly unconfigured  → SHOW dev login.
+  //   • 2xx/3xx (302) → OIDC works (Zitadel)    → HIDE dev login (prod path).
+  //   • network error / timeout → gateway unreachable (ambiguous) → fall back
+  //     to the env-var hint: only offer dev login if the OIDC env var is also
+  //     missing, so a real production infra outage does not surface a dev
+  //     bypass affordance. In prod the env var is set, so a gateway outage
+  //     keeps the button hidden; in local dev the env var is typically unset,
+  //     so a not-yet-started gateway still offers dev login.
+  //
+  // Production safety is preserved because a configured Zitadel returns 302
+  // (button hidden), and even in the unlikely event of a transient prod 502
+  // the dev-login endpoint itself returns 403 when OIDC is configured — which
+  // handleDevLogin() below catches and uses to hide the button again.
   useEffect(() => {
-    const zitadelBaseUrl = process.env.NEXT_PUBLIC_ZITADEL_URL;
-    const envMissing = !zitadelBaseUrl;
+    // Whether the client build has an OIDC issuer configured. Used ONLY as a
+    // tie-breaker when the gateway is unreachable (see below).
+    const envMissing = !process.env.NEXT_PUBLIC_ZITADEL_URL;
 
-    // Fast path: if env IS configured, dev-login is never offered. Skip the
-    // probe entirely — production deployments shouldn't pay a network round
-    // trip on every login page render.
-    if (!envMissing) {
-      setDevLoginAvailable(false);
-      return;
-    }
-
-    // Env var IS missing. Confirm with the gateway that OIDC is also
-    // unconfigured server-side (502 == oidc_discovery_failed) before
-    // showing the dev-login button. Belt-and-braces — if a misconfigured
-    // build slips out without the env var but with a healthy Zitadel
-    // (rare but possible), we still don't show the dev shortcut.
     async function probeOidc() {
       // WHY AbortController: without a timeout this fetch hangs until the
       // browser's internal limit (~25 s) when the gateway is cold or slow.
-      // 5 s matches the dev-login handler's hard timeout; on abort we treat
-      // it the same as a network error and show the dev-login button.
+      // 5 s matches the dev-login handler's hard timeout; on abort we treat it
+      // as "gateway unreachable" and defer to the env-var tie-breaker.
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
       try {
@@ -162,16 +169,17 @@ function LoginContent() {
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
-        // 302 = OIDC is working (Zitadel redirect); 502 = OIDC unavailable.
-        // Only flip dev-login on when the gateway agrees with the env var.
-        if (resp.status === 502) {
-          setDevLoginAvailable(true);
-        }
+        // 502 == oidc_discovery_failed → OIDC unconfigured → offer dev login.
+        // Anything else (302 redirect to Zitadel, or a 2xx) means real OIDC is
+        // available → hide the dev-login shortcut and show the Zitadel button.
+        setDevLoginAvailable(resp.status === 502);
       } catch {
         clearTimeout(timeoutId);
-        // Network error or AbortError (timeout) — env var is also missing,
-        // so this is almost certainly a local dev environment.
-        setDevLoginAvailable(true);
+        // Network error or AbortError (timeout): the gateway did not answer, so
+        // we can't confirm OIDC status. Defer to the env-var hint — offer dev
+        // login only when the OIDC issuer is also unconfigured (local dev),
+        // never on a production build where the issuer env var is set.
+        setDevLoginAvailable(envMissing);
       }
     }
     void probeOidc();

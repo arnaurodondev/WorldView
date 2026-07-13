@@ -141,22 +141,39 @@ Copy `apps/worldview-web/.env.example` to `apps/worldview-web/.env.local`:
 | `NEXT_PUBLIC_SENTRY_DSN` | *(empty)* | Client | Sentry DSN — empty = disabled (no-op in dev) |
 | `SENTRY_AUTH_TOKEN` | *(CI only)* | Build | Sentry sourcemap upload; never put in `.env.local` |
 
-> `NEXT_PUBLIC_ZITADEL_URL` is intentionally left without a default. If it is empty,
-> the login page detects this and shows the "Dev Login" button instead of the Zitadel OIDC flow.
-> Adding a `??` fallback would suppress the dev button even when Zitadel isn't running.
+> `NEXT_PUBLIC_ZITADEL_URL` is intentionally left without a default. The login page decides
+> between the Zitadel OIDC flow and the "Dev Login" button primarily by **probing the gateway's
+> OIDC-init route** (see §4.4); this env var is only a tie-breaker used when the gateway is
+> unreachable. Adding a `??` fallback here would still be wrong, but the probe-first logic means
+> Dev Login now appears whenever OIDC genuinely 502s even if this var is accidentally set.
 
 ### 4.4 Dev Login Mode
 
-When `NEXT_PUBLIC_ZITADEL_URL` is not set, the platform's dev-login shortcut activates:
+When Zitadel OIDC is not configured, the platform's dev-login shortcut activates:
 
 1. Navigate to `http://localhost:3001` — you are redirected to `/login`.
-2. The login page detects that Zitadel is not configured and renders a **"Dev Login"** button.
+2. On mount, the login page **probes the gateway's OIDC-init route** (`GET /api/v1/auth/login`).
+   This probe is the authoritative signal for whether real OIDC login works:
+   - `502` (`oidc_discovery_failed`) → OIDC is unconfigured → the **"Dev Login"** button is shown
+     and the Zitadel button is hidden.
+   - `302` (redirect to Zitadel) → OIDC works → the Zitadel button is shown and Dev Login is hidden.
+   - network error / timeout → gateway unreachable (ambiguous) → falls back to the
+     `NEXT_PUBLIC_ZITADEL_URL` hint (offer Dev Login only when the issuer env var is also unset).
 3. Clicking "Dev Login" calls `POST /api/v1/auth/dev-login` on S9, which returns an internal JWT
    for the seed demo user.
-4. The frontend stores the token in React state and redirects to `/dashboard`.
+4. The frontend stores the token in React state (`AuthContext.setTokens`) and redirects to `/dashboard`.
+
+> **Why the probe is authoritative (not just the env var):** an earlier build gated Dev Login on
+> `NEXT_PUBLIC_ZITADEL_URL` being unset *and* a 502 probe (logical AND), skipping the probe entirely
+> whenever the env var was set. That hid the Dev Login button for the common local setup where a
+> developer sets `NEXT_PUBLIC_ZITADEL_URL` (per `.env.example`, for PKCE testing) but does not have
+> Zitadel actually running — the OIDC route 502s, real login is impossible, and Dev Login was hidden,
+> leaving no way to log in through the UI. The probe-first logic keeps production safe (a configured
+> Zitadel returns 302 → Dev Login hidden) while always offering the shortcut when OIDC genuinely 502s.
 
 **Security**: The dev-login endpoint returns `403 Forbidden` when `OIDC_DISCOVERY_OPTIONAL=false`
-(i.e., in production). It is never accessible in a properly configured deployment.
+(i.e., in production). It is never accessible in a properly configured deployment — and even if the
+button were shown during a transient production 502, clicking it 403s and the page re-hides it.
 
 **Prerequisite**: Run `make seed` to ensure the demo user and sample data exist in the database.
 
