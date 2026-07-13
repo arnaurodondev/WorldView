@@ -13,6 +13,7 @@ build/
 # Virtual environments
 .venv/
 .venv-ci-local/
+.venv-demo/
 .venv312
 venv/
 env/
@@ -160,6 +161,13 @@ arnau_*.pdf
 results/chat_model_eval/
 results/desc_grounding_eval/
 results/kg_desc_eval/
+scripts/eval_runs/
+
+# Demo recording/screenshot artifacts + its throwaway venv (large, machine-generated)
+demo/
+
+# Personal contact list (not a project artifact)
+contacts.md
 
 # Presentation build tooling + generated output (not product code)
 presentation/script_to_html.py
