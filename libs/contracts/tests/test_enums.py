@@ -17,6 +17,8 @@ class TestContentSourceType:
 
     def test_all_values(self) -> None:
         # PLAN-0106: EODHD_TICKER_NEWS added as a dedicated ticker-news adapter.
+        # PLAN-0056: Polymarket deeper-stream sources (CLOB / data-api trades &
+        # open-interest / gamma events) added for prediction-market ingestion.
         expected = {
             "eodhd",
             "eodhd_ticker_news",
@@ -25,12 +27,16 @@ class TestContentSourceType:
             "newsapi",
             "manual",
             "polymarket",
+            "polymarket_gamma_events",
+            "polymarket_clob",
+            "polymarket_data_trades",
+            "polymarket_data_oi",
             "tenant_upload",
         }
         assert {v.value for v in ContentSourceType} == expected
 
     def test_member_count(self) -> None:
-        assert len(ContentSourceType) == 8
+        assert len(ContentSourceType) == 12
 
     def test_string_comparison(self) -> None:
         assert ContentSourceType.EODHD == "eodhd"
