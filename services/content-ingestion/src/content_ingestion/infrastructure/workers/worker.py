@@ -316,6 +316,15 @@ class WorkerProcess:
             await self._execute_trades_stream_task(task)
             return
 
+        # PLAN-0056 QA: CLOB price history gets the SAME dedicated incremental +
+        # bounded path (per-market cursor, rotating market window, per-market
+        # commit) to stop the ``market.prediction.history.v1`` firehose (one
+        # outbox event PER datapoint x full backfill depth x every cycle) that
+        # flooded the outbox and starved the FIFO dispatcher behind it.
+        if task.source_type == SourceType.POLYMARKET_CLOB:
+            await self._execute_history_stream_task(task)
+            return
+
         if task.source_type in _PREDICTION_STREAM_SOURCE_TYPES:
             await self._execute_prediction_stream_task(task)
             return
@@ -1150,6 +1159,221 @@ class WorkerProcess:
             logger.error(
                 "trades_progress_persist_failed",
                 condition_id=condition_id,
+                error=str(exc),
+            )
+
+    # ── PLAN-0056 QA — incremental + bounded CLOB history stream ──────────────
+
+    async def _execute_history_stream_task(self, task: ContentIngestionTask) -> None:
+        """Execute the Polymarket CLOB ``/prices-history`` task INCREMENTALLY.
+
+        ROOT CAUSE (fixed here): the generic single-pass path re-fetched the FULL
+        ``backfill_days`` price depth (2 weeks x hourly ≈ 336 points/token) for
+        EVERY work-list token EVERY cycle, and the history payload builder emits
+        ONE outbox event PER datapoint. The fetch_log dedup keyed on
+        ``(token_id, fetched_at)`` never hit (``fetched_at`` advances each cycle),
+        so every cycle re-emitted the entire depth for every token → millions of
+        pending ``market.prediction.history.v1`` rows that starved the single
+        FIFO outbox dispatcher (and behind it trades + synthetic docs).
+
+        This path instead mirrors the trades fix (:meth:`_execute_trades_stream_task`):
+        1. Marks RUNNING.
+        2. Reads the ``markets`` work-list + persisted ``history_cursors`` +
+           ``history_market_offset`` from ``sources.config`` (short session,
+           closed before I/O — R24).
+        3. Processes a ROTATING WINDOW of ``markets_per_cycle`` markets so a cycle
+           emits a bounded number of events (thousands, not millions).
+        4. Per market: fetches ONLY points newer than the cursor (bounded by the
+           points cap), writes them under the ``s4:fetch`` advisory lock (the use
+           case commits per fetch-result — R8 outbox), then COMMITS the advanced
+           cursor + rotation offset so a timeout/retry resumes at the next market.
+        """
+        import time as _time
+
+        from content_ingestion.application.use_cases.fetch_and_write_prediction_streams import (
+            PREDICTION_HISTORY_SPEC,
+            FetchAndWritePredictionStreamUseCase,
+        )
+        from content_ingestion.domain.entities import Source
+        from content_ingestion.infrastructure.adapters.polymarket_clob.adapter import PolymarketClobHistoryAdapter
+        from content_ingestion.infrastructure.adapters.polymarket_clob.client import PolymarketClobHistoryClient
+
+        # 1. Mark RUNNING.
+        async with self._write_factory() as session:
+            task_repo = TaskRepository(session)
+            try:
+                task.start()
+                await task_repo.update_status(task.id, task.status)
+                await session.commit()
+            except Exception as exc:
+                await session.rollback()
+                logger.error("history_stream_task_start_failed", task_id=str(task.id), error=str(exc))
+                return
+
+        # 2. Load the live source config (work-list + cursors + rotation offset).
+        async with self._write_factory() as config_session:
+            source_model = await SourceRepository(config_session).get_by_id(task.source_id)
+            source_config = dict(source_model.config) if source_model and source_model.config else {}
+        source = Source(
+            id=task.source_id,
+            name=task.source_name,
+            source_type=task.source_type,
+            enabled=True,
+            config=source_config,
+        )
+        all_markets = PolymarketClobHistoryAdapter._extract_markets(source)
+        if not all_markets:
+            logger.info("history_stream_no_markets", task_id=str(task.id), source=task.source_name)
+            await self._mark_stream_task_succeeded(task)
+            return
+
+        # 3. Select the rotating per-cycle market window.
+        clob_cfg = self._settings.polymarket_clob
+        n = len(all_markets)
+        per_cycle = min(clob_cfg.markets_per_cycle, n)
+        offset = int(source_config.get("history_market_offset", 0) or 0)
+        if offset < 0 or offset >= n:
+            offset = 0
+        window = [all_markets[(offset + i) % n] for i in range(per_cycle)]
+        cursors: dict[str, Any] = dict(source_config.get("history_cursors") or {})
+
+        # 4. Build the adapter (window from settings; NO session held during I/O).
+        clob_settings = clob_cfg.model_copy(update={"backfill_days": self._settings.polymarket_history_backfill_days})
+        adapter = PolymarketClobHistoryAdapter(
+            client=PolymarketClobHistoryClient(http_client=self._http_client, settings=clob_settings),
+            fetch_log_exists_fn=self._make_dedup_exists_fn(),
+            settings=clob_settings,
+            storage=self._storage,
+        )
+        is_backfill = self._settings.backfill_on_startup
+
+        total_fetched = 0
+        total_emitted = 0
+        total_skipped = 0
+        total_failed = 0
+        markets_failed = 0
+        start = _time.monotonic()
+
+        for i, market in enumerate(window):
+            key = self._history_market_key(market)
+            try:
+                market_result = await adapter.fetch_market(market, cursors.get(key), is_backfill=is_backfill)
+            except Exception as exc:
+                # A single market's fetch error is non-fatal — advance rotation past
+                # it (persist the resume offset) so the cycle keeps making progress.
+                logger.error("history_market_fetch_failed", market_key=key, error=str(exc))
+                markets_failed += 1
+                await self._persist_history_progress(task.source_id, key, None, (offset + i + 1) % n)
+                continue
+
+            if market_result.results:
+                async with (
+                    self._write_factory() as session,
+                    pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
+                ):
+                    if acquired:
+                        write_use_case = FetchAndWritePredictionStreamUseCase(
+                            fetch_log_repo=PredictionMarketFetchLogRepository(session),
+                            outbox_repo=OutboxRepository(session),
+                            spec=PREDICTION_HISTORY_SPEC,
+                            commit_fn=session.commit,
+                            rollback_fn=session.rollback,  # M-02: unpoison on failure
+                        )
+                        summary = await write_use_case.execute(
+                            market_result.results, source_id=task.source_id, is_backfill=is_backfill
+                        )
+                        total_fetched += summary.fetched
+                        total_emitted += summary.emitted
+                        total_skipped += summary.skipped
+                        total_failed += summary.failed
+
+            # INCREMENTAL COMMIT: persist this market's advanced cursor + the
+            # resume offset so a later timeout/retry does not re-do this market.
+            await self._persist_history_progress(task.source_id, key, market_result.new_cursor, (offset + i + 1) % n)
+
+        duration = _time.monotonic() - start
+        record_fetch(
+            task.source_name,
+            fetched=total_fetched,
+            skipped=total_skipped,
+            failed=total_failed,
+            duration=duration,
+        )
+        logger.info(
+            "history_stream_cycle_complete",
+            task_id=str(task.id),
+            markets=len(window),
+            markets_failed=markets_failed,
+            fetched=total_fetched,
+            emitted=total_emitted,
+            duration_seconds=round(duration, 3),
+        )
+
+        # 5. Final status: only fail when EVERY windowed market errored (nothing
+        # written), so the scheduler retries; otherwise SUCCEEDED (partial progress
+        # is already durably committed per market).
+        if window and markets_failed == len(window) and total_fetched == 0:
+            async with self._write_factory() as fail_session:
+                fail_repo = TaskRepository(fail_session)
+                task.fail(f"all_{markets_failed}_history_markets_failed")
+                await fail_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+                await fail_session.commit()
+            return
+        await self._mark_stream_task_succeeded(task)
+
+    @staticmethod
+    def _history_market_key(market: Any) -> str:
+        """Stable per-market cursor key: the parent conditionId, or a token surrogate.
+
+        Legacy flat-``token_ids`` work-items have no parent conditionId
+        (``condition_id is None``); fall back to the joined token ids so each
+        legacy market still gets its own durable cursor.
+        """
+        return market.condition_id or "|".join(market.token_ids)
+
+    async def _mark_stream_task_succeeded(self, task: ContentIngestionTask) -> None:
+        """Write SUCCEEDED for a deeper-stream task in a fresh short-lived session."""
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        async with self._write_factory() as session:
+            task_repo = TaskRepository(session)
+            await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+            await session.commit()
+            task.succeed()
+
+    async def _persist_history_progress(
+        self,
+        source_id: Any,
+        market_key: str,
+        cursor: dict[str, Any] | None,
+        resume_offset: int,
+    ) -> None:
+        """Durably commit one market's advanced history cursor + the rotation offset.
+
+        Read-modify-write on ``sources.config`` so a concurrent work-list seeder's
+        ``markets`` update (and other markets' cursors) is preserved. Best-effort:
+        a persist failure is logged but never fails the task — the market's points
+        are already committed and the next cycle re-fetches (deduped by the S3
+        ``ON CONFLICT`` + the use-case fetch_log check).
+        """
+        try:
+            async with self._write_factory() as session:
+                repo = SourceRepository(session)
+                model = await repo.get_by_id(source_id)
+                if model is None:
+                    return
+                cfg = dict(model.config or {})
+                stored_cursors = dict(cfg.get("history_cursors") or {})
+                if cursor is not None:
+                    stored_cursors[market_key] = cursor
+                cfg["history_cursors"] = stored_cursors
+                cfg["history_market_offset"] = resume_offset
+                await repo.update(source_id, config=cfg)
+                await session.commit()
+        except Exception as exc:
+            logger.error(
+                "history_progress_persist_failed",
+                market_key=market_key,
                 error=str(exc),
             )
 

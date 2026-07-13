@@ -75,10 +75,10 @@ def test_stream_source_type_set_has_exactly_four() -> None:
     assert SourceType.POLYMARKET not in _PREDICTION_STREAM_SOURCE_TYPES
 
 
-# PLAN-0056 QA: trades now route to the DEDICATED incremental+bounded path.
+# PLAN-0056 QA: trades AND CLOB history now route to DEDICATED incremental+bounded
+# paths; only events + OI keep the generic single-pass stream path.
 _GENERIC_STREAM_TYPES = [
     SourceType.POLYMARKET_GAMMA_EVENTS,
-    SourceType.POLYMARKET_CLOB,
     SourceType.POLYMARKET_DATA_OI,
 ]
 
@@ -88,6 +88,7 @@ async def test_execute_task_routes_to_prediction_stream(source_type: SourceType)
     worker = _build_worker()
     worker._execute_prediction_stream_task = AsyncMock()  # type: ignore[method-assign]
     worker._execute_trades_stream_task = AsyncMock()  # type: ignore[method-assign]
+    worker._execute_history_stream_task = AsyncMock()  # type: ignore[method-assign]
     worker._execute_polymarket_task = AsyncMock()  # type: ignore[method-assign]
 
     task = _make_task(source_type)
@@ -95,6 +96,7 @@ async def test_execute_task_routes_to_prediction_stream(source_type: SourceType)
 
     worker._execute_prediction_stream_task.assert_awaited_once_with(task)
     worker._execute_trades_stream_task.assert_not_awaited()
+    worker._execute_history_stream_task.assert_not_awaited()
     worker._execute_polymarket_task.assert_not_awaited()
 
 
@@ -109,6 +111,20 @@ async def test_execute_task_routes_trades_to_dedicated_incremental_path() -> Non
     await worker._execute_task(task)
 
     worker._execute_trades_stream_task.assert_awaited_once_with(task)
+    worker._execute_prediction_stream_task.assert_not_awaited()
+
+
+async def test_execute_task_routes_clob_to_dedicated_history_path() -> None:
+    """PLAN-0056 QA: CLOB history routes to the incremental history path, NOT the
+    generic single-pass stream path (which caused the outbox history firehose)."""
+    worker = _build_worker()
+    worker._execute_prediction_stream_task = AsyncMock()  # type: ignore[method-assign]
+    worker._execute_history_stream_task = AsyncMock()  # type: ignore[method-assign]
+
+    task = _make_task(SourceType.POLYMARKET_CLOB)
+    await worker._execute_task(task)
+
+    worker._execute_history_stream_task.assert_awaited_once_with(task)
     worker._execute_prediction_stream_task.assert_not_awaited()
 
 

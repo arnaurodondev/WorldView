@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import common.time
 from content_ingestion.domain.entities import PredictionHistoryFetchResult
@@ -46,6 +47,23 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _BRONZE_BUCKET = "worldview-bronze"
+
+
+@dataclass(frozen=True, slots=True)
+class MarketHistoryResult:
+    """Outcome of one INCREMENTAL per-market CLOB history fetch (PLAN-0056 QA).
+
+    Attributes:
+        results: The NEW (post-cursor) per-token history fetch-results collected
+            this cycle, each already trimmed to points newer than the cursor.
+        new_cursor: The advanced per-market cursor to persist durably so the next
+            cycle fetches only points newer than it — ``{"last_point_ts": int}``
+            (Unix epoch-seconds of the newest point emitted). Left equal to the
+            prior cursor when nothing new was collected this cycle.
+    """
+
+    results: list[PredictionHistoryFetchResult]
+    new_cursor: dict[str, Any] | None
 
 
 def _build_bronze_key(token_id: str, snapshot_at: datetime) -> str:
@@ -136,6 +154,107 @@ class PolymarketClobHistoryAdapter:
             new=len(results),
         )
         return results
+
+    # ── PLAN-0056 QA — INCREMENTAL + BOUNDED per-market history fetch ─────────
+    #
+    # ``fetch_market`` is the path the worker now drives (one market at a time,
+    # round-robin windowed, committing a cursor per market). The legacy ``fetch``
+    # above is retained for the flat-config / backfill callers and existing tests
+    # but is NO LONGER on the steady-state cadence — it re-pulls the full
+    # ``backfill_days`` depth for every token every cycle and, because the history
+    # payload emits ONE outbox event per datapoint, was the source of the
+    # ``market.prediction.history.v1`` firehose that starved the FIFO dispatcher.
+
+    async def fetch_market(
+        self,
+        market: MarketWorkItem,
+        cursor: dict[str, Any] | None,
+        *,
+        is_backfill: bool = False,
+    ) -> MarketHistoryResult:
+        """Fetch ONLY new price points for one market since ``cursor`` (bounded).
+
+        Price history is append-only in time, so a per-market high-watermark
+        (last-seen point timestamp) lets each cycle emit only what is new instead
+        of re-emitting the full ``backfill_days`` depth for every token every
+        cycle (the firehose that starved the outbox dispatcher).
+
+        Bounds (all config-driven, no magic numbers):
+        - the CLOB ``startTs`` window floor is the cursor (or the first-cycle
+          ``now - backfill_days`` bounded-backfill floor),
+        - ``max_points_per_market_per_cycle`` NEW points collected across the
+          market's outcome tokens; a deeper backfill drains oldest-first over
+          subsequent cycles rather than flooding a single cycle.
+
+        Args:
+            market: The market work-item (parent ``condition_id`` + child token ids).
+            cursor: The persisted ``{"last_point_ts": int}`` or None (first cycle).
+            is_backfill: Accepted for a uniform call signature; the window is
+                always cursor/``backfill_days``-derived.
+
+        Returns:
+            :class:`MarketHistoryResult` with the new per-token results + cursor.
+        """
+        fetched_at = _round_to_minute(common.time.utc_now())
+        floor_ts = self._cursor_floor_ts(cursor, fetched_at)
+        cap = self._settings.max_points_per_market_per_cycle
+
+        collected: list[PredictionHistoryFetchResult] = []
+        max_ts = floor_ts
+        total_points = 0
+
+        for token_id in market.token_ids:
+            if total_points >= cap:
+                break
+            # Ask the API for points since the watermark; _process_token applies
+            # the resolved-market 1h→1d fallback + writes bronze.
+            result = await self._process_token(token_id, fetched_at, floor_ts, market.condition_id)
+            if result is None:
+                continue
+            # Incremental: keep only points STRICTLY newer than the cursor floor.
+            new_points = [p for p in result.points if int(p.timestamp.timestamp()) > floor_ts]
+            if not new_points:
+                continue
+            # BOUNDED: cap the total NEW points collected for this market-cycle.
+            # Points are chronological (oldest-first), so trimming to the first
+            # ``remaining`` drains oldest-first and advances the cursor gradually —
+            # the newer points are re-fetched next cycle (no permanent loss).
+            remaining = cap - total_points
+            if len(new_points) > remaining:
+                new_points = new_points[:remaining]
+            total_points += len(new_points)
+            for p in new_points:
+                ep = int(p.timestamp.timestamp())
+                if ep > max_ts:
+                    max_ts = ep
+            collected.append(dataclasses.replace(result, points=new_points))
+
+        # Advance the cursor to the newest emitted point; keep it unchanged when
+        # nothing new arrived so a quiet cycle does not reset the watermark.
+        new_cursor: dict[str, Any] | None
+        new_cursor = {"last_point_ts": max_ts} if collected else cursor
+
+        logger.info(
+            "polymarket_clob_market_fetch_complete",
+            condition_id=market.condition_id,
+            tokens=len(market.token_ids),
+            new_results=len(collected),
+            new_points=total_points,
+            floor_ts=floor_ts,
+            new_cursor_ts=new_cursor.get("last_point_ts") if new_cursor else None,
+        )
+        return MarketHistoryResult(results=collected, new_cursor=new_cursor)
+
+    def _cursor_floor_ts(self, cursor: dict[str, Any] | None, fetched_at: datetime) -> int:
+        """Return the watermark floor epoch-seconds for an incremental fetch.
+
+        Uses the persisted cursor when present; otherwise the first-cycle
+        BOUNDED-backfill floor of ``now - backfill_days``.
+        """
+        if cursor and cursor.get("last_point_ts") is not None:
+            return int(cursor["last_point_ts"])
+        window = timedelta(days=self._settings.backfill_days)
+        return int((fetched_at - window).timestamp())
 
     @staticmethod
     def _extract_markets(source: Source) -> list[MarketWorkItem]:

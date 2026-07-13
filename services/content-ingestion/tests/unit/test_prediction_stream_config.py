@@ -32,7 +32,9 @@ class TestPollCadenceDefaults:
 
 class TestBackfillEnvVars:
     def test_history_backfill_days_default(self) -> None:
-        assert Settings().polymarket_history_backfill_days == 14
+        # PLAN-0056 QA: reduced 14 → 3 to shrink the first-cycle history backfill
+        # (a driver of the market.prediction.history.v1 outbox firehose).
+        assert Settings().polymarket_history_backfill_days == 3
 
     def test_trades_backfill_days_default(self) -> None:
         assert Settings().polymarket_trades_backfill_days == 14

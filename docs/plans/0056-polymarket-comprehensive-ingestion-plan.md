@@ -973,3 +973,51 @@ after 3 cycles). Downstream `prediction_market_trades` persistence is gated only
 outbox-dispatcher throughput backlog (~20 events/s with ~128k `market.prediction.history` events queued ahead
 in created_at order) — the trade events serialize without error and are queued in the outbox; not a trades-fix
 regression.
+
+## QA fix (2026-07-12) — incremental + bounded CLOB history (outbox firehose starving trades/synthetic-docs)
+
+Follow-up to the trades fix above: live QA found `content_ingestion_db.outbox_events` **pending ≈ 2.13M and
+growing**, of which ~2.13M was `market.prediction.history.v1`. The single FIFO dispatcher (`ORDER BY created_at`)
+could not keep up, so it STARVED all other content-ingestion output queued behind it — the 19,360 emitted-but-
+unpublished trade events (`prediction_market_trades` = 0 rows, topic offset 0), fresh synthetic docs, etc.
+
+Root cause (same class as the trades deadlock): the CLOB history task (`_execute_prediction_stream_task` →
+`PolymarketClobHistoryAdapter.fetch`) re-fetched the FULL `backfill_days` price depth (14 days x hourly ≈ 336
+points/token) for EVERY work-list token EVERY cycle, and `build_prediction_history_payloads` emits **ONE outbox
+event PER datapoint**. The `prediction_market_fetch_log` dedup keyed on `(token_id, fetched_at)` never hit
+because `fetched_at` advances each cycle — so every cycle re-emitted the entire 2-week depth for every token →
+millions of pending history rows growing unboundedly.
+
+Fix (content-ingestion only; no wave-count change) — apply the trades treatment to the CLOB history path.
+CLOB now routes to a DEDICATED `WorkerProcess._execute_history_stream_task` (not the generic single-pass path):
+
+- **Incremental cursor (primary fix)** — `PolymarketClobHistoryAdapter.fetch_market(market, cursor)` fetches
+  only points newer than the persisted per-market `cursor.last_point_ts` (price history is append-only),
+  returning `MarketHistoryResult(results, new_cursor)`. First cycle (no cursor) floor = `now - backfill_days`
+  — a BOUNDED backfill of the recent window, never the full depth.
+- **Bounded per-cycle work** — a ROTATING window of `polymarket_clob.markets_per_cycle` markets (default 25,
+  round-robin via `config["history_market_offset"]`) + `max_points_per_market_per_cycle` cap (default 2000,
+  a TOTAL across a market's outcome tokens; a deeper backfill drains oldest-first over cycles).
+- **Incremental commit** — the use case commits per fetch-result (R8 outbox); `_persist_history_progress`
+  read-modify-writes the advanced cursor (`config["history_cursors"][market_key]`) + rotation offset PER MARKET
+  so a timeout/retry resumes at the next market. SEPARATE config keys the Wave B5 seeder preserves.
+- **Reduced backfill default** — `polymarket_history_backfill_days` default **14 → 3** (a driver of the flood);
+  the per-market cursor drains any deeper configured backfill incrementally.
+- Idempotency unchanged: use-case `fetch_log` dedup + S3 `ON CONFLICT`. Legacy `fetch()` retained for
+  flat-config/tests but off the steady-state cadence. (Left as a documented recommendation, NOT changed under
+  time pressure: making the FIFO dispatcher round-robin across topics so one firehose can't starve others.)
+
+Config (env-overridable): `CONTENT_INGESTION_POLYMARKET_CLOB__MARKETS_PER_CYCLE` (default 25),
+`…__MAX_POINTS_PER_MARKET_PER_CYCLE` (default 2000), `CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS`
+(default now 3).
+
+**Ops** — the ~2.13M pending `market.prediction.history.v1` outbox rows were dev backfill NOISE (re-fetchable)
+clogging the dispatcher; marked `status='skipped'` (reversible) so trades/events/OI/article rows publish. See
+BP-724.
+
+**Tests (10 new):** `test_polymarket_clob_incremental.py` (7 — first-cycle bounded backfill, backfill-window
+exclusion, deep-history points-cap, incremental-only-since-cursor, cursor-unchanged-when-nothing-new, 2-token
+shared-parent cursor = global max, points-cap-spans-tokens); `test_worker_history_incremental.py` (3 — per-cycle
+market cap + per-market incremental progress commit, `_persist_history_progress` preserves markets + other
+cursors, market-key token surrogate for legacy config); routing + config-default tests updated. content-ingestion
+unit suite 1060 pass (1 pre-existing unrelated ticker-news ordering flake, file untouched). ruff+format+mypy clean.

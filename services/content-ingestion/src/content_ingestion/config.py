@@ -204,6 +204,33 @@ class PolymarketClobProviderSettings(BaseModel):
     # Poll cadence (PRD-0033 §4.2): CLOB price history refreshes every 6 hours.
     poll_interval_seconds: float = Field(default=21600.0, ge=60.0)
 
+    # ── PLAN-0056 QA — incremental + bounded CLOB history ingestion ──────────
+    # ROOT CAUSE of the 1.5M-row ``market.prediction.history.v1`` outbox firehose
+    # that starved the single FIFO dispatcher (and behind it trades + synthetic
+    # docs): the history task re-fetched the FULL ``backfill_days`` depth (2 weeks
+    # x hourly = ~336 points/token) for EVERY work-list token EVERY cycle, and the
+    # history payload builder emits ONE outbox event PER datapoint. The fetch_log
+    # dedup keyed on ``(token_id, fetched_at)`` never hit because ``fetched_at``
+    # advances each cycle, so every cycle re-emitted the entire 2-week depth for
+    # every token → millions of pending outbox rows, growing unboundedly.
+    #
+    # Fix mirrors the trades path (commit 11753e1cc): INCREMENTAL (per-market
+    # cursor: only points newer than the last-seen ``window_start_ts``) + BOUNDED
+    # (a rotating window of markets per cycle + a points cap per market) +
+    # INCREMENTALLY-COMMITTED (per-market cursor commit survives a timeout/retry).
+    #
+    # ``markets_per_cycle``: how many work-list markets one history task processes
+    # per run (round-robin via the ``history_market_offset`` config cursor). Bounds
+    # the per-cycle fan-out so a cycle emits thousands of events, not millions.
+    markets_per_cycle: int = Field(default=25, ge=1, le=1000)
+    # ``max_points_per_market_per_cycle``: cap on NEW price points collected across
+    # a market's outcome tokens per cycle. On the FIRST cycle (no cursor) this
+    # bounds the backfill to the most-recent N points within ``backfill_days`` — a
+    # BOUNDED backfill, NOT the full historical depth. In steady state (6-hourly
+    # cadence at 1h fidelity) a market accrues only a handful of points, so the cap
+    # is a safety backstop that also lets a deep backfill drain over cycles.
+    max_points_per_market_per_cycle: int = Field(default=2000, ge=1, le=100000)
+
 
 class PolymarketTradesProviderSettings(BaseModel):
     """Operational parameters for the Polymarket Data-API ``/trades`` stream."""
@@ -392,7 +419,13 @@ class Settings(BaseSettings):
     # ..._TRADES_BACKFILL_DAYS) that the worker threads into the CLOB / trades
     # adapter windows. Only consulted when ``backfill_on_startup`` is ON — the
     # worker passes ``is_backfill=backfill_on_startup`` to those two adapters.
-    polymarket_history_backfill_days: int = 14
+    # PLAN-0056 QA: reduced the history backfill default 14 → 3. At ~336 points
+    # per token for a 14-day hourly window and ONE outbox event per point, the old
+    # default was the primary driver of the ``market.prediction.history.v1``
+    # firehose that starved the FIFO outbox dispatcher. 3 days is a sane
+    # steady-state backfill; the per-market points cap bounds it further and the
+    # per-market cursor drains any deeper backfill incrementally over cycles.
+    polymarket_history_backfill_days: int = 3
     polymarket_trades_backfill_days: int = 14
 
     # PLAN-0056 live-QA (BUG 2) — deeper-stream work-list seeder cap.
