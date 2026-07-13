@@ -178,8 +178,6 @@ def _make_pipeline(**overrides: Any) -> ChatPipeline:
         "cache": MagicMock(),
         "get_thread": MagicMock(),
         "s6_client": MagicMock(),
-        "classifier": MagicMock(),
-        "plan_builder": MagicMock(),
         "hyde": MagicMock(),
         "embedder": MagicMock(),
         "retrieval": MagicMock(),
