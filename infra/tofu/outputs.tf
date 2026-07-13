@@ -13,9 +13,12 @@ output "worker2_ip" {
   value       = hcloud_server.worker2.ipv4_address
 }
 
-output "floating_ip" {
-  description = "Floating IP — point your DNS A record here"
-  value       = hcloud_floating_ip.main.ip_address
+# The public ingress IP is provisioned at runtime by the Hetzner CCM for the
+# Traefik LoadBalancer Service — it does not exist at tofu-apply time (B16).
+# Retrieve it post-bootstrap and point your DNS A record at it.
+output "ingress_ip_command" {
+  description = "Command to fetch the public ingress IP (Hetzner LB created by CCM for Traefik). Point DNS A record here."
+  value       = "kubectl -n traefik get svc traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}'"
 }
 
 output "postgres_volume_device" {

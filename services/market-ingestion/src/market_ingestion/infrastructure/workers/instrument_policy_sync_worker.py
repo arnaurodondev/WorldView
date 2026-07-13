@@ -34,15 +34,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import time
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
 import httpx
-import jwt
 import prometheus_client as prom
 
 from market_ingestion.infrastructure.db.session import _build_factories
+from observability.internal_jwt import mint_internal_jwt  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -305,36 +304,19 @@ class InstrumentPolicySyncWorker:
     def _sign_internal_jwt(self) -> str:
         """Sign a short-lived internal JWT for the market-data call.
 
-        Mirrors ``FundamentalsRefreshWorker._sign_internal_jwt`` exactly —
-        same issuer/sub/claims pattern so market-data's InternalJWTMiddleware
-        accepts the request.
+        DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the
+        token always carries ``aud="worldview-internal"`` + a unique ``jti``
+        (required by ``InternalJWTMiddleware`` once real verification is on).
         """
-        now = int(time.time())
-        payload = {
-            "iss": "worldview-gateway",
-            "sub": "system:instrument-policy-sync-worker",
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "tenant_id": "00000000-0000-0000-0000-000000000000",
-            "role": "system",
-            "iat": now,
-            "exp": now + 300,
-        }
         # SecretStr-or-str compatibility — settings expose either form.
         raw_key = getattr(self._settings, "internal_jwt_private_key", "")
         if hasattr(raw_key, "get_secret_value"):
             raw_key = raw_key.get_secret_value()
-        if raw_key:
-            from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
-            private_key = load_pem_private_key(raw_key.encode(), password=None)
-            return str(
-                jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[arg-type]
-            )
-        # Dev fallback — HS256 with the shared dev key (same as FundamentalsRefreshWorker).
         return str(
-            jwt.encode(
-                payload,
-                "dev-skip-verification-key-for-kg-structured-enrichment",
-                algorithm="HS256",
+            mint_internal_jwt(
+                sub="system:instrument-policy-sync-worker",
+                ttl_seconds=300,
+                private_key_pem=raw_key or "",
+                dev_hs256_secret="dev-skip-verification-key-for-kg-structured-enrichment",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
             )
         )

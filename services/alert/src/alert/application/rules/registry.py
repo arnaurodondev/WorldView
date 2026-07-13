@@ -78,6 +78,7 @@ def register_default_evaluators() -> dict[RuleType, RuleEvaluator]:
     from alert.application.rules.kg_connection import KgConnectionEvaluator
     from alert.application.rules.news_count import NewsCountEvaluator
     from alert.application.rules.news_momentum import NewsMomentumEvaluator
+    from alert.application.rules.prediction import PredictionRuleEvaluator
     from alert.application.rules.price_cross import PriceCrossEvaluator
     from alert.domain.enums import RuleType as _RuleType
 
@@ -86,4 +87,8 @@ def register_default_evaluators() -> dict[RuleType, RuleEvaluator]:
     EVALUATOR_REGISTRY[_RuleType.NEWS_COUNT] = NewsCountEvaluator()
     EVALUATOR_REGISTRY[_RuleType.NEWS_MOMENTUM] = NewsMomentumEvaluator()
     EVALUATOR_REGISTRY[_RuleType.KG_CONNECTION] = KgConnectionEvaluator()
+    # PLAN-0056 Wave D3: event-driven (like KG_CONNECTION); the poller skips it
+    # (cadence_seconds=None). Prediction alerts still fire via the watchlist
+    # fanout regardless of this rule — see PredictionRuleEvaluator docstring.
+    EVALUATOR_REGISTRY[_RuleType.PREDICTION] = PredictionRuleEvaluator()
     return EVALUATOR_REGISTRY

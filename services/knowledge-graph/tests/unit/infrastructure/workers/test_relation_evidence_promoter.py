@@ -584,3 +584,159 @@ class TestRelationEvidencePromoterQualityGate:
         assert params["conf_threshold"] == _CONF_THRESHOLD
         assert params["density_threshold"] == _DENSITY_THRESHOLD
         assert params["batch_size"] == _BATCH_SIZE
+
+
+# ── Diagnostic statement_timeout resilience (KG promoter density perf) ─────────
+
+
+def _make_session_factory_with_gated_timeout(
+    fetch_rows: list,
+    exc: Exception,
+) -> MagicMock:
+    """Session factory whose gated-quality diagnostic (4th session) raises ``exc``.
+
+    Mirrors ``_make_session_factory`` for the fetch + provisional + no_match
+    sessions, but the 4th session's ``execute`` raises — simulating the
+    ``_COUNT_GATED_QUALITY_SQL`` density scan exceeding ``statement_timeout``.
+    The promotion (session 1) has already committed by the time this fires, so
+    ``run()`` must swallow the error and still emit the completion log.
+    """
+    fetch_result = MagicMock()
+    fetch_result.fetchall = MagicMock(return_value=fetch_rows)
+
+    session1 = AsyncMock()
+    session1.__aenter__ = AsyncMock(return_value=session1)
+    session1.__aexit__ = AsyncMock(return_value=False)
+    session1.commit = AsyncMock()
+    insert_result = MagicMock()
+    session1.execute = AsyncMock(side_effect=[fetch_result] + [insert_result] * (2 * len(fetch_rows)))
+
+    prov_result = MagicMock()
+    prov_result.scalar = MagicMock(return_value=5)
+    session2 = AsyncMock()
+    session2.__aenter__ = AsyncMock(return_value=session2)
+    session2.__aexit__ = AsyncMock(return_value=False)
+    session2.execute = AsyncMock(return_value=prov_result)
+
+    nm_result = MagicMock()
+    nm_result.scalar = MagicMock(return_value=3)
+    session3 = AsyncMock()
+    session3.__aenter__ = AsyncMock(return_value=session3)
+    session3.__aexit__ = AsyncMock(return_value=False)
+    session3.execute = AsyncMock(return_value=nm_result)
+
+    # Session 4: the gated-quality diagnostic raises (statement_timeout).
+    session4 = AsyncMock()
+    session4.__aenter__ = AsyncMock(return_value=session4)
+    session4.__aexit__ = AsyncMock(return_value=False)
+    session4.execute = AsyncMock(side_effect=exc)
+
+    sf = MagicMock()
+    sf.side_effect = [session1, session2, session3, session4]
+    return sf
+
+
+class TestRelationEvidencePromoterDiagnosticTimeout:
+    """A statement_timeout on a diagnostic count must not discard the promotion.
+
+    Regression guard for the KG-promoter density perf work: the gated-quality
+    diagnostic shares the expensive density CTE pass and can hit the
+    per-connection statement_timeout on a large raw table.  Because the promotion
+    has already committed, that cancellation must be swallowed — never re-raised.
+    """
+
+    def _run_and_capture(self, sf: MagicMock) -> list[dict]:
+        import knowledge_graph.infrastructure.workers.relation_evidence_promoter as _mod
+        from knowledge_graph.infrastructure.workers.relation_evidence_promoter import (
+            RelationEvidencePromoterWorker,
+        )
+
+        logged: list[dict] = []
+        orig_info = _mod.logger.info  # type: ignore[attr-defined]
+
+        def _capture(event: str, **kw: object) -> None:  # type: ignore[return]
+            logged.append({"event": event, **kw})  # type: ignore[arg-type]
+            return orig_info(event, **kw)  # type: ignore[no-any-return]
+
+        _mod.logger.info = _capture  # type: ignore[method-assign]
+        try:
+            # Must NOT raise even though the gated diagnostic errors.
+            asyncio.run(RelationEvidencePromoterWorker(sf).run())
+        finally:
+            _mod.logger.info = orig_info  # type: ignore[method-assign]
+        return logged
+
+    def test_gated_timeout_does_not_raise_and_promotion_logged(self) -> None:
+        """statement_timeout on gated diagnostic → run() completes; promotion logged."""
+        timeout_exc = RuntimeError("canceling statement due to statement_timeout")
+        sf = _make_session_factory_with_gated_timeout([_make_fetch_row(0)], timeout_exc)
+
+        logged = self._run_and_capture(sf)
+
+        complete = [e for e in logged if e["event"] == "relation_evidence_promoter_complete"]
+        assert complete, "completion log must still be emitted after a diagnostic timeout"
+        ev = complete[0]
+        # Promotion itself committed before the diagnostic ran.
+        assert ev["promoted"] == 1
+        # Cheap diagnostics that ran before the timeout are still populated.
+        assert ev["blocked_provisional"] == 5
+        assert ev["no_match"] == 3
+        # The timed-out gated count is the -1 "not measured" sentinel.
+        assert ev["gated_quality"] == -1
+        assert ev["diagnostics_ok"] is False
+
+    def test_gated_timeout_does_not_increment_prometheus(self) -> None:
+        """The -1 sentinel must not increment the gated-quality counter."""
+        from knowledge_graph.infrastructure.workers.relation_evidence_promoter import (
+            RelationEvidencePromoterWorker,
+        )
+
+        timeout_exc = RuntimeError("canceling statement due to statement_timeout")
+        sf = _make_session_factory_with_gated_timeout([], timeout_exc)
+
+        with patch(
+            "knowledge_graph.infrastructure.workers.relation_evidence_promoter.kg_evidence_quality_gated_total"
+        ) as mock_counter:
+            asyncio.run(RelationEvidencePromoterWorker(sf).run())
+
+        mock_counter.inc.assert_not_called()
+
+    def test_non_timeout_diagnostic_error_also_swallowed(self) -> None:
+        """A non-timeout diagnostic error is likewise swallowed (promotion preserved)."""
+        other_exc = RuntimeError("connection reset by peer")
+        sf = _make_session_factory_with_gated_timeout([_make_fetch_row(0)], other_exc)
+
+        logged = self._run_and_capture(sf)
+
+        complete = [e for e in logged if e["event"] == "relation_evidence_promoter_complete"]
+        assert complete, "completion log must still be emitted after a diagnostic error"
+        assert complete[0]["promoted"] == 1
+        assert complete[0]["gated_quality"] == -1
+        assert complete[0]["diagnostics_ok"] is False
+
+    def test_happy_path_reports_diagnostics_ok_true(self) -> None:
+        """When all diagnostics succeed, diagnostics_ok is True."""
+        import knowledge_graph.infrastructure.workers.relation_evidence_promoter as _mod
+        from knowledge_graph.infrastructure.workers.relation_evidence_promoter import (
+            RelationEvidencePromoterWorker,
+        )
+
+        sf, *_ = _make_session_factory([_make_fetch_row(0)], gated_quality_count=2)
+
+        logged: list[dict] = []
+        orig_info = _mod.logger.info  # type: ignore[attr-defined]
+
+        def _capture(event: str, **kw: object) -> None:  # type: ignore[return]
+            logged.append({"event": event, **kw})  # type: ignore[arg-type]
+            return orig_info(event, **kw)  # type: ignore[no-any-return]
+
+        _mod.logger.info = _capture  # type: ignore[method-assign]
+        try:
+            asyncio.run(RelationEvidencePromoterWorker(sf).run())
+        finally:
+            _mod.logger.info = orig_info  # type: ignore[method-assign]
+
+        complete = [e for e in logged if e["event"] == "relation_evidence_promoter_complete"]
+        assert complete
+        assert complete[0]["diagnostics_ok"] is True
+        assert complete[0]["gated_quality"] == 2

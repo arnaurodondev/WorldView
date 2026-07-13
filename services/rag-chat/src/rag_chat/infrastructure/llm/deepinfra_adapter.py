@@ -143,6 +143,7 @@ class DeepInfraCompletionAdapter:
         model_id: str,
         usage: dict | None,
         call_site: str,
+        user_id: UUID | None = None,
     ) -> None:
         """Forward usage tokens to the injected CostRecorder. Defence-in-depth no-op on errors.
 
@@ -150,12 +151,21 @@ class DeepInfraCompletionAdapter:
         different ``usage`` envelope shape. Centralising the extraction here keeps
         the chain transport-agnostic. The recorder itself is already fault-tolerant
         but we wrap again so a recorder regression NEVER affects the chat path.
+
+        PLAN-0117 W4 (FR-1): DeepInfra returns the authoritative per-call USD cost
+        as ``usage.estimated_cost`` (verified live, e.g. ``4.1e-07``). We surface
+        it verbatim to the recorder as ``provider_estimated_cost`` so the leaf row
+        is priced from the provider (``cost_source='provider'``) rather than our
+        matrix. Absent/malformed → ``None`` → recorder falls back to the matrix
+        (never a silent $0 for a paid model).
         """
         if self._cost_recorder is None:
             return
-        # DeepInfra / OpenAI-compat returns usage = {prompt_tokens, completion_tokens, total_tokens}.
-        # When the provider omits the field (rare), still emit record() with
-        # zeros so the call_site is visible (we want to spot missing-usage paths).
+        # DeepInfra / OpenAI-compat returns usage = {prompt_tokens, completion_tokens,
+        # total_tokens, estimated_cost}. When the provider omits the field (rare),
+        # still emit record() with zeros so the call_site is visible (we want to
+        # spot missing-usage paths).
+        provider_estimated_cost: object = None
         if not usage:
             log.debug(  # type: ignore[no-any-return]
                 "cost_recorder_no_usage",
@@ -168,6 +178,9 @@ class DeepInfraCompletionAdapter:
         else:
             tokens_in = int(usage.get("prompt_tokens", 0) or 0)
             tokens_out = int(usage.get("completion_tokens", 0) or 0)
+            # Raw provider cost (float USD) — forwarded verbatim; the Decimal
+            # conversion + §2.2 priority happen once inside ``resolve_cost``.
+            provider_estimated_cost = usage.get("estimated_cost")
         try:
             await self._cost_recorder.record(
                 thread_id=thread_id,
@@ -175,6 +188,8 @@ class DeepInfraCompletionAdapter:
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 call_site=call_site,
+                provider_estimated_cost=provider_estimated_cost,
+                user_id=user_id,
             )
         except Exception as exc:  # pragma: no cover — defensive
             log.debug(  # type: ignore[no-any-return]
@@ -286,8 +301,18 @@ class DeepInfraCompletionAdapter:
         max_tokens: int = 1024,
         temperature: float = 0.2,
         thread_id: UUID | None = None,
+        user_id: UUID | None = None,
+        model: str | None = None,
     ) -> LLMToolResponse:
         """Non-streaming structured call — returns text OR tool_calls.
+
+        DEF-036 (2026-07-04): ``model`` optionally overrides the adapter's
+        configured ``self._model`` for THIS call only — used by the chat
+        tool-loop PLANNING turn to run a fast parallel-tool-calling model
+        (Qwen3-235B) while synthesis keeps gpt-oss-120b. ``None`` (the default)
+        preserves the configured model so existing callers (brief agentic loop,
+        etc.) are byte-for-byte unchanged. The same-provider retriable-error
+        fallback and cost/metric attribution all key off the resolved model.
 
         BP-025: entire HTTP call wrapped in asyncio.wait_for to honour self._timeout.
         WHY stream=False: tool_call deltas in streaming mode require reassembling
@@ -367,13 +392,17 @@ class DeepInfraCompletionAdapter:
         # Wrap the call so we record one Prometheus sample per attempt — both
         # the primary-model attempt and the fallback-model attempt (if any) are
         # counted independently with the proper ``model_id`` label.
+        # DEF-036: resolve the per-call model override (planning turn) once so the
+        # request, metric label, fallback guard and cost row all agree on which
+        # model actually served the call. ``None`` → configured ``self._model``.
+        primary_model = model or self._model
         start = time.perf_counter()
         try:
-            result = await _call(self._model)
+            result = await _call(primary_model)
         except Exception as exc:
-            self._record_ml_call("chat_with_tools", "error", time.perf_counter() - start, model=self._model)
+            self._record_ml_call("chat_with_tools", "error", time.perf_counter() - start, model=primary_model)
             fallback_model = self._stream_chat_fallback_model
-            if not fallback_model or fallback_model == self._model or not _is_retriable_chat_failure(exc):
+            if not fallback_model or fallback_model == primary_model or not _is_retriable_chat_failure(exc):
                 raise
             log.warning(  # type: ignore[no-any-return]
                 "deepinfra_chat_with_tools_model_fallback",
@@ -399,15 +428,17 @@ class DeepInfraCompletionAdapter:
                 model_id=fallback_model,
                 usage=fb_result.usage,
                 call_site="tool_loop_iter",
+                user_id=user_id,
             )
             return fb_result
-        self._record_ml_call("chat_with_tools", "success", time.perf_counter() - start, model=self._model)
+        self._record_ml_call("chat_with_tools", "success", time.perf_counter() - start, model=primary_model)
         # PLAN-0107 Agent-B: capture cost on the primary model success path.
         await self._record_cost(
             thread_id=thread_id,
-            model_id=self._model,
+            model_id=primary_model,
             usage=result.usage,
             call_site="tool_loop_iter",
+            user_id=user_id,
         )
         return result
 
@@ -505,11 +536,18 @@ class DeepInfraCompletionAdapter:
         max_tokens: int = 1024,
         temperature: float = 0.2,
         thread_id: UUID | None = None,
+        user_id: UUID | None = None,
         tools: list[dict] | None = None,
         seed: int | None = None,
         model: str | None = None,
+        call_site: str = "synthesis",
     ) -> AsyncIterator[str]:
         """Stream the final answer turn from an OpenAI-format messages list.
+
+        PLAN-0117 (attribution): ``call_site`` tags the leaf ``llm_usage_log``
+        row so grounding-repair / degraded-synthesis rewrites are distinguishable
+        from the primary synthesis turn in the ledger. Defaults to
+        ``"synthesis"`` so existing callers are unchanged (forward-compatible).
 
         RC-1 (2026-06-18): ``model`` overrides the adapter's configured
         ``self._model`` for THIS call only — used by the combined
@@ -537,19 +575,37 @@ class DeepInfraCompletionAdapter:
         outer safety nets — this layer just gives them a far better shot at
         recovering a real LLM answer.
 
-        We materialise the primary stream into a buffer because the OpenAI SSE
-        API does not allow rewinding: if we yielded tokens piecemeal we could
-        only detect "zero chunks" once iteration finished, at which point the
-        caller would already have committed to an empty stream.  Latency is
-        unaffected on the happy path — we yield the buffered tokens as soon
-        as the primary stream completes (one extra event-loop tick).
+        F1 (2026-06-30, streaming latency fix): we YIELD each chunk the instant
+        it arrives from the primary stream — we no longer materialise the whole
+        upstream SSE into a buffer first.  The old buffer-then-replay approach
+        made time-to-first-token equal to the FULL generation time and flushed
+        the entire answer in one event-loop tick (the "jumpy burst"); streaming
+        chunk-by-chunk restores a real trickle.  The zero-chunk failover is
+        preserved by COUNTING yielded chunks instead of inspecting a buffer:
+
+          * If the primary yields ZERO chunks before completing or erroring,
+            ``_primary_chunk_count`` stays 0 and we fall through to the
+            same-provider ``_stream_chat_fallback_model`` recovery path below
+            (and, if that is unset, the W40 chain-level + W36 degraded-synthesis
+            nets still own recovery downstream).
+          * Once ≥1 chunk has been yielded we are COMMITTED to the primary
+            stream — a mid-stream switch cannot rewind the wire (it would emit
+            duplicate tokens to the client).  This matches the prior behaviour
+            exactly: the old code likewise declined to fall back the moment the
+            buffer was non-empty, and swallowed any later mid-stream error after
+            replaying the partial buffer.  Here the client has already received
+            those partial tokens live, so ending the turn after a mid-stream
+            error is observably identical (partial tokens + a clean end).
         """
         # RC-1: resolve the effective primary model for THIS call. ``model``
         # (when supplied) overrides ``self._model`` for the primary request,
         # the cost-record model_id, and the fallback-guard comparison so the
         # whole method stays internally consistent.
         _effective_model = model or self._model
-        primary_chunks: list[str] = []
+        # F1: replaces the old ``primary_chunks`` buffer.  A count is all we need
+        # to decide failover: 0 => primary produced nothing => fall back; ≥1 =>
+        # committed to the primary stream (no rewind possible).
+        _primary_chunk_count = 0
         # PLAN-0107 Agent-B: usage sink fed by the final SSE chunk. Empty dict
         # = "stream completed without a usage frame" (still triggers a record()
         # call with zeros so the call_site is observable).
@@ -569,24 +625,27 @@ class DeepInfraCompletionAdapter:
                 tools=tools,
                 seed=seed,
             ):
-                primary_chunks.append(chunk)
+                # F1: emit each chunk the moment it arrives (true streaming).
+                _primary_chunk_count += 1
+                yield chunk
         except Exception as exc:
             _primary_exc = exc
 
-        if primary_chunks:
-            # Got at least one token from the primary — emit and finish.
-            # We DON'T fall back mid-stream because partial tokens cannot be
-            # rewound on the wire (would emit duplicates to the client).
-            for chunk in primary_chunks:
-                yield chunk
-            # PLAN-0107 Agent-B: stream successfully completed — record cost
-            # AFTER all chunks are yielded so a recorder hiccup never blocks
-            # the client from receiving tokens.
+        if _primary_chunk_count > 0:
+            # Got at least one token from the primary — we already yielded them
+            # incrementally above, so just finish.  We DON'T fall back even if an
+            # error was captured AFTER the first chunk because partial tokens
+            # cannot be rewound on the wire (would emit duplicates to the
+            # client) — this swallow-after-partial matches the prior buffered
+            # implementation's semantics exactly.
+            # PLAN-0107 Agent-B: record cost AFTER all chunks are yielded so a
+            # recorder hiccup never blocks the client from receiving tokens.
             await self._record_cost(
                 thread_id=thread_id,
                 model_id=_effective_model,
                 usage=primary_usage or None,
-                call_site="synthesis",
+                call_site=call_site,
+                user_id=user_id,
             )
             return
 
@@ -630,7 +689,8 @@ class DeepInfraCompletionAdapter:
             thread_id=thread_id,
             model_id=fallback_model,
             usage=fallback_usage or None,
-            call_site="synthesis",
+            call_site=call_site,
+            user_id=user_id,
         )
 
     async def aclose(self) -> None:

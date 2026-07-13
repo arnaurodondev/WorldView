@@ -133,3 +133,165 @@ async def test_list_proxy_omits_category_when_absent(authed_app, authed_mock_cli
     assert resp.status_code == 200
     call_kwargs = authed_mock_clients.market_data.get.call_args[1]
     assert "category" not in call_kwargs["params"]
+
+
+# ── PLAN-0056 Wave E1: events / trades / entity-predictions ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_events_list_proxy_forwards_pagination(authed_app, authed_mock_clients) -> None:
+    """GET /v1/signals/prediction-markets/events forwards limit/offset to S3."""
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, b'{"items": [], "total": 0, "limit": 20, "offset": 0}')
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/signals/prediction-markets/events",
+            params={"limit": "20", "offset": "5"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    # The literal "events" path must NOT be swallowed by the /{market_id} route.
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert call_args[0][0] == "/api/v1/prediction-markets/events"
+    params = call_args[1]["params"]
+    assert params.get("limit") == "20"
+    assert params.get("offset") == "5"
+
+
+@pytest.mark.asyncio
+async def test_events_list_requires_auth(app, mock_clients) -> None:
+    """Missing JWT → 401; downstream S3 is never called."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/signals/prediction-markets/events")
+
+    assert resp.status_code == 401
+    mock_clients.market_data.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_event_detail_404_passthrough(authed_app, authed_mock_clients) -> None:
+    """Unknown event_id → S3 404 propagated unchanged to the frontend."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(404, b'{"detail": "Event not found"}'))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/signals/prediction-markets/events/evt-unknown",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 404
+    # Must route to the event-detail S3 path, not the market-detail path.
+    assert authed_mock_clients.market_data.get.call_args[0][0] == "/api/v1/prediction-markets/events/evt-unknown"
+
+
+@pytest.mark.asyncio
+async def test_trades_proxy_forwards_since_and_limit(authed_app, authed_mock_clients) -> None:
+    """GET /{id}/trades forwards since/limit query params to S3."""
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, b'{"market_id": "m-1", "items": [], "limit": 100}')
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/signals/prediction-markets/m-1/trades",
+            params={"since": "2026-07-01T00:00:00Z", "limit": "50"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert call_args[0][0] == "/api/v1/prediction-markets/m-1/trades"
+    params = call_args[1]["params"]
+    assert "since" in params
+    assert params.get("limit") == "50"
+
+
+@pytest.mark.asyncio
+async def test_history_forwards_interval_param(authed_app, authed_mock_clients) -> None:
+    """PLAN-0056 A4: ``?interval=1d`` flows through the history proxy verbatim."""
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, b'{"market_id": "m-1", "points": []}')
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/signals/prediction-markets/m-1/history",
+            params={"interval": "1d", "token_id": "tok-yes"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    params = authed_mock_clients.market_data.get.call_args[1]["params"]
+    assert params.get("interval") == "1d"
+    assert params.get("token_id") == "tok-yes"
+
+
+# ── Entity predictions (T-E-1-02, proxies S7 knowledge-graph) ────────────────
+
+_ENTITY_ID = "018f5a2b-1c3d-7e4f-8a9b-0c1d2e3f4a5b"
+
+
+@pytest.mark.asyncio
+async def test_entity_predictions_proxies_s7(authed_app, authed_mock_clients) -> None:
+    """GET /v1/entities/{id}/predictions returns the S7 payload verbatim."""
+    payload = (
+        b'{"items": [{"condition_id": "0xabc", "question": "Will X happen?",'
+        b' "polarity": "bullish", "polarity_confidence": 0.82,'
+        b' "close_time": "2026-12-31T00:00:00Z", "confidence": 0.9}],'
+        b' "total": 1, "limit": 50, "offset": 0}'
+    )
+    authed_mock_clients.knowledge_graph.get = AsyncMock(return_value=_mock_response(200, payload))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_ID}/predictions",
+            params={"limit": "50", "offset": "0"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["items"][0]["condition_id"] == "0xabc"
+    assert body["items"][0]["polarity"] == "bullish"
+    # Proxies to S7 knowledge-graph (not S3 market-data): no odds hydration.
+    call_args = authed_mock_clients.knowledge_graph.get.call_args
+    assert call_args[0][0] == f"/api/v1/entities/{_ENTITY_ID}/predictions"
+    assert call_args[1]["params"] == {"limit": 50, "offset": 0}
+
+
+@pytest.mark.asyncio
+async def test_entity_predictions_requires_auth(app, mock_clients) -> None:
+    """Missing JWT → 401; S7 is never called."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(f"/v1/entities/{_ENTITY_ID}/predictions")
+
+    assert resp.status_code == 401
+    mock_clients.knowledge_graph.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entity_predictions_empty_list_not_404(authed_app, authed_mock_clients) -> None:
+    """An entity with no linked markets → 200 with empty items (never 404)."""
+    authed_mock_clients.knowledge_graph.get = AsyncMock(
+        return_value=_mock_response(200, b'{"items": [], "total": 0, "limit": 50, "offset": 0}')
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_ID}/predictions",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []

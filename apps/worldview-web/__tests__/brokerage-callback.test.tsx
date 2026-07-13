@@ -192,9 +192,12 @@ describe("BrokerageCallbackPage — SnapTrade OAuth callback", () => {
 
     // WHY check secondary copy: users need to know their data will appear soon
     // (sync is async — transactions don't appear instantly after connection).
-    expect(
-      screen.getByText(/Your transaction history will begin syncing shortly/i),
-    ).toBeInTheDocument();
+    // PLAN-0122 W-C (R-9/R-10): the misleading "begin syncing shortly" copy was
+    // replaced with explicit, honest timing (minutes → up to a few hours + the
+    // "Sync Now" recovery hint). The heading above stays pinned.
+    expect(screen.getByText(/few minutes/i)).toBeInTheDocument();
+    expect(screen.getByText(/few hours/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sync Now/i)).toBeInTheDocument();
   });
 
   it("renders Go to Portfolio button in success state", async () => {

@@ -204,16 +204,38 @@ def test_invariant_infra_non_answer() -> None:
 
 
 def test_invariant_floor_below_12() -> None:
-    """A grounding sub-dim below the floor trips GROUNDING_FLOOR."""
+    """A grounding sub-dim below the floor trips GROUNDING_FLOOR in VERIFIED mode.
+
+    B3 (2026-07-06): the floor veto is only valid when real grounding samples exist
+    (``evidence_mode == "verified"``) — a low GUESSED sub-score in ``presumed`` mode
+    is not evidence of fabrication (see ``test_invariant_floor_suppressed_in_presumed``).
+    """
     gates = evaluate_invariants(
         _ok_input().answer_text,
         _ok_input().tool_results,
         Rubric(),
-        GroundingCheck(),
+        GroundingCheck(evidence_mode="verified"),
         grounding_score=10,
         tool_calls=_ok_input().tool_calls,
     )
     assert gates[InvariantCode.GROUNDING_FLOOR] is False
+
+
+def test_invariant_floor_suppressed_in_presumed() -> None:
+    """B3: a low grounding sub-score in PRESUMED mode must NOT trip GROUNDING_FLOOR.
+
+    No grounding sample = no basis to claim fabrication, so the guessed sub-score
+    cannot force a FAIL. This is the fix for the identical-answer PASS/FAIL/PASS flip.
+    """
+    gates = evaluate_invariants(
+        _ok_input().answer_text,
+        _ok_input().tool_results,
+        Rubric(),
+        GroundingCheck(evidence_mode="presumed"),
+        grounding_score=10,
+        tool_calls=_ok_input().tool_calls,
+    )
+    assert gates[InvariantCode.GROUNDING_FLOOR] is True
 
 
 def test_invariant_floor_at_12_does_not_fire() -> None:
@@ -222,7 +244,7 @@ def test_invariant_floor_at_12_does_not_fire() -> None:
         _ok_input().answer_text,
         _ok_input().tool_results,
         Rubric(),
-        GroundingCheck(),
+        GroundingCheck(evidence_mode="verified"),
         grounding_score=GROUNDING_VETO_FLOOR,
         tool_calls=_ok_input().tool_calls,
     )
@@ -384,14 +406,41 @@ def test_gate_overrides_high_quality() -> None:
     assert decision["gate_results"]["CONTROL_TOKEN_LEAK"] is False
 
 
+def _ok_input_verified() -> JudgeInput:
+    """``_ok_input`` plus a real grounding sample → the cross-check runs VERIFIED.
+
+    The sampled ``pe_ratio`` matches the claimed ``37.73x`` so no numeric
+    contradiction fires; the low soft grounding sub-score is what drives the floor
+    veto, which is only valid in verified mode (B3).
+    """
+    base = _ok_input()
+    return JudgeInput(
+        prompt=base.prompt,
+        rubric=base.rubric,
+        answer_text=base.answer_text,
+        tool_calls=base.tool_calls,
+        tool_results=[
+            {
+                "tool": "query_fundamentals",
+                "status": "ok",
+                "item_count": 1,
+                "grounding_sample": {"fields": {"pe_ratio": "37.73", "ticker": "AAPL"}},
+            }
+        ],
+    )
+
+
 def test_grounding_floor_gate_overrides_high_quality_via_judge() -> None:
-    """dims sum 85 with grounding=10 → tiered FAIL[GROUNDING_FLOOR].
+    """dims sum 85 with grounding=10 → tiered FAIL[GROUNDING_FLOOR] in VERIFIED mode.
 
     This is the E1 fabrication case routed through the soft judge (not the
     degenerate pre-check): a fabricated number scores grounding=10, the other
-    dims are perfect, the additive sum is 85 (old PASS) — the gate must FAIL it.
+    dims are perfect, the additive sum is 85 (old PASS) — with real samples present
+    the floor gate must FAIL it. (B3, 2026-07-06: the floor is verified-mode only.)
     """
-    out = judge_answer(_ok_input(), llm=_llm_with_dims(tool_use=25, grounding=10, framing=25, refusal_judgment=25))
+    out = judge_answer(
+        _ok_input_verified(), llm=_llm_with_dims(tool_use=25, grounding=10, framing=25, refusal_judgment=25)
+    )
     decision = out["verdict_decision"]
     assert decision["quality_score"] == 85  # unchanged additive sum
     assert decision["verdict"] == "FAIL"
@@ -399,6 +448,21 @@ def test_grounding_floor_gate_overrides_high_quality_via_judge() -> None:
     # Legacy back-compat: the old ``veto`` block + ``verdict`` string still fire.
     assert out["verdict"] == "FAIL"
     assert out["veto"]["type"] == "grounding"
+
+
+def test_grounding_floor_suppressed_in_presumed_via_judge() -> None:
+    """B3: the SAME dims (grounding=10) in PRESUMED mode do NOT veto → PASS.
+
+    ``_ok_input`` carries no grounding sample, so the guessed grounding sub-score
+    cannot force a FAIL. sum=85 → the additive band decides → PASS (no veto).
+    """
+    out = judge_answer(_ok_input(), llm=_llm_with_dims(tool_use=25, grounding=10, framing=25, refusal_judgment=25))
+    decision = out["verdict_decision"]
+    assert decision["quality_score"] == 85
+    assert decision["fail_reason"] is None
+    assert decision["verdict"] != "FAIL"
+    assert out["verdict"] == "PASS"
+    assert out["veto"] is None
 
 
 def test_additive_fabrication_now_fails_e1_regression() -> None:

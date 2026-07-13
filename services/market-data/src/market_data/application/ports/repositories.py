@@ -25,8 +25,12 @@ if TYPE_CHECKING:
         FundamentalsRecord,
         Instrument,
         OHLCVBar,
+        PredictionEvent,
         PredictionMarket,
+        PredictionMarketOI,
+        PredictionMarketPrice,
         PredictionMarketSnapshot,
+        PredictionMarketTrade,
         Quote,
         ScreenFieldMetadata,
         Security,
@@ -683,6 +687,7 @@ class PredictionMarketRepository(ABC):
         limit: int,
         offset: int,
         category: str | None = None,
+        volume_window_days: int | None = None,
     ) -> tuple[list[tuple[PredictionMarket, Decimal | None]], int]:
         """Return a paginated list of ``(market, latest_volume_24h)`` pairs and total.
 
@@ -697,6 +702,14 @@ class PredictionMarketRepository(ABC):
         (``LEFT JOIN LATERAL ... ORDER BY snapshot_at DESC LIMIT 1``); ``None``
         when the market has no snapshots or the latest snapshot has no volume.
         Forward-compatible: callers tolerating ``None`` continue to work.
+
+        ``volume_window_days`` (PLAN-0056 QA): when a positive int, bound the
+        latest-snapshot LATERAL to ``snapshot_at >= now() - N days`` so the
+        TimescaleDB hypertable prunes to recent chunks instead of descending
+        every chunk per market (which cold-scans ~1.8M rows and 500s the
+        endpoint under load). Markets with no in-window snapshot get
+        ``latest_volume_24h = None`` and sort to the bottom (stale volume must
+        not float a dead market to the top). ``None`` / ``<= 0`` = unbounded.
         """
 
     @abstractmethod
@@ -736,9 +749,27 @@ class PredictionMarketSnapshotRepository(ABC):
         """Return snapshots for ``market_id``, ordered by ``snapshot_at DESC``."""
 
     @abstractmethod
+    async def get_earliest_snapshot_at_or_after(
+        self,
+        market_id: str,
+        at_or_after: datetime,
+    ) -> PredictionMarketSnapshot | None:
+        """Return the earliest snapshot for ``market_id`` with ``snapshot_at >= at_or_after``.
+
+        Used by the move detector to obtain the TRUE window-start baseline: a
+        ``list_snapshots(limit=N)`` scan only returns the newest ``N`` rows, so
+        its oldest element is not the window start once a market has more than
+        ``N`` snapshots in the window. This single ``ORDER BY snapshot_at ASC
+        LIMIT 1`` read returns the genuine earliest-in-window row (or ``None`` if
+        the market has no snapshot in the window).
+        """
+
+    @abstractmethod
     async def get_latest_prices_batch(
         self,
         market_ids: list[str],
+        *,
+        window_days: int | None = None,
     ) -> dict[str, dict[str, float]]:
         """Return the latest ``outcomes_prices`` for each market in ``market_ids``.
 
@@ -746,4 +777,133 @@ class PredictionMarketSnapshotRepository(ABC):
         query regardless of how many markets are requested (avoids N+1).
 
         Returns a dict keyed by ``market_id``; missing markets are not included.
+
+        ``window_days`` (PLAN-0056 QA): when a positive int, bound the scan to
+        ``snapshot_at >= now() - N days`` so the TimescaleDB hypertable prunes to
+        recent chunks instead of ``DISTINCT ON``-SkipScanning every chunk per
+        market (a cold second contributor to the list-endpoint pool exhaustion).
+        Kept in lock-step with the list use case's ``volume_window_days`` so a
+        market's row shows prices from the SAME recent-window snapshot that
+        produced its ``volume_24h``; a market with no in-window snapshot is
+        simply omitted (its row already carries ``volume_24h=None`` and sorts
+        last).  ``None`` / ``<= 0`` = unbounded (legacy behaviour).
         """
+
+
+class PredictionMarketPricesRepository(ABC):
+    """Port for per-token interval price history (hypertable) operations (PLAN-0056 A2)."""
+
+    @abstractmethod
+    async def insert_if_not_exists(self, price: PredictionMarketPrice) -> bool:
+        """Atomically insert one price bar; ``True`` if new, ``False`` on conflict.
+
+        Conflict target: ``(market_id, token_id, interval, window_start_ts)``.
+        """
+
+    @abstractmethod
+    async def bulk_insert(self, prices: list[PredictionMarketPrice]) -> int:
+        """Insert many price bars in one multi-row ``INSERT … ON CONFLICT DO NOTHING``.
+
+        Used by the historical backfill path (BP-034/035 idempotent inserts).
+        Returns the number of rows actually inserted (conflicts are skipped).
+        An empty list is a no-op returning ``0``.
+        """
+
+    @abstractmethod
+    async def list_prices(
+        self,
+        market_id: str,
+        *,
+        token_id: str | None,
+        interval: str | None,
+        from_dt: datetime | None,
+        to_dt: datetime | None,
+        limit: int,
+    ) -> list[PredictionMarketPrice]:
+        """Return price bars for ``market_id``, ordered by ``window_start_ts DESC``.
+
+        Optional ``token_id`` / ``interval`` narrow to one series; ``from_dt`` /
+        ``to_dt`` bound the window (inclusive).
+        """
+
+
+class PredictionMarketTradesRepository(ABC):
+    """Port for individual trade/fill (hypertable) operations (PLAN-0056 A2)."""
+
+    @abstractmethod
+    async def insert_if_not_exists(self, trade: PredictionMarketTrade) -> bool:
+        """Atomically insert one trade; ``True`` if new, ``False`` on conflict.
+
+        Conflict target: ``(market_id, trade_id, ts)``.
+        """
+
+    @abstractmethod
+    async def bulk_insert(self, trades: list[PredictionMarketTrade]) -> int:
+        """Insert many trades in one multi-row ``INSERT … ON CONFLICT DO NOTHING``.
+
+        Returns the number of rows actually inserted. Empty list → ``0``.
+        """
+
+    @abstractmethod
+    async def list_trades(
+        self,
+        market_id: str,
+        *,
+        since: datetime | None,
+        limit: int,
+    ) -> list[PredictionMarketTrade]:
+        """Return trades for ``market_id``, ordered by ``ts DESC``.
+
+        Optional ``since`` bounds the window to ``ts >= since`` (inclusive).
+        """
+
+
+class PredictionMarketOIRepository(ABC):
+    """Port for daily open-interest / 24h-volume roll-up operations (PLAN-0056 A2)."""
+
+    @abstractmethod
+    async def upsert(self, oi: PredictionMarketOI) -> None:
+        """Insert or overwrite the daily roll-up for ``(market_id, snapshot_date)``.
+
+        On conflict the money fields are overwritten (last-write-wins) so a later
+        poll on the same day supersedes an earlier partial reading.
+        """
+
+    @abstractmethod
+    async def list_oi(
+        self,
+        market_id: str,
+        *,
+        from_date: date | None,
+        to_date: date | None,
+        limit: int,
+    ) -> list[PredictionMarketOI]:
+        """Return daily roll-ups for ``market_id``, ordered by ``snapshot_date DESC``.
+
+        Optional ``from_date`` / ``to_date`` bound the range (inclusive).
+        """
+
+    @abstractmethod
+    async def get_latest(self, market_id: str) -> PredictionMarketOI | None:
+        """Return the most recent daily roll-up for ``market_id`` (or ``None``)."""
+
+
+class PredictionMarketEventsRepository(ABC):
+    """Port for Polymarket "event" group operations (PLAN-0056 A2)."""
+
+    @abstractmethod
+    async def upsert(self, event: PredictionEvent) -> None:
+        """Insert or update the event keyed on ``event_id`` (last-write-wins metadata)."""
+
+    @abstractmethod
+    async def find_by_event_id(self, event_id: str) -> PredictionEvent | None:
+        """Return the event with the given ``event_id`` (or ``None`` if absent)."""
+
+    @abstractmethod
+    async def list_events(
+        self,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[PredictionEvent], int]:
+        """Return a page of events (ordered by ``start_date DESC NULLS LAST``) + total count."""

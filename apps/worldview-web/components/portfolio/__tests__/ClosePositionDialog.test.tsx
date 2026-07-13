@@ -90,14 +90,15 @@ describe("ClosePositionDialog", () => {
     expect(tickerInput).toHaveValue("AAPL");
   });
 
-  it("renders the quantity field as read-only and pre-filled from holding", () => {
+  it("test_partial_close_quantity_editable_default_full: quantity editable, defaults to full holding", () => {
+    // PLAN-0122 W-D §6.5: quantity is now EDITABLE (was read-only) so the user
+    // can close a partial position. It still DEFAULTS to the full holding so a
+    // full close stays one click.
     renderDialog();
     const qtyInput = screen.getByLabelText(/quantity/i);
-    // WHY: the quantity is the FULL holding quantity (full close only).
-    // The field is read-only so the user cannot accidentally enter a partial qty.
-    expect(qtyInput).toHaveAttribute("readonly");
-    // The holding.quantity is 50; rendered as "50" via toLocaleString().
-    expect(qtyInput).toHaveValue("50");
+    expect(qtyInput).not.toHaveAttribute("readonly");
+    // Number input → default value is the full holding quantity (50).
+    expect(qtyInput).toHaveValue(50);
   });
 
   it("renders Cancel and Close Position buttons", () => {
@@ -260,5 +261,121 @@ describe("ClosePositionDialog", () => {
     expect(
       screen.getByText(/valid sale price greater than 0/i),
     ).toBeInTheDocument();
+  });
+
+  // ── PLAN-0122 W-D §6.5: partial close ────────────────────────────────────
+
+  it("test_partial_close_full_still_one_click: leaving the default full quantity posts the full SELL", async () => {
+    // Regression guard: the default (full holding) close must behave exactly as
+    // before — a single click posts a SELL of the whole holding quantity.
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "tx-1",
+          portfolio_id: "port-222",
+          instrument_id: "inst-333",
+          transaction_type: "TRADE",
+          direction: "SELL",
+          quantity: "50.00000000",
+          price: "180.00000000",
+          fees: "0.00000000",
+          currency: "USD",
+          executed_at: "2026-07-09T00:00:00Z",
+          created_at: "2026-07-09T00:00:00Z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+    const user = userEvent.setup();
+    renderDialog();
+
+    // Do NOT touch the quantity — click Close Position directly.
+    await user.click(screen.getByRole("button", { name: /close position/i }));
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledOnce());
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.quantity).toBe(50); // full holding
+    expect(body.trade_side).toBe("SELL");
+  });
+
+  it("test_partial_close_blocks_over_and_zero: over-holding and zero quantities are blocked", async () => {
+    const mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+    const user = userEvent.setup();
+    renderDialog();
+
+    const qtyInput = screen.getByLabelText(/quantity/i);
+
+    // Over-holding (60 > 50) → blocked with the "You only hold N shares." message.
+    await user.clear(qtyInput);
+    await user.type(qtyInput, "60");
+    await user.click(screen.getByRole("button", { name: /sell 60 of 50|close position|sell all/i }));
+    expect(screen.getByText(/you only hold 50 shares/i)).toBeInTheDocument();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    // Zero → blocked with the "greater than 0" message.
+    await user.clear(qtyInput);
+    await user.type(qtyInput, "0");
+    // With qty 0 the label reads "Close Position" (isPartial=false), so target it.
+    await user.click(screen.getByRole("button", { name: /close position/i }));
+    expect(screen.getByText(/quantity must be greater than 0/i)).toBeInTheDocument();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("test_partial_close_title_reflects_partial: partial qty updates the label; Sell all resets to full", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    const qtyInput = screen.getByLabelText(/quantity/i);
+    await user.clear(qtyInput);
+    await user.type(qtyInput, "20");
+
+    // The intent label reflects the partial close.
+    expect(screen.getByTestId("close-mode-label")).toHaveTextContent("Sell 20 of 50");
+    // The submit button label follows suit.
+    expect(
+      screen.getByRole("button", { name: /sell 20 of 50/i }),
+    ).toBeInTheDocument();
+
+    // "Sell all" resets the quantity back to the full holding.
+    await user.click(screen.getByRole("button", { name: /sell all/i }));
+    expect(qtyInput).toHaveValue(50);
+    expect(screen.getByTestId("close-mode-label")).toHaveTextContent("Close Position");
+  });
+
+  it("posts the entered partial quantity on a partial close", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "tx-2",
+          portfolio_id: "port-222",
+          instrument_id: "inst-333",
+          transaction_type: "TRADE",
+          direction: "SELL",
+          quantity: "20.00000000",
+          price: "180.00000000",
+          fees: "0.00000000",
+          currency: "USD",
+          executed_at: "2026-07-09T00:00:00Z",
+          created_at: "2026-07-09T00:00:00Z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+    const user = userEvent.setup();
+    renderDialog();
+
+    const qtyInput = screen.getByLabelText(/quantity/i);
+    await user.clear(qtyInput);
+    await user.type(qtyInput, "20");
+    await user.click(screen.getByRole("button", { name: /sell 20 of 50/i }));
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledOnce());
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.quantity).toBe(20);
   });
 });

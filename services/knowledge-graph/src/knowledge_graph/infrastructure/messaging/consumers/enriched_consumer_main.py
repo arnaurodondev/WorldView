@@ -4,7 +4,8 @@ Runs as an independent process (R22). Consumes ``nlp.article.enriched.v1``
 from S6 and orchestrates Blocks 11 → 12a → 12b (canonicalization, graph
 materialization, contradiction detection).
 
-Requires an embedding client (Ollama) and a direct Kafka producer for
+Requires an embedding client (DeepInfra or Ollama, per
+KNOWLEDGE_GRAPH_EMBEDDING_PROVIDER) and a direct Kafka producer for
 entity.dirtied.v1 events.  ML clients are wired best-effort — the process
 exits if they cannot be initialized.
 
@@ -20,6 +21,7 @@ import contextlib
 import os
 import signal
 import sys
+from typing import Any
 
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
@@ -32,9 +34,48 @@ from observability import (  # type: ignore[import-untyped]
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
+def _build_embedding_adapter(settings: Any) -> tuple[Any, str]:
+    """Select the embedding adapter by ``KNOWLEDGE_GRAPH_EMBEDDING_PROVIDER``.
+
+    Mirrors the switch in ``scheduler_main``/``narrative_refresh``/``provisional_queued``
+    so that prod (``deepinfra``) does NOT depend on a local Ollama server (Ollama was
+    dropped 2026-07-06). ``BAAI/bge-large-en-v1.5`` (DeepInfra) and ``bge-large:latest``
+    (Ollama) are both 1024-dim → vector-compatible with the ``vector(1024)`` column.
+
+    Returns ``(raw_adapter, model_id)`` where ``raw_adapter.embed()`` takes a
+    ``list[EmbeddingInput]``. Falls back to Ollama only when the provider is not
+    ``deepinfra`` or its api_key is empty.
+    """
+    provider = settings.embedding_provider.lower()
+    api_key = settings.embedding_api_key.get_secret_value()  # DEF-005
+    if provider == "deepinfra" and api_key:
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter  # type: ignore[import-not-found]
+
+        logger.info("kg_enriched_consumer_embedding_deepinfra", model_id=settings.embedding_api_model_id)
+        return (
+            DeepInfraEmbeddingAdapter(
+                api_key=api_key,
+                model_id=settings.embedding_api_model_id,
+                base_url=settings.embedding_api_base_url,
+            ),
+            settings.embedding_api_model_id,
+        )
+
+    from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter  # type: ignore[import-not-found]
+
+    logger.info("kg_enriched_consumer_embedding_ollama", model_id=settings.embedding_model_id)
+    return (
+        OllamaEmbeddingAdapter(
+            base_url=settings.ollama_base_url,
+            model_id=settings.embedding_model_id,
+            semaphore=asyncio.Semaphore(4),
+        ),
+        settings.embedding_model_id,
+    )
+
+
 async def main() -> None:
     from confluent_kafka import Producer  # type: ignore[import-untyped]
-    from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter  # type: ignore[import-not-found]
 
     from knowledge_graph.config import Settings
     from knowledge_graph.infrastructure.intelligence_db.session import _build_factories
@@ -86,24 +127,22 @@ async def main() -> None:
     # Valkey for dedup
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
-    # Embedding client (required — exits if unavailable).
-    # _EmbeddingBridgeClient wraps OllamaEmbeddingAdapter (batch EmbeddingInput API)
-    # to satisfy the canonicalization block's embed(str) -> list[float] protocol.
+    # Embedding client (required — exits if unavailable). Provider selection is
+    # extracted into _build_embedding_adapter() (below) so it is unit-testable.
+    # _EmbeddingBridgeClient wraps whichever adapter (batch EmbeddingInput API) to
+    # satisfy the canonicalization block's embed(str) -> list[float] protocol.
     # The adapter's embed() takes list[EmbeddingInput]; passing a bare str causes it
     # to iterate characters, crashing with "'str' has no attribute 'instruction_prefix'".
-    _raw_embedding_adapter = OllamaEmbeddingAdapter(
-        base_url=settings.ollama_base_url,
-        model_id=settings.embedding_model_id,
-        semaphore=asyncio.Semaphore(4),
-    )
-    _embedding_model_id = settings.embedding_model_id
+    _raw_embedding_adapter, _embedding_model_id = _build_embedding_adapter(settings)
 
     from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
 
     class _EmbeddingBridgeClient:
         async def embed(self, text: str) -> list[float]:  # type: ignore[override]
             outputs = await _raw_embedding_adapter.embed([EmbeddingInput(text=text, model_id=_embedding_model_id)])
-            return outputs[0].embedding
+            # _raw_embedding_adapter is Any (provider-selected), so .embedding is Any.
+            embedding: list[float] = outputs[0].embedding
+            return embedding
 
     embedding_client: object = _EmbeddingBridgeClient()
 

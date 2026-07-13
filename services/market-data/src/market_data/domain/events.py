@@ -140,3 +140,45 @@ class InstrumentUpdated(DomainEvent):
     has_quotes: bool = False
     has_fundamentals: bool = False
     fields_updated: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class PredictionMarketMove(DomainEvent):
+    """Emitted by the S3 ``PredictionMoveDetector`` when a prediction market's
+    implied probability for one outcome moves *materially* over a lookback
+    window (PLAN-0056 Wave D1).
+
+    Published to topic ``market.prediction.move.v1`` (Avro schema
+    ``market.prediction.move.v1.avsc``).  Consumed by the S7
+    ``PredictionSignalEmitter`` (Wave D2) which joins the ``market_id``
+    (Polymarket ``conditionId``) to entity exposures + polarity and fans a
+    per-entity signal out to the alert pipeline.
+
+    A move is only emitted when it clears three config-driven gates so noise
+    never fires: ``|delta| >= τ`` AND ``liquidity >= floor`` AND
+    ``volume_24h >= floor`` (all from the latest snapshot).  ``prev_price`` is
+    the implied probability at the window start, ``new_price`` at the window
+    end; ``delta = new_price - prev_price`` (signed) and ``direction`` is
+    ``"up"``/``"down"``.
+
+    Field ordering places every field after the base ``DomainEvent`` defaults;
+    all carry defaults so the frozen dataclass respects the "no non-default
+    after default" rule.  ``prev_price``/``new_price``/``delta`` are plain
+    ``float`` to match the Avro ``double`` fields (no ``Decimal`` round-trip).
+    """
+
+    event_type: ClassVar[str] = "market.prediction.move"
+    schema_version: ClassVar[int] = 1
+
+    market_id: str = ""  # Polymarket conditionId
+    token_id: str = ""  # CLOB token id of the outcome that moved
+    interval: str = ""  # window granularity label: 1h | 1d | 1w
+    prev_price: float = 0.0  # implied probability at window start [0,1]
+    new_price: float = 0.0  # implied probability at window end [0,1]
+    delta: float = 0.0  # new_price - prev_price (signed)
+    direction: str = ""  # up | down
+    window_start_ts: str = ""  # ISO-8601 UTC start of the move window
+    outcome_name: str | None = None  # e.g. Yes/No, when known
+    liquidity: float | None = None  # USD liquidity at detection (conviction)
+    volume_24h: float | None = None  # USD 24h volume at detection (conviction)
+    is_backfill: bool = False  # True when computed over backfilled history

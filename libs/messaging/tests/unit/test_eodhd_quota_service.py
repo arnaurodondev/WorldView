@@ -17,6 +17,7 @@ import pytest
 from messaging.eodhd_quota.quota_service import (
     EodhdQuotaService,
     QuotaCheckResult,
+    _current_day,
 )
 
 pytestmark = pytest.mark.unit
@@ -73,33 +74,55 @@ async def test_try_consume_counts_fundamentals_cost() -> None:
 
 
 @pytest.mark.unit
-async def test_hard_limit_blocks_when_at_cap() -> None:
+async def test_daily_hard_limit_blocks_when_at_cap() -> None:
+    """The DAILY counter is the real cap: at/over it, calls are blocked."""
     vk = _FakeValkey()
-    svc = EodhdQuotaService(valkey=vk, hard_limit=100)
-    # Pre-seed the monthly total at the cap.
-    month_key = "eodhd:v1:quota:2026-06:credits_used"
-    vk.store[month_key] = 100
+    svc = EodhdQuotaService(valkey=vk, hard_limit=100_000, daily_hard_limit=100)
+    # Pre-seed the per-UTC-day total at the daily cap.
+    day_key = "eodhd:v1:quota:day:2026-06-16:credits_used"
+    vk.store[day_key] = 100
 
-    result = await svc.try_consume(cost=5, service="market-ingestion", month="2026-06")
+    result = await svc.try_consume(cost=5, service="market-ingestion", month="2026-06", day="2026-06-16")
 
     assert result == QuotaCheckResult.HARD_LIMIT_EXCEEDED
-    # Blocked call must NOT consume additional credits.
-    assert vk.store[month_key] == 100
-    # And must not have created a daily counter for this blocked call.
-    assert not [k for k in vk.store if k.startswith("eodhd:v1:quota:day:")]
+    # Blocked call must NOT consume additional credits (day counter unchanged).
+    assert vk.store[day_key] == 100
+    # And must not have touched the monthly counter for this blocked call.
+    assert "eodhd:v1:quota:2026-06:credits_used" not in vk.store
 
 
 @pytest.mark.unit
-async def test_soft_limit_signalled_but_not_blocked() -> None:
+async def test_monthly_counter_no_longer_blocks() -> None:
+    """REGRESSION (incident 2026-07-03): a huge monthly total must NOT block.
+
+    EODHD's real limit is per-day; the monthly counter is reporting-only. A
+    monthly value far above the old 100k cap must still return OK as long as the
+    DAILY counter has headroom.
+    """
     vk = _FakeValkey()
-    svc = EodhdQuotaService(valkey=vk, hard_limit=100, soft_limit_ratio=0.80)
-    vk.store["eodhd:v1:quota:2026-06:credits_used"] = 75
+    svc = EodhdQuotaService(valkey=vk, hard_limit=100_000, daily_hard_limit=100_000)
+    # Monthly counter already blown past the old hard cap (the incident state).
+    vk.store["eodhd:v1:quota:2026-07:credits_used"] = 250_000
 
-    result = await svc.try_consume(cost=10, service="market-ingestion", month="2026-06")
+    result = await svc.try_consume(cost=5, service="content-ingestion", month="2026-07", day="2026-07-03")
 
-    # 75 + 10 = 85 ≥ soft (80) but < hard (100).
+    assert result == QuotaCheckResult.OK
+    # The request DID roll up into the monthly total (reporting continues).
+    assert vk.store["eodhd:v1:quota:2026-07:credits_used"] == 250_005
+    assert vk.store["eodhd:v1:quota:day:2026-07-03:credits_used"] == 5
+
+
+@pytest.mark.unit
+async def test_daily_soft_limit_signalled_but_not_blocked() -> None:
+    vk = _FakeValkey()
+    svc = EodhdQuotaService(valkey=vk, hard_limit=100_000, daily_hard_limit=100, soft_limit_ratio=0.80)
+    vk.store["eodhd:v1:quota:day:2026-06-16:credits_used"] = 75
+
+    result = await svc.try_consume(cost=10, service="market-ingestion", month="2026-06", day="2026-06-16")
+
+    # 75 + 10 = 85 ≥ daily soft (80) but < daily hard (100).
     assert result == QuotaCheckResult.SOFT_LIMIT_EXCEEDED
-    assert vk.store["eodhd:v1:quota:2026-06:credits_used"] == 85
+    assert vk.store["eodhd:v1:quota:day:2026-06-16:credits_used"] == 85
 
 
 @pytest.mark.unit
@@ -117,3 +140,52 @@ async def test_get_daily_credits_used_reads_counter() -> None:
     vk.store["eodhd:v1:quota:day:2026-06-16:credits_used"] = 4242
 
     assert await svc.get_daily_credits_used(day="2026-06-16") == 4242
+
+
+@pytest.mark.unit
+async def test_record_usage_increments_shared_counters() -> None:
+    """record_usage rolls a caller's spend into the SAME shared counters.
+
+    Regression guard for the S4 blind spot: content-ingestion's EODHD spend must
+    land on ``eodhd:v1:quota:{month}:credits_used`` (the cross-service total), not
+    a divergent key, so the account-wide monthly figure is a true rollup.
+    """
+    vk = _FakeValkey()
+    svc = EodhdQuotaService(valkey=vk, hard_limit=100_000)
+
+    result = await svc.record_usage(cost=5, service="content-ingestion", symbol="AAPL.US", month="2026-06")
+
+    assert result == QuotaCheckResult.OK
+    assert vk.store["eodhd:v1:quota:2026-06:credits_used"] == 5
+    assert vk.store["eodhd:v1:quota:2026-06:content-ingestion:credits_used"] == 5
+    assert vk.store["eodhd:v1:quota:2026-06:symbol:AAPL.US:credits_used"] == 5
+
+
+@pytest.mark.unit
+async def test_record_usage_best_effort_swallows_valkey_failure() -> None:
+    """A Valkey failure must NEVER propagate out of record_usage."""
+
+    class _BrokenValkey(_FakeValkey):
+        async def incr(self, key: str, amount: int = 1) -> int:
+            raise RuntimeError("valkey down")
+
+    svc = EodhdQuotaService(valkey=_BrokenValkey(), hard_limit=100_000)
+
+    # Must not raise — returns None to signal the counter was not written.
+    result = await svc.record_usage(cost=5, service="content-ingestion", month="2026-06")
+
+    assert result is None
+
+
+@pytest.mark.unit
+async def test_record_usage_returns_soft_limit_for_alerting() -> None:
+    """record_usage surfaces the threshold result so callers can alert loudly."""
+    vk = _FakeValkey()
+    svc = EodhdQuotaService(valkey=vk, hard_limit=100_000, daily_hard_limit=100, soft_limit_ratio=0.80)
+    day = _current_day()
+    vk.store[f"eodhd:v1:quota:day:{day}:credits_used"] = 78
+
+    result = await svc.record_usage(cost=5, service="content-ingestion", month="2026-06")
+
+    # 78 + 5 = 83 ≥ daily soft (80) but < daily hard (100).
+    assert result == QuotaCheckResult.SOFT_LIMIT_EXCEEDED

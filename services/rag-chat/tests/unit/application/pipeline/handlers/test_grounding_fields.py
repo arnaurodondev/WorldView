@@ -264,6 +264,91 @@ async def test_query_fundamentals_honours_coverage_flag() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_fundamentals_snapshot_only_valuation_emits_values() -> None:
+    """C1 (2026-07-06): a valuation query with an EMPTY period series but a
+    populated TTM snapshot emits the metric VALUES — not just ``{ticker}``.
+
+    ``pe_ratio`` / ``forward_pe`` / ``price_to_sales_ttm`` are TTM scalars that
+    market-data returns on the snapshot with ``metrics_by_period: []``. Before
+    this fix ``_grounding_fields_from_rows`` returned ``()`` on empty rows, so
+    the judge saw no value and defaulted to a blind PASS. ``eps`` here lives ONLY
+    on the snapshot (eps_ttm) — the single-metric EPS packing gap.
+    """
+    s3 = AsyncMock()
+    s3.query_fundamentals = AsyncMock(
+        return_value={
+            "metrics_by_period": [],  # snapshot-oriented query — no per-period rows
+            "snapshot": {
+                "pe_ratio": 37.73,
+                "forward_pe": 27.80,
+                "price_to_sales_ttm": 9.12,
+                "eps_ttm": 6.31,  # EPS carried on the TTM snapshot only
+                "as_of": "2026-07-01",
+                "source": "highlights",
+            },
+            "coverage": {
+                "pe_ratio": "ok",
+                "forward_pe": "ok",
+                "price_to_sales_ttm": "ok",
+                "eps": "ok",
+            },
+        }
+    )
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="meta",
+        metrics=["pe_ratio", "forward_pe", "price_to_sales_ttm", "eps"],
+        periods=0,
+    )
+    assert result is not None
+    gf = _gf_dict(result)
+    assert gf["ticker"] == "META"
+    # Every valuation VALUE must be present (the whole point of C1) — not {ticker}.
+    assert gf["pe_ratio"] == "37.73"
+    assert gf["forward_pe"] == "27.8"
+    assert gf["price_to_sales_ttm"] == "9.12"
+    # Single-metric EPS from the snapshot (eps_ttm synonym) is packed consistently.
+    assert gf["eps"] == "6.31"
+
+
+@pytest.mark.asyncio
+async def test_history_periods_8_returns_all_8_periods() -> None:
+    """A2 (2026-07-06): when the upstream returns the requested N=8 periods, the
+    handler exposes ALL 8 (in the grounding bag AND the tool-result table) — it
+    never silently caps to the latest ~3, which would force the model to fill the
+    rest of the series from parametric memory (ungrounded fabrication).
+    """
+    s3 = AsyncMock()
+    # ASC by date: 8 quarters, revenue 10B..80B, distinct EPS per quarter.
+    s3.get_fundamentals_history_with_snapshot.return_value = {
+        "periods": [
+            {
+                "period": f"Q{i}",
+                "period_type": "QUARTERLY",
+                "revenue": i * 10_000_000_000,
+                "eps": float(i),
+            }
+            for i in range(1, 9)  # 8 periods
+        ],
+        "current_snapshot": None,
+    }
+    handler = _make_handler(s3)
+    result = await handler._handle_get_fundamentals_history(ticker="TSLA", periods=8)
+
+    assert result is not None
+    gf = _gf_dict(result)
+    # Newest (Q8) bare, then _2 (.. Q7) ... _8 (Q1) — all 8 periods present.
+    assert gf["revenue"] == "80000000000"  # newest
+    assert gf["revenue_8"] == "10000000000"  # oldest of the 8
+    # Every one of the 8 requested periods survived — no truncation to ~3.
+    period_revenues = [k for k in gf if k == "revenue" or k.startswith("revenue_")]
+    assert len(period_revenues) == 8
+    # The tool-result table the MODEL reads also lists all 8 quarters (one
+    # ``| QUARTERLY |`` cell per data row — the header uses "Periodicity:").
+    assert result.text.count("| QUARTERLY |") == 8
+
+
+@pytest.mark.asyncio
 async def test_query_fundamentals_emits_margins_as_raw_ratios() -> None:
     """STEP A (2026-06-26): ``ok``-coverage margins land as RAW RATIOS, not percent.
 

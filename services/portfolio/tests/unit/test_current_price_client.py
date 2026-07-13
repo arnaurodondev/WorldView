@@ -184,3 +184,33 @@ class TestHttpCurrentPriceClientWithRealFixture:
         # presence of the call site is what matters; structlog tests are
         # the wrong layer for "did logger.warning fire" assertions).
         assert result == {}
+
+
+# ── DEF-002: internal-JWT claims (aud + jti) ──────────────────────────────────
+
+
+def test_system_jwt_headers_include_aud_and_jti() -> None:
+    """DEF-002: X-Internal-JWT MUST carry aud + a unique jti (required by middleware)."""
+    import jwt as pyjwt
+    from portfolio.infrastructure.market_data.current_price_client import (
+        _system_jwt_headers,
+    )
+
+    decoded = pyjwt.decode(_system_jwt_headers()["X-Internal-JWT"], options={"verify_signature": False})
+    assert decoded["aud"] == "worldview-internal"
+    assert decoded["iss"] == "worldview-gateway"
+    assert decoded["sub"] == "system:portfolio-current-price-client"
+    assert decoded["jti"]
+
+
+def test_recent_prices_system_jwt_headers_include_aud_and_jti() -> None:
+    """DEF-002: recent-prices client X-Internal-JWT MUST carry aud + a unique jti."""
+    import jwt as pyjwt
+    from portfolio.infrastructure.market_data.recent_prices_client import (
+        _system_jwt_headers,
+    )
+
+    decoded = pyjwt.decode(_system_jwt_headers()["X-Internal-JWT"], options={"verify_signature": False})
+    assert decoded["aud"] == "worldview-internal"
+    assert decoded["sub"] == "system:portfolio-recent-prices-client"
+    assert decoded["jti"]

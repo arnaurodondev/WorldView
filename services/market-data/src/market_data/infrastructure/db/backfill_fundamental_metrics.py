@@ -34,6 +34,9 @@ from market_data.infrastructure.db.models.fundamentals import (
     CashFlowStatementModel,
     HighlightsModel,
     IncomeStatementModel,
+    ShareStatisticsModel,
+    SplitsDividendsModel,
+    TechnicalsSnapshotModel,
     ValuationRatiosModel,
 )
 from market_data.infrastructure.db.repositories.fundamental_metrics_repo import PgFundamentalMetricsRepository
@@ -79,6 +82,15 @@ _BACKFILL_SECTIONS: list[tuple[type[Any], FundamentalsSection]] = [
     (IncomeStatementModel, FundamentalsSection.INCOME_STATEMENT),
     (BalanceSheetModel, FundamentalsSection.BALANCE_SHEET),
     (CashFlowStatementModel, FundamentalsSection.CASH_FLOW),
+    # 2026-07-05: Technicals (52w levels / moving averages / short interest),
+    # SharesStats (float + ownership), and SplitsDividends (forward yield / payout
+    # / dates) were added to the metric catalog.  Include their section models here
+    # so a one-time backfill can populate the new fundamental_metrics rows for the
+    # ~670 existing instruments (new catalog entries otherwise only materialise on
+    # the NEXT fundamentals ingest per instrument).
+    (TechnicalsSnapshotModel, FundamentalsSection.TECHNICALS_SNAPSHOT),
+    (ShareStatisticsModel, FundamentalsSection.SHARE_STATISTICS),
+    (SplitsDividendsModel, FundamentalsSection.SPLITS_DIVIDENDS),
 ]
 
 

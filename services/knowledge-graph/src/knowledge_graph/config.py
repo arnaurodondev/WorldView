@@ -115,6 +115,51 @@ class Settings(BaseSettings):
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_CONCURRENCY
     deepinfra_extraction_concurrency: int = 5
 
+    # PLAN-0056 Wave C3: MarketPolarityClassifier (prediction-market exposure polarity).
+    # Reuses the DeepInfra OpenAI-compat small-model stack (same shape as S6 relevance
+    # scoring — a small, cheap chat model). When ``deepinfra_api_key`` is set the
+    # PredictionEnrichedConsumer wires the classifier; empty key → exposures keep
+    # NULL polarity (the classifier is never constructed).
+    #
+    # PLAN-0056 live-QA fix: the original default ``Qwen/Qwen2.5-0.5B-Instruct`` is
+    # NOT served on this DeepInfra account — the endpoint returns HTTP 404
+    # ("model_not_found"), which the classifier swallows into ("neutral", 0.0), so
+    # EVERY exposure silently degraded to neutral/0.0 (the "against a company"
+    # bullish/bearish signal was dead). We default to the SAME served model the S6
+    # relevance-scoring worker uses in the live config
+    # (``meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo`` — verified HTTP 200 with the
+    # current KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY). It is larger than 0.5B (a small
+    # cost bump), but a working classifier beats a 404→neutral degrade. Override via
+    # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_MODEL_ID if the account tier changes.
+    polarity_classifier_model_id: str = (
+        "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_MODEL_ID
+    )
+    polarity_classifier_base_url: str = (
+        "https://api.deepinfra.com/v1/openai"  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_BASE_URL
+    )
+    polarity_classifier_timeout_seconds: int = 30  # KNOWLEDGE_GRAPH_POLARITY_CLASSIFIER_TIMEOUT_SECONDS
+
+    # ── PLAN-0056 Wave D2 — PredictionSignalEmitter tunables ─────────────────
+    # The emitter turns the three prediction triggers (new_market / material_move /
+    # resolution) into per-entity ``market.prediction.signal.v1`` events (one per
+    # entity exposure) with a gating ``market_impact_score`` in [0, 1]. All bases /
+    # multipliers are env-driven so the alert severity mapping can be tuned without
+    # a code change (no magic numbers buried in the score logic).
+    #
+    # new_market  : score = new_market_base * exposure.confidence (clamped 0..1).
+    # material_move: score = clamp(|delta|, 0..1), boosted by adverse_factor when the
+    #               move is adverse for the entity (bearish-outcome rising OR the
+    #               entity's favourable outcome falling), capped at 1.0.
+    # resolution  : score = resolution_base (fixed).
+    prediction_signal_new_market_base: float = 0.5  # KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_NEW_MARKET_BASE
+    prediction_signal_resolution_base: float = 0.6  # KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_RESOLUTION_BASE
+    # KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_MATERIAL_MOVE_ADVERSE_FACTOR
+    prediction_signal_material_move_adverse_factor: float = 1.25
+    # Gate: when False the enriched consumer never emits new_market signals (the
+    # first-sight-of-a-market trigger). material_move + resolution are unaffected.
+    # KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_EMIT_NEW_MARKET
+    prediction_signal_emit_new_market: bool = True
+
     # Observability (STANDARDS.md §5)
     log_level: str = "INFO"
     log_json: bool = True
@@ -289,6 +334,22 @@ class Settings(BaseSettings):
     kafka_instrument_discovered_consumer_instance_id: str = ""
     kafka_temporal_event_consumer_instance_id: str = ""
     kafka_earnings_calendar_dataset_consumer_instance_id: str = ""
+    # PLAN-0056 Wave C2 — PredictionEnrichedConsumer (own group on nlp.article.enriched.v1).
+    kafka_prediction_enriched_consumer_instance_id: str = ""
+    # PLAN-0056 deploy-fix — start-at-latest for the prediction-enriched consumer.
+    # This consumer is a FRESH group on the high-volume nlp.article.enriched.v1
+    # topic, which holds ~20k historical messages written under the PRE-C2b/C3
+    # schema (before the additive nullable external_id/source_title fields). The
+    # no-registry ``fastavro.schemaless_reader`` decodes those old records with the
+    # NEW reader schema → union misalignment → IndexError → dead-letter storm →
+    # dead_letter_cap crash-loop. The consumer is FORWARD-ONLY (it only needs NEW
+    # polymarket synthetic docs; there are ZERO polymarket docs in the historical
+    # news backlog), so a fresh group starts at the LATEST offset and never reads
+    # the pre-change backlog. Override via
+    # KNOWLEDGE_GRAPH_KAFKA_PREDICTION_ENRICHED_CONSUMER_AUTO_OFFSET_RESET.
+    kafka_prediction_enriched_consumer_auto_offset_reset: str = "latest"
+    # PLAN-0056 Wave D2 — PredictionMoveConsumer (own group on market.prediction.move.v1).
+    kafka_prediction_move_consumer_instance_id: str = ""
     kafka_economic_events_dataset_consumer_instance_id: str = ""
     kafka_insider_transactions_dataset_consumer_instance_id: str = ""
     kafka_macro_indicator_dataset_consumer_instance_id: str = ""

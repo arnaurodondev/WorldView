@@ -141,6 +141,7 @@
 - [ ] **Alertmanager has at least one receiver with a working notification channel** — an empty `receivers:` list or a receiver with no `email_configs`/`slack_configs`/`webhook_configs` is a silent black hole; all alerts will be discarded (BP-176)
 - [ ] **Template variables in Grafana dashboards are referenced in at least one panel query** — a variable declared in `templating.list` but never appearing in any `expr` field is dead (audit finding)
 - [ ] **`tracing.configure_tracing()` receives a non-empty `otlp_endpoint`** in production config — empty string installs `NoOpTracerProvider` and emits zero traces despite Alloy+Tempo being configured
+- [ ] **Any new LLM call site records real cost via the unified path + `cost_source`** — resolve cost with `ml_clients.pricing.resolve_cost(...)` (provider `usage.estimated_cost` → local → price matrix); NEVER hardcode `estimated_cost_usd=0.0` for a paid model. Persist `cost_source` (`provider`|`pricematrix`|`local`|`aggregate`) and thread `user_id`. Any new configured model id MUST be added to `ml_clients.model_registry.PLATFORM_MODEL_REGISTRY` (CI test `test_all_configured_models_priceable` blocks an unpriced model) and to `MODEL_PRICING`/`LOCAL_FREE_MODELS` as appropriate. The `llm_usage_log` write choke-point must call `observability.metrics.record_silent_zero_cost(<service>, …)` so a paid silent-zero trips `llm_usage_silent_zero_cost_total` (exempt only `local` + `aggregate`). (PLAN-0117 FR-4/FR-7, BP-715)
 
 ## 8. Test Coverage
 
@@ -208,6 +209,7 @@ Mark N/A for pure backend changes.
 - [ ] **Every data-dependent component handles all 3 states**: loading skeleton, error card with retry, empty state (HR-034)
 - [ ] Skeletons match the shape of loaded content
 - [ ] Error states include a recovery action (retry button, navigation link)
+- [ ] **New public-facing UI surfaces define a casual-user default + progressive disclosure** before public exposure (PRD-0122 / audit §7). A Simple/Advanced (or any progressive-disclosure) split MUST be a prop-driven **render gate guarded by an Advanced-parity snapshot test**, never a duplicated component tree; flipping the default forces every old-default e2e to seed the old mode (DS §6.17)
 
 ### 10e. Security
 - [ ] **No `dangerouslySetInnerHTML` without DOMPurify sanitization** (HR-031)

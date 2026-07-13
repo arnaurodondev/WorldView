@@ -17,7 +17,9 @@ Design invariants:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Protocol, runtime_checkable
+from uuid import UUID
 
 
 @runtime_checkable
@@ -50,6 +52,8 @@ class LlmUsageLogProtocol(Protocol):
         estimated_cost_usd: float = 0.0,
         success: bool = True,
         error_code: str | None = None,
+        cost_source: str | None = None,
+        user_id: UUID | None = None,
         **context: object,
     ) -> None:
         """Append one LLM usage record.
@@ -70,6 +74,15 @@ class LlmUsageLogProtocol(Protocol):
             error_code:          Short error tag when success=False.
                                  Values: "timeout" | "rate_limit" | "auth"
                                  | "model_error" | None.
+            cost_source:         Provenance of ``estimated_cost_usd`` (PLAN-0117
+                                 FR-2): "provider" (verbatim from the provider's
+                                 ``usage.estimated_cost``), "pricematrix"
+                                 (computed via ``pricing.compute_cost``), or
+                                 "local" ($0 Ollama/GLiNER). ``None`` means a
+                                 legacy caller that has not been migrated yet.
+            user_id:             Authenticated end-user UUID when a genuine user
+                                 triggered the call (PLAN-0117 FR-3); ``None``
+                                 for system/background pipeline calls.
             **context:           Service-specific extras (doc_id, entity_id,
                                  session_id, tenant_id, …).
 
@@ -95,6 +108,18 @@ class LlmCallUsage:
         latency_ms:         Wall-clock duration of the API call in milliseconds.
         success:            True on 2xx response, False on exception or timeout.
         error_code:         Short error classification when success=False, or None.
+        provider_cost_usd:  Verbatim ``usage.estimated_cost`` returned by the
+                            provider (DeepInfra reports this), as a
+                            :class:`decimal.Decimal`; ``None`` when the provider
+                            did not report a cost (PLAN-0117 FR-1).
+        cost_source:        Provenance of the persisted cost: "provider" |
+                            "pricematrix" | "local" (PLAN-0117 FR-2). Defaults to
+                            "pricematrix" — the historical behaviour when no
+                            provider cost is available.
+
+    Invariants (documented; asserted by callers, not enforced on this frozen VO):
+      * ``cost_source == "provider"`` ⇒ ``provider_cost_usd is not None``.
+      * ``cost_source == "local"``    ⇒ ``estimated_cost_usd == 0``.
 
     """
 
@@ -107,3 +132,8 @@ class LlmCallUsage:
     latency_ms: int
     success: bool
     error_code: str | None = None
+    # PLAN-0117 FR-1/FR-2 — appended with defaults so every existing positional
+    # or keyword construction that stops at ``error_code`` keeps compiling
+    # unchanged (verified: no production code constructs LlmCallUsage today).
+    provider_cost_usd: Decimal | None = None
+    cost_source: str = "pricematrix"

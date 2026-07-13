@@ -76,6 +76,19 @@ import type {
 // The hook imports from there (not vice versa) because the hook feeds the
 // component, not the other way round.
 import type { ToolCallState } from "@/features/chat/components/ToolCallIndicator";
+// F2: typewriter smoothing buffer — decouples paint cadence from network framing.
+import { createTypewriterBuffer } from "@/features/chat/lib/typewriter-buffer";
+
+// ── F2 typewriter tuning constants ──────────────────────────────────────────
+// CHARS_PER_FRAME — baseline minimum characters revealed per animation frame
+// (~60fps). 3 chars/frame ≈ 180 chars/sec on a small backlog, which reads like
+// brisk typing without feeling sluggish. Tunable in one place so the reveal
+// speed can be adjusted without touching the stream logic.
+const CHARS_PER_FRAME = 3;
+// TYPEWRITER_CATCH_UP_FRACTION — when a large backlog builds up (a coalesced
+// network burst), also reveal this fraction of the backlog each frame so the
+// typewriter catches up within a bounded number of frames instead of crawling.
+const TYPEWRITER_CATCH_UP_FRACTION = 0.08;
 
 // ── Public hook contract ──────────────────────────────────────────────────────
 
@@ -332,12 +345,50 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // forcing a re-render or re-binding the send() closure. Reset to 0 per send.
   const currentIterationRef = useRef(0);
 
+  // ── F2: typewriter / smoothing buffer ────────────────────────────────────
+  // WHY: token `text` chunks arrive off the network in unpredictable lumps —
+  // a proxy can coalesce many server chunks into one read, and the backend can
+  // emit text in 8-word groups (or, before the F1 backend fix, the WHOLE answer
+  // in one burst). Appending each chunk straight to `streaming.text` makes the
+  // answer "pop in" in jumps. The typewriter buffer DECOUPLES paint cadence
+  // from network framing: incoming text is queued and drained a few characters
+  // per requestAnimationFrame, so the reveal is smooth no matter how the bytes
+  // were framed. See features/chat/lib/typewriter-buffer.ts for the full design.
+  //
+  // WHY a ref (not state): the buffer is a long-lived mutable object that must
+  // survive re-renders and be reachable from inside the send() closure and the
+  // unmount cleanup. It is created lazily on first use so it is never built on
+  // the server (rAF is browser-only) and uses the LIVE `setStreaming` setter.
+  const typewriterRef = useRef<ReturnType<typeof createTypewriterBuffer> | null>(
+    null,
+  );
+  // Lazily build (or return the existing) buffer. `onReveal` appends the newly
+  // revealed characters to the streaming bubble via a functional setState so a
+  // concurrent reset (cancel racing the rAF) can never resurrect a dead bubble.
+  const getTypewriter = useCallback((): ReturnType<typeof createTypewriterBuffer> => {
+    if (typewriterRef.current === null) {
+      typewriterRef.current = createTypewriterBuffer({
+        // CHARS_PER_FRAME — tunable minimum reveal speed (chars per frame).
+        charsPerFrame: CHARS_PER_FRAME,
+        catchUpFraction: TYPEWRITER_CATCH_UP_FRACTION,
+        onReveal: (chars) =>
+          setStreaming((prev) =>
+            prev ? { ...prev, text: prev.text + chars } : prev,
+          ),
+      });
+    }
+    return typewriterRef.current;
+  }, []);
+
   // Cancel any in-flight stream on unmount. Without this, a fast nav-away
   // would leak a half-read fetch + a setState that fires after unmount,
   // emitting React's "set state on an unmounted component" warning.
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      // F2: stop the typewriter rAF loop and drop its queue so no scheduled
+      // frame fires a setState after the component has unmounted (leak guard).
+      typewriterRef.current?.reset();
     };
   }, []);
 
@@ -365,6 +416,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
       abortRef.current.abort();
       abortRef.current = null;
     }
+    // F2: discard any queued-but-unpainted text and stop the rAF loop — the
+    // user aborted, so the partial reveal must not keep trickling out.
+    typewriterRef.current?.reset();
     setStreaming(null);
     // WHY clear here: if the user cancels mid-tool-use, the tool indicators
     // would stay frozen on screen with spinners. Clearing them on cancel
@@ -389,6 +443,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
       abortRef.current.abort();
       abortRef.current = null;
     }
+    // F2: a thread switch discards the in-flight reveal — stop the rAF loop and
+    // drop the queue so the previous thread's leftover text can never bleed
+    // into the new thread's bubble.
+    typewriterRef.current?.reset();
     setStreaming(null);
     setChatError(null);
     setLocalMessages([]);
@@ -561,6 +619,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
 
       const controller = new AbortController();
       abortRef.current = controller;
+      // F2: a new turn begins — hard-reset the typewriter (cancel any pending
+      // frame + clear the queue) BEFORE the fresh bubble is shown so no leftover
+      // characters from a prior turn paint into this one.
+      typewriterRef.current?.reset();
       setStreaming({ text: "", active: true });
 
       // `reader` declared outside try so the finally block can cancel it
@@ -654,13 +716,15 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // finalize cleanly instead of slapping a false "Response interrupted"
         // banner under a fully-delivered answer (the user-reported bug).
         let sawAnswerComplete = false;
-        // Wave 3: text from the `final_answer` SSE event. S8 emits the full
-        // answer as ONE final_answer frame in addition to the token frames.
-        // Normally tokens win (finalContent is non-empty), but some backend
-        // paths (cache hits, guardrail responses) emit NO token frames at all
-        // — previously those settled as an EMPTY optimistic message and the
-        // answer only appeared after a thread refetch. final_answer is the
-        // fallback content source for exactly that shape.
+        // Wave 3 / RC-3: text from the `final_answer` SSE event. S8 emits the
+        // full answer as ONE final_answer frame in addition to the token frames.
+        // It is emitted AFTER post-synthesis grounding validation, so it is the
+        // AUTHORITATIVE final text: when grounding repairs or refuses the draft
+        // it differs from the streamed tokens, and finalize() must end the bubble
+        // on THIS text (RC-3 precedence flip). It also covers backend paths that
+        // emit NO token frames at all (cache hits, guardrail responses) — those
+        // used to settle as an EMPTY optimistic message until a thread refetch.
+        // finalize() falls back to the streamed tokens only when this is empty.
         let finalAnswerText = "";
 
         // Helper: finalise a CLEAN stream end (done event / [DONE] sentinel)
@@ -669,10 +733,36 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // loop below — Round 4 hardening split the two so an interruption can
         // never masquerade as a complete answer.
         const finalize = () => {
+          // F2: the stream ended cleanly — stop the typewriter and paint any
+          // characters still queued in ONE shot so there is no trailing trickle
+          // after the answer is complete (instant settle). The promoted final
+          // message below uses `finalContent` (already complete) regardless, so
+          // this only keeps the transient bubble consistent before it is nulled.
+          typewriterRef.current?.flush();
           setStreaming(null);
-          // Wave 3: tokens are the primary content source; final_answer is
-          // the fallback for zero-token streams (see finalAnswerText above).
-          const content = finalContent || finalAnswerText;
+          // RC-3 (flash-of-ungrounded-answer fix): the `final_answer` event is
+          // AUTHORITATIVE and takes PRECEDENCE over the streamed tokens.
+          //
+          // WHY the precedence flip (was `finalContent || finalAnswerText`):
+          // S8 emits `final_answer` AFTER post-synthesis grounding validation.
+          // That phase can REPAIR the draft (e.g. correct a hallucinated number)
+          // or REFUSE it entirely — in which case `final_answer` differs from the
+          // tokens the user just watched stream (`finalContent`). The old order
+          // kept the pre-repair draft on screen; the corrected/refusal text only
+          // appeared later when the async thread refetch swapped the optimistic
+          // bubble — a visible "flash of ungrounded answer" (and, for a refusal,
+          // a materially different message shown only after the user had already
+          // read the un-repaired one). Preferring `final_answer` reconciles the
+          // bubble to the grounded truth in one clean swap at finalize time.
+          //
+          // COMMON CASE (no repair): grounding leaves the answer unchanged, so
+          // `final_answer` === the streamed tokens — promoting it is a no-op swap
+          // (identical string → the smooth streaming reveal is untouched).
+          //
+          // ROBUSTNESS: some streams never emit a `final_answer` frame at all
+          // (a genuinely interrupted synthesis). `finalAnswerText` is "" then, so
+          // we fall back to the streamed `finalContent` and never blank the bubble.
+          const content = finalAnswerText || finalContent;
           if (content || pendingCitations.length > 0) {
             // Wave 2: MessageWithMeta — spread the metadata-event fields onto
             // the optimistic message so MessageBubble's meta strip shows
@@ -1000,15 +1090,23 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               eventName === "token" ||
               (!eventName && ("text" in data || "token" in data))
             ) {
-              // Token chunk — append to the streaming bubble immediately.
+              // Token chunk. Two distinct sinks, on purpose:
               const chunk = (data.text ?? data.token) as string | undefined;
               if (chunk) {
+                // 1) `finalContent` accumulates the FULL answer IMMEDIATELY.
+                //    It is the source of truth promoted by finalize() and the
+                //    interrupted-partial path, so the settled message is always
+                //    complete the instant the stream ends — the typewriter only
+                //    paces the VISIBLE reveal, never the persisted content.
                 finalContent += chunk;
-                // Functional update: prev may have been replaced by a
-                // concurrent setState (e.g. cancel() racing the read loop).
-                setStreaming((prev) =>
-                  prev ? { ...prev, text: prev.text + chunk } : prev,
-                );
+                // 2) The streaming BUBBLE is painted through the typewriter
+                //    buffer (F2) instead of a direct setState. The buffer
+                //    queues the text and drains it a few chars per animation
+                //    frame, so the on-screen reveal stays smooth regardless of
+                //    how the network framed this chunk. The buffer's onReveal
+                //    does the functional setStreaming (guarding against a
+                //    concurrent cancel() that nulled the bubble).
+                getTypewriter().push(chunk);
               }
             } else if (eventName === "citations") {
               // WHY validate before accepting: the data is from an SSE frame
@@ -1097,12 +1195,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               // answer completed — see sawAnswerComplete declaration.
               sawAnswerComplete = true;
             } else if (eventName === "final_answer") {
-              // Wave 3: S8 emits the complete answer as one final_answer frame
-              // alongside (after) the token frames. Captured as the FALLBACK
-              // content source for streams that emitted no token frames at all
-              // (cache hits, guardrail responses) — finalize() prefers the
-              // token-accumulated finalContent when it is non-empty, so this
-              // never overrides genuinely streamed text.
+              // Wave 3 / RC-3: S8 emits the complete answer as one final_answer
+              // frame alongside (after) the token frames, post grounding
+              // validation. Captured as the AUTHORITATIVE final content:
+              // finalize() prefers this over the streamed tokens so a grounding
+              // repair/refusal reconciles the bubble in place (RC-3), and it
+              // still covers zero-token streams (cache hits, guardrail responses).
               const fa = data as { text?: unknown };
               if (typeof fa.text === "string") {
                 finalAnswerText = fa.text;
@@ -1113,6 +1211,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                   ? data.message
                   : "Stream error from server";
               setChatError(msg);
+              // F2: server-emitted error — stop the typewriter so a queued
+              // reveal does not keep painting under the error banner.
+              typewriterRef.current?.reset();
               setStreaming(null);
               // PLAN-0099 W4: clear progress strip on server-emitted error
               // so we don't leave a stale "Reasoning over…" strip hovering
@@ -1212,6 +1313,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         //      the partial message, WITH the Retry button.
         //   3. lastQuestionRef is armed so Retry resends the question without
         //      re-echoing the user bubble (see the skipUserEcho backward scan).
+        // F2: the connection dropped mid-answer — stop the typewriter. The
+        // partial message below is built from `finalContent` (the full text
+        // received so far), so nothing the user already saw is lost.
+        typewriterRef.current?.reset();
         setStreaming(null);
         // Same chrome-reset trio as every other end-of-stream path: spinners
         // and the iteration strip must never hover next to the error banner.
@@ -1246,6 +1351,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // not an error condition, so we swallow it and only clear the
         // streaming bubble.
         if (err instanceof Error && err.name === "AbortError") {
+          // F2: aborted — stop the typewriter so no queued reveal lingers.
+          typewriterRef.current?.reset();
           setStreaming(null);
           // PLAN-0099 W4: abort path must also clear the iteration strip; cancel()
           // already does this for user-initiated aborts, but unmount/race paths
@@ -1254,6 +1361,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           setVerifying(false);
           return;
         }
+        // F2: thrown-error path — stop the typewriter before clearing the bubble.
+        typewriterRef.current?.reset();
         setStreaming(null);
         // PLAN-0099 W4: clear strip on the error fallback path too.
         setIterationEvent(null);
@@ -1296,7 +1405,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     // (ref-based, always current) so the closure doesn't need to re-bind.
     // WHY entityId in deps: when entityId changes (e.g. sidebar sync switches
     // the anchor), the endpoint changes — the closure must re-bind to pick it up.
-    [accessToken, activeThreadId, refetchThreads, setActiveThreadId, entityId],
+    // getTypewriter is a stable ([]-dep) callback; listed for exhaustive-deps.
+    [accessToken, activeThreadId, refetchThreads, setActiveThreadId, entityId, getTypewriter],
   );
 
   /**

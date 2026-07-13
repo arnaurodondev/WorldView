@@ -129,9 +129,15 @@ vi.mock("ag-grid-react", () => {
               const renderer = col.cellRenderer as ((p: unknown) => unknown) | undefined;
               if (renderer && typeof renderer === "function") {
                 // Call the cell renderer as a React element factory.
+                // WHY pass `context` (PLAN-0122 W-D): AG Grid passes the grid-level
+                // `context` object to every cell renderer via params.context. The
+                // holdings ACTIONS kebab reads context.onOpenRowMenu from it, and
+                // the SPARK/ASSET renderers read holdingsSeries/assetClasses. This
+                // makes the mock faithful to that channel; renderers already guard
+                // an undefined context, so passing it is additive.
                 content = React.createElement(
-                  renderer as React.ComponentType<{ data: unknown; value: unknown }>,
-                  { data: row, value: rawValue },
+                  renderer as React.ComponentType<{ data: unknown; value: unknown; context: unknown }>,
+                  { data: row, value: rawValue, context: props.context },
                 );
               } else if (typeof col.valueFormatter === "function") {
                 const fmt = (col.valueFormatter as (p: unknown) => string)({ value: rawValue, data: row });

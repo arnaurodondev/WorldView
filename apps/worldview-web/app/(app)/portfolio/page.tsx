@@ -56,8 +56,13 @@ import Link from "next/link";
 import { Plus, FolderPlus, AlertTriangle, RotateCw } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
+// PLAN-0122 W-A: the single portfolio detail-level value (Simple | Advanced).
+// This wave only THREADS it down (default "advanced" everywhere) so output is
+// byte-identical to today; W-B adds the conditional rendering.
+import { usePortfolioMode } from "@/hooks/usePortfolioMode";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Skeleton } from "@/components/ui/skeleton";
+// PLAN-0122 W-B: mode-aware initial-load skeleton (4-tile/no-donut in Simple).
+import { PortfolioLoadingSkeleton } from "@/components/portfolio/PortfolioLoadingSkeleton";
 
 // ── Portfolio chrome ────────────────────────────────────────────────────────
 import { PortfolioKPIStrip } from "@/components/portfolio/PortfolioKPIStrip";
@@ -72,6 +77,12 @@ import type { PeriodLabel } from "@/components/portfolio/EquityCurveChart";
 
 // ── Brokerage modal ─────────────────────────────────────────────────────────
 import { ConnectBrokerageModal } from "@/components/brokerage/ConnectBrokerageModal";
+// PLAN-0122 W-F: the dismissible, non-blocking onboarding tour. Mounted in the
+// main render path (never the empty-portfolio branch) so its anchors — the
+// header, mode toggle, Add Position button, column toggle — all exist. It
+// auto-starts once from the "pending" flag CreatePortfolioDialog sets on a
+// first-ever create, and backfills existing users to "done".
+import { PortfolioTour } from "@/components/portfolio/PortfolioTour";
 
 // ── Terminal primitives ─────────────────────────────────────────────────────
 // R3 polish (DS §15.12): shared EmptyState primitive — the no-portfolio
@@ -142,6 +153,14 @@ import { usePortfolioBundle } from "@/features/portfolio/hooks/usePortfolioBundl
 
 export default function PortfolioPage() {
   const { accessToken } = useAuth();
+
+  // ── PLAN-0122 W-A: portfolio detail level ──────────────────────────────
+  // Resolved from URL (?mode) → localStorage → the PORTFOLIO_SIMPLE_DEFAULT
+  // flag default. This wave threads `mode` into HoldingsTab (default "advanced")
+  // WITHOUT any conditional rendering, so the page renders exactly as today; the
+  // Advanced-parity snapshot test guards that invariant. W-B consumes `mode` to
+  // gate the KPI-tile count, the tab bar, the donut, and the power-strips.
+  const { mode, hydrated: modeHydrated } = usePortfolioMode();
 
   // T-B-2-07: KPI strip is hard-locked to "1D". The const stays narrow so
   // queryKey shapes downstream compile unchanged.
@@ -272,60 +291,19 @@ export default function PortfolioPage() {
   usePortfolioBundle({ portfolioId: activePortfolioId, accessToken });
 
   // ── Loading state (initial mount, no portfolios yet) ──────────────────
-  if (portfoliosLoading || (holdingsLoading && !holdingsResp)) {
-    return (
-      // WHY p-3 space-y-3: terminal density — 12px padding, 12px gaps.
-      <div className="flex flex-col h-full min-h-0 space-y-3 p-3">
-        <div className="flex h-9 items-center justify-between">
-          <Skeleton className="h-4 w-24" />
-          <Skeleton className="h-7 w-36" />
-        </div>
-        {/* F-P-020 (PLAN-0051 W6): KPI strip skeleton mirrors the populated
-            strip's shape exactly — same `divide-x` separator, same
-            px-3/py-1.5 padding. Any mismatch causes layout shift when
-            the data resolves.
-            R3 polish: tile count corrected 7 → 8 (PRD-0089 W2 §4.2 added
-            CASH + BUYING PWR and removed # Positions — the skeleton had
-            drifted one tile short of the real strip, so the 8th tile popped
-            in on data arrival). The donut placeholder beside it mirrors the
-            R2 header band (hidden below xl, exactly like the real donut). */}
-        <div className="flex items-stretch">
-          <div
-            data-testid="kpi-strip-skeleton"
-            className="flex min-w-0 flex-1 divide-x divide-border border-b border-border"
-          >
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="flex-1 px-3 py-1.5">
-                <Skeleton className="h-3 w-16 mb-1" />
-                <Skeleton className="h-4 w-20" />
-              </div>
-            ))}
-          </div>
-          {/* Donut skeleton: circle + 3 legend lines — same shape the
-              populated SectorAllocationDonut renders while its own query
-              loads, so the whole header band paints consistently. */}
-          <div
-            data-testid="donut-skeleton"
-            className="hidden xl:flex w-[400px] shrink-0 items-center gap-2 border-l border-b border-border px-2 py-1"
-          >
-            <Skeleton className="size-[56px] rounded-full shrink-0" />
-            <div className="flex-1 space-y-1">
-              <Skeleton className="h-3 w-full" />
-              <Skeleton className="h-3 w-3/4" />
-              <Skeleton className="h-3 w-2/3" />
-            </div>
-          </div>
-        </div>
-        <Skeleton className="h-9 w-80" />
-        {/* F-P-020: row skeletons use h-[22px] to match the real holdings
-            row height token. */}
-        <div className="space-y-px">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-[22px] w-full" />
-          ))}
-        </div>
-      </div>
-    );
+  // PLAN-0122 W-B (T-A-B-02): the skeleton now mirrors the ACTIVE mode's shape —
+  // 4 tiles + no donut in Simple, 8 tiles + donut in Advanced — so the first
+  // paint matches what the resolved data will render (no layout jump).
+  // PLAN-0122 QA item 12 (mode-hydration flash guard): also hold the skeleton
+  // until `modeHydrated` — before the localStorage reconcile, `mode` is the flag
+  // default, so an Advanced-chooser would briefly resolve to Simple, mount the
+  // lighter Simple layout, then tear it down and mount the heavy Advanced strips
+  // once hydration flips `mode`. Keeping the mode-aware skeleton up until hydrated
+  // means the first real layout paint already matches the sticky choice. The
+  // skeleton reads `mode` so the pre-hydration frame still resembles the default
+  // shape (no jump for the common unset user).
+  if (portfoliosLoading || (holdingsLoading && !holdingsResp) || !modeHydrated) {
+    return <PortfolioLoadingSkeleton mode={mode} />;
   }
 
   // ── Error state ────────────────────────────────────────────────────────
@@ -436,6 +414,63 @@ export default function PortfolioPage() {
   // its own silhouette.
   // F-P-019 (PLAN-0051 W6): mobile safe-area insets — env() values are 0
   // on desktop, ~44px/34px on iPhones with Face ID.
+
+  // ── PLAN-0122 W-B: the Holdings body, defined once ─────────────────────
+  // WHY hoist it to a const: it is rendered in TWO places — inside <Tabs> in
+  // Advanced mode, and DIRECTLY (no tab bar) in Simple mode. Defining the exact
+  // same <HoldingsTab> element once and reusing it guarantees the two modes can
+  // never diverge into a fork (PRD-0122 §11 top risk); only the `mode` prop it
+  // carries differs. The `mode` prop tells HoldingsTab which power-strips to gate.
+  const holdingsTabBody = (
+    <HoldingsTab
+      // PLAN-0122: the single detail-level value. Simple hides the power-strips
+      // inside HoldingsTab and shows the Core-only holdings list.
+      mode={mode}
+      activePortfolioId={activePortfolioId}
+      holdingsLoading={holdingsLoading}
+      holdingsResp={holdingsResp}
+      enrichedHoldings={enrichedHoldings}
+      holdingsQuotes={holdingsQuotes}
+      holdingOverviews={holdingOverviews}
+      // R1 sprint: asset-class lookup (derived from transactions in the
+      // hook) feeds the holdings table ASSET column, which previously
+      // rendered "—" for every row because the context map was empty.
+      assetClasses={assetClassByInstrument}
+      kpi={kpi}
+      bySector={bySector}
+      byType={byType}
+      equityPeriod={equityPeriod}
+      setEquityPeriod={setEquityPeriod}
+      // R2 sprint: donut-driven sector filter. HoldingsTab filters the
+      // table rows and renders the dismissible chip; clearing routes
+      // back through the same URL state the donut writes.
+      sectorFilter={sectorFilter}
+      onClearSectorFilter={() => void setSectorFilter(null)}
+      // 2026-06-10 sprint gap #2: raw sector segments (with
+      // instrument_ids) for the SectorExposurePanel rows + the
+      // exact-ID sector-filter join.
+      sectorSegments={sectorSegments}
+      sectorIdMap={sectorIdMap}
+      // PRD-0114 W4 (FR-5, FR-7, FR-8): portfolio kind + dialog callback.
+      // portfolioKind drives the empty state (manual/brokerage) and the
+      // brokerage sync-status strip visibility.
+      portfolioKind={activePortfolio?.kind ?? null}
+      // onOpenAddPosition: undefined for root portfolios (S1 rejects
+      // transactions on root; the CTA would create a dead end).
+      onOpenAddPosition={
+        activeIsRoot ? undefined : () => setAddPositionOpen(true)
+      }
+      // PRD-0114 W5 (FE-003): Close Position wiring.
+      // accessToken is forwarded through HoldingsTab → SemanticHoldingsTable
+      // → ClosePositionDialog for the auth-gated POST /api/v1/transactions.
+      accessToken={accessToken}
+      // onHoldingsRefetch delegates to handlePositionAdded (same TanStack
+      // Query invalidation path as Add Position) so the table refreshes
+      // immediately after a close without a full page reload.
+      onHoldingsRefetch={handlePositionAdded}
+    />
+  );
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <PortfolioPageHeader
@@ -478,6 +513,8 @@ export default function PortfolioPage() {
               const realizedPnl = useFifo ? fifo!.total_realized : kpi.realizedPnl;
               return (
                 <PortfolioKPIStrip
+                  // PLAN-0122 W-B: Simple renders 4 tiles, Advanced all 8.
+                  variant={mode}
                   portfolioId={activePortfolioId}
                   totalValue={kpi.totalValue}
                   dayPnl={kpi.dayPnl}
@@ -516,7 +553,10 @@ export default function PortfolioPage() {
             the full width; squeezing a 400px donut in would crush both. The
             sector filter remains clearable on small screens via the chip in
             the Holdings tab (which is always visible when a filter is set). */}
-        {holdingsResp && (
+        {/* PLAN-0122 W-B (render matrix): the allocation donut is an ADVANCED-only
+            surface — Simple hides it (and, with it, the sector-filter entry point).
+            Advanced renders it exactly as today. */}
+        {mode === "advanced" && holdingsResp && (
           <SectorAllocationDonut
             portfolioId={activePortfolioId}
             selectedSector={sectorFilter}
@@ -526,10 +566,23 @@ export default function PortfolioPage() {
         )}
       </div>
 
-      {/* ── Tabs ────────────────────────────────────────────────────────── */}
-      {/* WHY flex-1 min-h-0: tabs must fill the remaining space below the
-          KPI strip. min-h-0 is required so the overflow-y-auto inside the
-          tab content can actually create a scroll area. */}
+      {/* ── Tabs (Advanced) vs. direct Holdings (Simple) ─────────────────── */}
+      {/* PLAN-0122 W-B (render matrix): Simple mode is "Holdings only" — the
+          TabsList (Transactions/Analytics/Watchlist) is NOT rendered and the
+          Holdings body renders DIRECTLY (PRD-0122 §6.1: prefer a direct render
+          over a lone 1-tab bar). The `?tab` URL param stays in the URL harmlessly
+          and is ignored while Simple. Advanced renders the full 4-tab layout
+          exactly as today (guarded by the W-A anti-fork snapshot).
+          WHY flex-1 min-h-0: the body must fill the remaining space below the
+          KPI strip; min-h-0 lets the inner overflow-y-auto create a scroll area. */}
+      {mode === "simple" ? (
+        <div
+          data-testid="portfolio-simple-holdings"
+          className="flex flex-1 min-h-0 flex-col overflow-y-auto bg-background"
+        >
+          {holdingsTabBody}
+        </div>
+      ) : (
       <Tabs
         value={activeTab}
         onValueChange={(v) => {
@@ -583,50 +636,11 @@ export default function PortfolioPage() {
           value="holdings"
           className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 bg-background"
         >
-          <HoldingsTab
-            activePortfolioId={activePortfolioId}
-            holdingsLoading={holdingsLoading}
-            holdingsResp={holdingsResp}
-            enrichedHoldings={enrichedHoldings}
-            holdingsQuotes={holdingsQuotes}
-            holdingOverviews={holdingOverviews}
-            // R1 sprint: asset-class lookup (derived from transactions in the
-            // hook) feeds the holdings table ASSET column, which previously
-            // rendered "—" for every row because the context map was empty.
-            assetClasses={assetClassByInstrument}
-            kpi={kpi}
-            bySector={bySector}
-            byType={byType}
-            equityPeriod={equityPeriod}
-            setEquityPeriod={setEquityPeriod}
-            // R2 sprint: donut-driven sector filter. HoldingsTab filters the
-            // table rows and renders the dismissible chip; clearing routes
-            // back through the same URL state the donut writes.
-            sectorFilter={sectorFilter}
-            onClearSectorFilter={() => void setSectorFilter(null)}
-            // 2026-06-10 sprint gap #2: raw sector segments (with
-            // instrument_ids) for the SectorExposurePanel rows + the
-            // exact-ID sector-filter join.
-            sectorSegments={sectorSegments}
-            sectorIdMap={sectorIdMap}
-            // PRD-0114 W4 (FR-5, FR-7, FR-8): portfolio kind + dialog callback.
-            // portfolioKind drives the empty state (manual/brokerage) and the
-            // brokerage sync-status strip visibility.
-            portfolioKind={activePortfolio?.kind ?? null}
-            // onOpenAddPosition: undefined for root portfolios (S1 rejects
-            // transactions on root; the CTA would create a dead end).
-            onOpenAddPosition={
-              activeIsRoot ? undefined : () => setAddPositionOpen(true)
-            }
-            // PRD-0114 W5 (FE-003): Close Position wiring.
-            // accessToken is forwarded through HoldingsTab → SemanticHoldingsTable
-            // → ClosePositionDialog for the auth-gated POST /api/v1/transactions.
-            accessToken={accessToken}
-            // onHoldingsRefetch delegates to handlePositionAdded (same TanStack
-            // Query invalidation path as Add Position) so the table refreshes
-            // immediately after a close without a full page reload.
-            onHoldingsRefetch={handlePositionAdded}
-          />
+          {/* PLAN-0122 W-B: the Holdings body is defined ONCE (holdingsTabBody,
+              above) and reused here (Advanced) and in the Simple direct-render
+              branch — the anti-fork guarantee that both modes render the SAME
+              component tree, differing only by the `mode` prop it receives. */}
+          {holdingsTabBody}
         </TabsContent>
 
         <TabsContent
@@ -709,6 +723,7 @@ export default function PortfolioPage() {
           />
         </TabsContent>
       </Tabs>
+      )}
 
       {/* ── Connect Brokerage Modal ─────────────────────────────────────── */}
       {/* WHY outside Tabs: the modal must persist through tab switches during
@@ -752,6 +767,16 @@ export default function PortfolioPage() {
           }}
         />
       )}
+
+      {/* ── PLAN-0122 W-F: Onboarding tour ──────────────────────────────── */}
+      {/* WHY here (main render, not the empty branch): every anchor the tour
+          points at — the header, the mode toggle, the Add Position button, the
+          column toggle — only exists once the page has ≥1 portfolio and mounts
+          this tree. hasExistingPortfolio drives the backfill so users who created
+          a portfolio before this feature shipped are marked "done", never shown
+          a tour they didn't ask for. The tour reads its own "pending"/"done"
+          flag in an effect and renders nothing unless it auto-starts. */}
+      <PortfolioTour hasExistingPortfolio={(sortedPortfolios?.length ?? 0) > 0} />
 
       {/* ── Add Position Dialog ─────────────────────────────────────────── */}
       {activePortfolioId && (

@@ -18,14 +18,12 @@ R9 safe degradation:
 
 from __future__ import annotations
 
-import time
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-import jwt as pyjwt
-
 from observability import get_logger  # type: ignore[import-untyped]
+from observability.internal_jwt import mint_internal_jwt  # type: ignore[import-untyped]
 from portfolio.application.use_cases.get_portfolio_pnl import (
     PnLPriceQuote,
     RecentPricesClient,
@@ -38,20 +36,16 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 def _system_jwt_headers() -> dict[str, str]:
-    """Mint a one-shot HS256 X-Internal-JWT (same pattern as the quote client)."""
-    now = int(time.time())
-    token = pyjwt.encode(
-        {
-            "iss": "worldview-gateway",
-            "sub": "system:portfolio-recent-prices-client",
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "tenant_id": "00000000-0000-0000-0000-000000000000",
-            "role": "system",
-            "iat": now,
-            "exp": now + 86400,
-        },
-        "dev-skip-verification-key-for-portfolio-recent-prices",
-        algorithm="HS256",
+    """Mint a one-shot HS256 X-Internal-JWT (same pattern as the quote client).
+
+    DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
+    always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
+    ``InternalJWTMiddleware`` once real verification is enabled).
+    """
+    token = mint_internal_jwt(
+        sub="system:portfolio-recent-prices-client",
+        ttl_seconds=86400,
+        dev_hs256_secret="dev-skip-verification-key-for-portfolio-recent-prices",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
     )
     return {"X-Internal-JWT": token}
 

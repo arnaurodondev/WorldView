@@ -28,7 +28,7 @@
 // and window.location.href for redirect — all require client-side runtime.
 
 import { useState } from "react";
-import { Link2, Loader2, AlertCircle } from "lucide-react";
+import { Link2, Loader2, AlertCircle, ShieldCheck } from "lucide-react";
 import { useInitiateBrokerageConnection } from "@/hooks/use-brokerage-connections";
 
 // ── shadcn/ui imports ─────────────────────────────────────────────────────────
@@ -139,6 +139,31 @@ export function ConnectBrokerageModal({
             <Badge variant="secondary" className="font-mono text-xs tabular-nums">
               {portfolioName ?? "Selected Portfolio"}
             </Badge>
+          </div>
+
+          {/* Credentials-safety reassurance block — PRD-0122 §6.2 (R-8).
+              WHY THIS EXISTS: the #1 barrier to linking a real brokerage is the fear
+              that we will see or store the user's broker password. SnapTrade's OAuth
+              means credentials NEVER touch Worldview and access is read-only. Stating
+              that up front (before the ToS box) removes the trust barrier and reduces
+              connect-flow churn. This is a pure copy block — no logic, no new state.
+              WHY styled like the ToS box below: visual consistency — both are bordered
+              info panels; the ShieldCheck icon signals "security" without a heavy banner. */}
+          <div
+            data-testid="brokerage-trust-block"
+            className="flex items-start gap-2 rounded-[2px] border border-border/50 bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground"
+          >
+            {/* aria-hidden: the icon is decorative — the sentence carries the meaning,
+                so screen readers should not announce a "shield-check" graphic. */}
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+            <p className="leading-relaxed">
+              <span className="font-medium text-foreground">
+                Your credentials stay with SnapTrade — never Worldview.
+              </span>{" "}
+              We use SnapTrade&apos;s secure, read-only connection. Worldview never sees or
+              stores your brokerage username or password, and can only <em>read</em> your
+              holdings and transactions — it can never place trades or move money.
+            </p>
           </div>
 
           {/* ToS notice — regulatory requirement: explicit consent before SnapTrade API call */}

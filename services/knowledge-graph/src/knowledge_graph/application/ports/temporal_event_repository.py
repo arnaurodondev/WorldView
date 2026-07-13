@@ -33,6 +33,7 @@ class TemporalEventRepositoryPort(ABC):
         source_url: str | None = None,
         active_until: datetime | None = None,
         residual_impact_days: int = 90,
+        dedup_by_region_only: bool = False,
     ) -> UUID:
         """Upsert a temporal event using the natural deduplication key.
 
@@ -40,6 +41,14 @@ class TemporalEventRepositoryPort(ABC):
         On conflict: updates description, scope, active_until, residual_impact_days,
         confidence, and source_url; leaves event_id, event_type, region, title,
         active_from, and created_at unchanged.
+
+        ``dedup_by_region_only`` (PLAN-0056 QA — FIX 1): when True AND ``region`` is
+        non-NULL, dedup collapses on ``(event_type, region)`` alone (ignoring the
+        ``active_from::day`` component).  Used ONLY for PREDICTION events, where
+        ``region`` is the globally-unique Polymarket condition_id and a missing
+        ``close_time`` would otherwise split one market into duplicate rows across
+        the first-sight and resolution synthetic docs.  Other event types leave this
+        False and keep the date-based key.
 
         Region must be ``None`` (not empty string) for events without a region tag.
         The Avro consumer must convert ``""`` → ``None`` before calling this method.
@@ -120,12 +129,17 @@ class EntityEventExposureRepositoryPort(ABC):
         exposure_type: str,
         confidence: float,
         evidence_text: str | None = None,
+        polarity: str | None = None,
+        polarity_confidence: float | None = None,
     ) -> UUID:
-        """Upsert an entity-event exposure link — ON CONFLICT DO NOTHING.
+        """Upsert an entity-event exposure link — ON CONFLICT fills a NULL polarity.
 
         Unique constraint: ``(event_id, entity_id, exposure_type)``.
-        If a row already exists for the triple, the call is a no-op and
-        the existing exposure_id is returned.
+        If a row already exists for the triple, the call is a no-op EXCEPT that a
+        NULL stored polarity is filled when the incoming polarity is non-NULL
+        (PLAN-0056 QA — FIX 3: late-arriving polarity from a later synthetic doc).
+        An already-classified polarity is never overwritten; the existing
+        exposure_id is returned in all cases.
 
         Args:
         ----
@@ -136,9 +150,85 @@ class EntityEventExposureRepositoryPort(ABC):
                            supply_chain/revenue_geography/sector_exposure.
             confidence:    0.0-1.0.
             evidence_text: Optional extracted evidence snippet.
+            polarity:      Directional signal for prediction-event exposures —
+                           one of 'bullish'/'bearish'/'neutral', or None for
+                           non-directional exposures (earnings/corporate). Added
+                           by PLAN-0056 Wave C2 on top of migration 0066;
+                           populated by the Wave C3 polarity classifier.
+            polarity_confidence: Confidence [0,1] of the polarity, or None.
 
         Returns:
         -------
             The exposure_id of the existing or newly created row.
+
+        """
+
+    @abstractmethod
+    async def list_exposures_for_condition(
+        self,
+        *,
+        condition_id: str,
+    ) -> tuple[str | None, list[dict[str, object]]]:
+        """List the entity exposures of a prediction market keyed by condition_id (PLAN-0056 Wave D2).
+
+        Joins ``entity_event_exposures`` to ``temporal_events`` where
+        ``event_type = 'prediction'`` and ``region = condition_id`` (the market
+        identity stamped by Wave C2b).  Used by the ``PredictionMoveConsumer`` to
+        fan a ``market.prediction.move.v1`` event out to the market's linked
+        entities before invoking ``PredictionSignalEmitter``.
+
+        Args:
+        ----
+            condition_id: Polymarket conditionId (temporal_events.region).
+
+        Returns:
+        -------
+            Tuple of ``(question, rows)`` where:
+            - ``question`` is the market question (temporal_events.title), or None
+              when the market is unknown / has no exposures.
+            - ``rows`` is a list of dicts, one per linked entity, each with:
+              ``entity_id`` (UUID), ``polarity`` (str|None),
+              ``polarity_confidence`` (float|None), ``confidence`` (float).
+            An empty ``rows`` list means the market is not linked to any entity
+            (the consumer no-ops).
+
+        """
+
+    @abstractmethod
+    async def list_prediction_exposures_for_entity(
+        self,
+        *,
+        entity_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, object]], int]:
+        """List the prediction markets that reference a given entity (PLAN-0056 Wave C4).
+
+        Read side of the KG linkage built in Waves C2/C2b/C3: joins
+        ``entity_event_exposures`` to ``temporal_events`` where
+        ``event_type = 'prediction'`` and the exposure belongs to ``entity_id``.
+
+        Each row corresponds to one prediction market that references the entity,
+        carrying the directional polarity recorded on the exposure.  Corporate /
+        earnings / macro exposures (event_type != 'prediction') are excluded.
+
+        Args:
+        ----
+            entity_id: canonical_entities.entity_id whose linked markets to list.
+            limit:     Page size (clamped to 1-200 by the caller).
+            offset:    Pagination offset (>= 0).
+
+        Returns:
+        -------
+            Tuple of (rows, total_count) where each row dict contains:
+            - ``event_id``            (UUID)   — temporal_events.event_id
+            - ``condition_id``        (str)    — temporal_events.region (market key)
+            - ``question``            (str)    — temporal_events.title (market question)
+            - ``polarity``            (str|None) — bullish/bearish/neutral or None
+            - ``polarity_confidence`` (float|None)
+            - ``close_time``          (datetime|None) — temporal_events.active_until
+            - ``exposure_type``       (str)
+            - ``confidence``          (float)
+            and total_count is the total matching rows before LIMIT/OFFSET.
 
         """

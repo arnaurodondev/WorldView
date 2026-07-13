@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from observability.metrics import record_silent_zero_cost  # type: ignore[import-untyped]
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +29,13 @@ class RagChatUsageLogRepository:
       session_id      — UUID of the RAG session when the call was made
       chat_thread_id  — UUID of the chat thread
       tenant_id       — UUID of the tenant (optional)
+      cost_source     — provenance of ``estimated_cost_usd`` (PLAN-0117 FR-2):
+                        ``provider`` | ``pricematrix`` | ``local`` | ``aggregate``
+                        (NULL for legacy/pre-0117 callers). ``aggregate`` marks a
+                        wrapper row that duplicates a leaf's tokens at $0 so the
+                        FR-7 silent-zero guard can exempt it (no double count).
+      user_id         — UUID of the authenticated end user (PLAN-0117 FR-3);
+                        NULL for system/background calls.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -59,6 +68,11 @@ class RagChatUsageLogRepository:
             session_id = context.get("session_id")
             chat_thread_id = context.get("chat_thread_id")
             tenant_id = context.get("tenant_id")
+            # PLAN-0117 W4 (FR-2/FR-3): provenance + authenticated user. Both are
+            # optional context kwargs so every legacy call site keeps compiling;
+            # they resolve to NULL when omitted (pre-0117 semantics).
+            cost_source = context.get("cost_source")
+            user_id = context.get("user_id")
 
             await self._session.execute(
                 text(
@@ -69,14 +83,16 @@ class RagChatUsageLogRepository:
                         service_name, tenant_id,
                         tokens_in, tokens_out, estimated_cost_usd,
                         latency_ms, success, error_code,
-                        session_id, chat_thread_id
+                        session_id, chat_thread_id,
+                        cost_source, user_id
                     ) VALUES (
                         :log_id,
                         :model_id, :provider, :capability,
                         'rag-chat', :tenant_id,
                         :tokens_in, :tokens_out, :estimated_cost_usd,
                         :latency_ms, :success, :error_code,
-                        :session_id, :chat_thread_id
+                        :session_id, :chat_thread_id,
+                        :cost_source, :user_id
                     )
                     """,
                 ),
@@ -94,7 +110,23 @@ class RagChatUsageLogRepository:
                     "error_code": error_code,
                     "session_id": str(session_id) if session_id is not None else None,
                     "chat_thread_id": str(chat_thread_id) if chat_thread_id is not None else None,
+                    "cost_source": str(cost_source) if cost_source is not None else None,
+                    "user_id": str(user_id) if user_id is not None else None,
                 },
+            )
+            # PLAN-0117 W5 (FR-7b): the single rag_db INSERT choke-point — BOTH the
+            # ``PrometheusAndDbCostRecorder`` leaf path AND the provider_chain
+            # ``chat_with_tools`` aggregate wrapper land here. Trip the guard only
+            # for a PAID silent-zero; the ``aggregate`` wrapper (tokens>0, $0) is
+            # exempt by design (no double count), as is any ``local`` row. Passing
+            # the resolved ``cost_source`` makes those exemptions automatic.
+            record_silent_zero_cost(
+                "rag-chat",
+                model_id=model_id,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                estimated_cost_usd=estimated_cost_usd,
+                cost_source=str(cost_source) if cost_source is not None else None,
             )
         except Exception as exc:
             logger.warning("rag_usage_log_failed", error=str(exc))

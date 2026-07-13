@@ -248,10 +248,15 @@ function makeQueryClient() {
  * wrapper — React tree provider for all tests
  * WHY: TanStack Query useQuery() requires QueryClientProvider in the tree.
  */
+// PLAN-0122 W-B: the portfolio page now defaults to SIMPLE mode. These tests all
+// assert the full ADVANCED layout (tab bar), so force Advanced via the shareable
+// `?mode=advanced` URL param (highest precedence, resolved synchronously by the
+// nuqs adapter). R19-safe: no assertion weakened — we only pin the mode that
+// renders the layout the tests already check.
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = makeQueryClient();
   return (
-    <NuqsTestingAdapter searchParams="">
+    <NuqsTestingAdapter searchParams="?mode=advanced">
       <QueryClientProvider client={qc}>{children}</QueryClientProvider>
     </NuqsTestingAdapter>
   );

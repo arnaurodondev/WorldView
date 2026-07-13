@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "PredictionMarketEvent",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S4 Content Ingestion (Polymarket Gamma /events adapter) — one event per Polymarket event group (clusters related markets). Consumed by S3 Market Data → prediction_events. PLAN-0056 Wave Z1.",
+  "fields": [
+    {"name": "event_id",         "type": "string",           "doc": "UUIDv7 envelope event identifier"},
+    {"name": "event_type",       "type": "string",           "default": "market.prediction.event", "doc": "Event type discriminator"},
+    {"name": "schema_version",   "type": "int",              "default": 1},
+    {"name": "occurred_at",      "type": "string",           "default": "1970-01-01T00:00:00Z", "doc": "ISO-8601 UTC timestamp. Default is epoch sentinel — callers MUST always supply a real value."},
+    {"name": "group_id",         "type": "string",           "doc": "Polymarket event group id (Gamma /events id)"},
+    {"name": "name",             "type": "string",           "doc": "Event group name, e.g. '2028 US Presidential Election'"},
+    {"name": "category",         "type": ["null", "string"], "default": null, "doc": "Normalized category (politics, crypto, macro, sports, ...)"},
+    {"name": "start_date",       "type": ["null", "string"], "default": null, "doc": "ISO-8601 UTC event window start"},
+    {"name": "end_date",         "type": ["null", "string"], "default": null, "doc": "ISO-8601 UTC event window end"},
+    {"name": "market_count",     "type": "int",              "default": 0, "doc": "Number of child markets in this event group"},
+    {"name": "correlation_id",   "type": ["null", "string"], "default": null}
+  ]
+}

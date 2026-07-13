@@ -48,6 +48,69 @@ class Settings(BaseSettings):
     # operate on bounded batches and complete well under 60 s.
     statement_timeout_ms: int = 60_000
 
+    # ── HNSW ANN candidate-pool size (BUG-3 / feat/fix-s6-search-quality) ──────
+    # pgvector applies the WHERE filters (source_type, tenant, entity, date) AFTER
+    # the HNSW index returns its candidate set. With the pgvector default
+    # ``hnsw.ef_search = 40`` the candidate pool is so small that any selective
+    # post-filter (e.g. ``source_types=['sec_edgar']`` — ~2% of the corpus) shrinks
+    # to near-zero rows. We raise ef_search per-query (``SET LOCAL``) so filtered
+    # ANN keeps a usable candidate pool. 200 is a good recall/latency balance for a
+    # ~66k-embedding corpus; raise for rarer buckets, lower if latency regresses.
+    chunk_ann_ef_search: int = 200
+
+    # ── Filter-first exact KNN (BUG-3 finish / feat/fix-bug3-ann-recall) ───────
+    # Raising ef_search alone CANNOT surface a rare source under a HARD post-filter:
+    # the HNSW ANN returns the top-ef_search nearest candidates for the *text*
+    # query (dominated by the ~98%-news corpus), then the source_type/entity
+    # post-filter drops a 2%-density bucket (e.g. sec_edgar = ~1.4k of ~66.8k) to
+    # ~0. Fix: when a SELECTIVE filter (source_types / entity_ids / entity_types)
+    # is present, filter FIRST (tenant + source_type + entity + date) and run an
+    # EXACT ``ORDER BY embedding <=> query`` over just the filtered subset via a
+    # MATERIALIZED CTE fence — no HNSW dependence, so the true nearest filtered
+    # chunks are GUARANTEED. Exact-sorting a few thousand rows is sub-millisecond.
+    # The UNFILTERED path (the 98% case) keeps the fast HNSW ANN unchanged.
+    chunk_ann_exact_when_filtered: bool = True
+
+    # Safety bound for the filter-first exact path: if the filtered candidate set
+    # exceeds this many rows the filter is NOT selective (HNSW recall is already
+    # fine and cheaper), so we fall back to the HNSW ANN path. Sized above the
+    # current corpus (~66.8k) so all present filters take the exact path; lower it
+    # only if a future, much larger corpus makes exact scans of big buckets slow.
+    chunk_ann_exact_max_rows: int = 100_000
+
+    # ── Partial-index accelerated ANN path (S6 chunk-search latency fix) ───────
+    # The exact-when-filtered path above exact-sorts the ENTIRE filtered bucket.
+    # That was sub-second when a bucket held a few thousand rows, but the R1
+    # filings backfill grew ``sec_edgar`` to ~30.5k of ~110k ready embeddings, so
+    # the exact sort now takes ~19 s — past rag-chat's 10 s client timeout, so
+    # ``get_filings`` gets 0 items. Migration 0024 denormalizes ``source_type``
+    # onto chunk_embeddings/section_embeddings and adds a PARTIAL HNSW index per
+    # bucket listed here (``idx_chunk_emb_hnsw_<src>``). For a SINGLE source_type
+    # in this set (and no entity filter) the repository emits a validated LITERAL
+    # ``source_type='<src>'`` predicate so the partial index serves the ANN in
+    # ~20 ms with 24-25/25 recall@25 vs exact. Comma-separated; MUST stay in
+    # lock-step with the partial indexes created in migration 0024 (adding a value
+    # here without the matching index just silently falls back to the exact path).
+    chunk_ann_indexed_source_types: str = "sec_edgar"
+
+    # ef_search used specifically on the partial-index accelerated path. Slightly
+    # higher than the general chunk_ann_ef_search (200) to keep recall high when a
+    # date post-filter co-occurs with the source filter (the date predicate is
+    # applied AFTER the HNSW candidate fetch). The partial index only covers one
+    # bucket (~30k rows), so even 400 is a few tens of ms.
+    chunk_ann_accel_ef_search: int = 400
+
+    # ── FTS planner override (HIGH-1 / feat/fix-s6-search-quality) ────────────
+    # The document-search FTS query (document_search.py) has a broad ``tsv_english
+    # @@ tsquery`` predicate. For common terms the planner MIS-COSTS a Seq Scan
+    # cheaper than the GIN ``ix_chunks_tsv_english_gin`` bitmap scan, because it
+    # underestimates the per-row cost of the ``@@`` / ``ts_rank_cd`` operator on
+    # the large stored tsvector. Measured live: the Seq Scan took ~55s vs ~3s for
+    # the GIN bitmap scan (18x). We disable seq scans transaction-locally
+    # (``SET LOCAL enable_seqscan = off``) for the search query so the GIN index
+    # is always used. Set False to fall back to the planner default.
+    fts_force_index_scan: bool = True
+
     # intelligence_db — read/write adapter, ALEMBIC_ENABLED MUST stay false
     # no default: fails fast if env var missing (DEF-027)
     intelligence_database_url: SecretStr  # NLP_PIPELINE_INTELLIGENCE_DATABASE_URL — required
@@ -116,6 +179,28 @@ class Settings(BaseSettings):
     # hybrid_boost_sweep``. NLP_PIPELINE_HYBRID_LEXICAL_BOOST.
     hybrid_lexical_boost: float = 1.0
 
+    # ── Hybrid chunk-search latency fix (R1 SEC-filings re-QA / 2026-07-06) ─────
+    # The POST /api/v1/search/chunks hybrid path ran its two independent legs
+    # (ANN vector + BM25/FTS) SEQUENTIALLY on one shared AsyncSession, so
+    # end-to-end latency was ~ann + lex (measured 20-22 s warm, 32-40 s under a
+    # host-load spike → rag-chat ReadTimeout → empty chat answers). With this
+    # flag ON the use case runs the two legs CONCURRENTLY, each on its OWN
+    # read-replica session leased from ``nlp_read_factory`` (a SQLAlchemy
+    # AsyncSession is NOT safe for concurrent use from one session, so a fresh
+    # session per leg is required). The embedding round-trip overlaps the
+    # lexical leg, so total latency collapses to ~max(embed+ann, lex).
+    # Set False to fall back to the (correct but slow) sequential path — the
+    # fused result set is identical either way (RRF is order-only).
+    # NLP_PIPELINE_CHUNK_SEARCH_PARALLEL_HYBRID
+    chunk_search_parallel_hybrid: bool = True
+
+    # Query-embedding cache TTL (seconds). Query text is embedded once via
+    # DeepInfra and cached in Valkey keyed by (model, normalized-query) so
+    # repeated/similar chat queries skip the embed round-trip. Short-ish TTL
+    # keeps the cache fresh if the embedding model is swapped.
+    # NLP_PIPELINE_CHUNK_EMBED_CACHE_TTL_S
+    chunk_embed_cache_ttl_s: int = 3600
+
     # Ollama / ML endpoints
     ollama_base_url: str = "http://localhost:11434"
     embedding_model_id: str = "bge-large"
@@ -146,6 +231,32 @@ class Settings(BaseSettings):
     # operator-tunable via NLP_PIPELINE_EMBEDDING_RETRY_MAX_ATTEMPTS so a high
     # error-rate from DeepInfra can be tolerated without a code change.
     embedding_retry_max_attempts: int = 5
+
+    # ── Startup stale-embedding expiry (PRE-1 / PLAN-0031 B-2) ───────────────
+    # ``_expire_stale_embeddings`` runs on boot and sets ``expires_at = now()`` on
+    # embeddings whose ``model_id`` is not one of the CURRENTLY configured model
+    # labels (see ``current_embedding_model_ids``), so the EmbeddingRetryWorker
+    # regenerates them after a genuine embedding-model change. In the common case
+    # (model unchanged) it matches 0 rows and returns immediately. A GENUINE model
+    # change can leave tens of thousands of stale rows, and each expiry forces an
+    # HNSW graph re-insert (~0.5 s/row on the grown ~110k-vector corpus) → a single
+    # unbounded UPDATE blew the 10-min statement_timeout on EVERY boot (PRE-1). The
+    # expiry is therefore drained in bounded, individually-committed batches, off
+    # the boot critical path, so it never blocks startup and never trips the
+    # per-connection statement_timeout.
+    #
+    # Rows expired per UPDATE statement. Small enough that one batch (incl. its
+    # HNSW churn) stays well under the per-batch timeout below.
+    embedding_expiry_batch_size: int = 200  # NLP_PIPELINE_EMBEDDING_EXPIRY_BATCH_SIZE
+    # Per-batch statement_timeout (ms), applied via SET LOCAL inside each batch
+    # transaction so the one-time large expiry gets more headroom than the 60 s
+    # OLTP default without loosening the global backstop. 0 = unbounded (not
+    # recommended). 300 s comfortably covers a batch of HNSW re-inserts.
+    embedding_expiry_statement_timeout_ms: int = 300_000  # NLP_PIPELINE_EMBEDDING_EXPIRY_STATEMENT_TIMEOUT_MS
+    # Safety ceiling on batches per boot run so a pathological predicate can never
+    # loop forever. 100_000 * batch_size rows is effectively unbounded for real
+    # corpora while still terminating.
+    embedding_expiry_max_batches_per_run: int = 100_000  # NLP_PIPELINE_EMBEDDING_EXPIRY_MAX_BATCHES_PER_RUN
 
     # Deep extraction via external API (DeepInfra / OpenAI-compatible)
     # When extraction_api_key is set, DeepSeekExtractionAdapter is used instead of OllamaExtractionAdapter.
@@ -237,6 +348,16 @@ class Settings(BaseSettings):
     # Minimum word count for an article to enter the NLP pipeline.
     # Articles below this threshold are skipped (too short for meaningful extraction).
     min_word_count: int = 50  # NLP_PIPELINE_MIN_WORD_COUNT
+
+    # BP-719 Mode B: cap the number of words fed to Block-10 deep extraction so the
+    # ML phase fits inside the 900s Kafka message watchdog on very large filings
+    # (20-48k-word 10-Q/10-K). Deep extraction runs on the first N words only;
+    # the rest of the document is STILL fully chunked + embedded + indexed by the
+    # phase-1 searchable write, so retrieval coverage is unaffected — only the
+    # KG-relation extraction is bounded (and remains backfillable). 0 disables the
+    # cap (process every window; the pre-BP-719 behaviour). Override via env
+    # NLP_PIPELINE_DEEP_EXTRACTION_MAX_WORDS.
+    deep_extraction_max_words: int = 0  # NLP_PIPELINE_DEEP_EXTRACTION_MAX_WORDS
 
     # GLiNER thresholds (PRD §6.7 Block 4)
     gliner_threshold: float = 0.35  # for routing/novelty signal

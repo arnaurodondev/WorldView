@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     kafka_topic_signal: str = "nlp.signal.detected.v1"
     kafka_topic_graph_state: str = "graph.state.changed.v1"
     kafka_topic_contradiction: str = "intelligence.contradiction.v1"
+    # PLAN-0056 Wave D3: prediction-market signals emitted by S7 (Wave D2).
+    # Fans out through the SAME watchlist-gated AlertFanoutUseCase as the other
+    # intelligence topics; severity comes from the event's market_impact_score
+    # (which D2 already boosts for adverse/bearish moves).
+    kafka_topic_prediction_signal: str = "market.prediction.signal.v1"
     kafka_topic_watchlist: str = "portfolio.watchlist.updated.v1"
 
     # Produced topics

@@ -1,0 +1,17 @@
+{
+  "type": "record",
+  "name": "PredictionMarketOI",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S4 Content Ingestion (Polymarket Data /oi adapter) — one daily open-interest snapshot per market. Consumed by S3 Market Data → prediction_market_oi. PLAN-0056 Wave Z1.",
+  "fields": [
+    {"name": "event_id",             "type": "string",  "doc": "UUIDv7 envelope event identifier"},
+    {"name": "event_type",           "type": "string",  "default": "market.prediction.oi", "doc": "Event type discriminator"},
+    {"name": "schema_version",       "type": "int",     "default": 1},
+    {"name": "occurred_at",          "type": "string",  "default": "1970-01-01T00:00:00Z", "doc": "ISO-8601 UTC timestamp. Default is epoch sentinel — callers MUST always supply a real value."},
+    {"name": "market_id",            "type": "string",  "doc": "Polymarket conditionId"},
+    {"name": "snapshot_date",        "type": "string",  "doc": "ISO-8601 UTC date (YYYY-MM-DD) of the OI snapshot (dedup key with market_id)"},
+    {"name": "total_oi_usd",         "type": "double",  "doc": "Total open interest in USD"},
+    {"name": "total_volume_24h_usd", "type": "double",  "doc": "Total 24-hour trading volume in USD"},
+    {"name": "correlation_id",       "type": ["null", "string"], "default": null}
+  ]
+}

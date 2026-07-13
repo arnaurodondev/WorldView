@@ -238,6 +238,21 @@ groups:
           summary: "Synthetic probe {{ $labels.probe_name }} failing for 5m"
           runbook: "Check synthetic monitor logs: docker compose logs synthetic-monitor"
 
+      # DeepInfra shared-key freshness. probe_deepinfra_key reports success=0 when
+      # DeepInfra returns 401/403 for the account key — the exact silent failure
+      # that halted the WHOLE ML pipeline (chat, embedding, extraction, relevance,
+      # resolution, KG, NL screener) when a key was revoked with no freshness alert.
+      # Fires fast (2m) because every ML feature is down until the key is rotated.
+      - alert: DeepInfraKeyDead
+        expr: synthetic_probe_success{probe_name="probe_deepinfra_key"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DeepInfra shared API key is dead/rotated (401/403) — ML pipeline down"
+          description: "The single DeepInfra account key is being rejected. All ML features (chat, embedding, extraction, relevance, resolution, KG descriptions, NL screener) are failing. Rotate the key in worldview-gitops and redeploy."
+          runbook: "infra/gitops/docs/deepinfra-key-rotation.md"
+
       # PLAN-0109 B-1: relevance-scoring worker provider degradation.
       # nlp_pipeline_relevance_scoring_empty_response_total increments whenever
       # the LLM returns empty content, fails JSON parse, or omits the score key.
@@ -251,3 +266,20 @@ groups:
         annotations:
           summary: "Relevance scoring worker producing empty responses"
           description: "More than 20 empty/failed-parse LLM responses in 15min. Check model config (chat_template_kwargs, max_tokens) and DeepInfra status."
+
+      # PLAN-0117 W5 (FR-7b): silent-zero LLM cost tripwire. Fires when a
+      # llm_usage_log row is written with tokens>0 but $0 cost on a PAID source
+      # (cost_source NOT IN local|aggregate) — the exact RC-1/RC-2/RC-3 regression
+      # that left ~315k calls logged at ~$0. The counter is a SINGLE cross-service
+      # global (labels: service, model_id), so ONE expression covers S6/S7/S8/S9.
+      # local (Ollama/GLiNER) + aggregate (S8 chat_with_tools wrapper) rows are
+      # exempt in the emitter and never increment this. See BP-715.
+      - alert: LlmUsageSilentZeroCost
+        expr: increase(llm_usage_silent_zero_cost_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Paid LLM call logged at $0 in {{ $labels.service }} (model {{ $labels.model_id }})"
+          description: "A llm_usage_log row was written with tokens>0 but estimated_cost_usd=0 on a paid cost_source (not local/aggregate). A model likely lacks a pricing path — add it to libs/ml-clients/pricing.MODEL_PRICING or LOCAL_FREE_MODELS. See docs/BUG_PATTERNS.md BP-715 and the FR-7 priceability CI test."
+          runbook: "docs/BUG_PATTERNS.md#bp-715"

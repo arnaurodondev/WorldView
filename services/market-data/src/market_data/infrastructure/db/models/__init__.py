@@ -36,8 +36,12 @@ from market_data.infrastructure.db.models.insider_transactions import InsiderTra
 from market_data.infrastructure.db.models.instruments import InstrumentModel
 from market_data.infrastructure.db.models.ohlcv import OHLCVBarModel
 from market_data.infrastructure.db.models.prediction_markets import (
+    PredictionEventModel,
     PredictionMarketModel,
+    PredictionMarketOIModel,
+    PredictionMarketPriceModel,
     PredictionMarketSnapshotModel,
+    PredictionMarketTradeModel,
 )
 from market_data.infrastructure.db.models.quotes import QuoteModel
 from market_data.infrastructure.db.models.securities import SecurityModel
@@ -65,8 +69,12 @@ __all__ = [
     "OHLCVBarModel",
     "OutboxEventModel",
     "OutstandingSharesModel",
+    "PredictionEventModel",
     "PredictionMarketModel",
+    "PredictionMarketOIModel",
+    "PredictionMarketPriceModel",
     "PredictionMarketSnapshotModel",
+    "PredictionMarketTradeModel",
     "QuoteModel",
     "SecurityModel",
     "ShareStatisticsModel",

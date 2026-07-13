@@ -27,6 +27,7 @@ import structlog
 from .handlers.alerts import AlertsHandler
 from .handlers.intelligence import IntelligenceHandler
 from .handlers.market import MarketHandler
+from .handlers.market_sizing import MarketSizingHandler
 from .handlers.narrative import NarrativeHandler
 from .handlers.news import NewsHandler
 from .handlers.portfolio import PortfolioHandler
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
 
     from rag_chat.application.ports.brief_archive import BriefArchivePort
     from rag_chat.application.ports.upstream_clients import (
+        ContentStorePort,
         S1Port,
         S3BriefPort,
         S3Port,
@@ -121,6 +123,7 @@ class ToolExecutorFactory:
         s3_brief: S3BriefPort | None = None,
         brief_archive: BriefArchivePort | None = None,
         s10: S10Port | None = None,
+        content_store: ContentStorePort | None = None,
         timeout: float = 5.0,
     ) -> None:
         self._registry = registry
@@ -132,6 +135,7 @@ class ToolExecutorFactory:
         self._s3_brief = s3_brief
         self._brief_archive = brief_archive
         self._s10 = s10
+        self._content_store = content_store
         self._timeout = timeout
 
     def for_request(
@@ -153,6 +157,7 @@ class ToolExecutorFactory:
             s3_brief=self._s3_brief,
             brief_archive=self._brief_archive,
             s10=self._s10,
+            content_store=self._content_store,
             user_id=user_id,
             tenant_id=tenant_id,
             internal_jwt=internal_jwt,
@@ -182,6 +187,7 @@ class ToolExecutor:
         s3_brief: S3BriefPort | None = None,
         brief_archive: BriefArchivePort | None = None,
         s10: S10Port | None = None,
+        content_store: ContentStorePort | None = None,
         user_id: UUID | None = None,
         tenant_id: UUID | None = None,
         internal_jwt: str | None = None,
@@ -193,7 +199,15 @@ class ToolExecutor:
         self._alerts_handler = AlertsHandler(s10=s10, user_id=user_id, tenant_id=tenant_id, timeout=timeout)
         # PLAN-0093 E-4 T-E-4-01: pass S6 so search_entity_relations can
         # call S6.embed_text() for real query embeddings.
-        _intelligence_handler = IntelligenceHandler(s7=s7, s6=s6, entity_context=entity_context, timeout=timeout)
+        # feat/chat-kg-source-links: content_store backfills claim/event citation
+        # URLs from the source article each was extracted from.
+        _intelligence_handler = IntelligenceHandler(
+            s7=s7,
+            s6=s6,
+            content_store=content_store,
+            entity_context=entity_context,
+            timeout=timeout,
+        )
         self._handlers = [
             MarketHandler(s3=s3, s3_brief=s3_brief, timeout=timeout),
             _intelligence_handler,
@@ -218,6 +232,10 @@ class ToolExecutor:
                 timeout=timeout,
             ),
             self._alerts_handler,
+            # Area-2 P3: curated TAM / market-size reference lookup. No upstream
+            # port — reads a packaged YAML reference table (analyst estimates)
+            # so projections can GROUND a scenario parameter instead of assuming.
+            MarketSizingHandler(),
         ]
         # Populated by execute_all; holds per-tool wall-clock seconds in the same
         # order as the capped input list.  Empty list before the first call.
@@ -388,6 +406,7 @@ __all__ = [
     "EntityContext",
     "IntelligenceHandler",
     "MarketHandler",
+    "MarketSizingHandler",
     "NarrativeHandler",
     "NewsHandler",
     "PortfolioHandler",

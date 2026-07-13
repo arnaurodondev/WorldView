@@ -2,9 +2,10 @@
 
 Consumer group: ``alert-service-group``
 Topics:
-  - ``nlp.signal.detected.v1``       → AlertType.SIGNAL
-  - ``graph.state.changed.v1``       → AlertType.GRAPH_CHANGE
+  - ``nlp.signal.detected.v1``        → AlertType.SIGNAL
+  - ``graph.state.changed.v1``        → AlertType.GRAPH_CHANGE
   - ``intelligence.contradiction.v1`` → AlertType.CONTRADICTION
+  - ``market.prediction.signal.v1``   → AlertType.PREDICTION (PLAN-0056 D3)
 
 At-least-once delivery with manual offset commit (``enable_auto_commit=False``).
 Backfill suppression is delegated to :class:`AlertFanoutUseCase`.
@@ -37,6 +38,8 @@ _KNOWN_TOPICS: frozenset[str] = frozenset(
         "nlp.signal.detected.v1",
         "graph.state.changed.v1",
         "intelligence.contradiction.v1",
+        # PLAN-0056 Wave D3: prediction-market signals from S7 (Wave D2).
+        "market.prediction.signal.v1",
     },
 )
 
@@ -45,6 +48,8 @@ _TOPIC_SCHEMA_PATHS: dict[str, str] = {
     "nlp.signal.detected.v1": get_schema_path("nlp.signal.detected.v1.avsc"),
     "graph.state.changed.v1": get_schema_path("graph.state.changed.v1.avsc"),
     "intelligence.contradiction.v1": get_schema_path("intelligence.contradiction.v1.avsc"),
+    # PLAN-0056 Wave D3: Avro-first decode of the prediction signal.
+    "market.prediction.signal.v1": get_schema_path("market.prediction.signal.v1.avsc"),
 }
 
 # PLAN-0062 F-018: defence-in-depth bound on the unbounded ``json.loads`` read.
@@ -194,20 +199,40 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         We advance our monotonic poll marker here so the watchdog treats an
         idle-but-cycling loop as alive, then delegate to the base to keep its
         own ``_last_progress_ts`` / Prometheus heartbeat behaviour intact.
+
+        PLAN-0056 live-QA (BUG 5): we ALSO refresh the heartbeat FILE mtime here.
+        Previously the file was only touched on construction + after each
+        processed message, so this consumer — assigned only currently-empty
+        topics (``market.prediction.signal.v1`` / ``intelligence.contradiction.v1``)
+        — never refreshed it and the Docker healthcheck (which stats the file
+        mtime with a 300s freshness window) flipped to ``unhealthy`` forever even
+        though the poll loop was perfectly alive. Refreshing the file on every
+        idle poll cycle keeps an idle-but-alive consumer healthy. We update ONLY
+        the file here (not ``_last_progress_monotonic``, the message-progress
+        marker), so the "last message processed" semantics stay intact.
         """
         self._last_poll_monotonic = time.monotonic()
+        self._write_heartbeat_file()
         super()._record_progress()
 
     def _touch_heartbeat(self) -> None:
-        """Record forward progress for both the watchdog and the healthcheck.
+        """Record message-processing progress for the watchdog + healthcheck.
 
-        Best-effort: a failure to write the heartbeat file must never break
-        message processing. The in-memory monotonic timestamp is the
-        authoritative signal for the in-process watchdog; the file exists only
-        so the *out-of-process* Docker healthcheck can observe liveness without
-        importing application state.
+        Advances the message-progress monotonic marker AND the heartbeat file.
+        Called after each successfully processed message.
         """
         self._last_progress_monotonic = time.monotonic()
+        self._write_heartbeat_file()
+
+    def _write_heartbeat_file(self) -> None:
+        """Refresh the heartbeat file mtime the Docker healthcheck stats.
+
+        Best-effort: a failure to write the heartbeat file must never break
+        message processing OR the poll loop. The in-memory monotonic timestamps
+        are the authoritative signal for the in-process watchdog; the file exists
+        only so the *out-of-process* Docker healthcheck can observe liveness
+        without importing application state.
+        """
         try:
             # `os.utime(..., None)` sets mtime to the current wall-clock time;
             # the healthcheck compares that mtime against `now` for staleness.
@@ -309,6 +334,9 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
             return "graph.state.changed.v1"
         if event_type.startswith("intelligence.contradiction"):
             return "intelligence.contradiction.v1"
+        # PLAN-0056 Wave D3: event_type is "market.prediction.signal".
+        if event_type.startswith("market.prediction.signal"):
+            return "market.prediction.signal.v1"
 
         # Unresolvable — log warning; fanout degrades gracefully for unknown topics
         logger.warning(  # type: ignore[no-any-return]

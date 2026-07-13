@@ -43,6 +43,65 @@ class Settings(BaseSettings):
     kafka_insider_transactions_consumer_instance_id: str = ""
     kafka_intraday_resampling_consumer_instance_id: str = ""
     kafka_prediction_market_consumer_instance_id: str = ""
+    # PLAN-0056 Wave A3: static-membership ids for the four deeper-stream
+    # prediction consumers (history / event / trade / oi). Empty = dynamic.
+    kafka_prediction_history_consumer_instance_id: str = ""
+    kafka_prediction_event_consumer_instance_id: str = ""
+    kafka_prediction_trade_consumer_instance_id: str = ""
+    kafka_prediction_oi_consumer_instance_id: str = ""
+
+    # ── PLAN-0056 Wave D1: PredictionMoveDetector worker ───────────────────────
+    # Periodic worker that scans ``prediction_market_snapshots`` per open market
+    # and emits ``market.prediction.move.v1`` when an outcome's implied
+    # probability moves materially over a lookback window.  Every threshold is
+    # env-driven (NO hardcoded gates) so the noise floor can be re-tuned without
+    # a redeploy.  All env vars carry the ``MARKET_DATA_`` prefix.
+    #
+    # Run cadence (seconds between cycles). 900 s = 15 min: frequent enough to
+    # catch fresh moves, sparse enough that the read-replica scan is cheap.
+    prediction_move_detector_interval_seconds: int = 900
+    # Lookback window (hours) over which Δ implied-probability is measured. The
+    # window-start snapshot is the oldest snapshot within this span; the latest
+    # snapshot is the window end. Default 24 h pairs with the ``1d`` label.
+    prediction_move_window_hours: int = 24
+    # Free-form window granularity label written to the event ``interval`` field
+    # (Avro allows 1h | 1d | 1w). Kept in lock-step with ``window_hours`` by
+    # convention — no PG enum (BP-007).
+    prediction_move_interval_label: str = "1d"
+    # Δ gate: only emit when ``abs(new_price - prev_price) >= τ``. Prices are
+    # implied probabilities in [0,1], so 0.15 = a 15-percentage-point swing.
+    prediction_move_delta_threshold: float = 0.15
+    # Liquidity floor (USD) on the latest snapshot — thin markets are noise.
+    prediction_move_min_liquidity_usd: float = 5_000.0
+    # 24h-volume floor (USD) on the latest snapshot — untraded markets are noise.
+    prediction_move_min_volume_usd: float = 1_000.0
+    # Safety cap on markets scanned per page and snapshots pulled per market so a
+    # runaway market count / snapshot fan-out can never blow up a single cycle.
+    prediction_move_market_page_size: int = 200
+    prediction_move_snapshot_limit: int = 500
+
+    # ── Prediction-market LIST endpoint latest-volume window (PLAN-0056 QA) ─────
+    # The ``GET /api/v1/prediction-markets`` list endpoint LEFT JOIN LATERALs the
+    # newest snapshot per market to surface ``volume_24h`` (which drives the
+    # "recently traded first" ordering). ``prediction_market_snapshots`` is a
+    # TimescaleDB hypertable partitioned by ``snapshot_at`` into weekly chunks
+    # (~1.8M rows / 64 days). WITHOUT a time bound the LATERAL's
+    # ``ORDER BY snapshot_at DESC LIMIT 1`` cannot stop early for a market whose
+    # newest snapshot lives in an OLD chunk (or that has stopped being polled):
+    # ChunkAppend descends EVERY chunk per market x 527 open markets, reading
+    # cold pages off disk (~1.8 s cold). Under concurrent load these slow queries
+    # pile up and exhaust the async DB pool -> the endpoint 500s ("upstream
+    # service error") and the frontend prediction rows stay stuck as skeletons.
+    #
+    # Bounding the lookup to a recent window lets Postgres/TimescaleDB prune to
+    # the few in-window chunks (chunk exclusion), so the query stays bounded
+    # (~60-370 ms) regardless of history depth. Markets with NO snapshot inside
+    # the window fall to ``volume_24h = NULL`` -> sort to the bottom, which is
+    # the DESIRED behaviour: a "24-hour volume" older than this window is stale
+    # and must not float a dead market to the top of the dashboard (this is the
+    # documented intent of the ORDER BY — surface recently-traded markets first).
+    # 0 or negative disables the bound (unbounded LATERAL — legacy behaviour).
+    prediction_market_list_volume_window_days: int = 30
 
     # ── Outbox dispatcher (BUG-4 / BP-612) ─────────────────────────────────────
     # These tune the ``DispatcherConfig`` built in ``dispatcher_main`` /
@@ -66,6 +125,23 @@ class Settings(BaseSettings):
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
+
+    # Fundamentals read-cache (chat-enhancement-roadmap Area 1 #3).
+    #
+    # The chat hot-path hammers a handful of tickers (AAPL/AMZN/NVDA) with the
+    # SAME fundamentals reads across many questions. Fundamentals only change
+    # quarterly, so a short-TTL Valkey cache in front of the read use-cases
+    # (/fundamentals/history, /fundamentals/query, /fundamentals/batch) cuts DB
+    # round-trips + connection-pool pressure with safe bounded staleness.
+    #
+    # ``fundamentals_cache_enabled`` (env MARKET_DATA_FUNDAMENTALS_CACHE_ENABLED)
+    # is a kill-switch: set False to route every read straight to the DB (the
+    # pre-cache behaviour) without a redeploy.
+    fundamentals_cache_enabled: bool = True
+    # Default 6h — comfortably shorter than the quarterly refresh cadence, so a
+    # freshly-ingested quarter is visible within at most one TTL window. Env:
+    # MARKET_DATA_FUNDAMENTALS_CACHE_TTL_SECONDS.
+    fundamentals_cache_ttl_seconds: int = 21_600
 
     # Internal auth (PRD-0025): S9 api-gateway base URL for JWKS endpoint.
     api_gateway_url: str = "http://api-gateway:8000"
@@ -143,6 +219,19 @@ class Settings(BaseSettings):
     # histogram (see infrastructure/metrics/prometheus.py) before bumping
     # again — the tail is the actionable signal, not the timeout itself.
     fundamentals_timeout_s: int = 90
+
+    # NEW-6 (2026-07-06) — screener statement-timeout ceiling (milliseconds).
+    # ``query_screen`` issues ``SET LOCAL statement_timeout`` for the duration of
+    # the read transaction so a pathological plan is cancelled cleanly at the DB
+    # (asyncpg ``QueryCanceledError`` → HTTP 504) instead of hanging the request
+    # and holding a pooled connection. This ceiling was previously HARDCODED to
+    # 8000 ms; it is now a tunable so ops can raise it during sustained host
+    # CPU/IO contention (the load-driven multiplier that turned a ~1 s screen
+    # into an ~18 s timeout in the R1 audit) without a redeploy, or lower it to
+    # shed load faster. The DISTINCT ON query rewrite that shipped with this
+    # setting keeps the screen well under 8 s even under contention, so the
+    # default is unchanged. Env var: ``MARKET_DATA_SCREEN_STATEMENT_TIMEOUT_MS``.
+    screen_statement_timeout_ms: int = 8000
 
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "market-data"

@@ -19,7 +19,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { AddPositionDialog } from "@/features/portfolio/components/AddPositionDialog";
+
+// WHY identity-mock useDebounce (PLAN-0122 W-C): the ticker typeahead debounces its
+// query; making the debounce synchronous keeps these error-path tests fast + stable.
+vi.mock("@/hooks/useDebounce", () => ({
+  useDebounce: (v: string) => v,
+}));
 
 // ── Gateway mock ─────────────────────────────────────────────────────────────
 // WHY mock createGateway (not fetch): the dialog calls gw.searchInstruments()
@@ -48,6 +56,13 @@ const MOCK_INSTRUMENT = {
   currency: "USD",
 };
 
+// WHY a QueryClientProvider wrapper (PLAN-0122 W-C): the ticker typeahead now uses
+// TanStack Query; without a provider useQuery throws "No QueryClient set".
+function wrapper({ children }: { children: ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
+
 function renderDialog() {
   const onOpenChange = vi.fn();
   const onSuccess = vi.fn();
@@ -59,6 +74,7 @@ function renderDialog() {
       portfolioId="port-123"
       accessToken="test-token"
     />,
+    { wrapper },
   );
   return { onOpenChange, onSuccess };
 }

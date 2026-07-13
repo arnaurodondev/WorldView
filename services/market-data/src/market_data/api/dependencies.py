@@ -35,8 +35,12 @@ if TYPE_CHECKING:
     )
     from market_data.application.use_cases.query_prediction_markets import (
         CountPredictionMarketCategoriesUseCase,
+        GetPredictionEventUseCase,
         GetPredictionMarketHistoryUseCase,
+        GetPredictionMarketPriceHistoryUseCase,
+        GetPredictionMarketTradesUseCase,
         GetPredictionMarketUseCase,
+        ListPredictionEventsUseCase,
         ListPredictionMarketsUseCase,
     )
     from market_data.application.use_cases.query_quote_stats import (
@@ -239,17 +243,56 @@ def get_ohlcv_bars_flexible_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) 
     return GetOHLCVBarsFlexibleUseCase(uow)
 
 
-def get_fundamentals_history_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetFundamentalsHistoryUseCase:
+def _build_fundamentals_cache(request: Request) -> Any | None:
+    """Return a FundamentalsCache bound to this app, or None when disabled.
+
+    chat-enhancement-roadmap Area 1 #3. Reads the feature flag + TTL from
+    Settings and the shared ValkeyClient from app.state (wired at startup). When
+    the flag is off (or Valkey was never wired), returns None so the caller uses
+    the un-wrapped use-case — the pre-cache DB path, unchanged.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None or not getattr(settings, "fundamentals_cache_enabled", False):
+        return None
+    valkey_client = getattr(request.app.state, "valkey_client", None)
+    if valkey_client is None:
+        return None
+    from market_data.infrastructure.cache.fundamentals_cache import FundamentalsCache
+
+    return FundamentalsCache(valkey_client, ttl=settings.fundamentals_cache_ttl_seconds)
+
+
+def get_fundamentals_history_uc(
+    request: Request,
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> GetFundamentalsHistoryUseCase:
     from market_data.application.use_cases.get_fundamentals_history import GetFundamentalsHistoryUseCase
 
-    return GetFundamentalsHistoryUseCase(uow)
+    base = GetFundamentalsHistoryUseCase(uow)
+    cache = _build_fundamentals_cache(request)
+    if cache is None:
+        return base
+    # Cache-aside wrapper mirrors the use-case's execute() signature, so the
+    # router is oblivious to whether it holds the raw or cached variant.
+    from market_data.infrastructure.cache.fundamentals_cache import CachedFundamentalsHistoryUseCase
+
+    return CachedFundamentalsHistoryUseCase(base, cache)  # type: ignore[return-value]
 
 
 # PLAN-0104 W32: parameterised fundamentals projection use case.
-def get_query_fundamentals_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> Any:
+def get_query_fundamentals_uc(
+    request: Request,
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> Any:
     from market_data.application.use_cases.query_fundamentals_metrics import QueryFundamentalsUseCase
 
-    return QueryFundamentalsUseCase(uow)
+    base = QueryFundamentalsUseCase(uow)
+    cache = _build_fundamentals_cache(request)
+    if cache is None:
+        return base
+    from market_data.infrastructure.cache.fundamentals_cache import CachedQueryFundamentalsUseCase
+
+    return CachedQueryFundamentalsUseCase(base, cache)
 
 
 # ── Fundamentals use case deps ────────────────────────────────────────────────
@@ -321,10 +364,19 @@ def get_screen_fields_uc(
 # ── Prediction market use case deps ──────────────────────────────────────────
 
 
-def get_list_prediction_markets_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> ListPredictionMarketsUseCase:
+def get_list_prediction_markets_uc(
+    request: Request,
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> ListPredictionMarketsUseCase:
     from market_data.application.use_cases.query_prediction_markets import ListPredictionMarketsUseCase
 
-    return ListPredictionMarketsUseCase(uow)
+    # PLAN-0056 QA: bound the latest-volume LATERAL to a recent window so the
+    # TimescaleDB hypertable prunes to recent chunks (prevents the cold
+    # full-chunk-scan that 500s this endpoint under load). getattr keeps this
+    # forward-compatible with settings objects that predate the field.
+    settings = request.app.state.settings
+    window_days: int = getattr(settings, "prediction_market_list_volume_window_days", 30)
+    return ListPredictionMarketsUseCase(uow, volume_window_days=window_days)
 
 
 def get_prediction_market_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetPredictionMarketUseCase:
@@ -350,6 +402,46 @@ def get_count_prediction_market_categories_uc(
     )
 
     return CountPredictionMarketCategoriesUseCase(uow)
+
+
+def get_prediction_market_price_history_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> GetPredictionMarketPriceHistoryUseCase:
+    """PLAN-0056 A4 — interval price-history endpoint dependency (reads prices hypertable)."""
+    from market_data.application.use_cases.query_prediction_markets import (
+        GetPredictionMarketPriceHistoryUseCase,
+    )
+
+    return GetPredictionMarketPriceHistoryUseCase(uow)
+
+
+def get_prediction_market_trades_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> GetPredictionMarketTradesUseCase:
+    """PLAN-0056 A4 — trades endpoint dependency."""
+    from market_data.application.use_cases.query_prediction_markets import (
+        GetPredictionMarketTradesUseCase,
+    )
+
+    return GetPredictionMarketTradesUseCase(uow)
+
+
+def get_list_prediction_events_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> ListPredictionEventsUseCase:
+    """PLAN-0056 A4 — events list endpoint dependency."""
+    from market_data.application.use_cases.query_prediction_markets import ListPredictionEventsUseCase
+
+    return ListPredictionEventsUseCase(uow)
+
+
+def get_prediction_event_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> GetPredictionEventUseCase:
+    """PLAN-0056 A4 — single-event endpoint dependency."""
+    from market_data.application.use_cases.query_prediction_markets import GetPredictionEventUseCase
+
+    return GetPredictionEventUseCase(uow)
 
 
 # ── Period aggregation use case deps ─────────────────────────────────────────

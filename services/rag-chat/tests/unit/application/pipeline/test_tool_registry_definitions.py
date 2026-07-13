@@ -97,7 +97,10 @@ class TestRegistryParameterCoverage:
         registry = build_default_registry()
         names = {s.name for s in registry.all_specs()}
         # PLAN-0112 W4 bumped 25 → 26 by adding ``get_path_between`` (pairwise).
-        assert len(names) == 26, f"Expected 26 tools, got {len(names)}: {sorted(names)}"
+        # Chat prediction-market tool bumped 26 → 27 by adding ``get_prediction_markets``.
+        # Chat SEC-filings tool bumped 27 → 28 by adding ``get_filings``.
+        # Area-2 P3 bumped 28 → 29 by adding ``get_market_sizing``.
+        assert len(names) == 29, f"Expected 29 tools, got {len(names)}: {sorted(names)}"
 
     def test_every_audit_placeholder_tool_now_carries_params_or_is_zero_param(self) -> None:
         """D-R1-002: 18 placeholder tools were filled in; 3 intentionally zero-arg."""
@@ -162,7 +165,10 @@ class TestProductionRegistryToolDefinitions:
         registry = build_default_registry()
         defs = registry.to_tool_definitions()
         # PLAN-0112 W4: 26 after adding get_path_between.
-        assert len(defs) == 26
+        # Chat prediction-market tool: 27 after adding get_prediction_markets.
+        # Chat SEC-filings tool: 28 after adding get_filings.
+        # Area-2 P3: 29 after adding get_market_sizing.
+        assert len(defs) == 29
 
     def test_every_definition_has_openai_envelope(self) -> None:
         registry = build_default_registry()
@@ -211,6 +217,12 @@ class TestProductionRegistryToolDefinitions:
             "query_fundamentals",
             # PLAN-0112 W4
             "get_path_between",
+            # Chat prediction-market tool
+            "get_prediction_markets",
+            # Chat SEC-filings tool
+            "get_filings",
+            # Area-2 P3: curated TAM / market-size reference tool
+            "get_market_sizing",
         }
         assert names == expected, f"Missing: {expected - names}; Extra: {names - expected}"
 
@@ -273,3 +285,16 @@ class TestProductionRegistryToolDefinitions:
         to_date = gph["function"]["parameters"]["properties"]["to_date"]
         assert from_date["type"] == "string" and from_date["format"] == "date"
         assert to_date["type"] == "string" and to_date["format"] == "date"
+
+    def test_get_fundamentals_history_advertises_date_window(self) -> None:
+        """BP-651: the singular fundamentals tool must expose from_date/to_date so
+        the LLM can anchor a past calendar year instead of getting the latest N."""
+        registry = build_default_registry()
+        defs = registry.to_tool_definitions()
+        gfh = next(d for d in defs if d["function"]["name"] == "get_fundamentals_history")
+        props = gfh["function"]["parameters"]["properties"]
+        assert "from_date" in props and "to_date" in props
+        assert props["from_date"]["type"] == "string" and props["from_date"]["format"] == "date"
+        assert props["to_date"]["type"] == "string" and props["to_date"]["format"] == "date"
+        # Neither is required (default behaviour = latest N periods).
+        assert "from_date" not in gfh["function"]["parameters"].get("required", [])

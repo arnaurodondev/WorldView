@@ -263,10 +263,27 @@ function makeQueryClient() {
  * wrapper — React tree provider for all tests
  * WHY: TanStack Query useQuery() requires QueryClientProvider in the tree.
  */
+// PLAN-0122 W-B: the portfolio page now defaults to SIMPLE mode (no tab bar, 4
+// KPI tiles). Every test in this file asserts the full ADVANCED layout (tabs,
+// Cash/Buying-Pwr tiles), so we force Advanced via the shareable `?mode=advanced`
+// URL param (highest precedence in usePortfolioMode — resolved synchronously by
+// the nuqs adapter, no effect-timing race). This is R19-safe: no assertion is
+// weakened; we only pin the mode that renders the layout the tests already check.
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = makeQueryClient();
   return (
-    <NuqsTestingAdapter searchParams="">
+    <NuqsTestingAdapter searchParams="?mode=advanced">
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
+}
+
+// Simple-mode render: same harness but forcing the Simple default via the URL.
+// Used only by the PLAN-0122 W-B gating tests below.
+function simpleWrapper({ children }: { children: React.ReactNode }) {
+  const qc = makeQueryClient();
+  return (
+    <NuqsTestingAdapter searchParams="?mode=simple">
       <QueryClientProvider client={qc}>{children}</QueryClientProvider>
     </NuqsTestingAdapter>
   );
@@ -330,6 +347,42 @@ describe("PortfolioPage — Holdings tab", () => {
     });
     // Buying power = cash for v1 cash accounts (margin is v2).
     expect(screen.getByTestId("kpi-buying-pwr")).toHaveTextContent("12,345.67");
+  });
+});
+
+// ── PLAN-0122 W-B (T-A-B-02): page-level Simple/Advanced render gate ──────────
+describe("PortfolioPage — Simple vs Advanced render gate (PLAN-0122 W-B)", () => {
+  it("test_page_simple_hides_tablist_and_donut", async () => {
+    // Simple mode: no tab bar, no allocation donut — the Holdings body renders
+    // directly. (The donut carries data-testid="sector-allocation-donut"; the tab triggers
+    // have role="tab".)
+    render(<PortfolioPage />, { wrapper: simpleWrapper });
+
+    // Wait for data to settle: the direct Holdings body wrapper is present.
+    await waitFor(() => {
+      expect(screen.getByTestId("portfolio-simple-holdings")).toBeInTheDocument();
+    });
+
+    // No tab bar in Simple.
+    expect(screen.queryByRole("tab", { name: "Holdings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Transactions" })).not.toBeInTheDocument();
+    // No allocation donut in Simple (and thus none of its Advanced-only chrome).
+    expect(screen.queryByTestId("sector-allocation-donut")).not.toBeInTheDocument();
+    // The Holdings list itself is still present.
+    expect(screen.getAllByText("AAPL").length).toBeGreaterThan(0);
+  });
+
+  it("test_page_advanced_shows_tablist_and_donut", async () => {
+    // Advanced mode (forced via the shared `wrapper`): full 4-tab bar + donut.
+    render(<PortfolioPage />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Holdings" })).toBeInTheDocument();
+    });
+    expect(screen.getByRole("tab", { name: "Transactions" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Analytics" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Watchlist" })).toBeInTheDocument();
+    expect(screen.getByTestId("sector-allocation-donut")).toBeInTheDocument();
   });
 });
 

@@ -15,8 +15,8 @@
  * ICellRendererParams stubs exactly like SparklineCellRenderer.test.tsx does.
  */
 
-import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, fireEvent } from "@testing-library/react";
 import { createElement, type ComponentType } from "react";
 import type { ICellRendererParams } from "ag-grid-community";
 import { holdingsAgColumns } from "../ag-holdings-columns";
@@ -189,6 +189,91 @@ describe("SECTOR cell (DESIGN-QA P-2 — column must not render '—' when a sec
       createElement(Sector, buildDataParams({ sector: null })),
     );
     expect(container.textContent).toBe("—");
+  });
+});
+
+// ── ACTIONS kebab cell (PLAN-0122 W-D §6.6) ───────────────────────────────────
+
+describe("ACTIONS pinned-right kebab cell (PLAN-0122 W-D)", () => {
+  it("test_actions_empty_on_total_row: the pinned TOTAL row renders an empty ACTIONS cell", () => {
+    // WHY: the totals footer has no per-row actions — the kebab must not render
+    // on it (R-22). ActionsCellRenderer returns null for a pinned-bottom row.
+    const Actions = rendererFor("actions");
+    const { container } = render(createElement(Actions, buildPinnedParams()));
+    expect(container.textContent).toBe("");
+    expect(container.querySelector("button")).toBeNull();
+  });
+
+  it("renders a kebab button with an aria-label naming the row on a data row", () => {
+    const Actions = rendererFor("actions");
+    const params = {
+      data: {
+        h: {
+          holding_id: "h-1",
+          portfolio_id: "p-1",
+          instrument_id: "iid-1",
+          entity_id: "e-1",
+          ticker: "AAPL",
+          name: "Apple Inc.",
+          quantity: 10,
+          average_cost: 100,
+        },
+        livePrice: 150,
+        value: 1500,
+        pnl: 500,
+        pnlPct: 50,
+        weight: 100,
+        sector: null,
+        dayChange: null,
+        dayChangePct: null,
+        dayChangeValue: null,
+        annualizedDividendYield: null,
+      },
+      node: { rowPinned: null },
+    } as unknown as ICellRendererParams<EnrichedHoldingRow>;
+    const { getByRole } = render(createElement(Actions, params));
+    // aria-label pins the ticker so screen-reader users know the target.
+    expect(getByRole("button", { name: /actions for aapl/i })).toBeInTheDocument();
+  });
+
+  it("clicking the kebab calls context.onOpenRowMenu with the row", () => {
+    // WHY assert the callback (not the menu): the ACTIONS cell's ONLY job is to
+    // REQUEST the menu open via context.onOpenRowMenu — the menu itself lives in
+    // SemanticHoldingsTable. This pins the reuse contract (no duplicate menu).
+    const onOpenRowMenu = vi.fn();
+    const Actions = rendererFor("actions");
+    const rowData = {
+      h: {
+        holding_id: "h-2",
+        portfolio_id: "p-1",
+        instrument_id: "iid-2",
+        entity_id: "e-2",
+        ticker: "MSFT",
+        name: "Microsoft",
+        quantity: 5,
+        average_cost: 400,
+      },
+      livePrice: 420,
+      value: 2100,
+      pnl: 100,
+      pnlPct: 5,
+      weight: 100,
+      sector: null,
+      dayChange: null,
+      dayChangePct: null,
+      dayChangeValue: null,
+      annualizedDividendYield: null,
+    };
+    const params = {
+      data: rowData,
+      node: { rowPinned: null },
+      context: { onOpenRowMenu },
+    } as unknown as ICellRendererParams<EnrichedHoldingRow>;
+    const { getByRole } = render(createElement(Actions, params));
+    fireEvent.click(getByRole("button", { name: /actions for msft/i }));
+    expect(onOpenRowMenu).toHaveBeenCalledOnce();
+    // First arg is the enriched row (so the menu can build the row context).
+    expect(onOpenRowMenu.mock.calls[0][0]).toBe(rowData);
   });
 });
 

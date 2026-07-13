@@ -1,0 +1,72 @@
+# Prediction-market stratum (EMNLP demo, added 2026-07-11).
+# Data confirmed live in market_data_db.prediction_markets: 526 markets
+# (politics 182, sports 277, crypto 7). Retrieval = keyword ILIKE on question text
+# via get_prediction_markets. Questions key off entities CONFIRMED present in the data
+# (Bitcoin, Trump, Musk, 2026 midterms) — Polymarket coverage is general-topic, so
+# there are no single-company markets; this stratum reflects that honestly.
+- id: pm_bitcoin_150k
+  prompt: Are there any prediction markets on Bitcoin hitting $150k, and what odds do they imply?
+  category: prediction
+  tags: [prediction_markets, get_prediction_markets, crypto]
+  rubric:
+    expected_tools: [get_prediction_markets]
+    required_facts: [bitcoin_market_found, implied_probability_stated, resolution_date]
+    forbidden_facts: [no_such_market_refusal, fabricated_price_target]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+  notes: Confirmed markets "Will Bitcoin hit $150k by June 30 / Dec 31, 2026?".
+
+- id: pm_trump_2028
+  prompt: What do prediction markets say about Donald Trump winning the 2028 US Presidential Election?
+  category: prediction
+  tags: [prediction_markets, get_prediction_markets, politics]
+  rubric:
+    expected_tools: [get_prediction_markets]
+    required_facts: [trump_2028_market_found, implied_odds, market_question_cited]
+    forbidden_facts: [personal_political_endorsement, fabricated_market]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+
+- id: pm_musk_2028_nomination
+  prompt: Is there a prediction market on Elon Musk winning the 2028 Republican nomination?
+  category: prediction
+  tags: [prediction_markets, get_prediction_markets, politics]
+  rubric:
+    expected_tools: [get_prediction_markets]
+    required_facts: [musk_market_found, implied_probability_stated]
+    forbidden_facts: [no_such_market_refusal]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+
+- id: pm_politics_category_scan
+  prompt: List the most active political prediction markets you have and what each is asking.
+  category: prediction
+  tags: [prediction_markets, get_prediction_markets, category_filter]
+  rubric:
+    expected_tools: [get_prediction_markets]
+    required_facts: [multiple_politics_markets_listed, market_questions_cited, category_politics]
+    forbidden_facts: [sports_markets_only, fabricated_market]
+    expected_depth: medium
+    appropriate_refusal_ok: false
+
+- id: pm_2026_balance_of_power
+  prompt: What does the market imply about which party controls the Senate and House after the 2026 midterms?
+  category: prediction
+  tags: [prediction_markets, get_prediction_markets, politics]
+  rubric:
+    expected_tools: [get_prediction_markets]
+    required_facts: [balance_of_power_market_found, implied_odds_stated]
+    forbidden_facts: [fabricated_poll_numbers, personal_prediction]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+
+- id: pm_trump_impeachment_2026
+  prompt: Any prediction market on Trump being impeached by the end of 2026? What are the odds?
+  category: prediction
+  tags: [prediction_markets, get_prediction_markets, politics]
+  rubric:
+    expected_tools: [get_prediction_markets]
+    required_facts: [impeachment_market_found, implied_probability_stated, close_date]
+    forbidden_facts: [no_such_market_refusal, legal_advice]
+    expected_depth: shallow
+    appropriate_refusal_ok: false

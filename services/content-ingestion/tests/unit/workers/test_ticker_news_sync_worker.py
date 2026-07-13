@@ -350,9 +350,14 @@ class TestTickerNewsWorkerJWT:
             token,
             "dev-skip-verification-key-for-kg-structured-enrichment",
             algorithms=["HS256"],
+            # DEF-002: token now carries aud — decode MUST pass the matching
+            # audience or PyJWT raises InvalidAudienceError.
+            audience="worldview-internal",
         )
         assert payload["sub"] == "system:ticker-news-sync-worker"
         assert payload["role"] == "system"
+        assert payload["aud"] == "worldview-internal"
+        assert payload["jti"]
 
     def test_fetch_us_instruments_response_envelope_handling(self) -> None:
         """_fetch_us_instruments handles both list and {results: [...]} shapes."""
@@ -379,4 +384,9 @@ class TestTickerNewsWorkerJWT:
 
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(_test())
+        # Use asyncio.run (not the deprecated get_event_loop().run_until_complete):
+        # under Python 3.12 get_event_loop() raises "no current event loop" when a
+        # prior test in collection order has closed the loop (e.g. its own
+        # asyncio.run), making this test order-dependent. asyncio.run creates and
+        # manages its own loop, so the test passes regardless of collection order.
+        asyncio.run(_test())

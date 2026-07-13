@@ -223,6 +223,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             error_type=type(exc).__name__,
         )
 
+    # PLAN-0117 W5 (FR-7a): best-effort boot check — WARN if the gateway's direct
+    # DeepInfra screener model has no pricing path (would log $0 → silent-zero).
+    # S9 wires no LLM adapter at boot; the only model it emits is the NL screener.
+    try:
+        from ml_clients.model_registry import warn_unpriceable_models
+
+        from api_gateway.routes.market import _NL_SCREENER_MODEL
+
+        warn_unpriceable_models("api-gateway", [(_NL_SCREENER_MODEL, "deepinfra")])
+    except ImportError:
+        # By design the gateway does NOT bundle ``ml_clients`` (it is not an LLM
+        # service; it proxies one direct DeepInfra screener call). The FR-7a boot
+        # check is therefore a no-op here — this is EXPECTED, not a failure. The
+        # gateway's screener spend is still guarded downstream: it is persisted via
+        # S8's ``POST /internal/v1/llm-usage``, where the silent-zero tripwire runs.
+        logger.info("priceability_startup_check_skipped", reason="ml_clients not bundled in api-gateway")
+    except Exception as exc:  # — guardrail must never block boot
+        logger.warning("priceability_startup_check_failed", error=str(exc))
+
     logger.info("service_started", service=settings.service_name)
     yield
 
@@ -277,6 +296,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         financial_mutation_limit=settings.rate_limit_financial_mutation_requests,
         unauthenticated_limit=settings.rate_limit_unauthenticated_requests,
         public_feedback_limit=settings.rate_limit_public_feedback_requests,
+        # Export tier is now env-driven (1/day default) instead of a hardcoded
+        # 10/60s constant — needs both the count and its own daily window.
+        export_limit=settings.rate_limit_export_requests,
+        export_window_seconds=settings.rate_limit_export_window_seconds,
     )
     # OIDCAuth must run before InternalJWT: OIDCAuth validates token + sets request.state.user;
     # InternalJWT then signs and attaches X-Internal-JWT using that user state.

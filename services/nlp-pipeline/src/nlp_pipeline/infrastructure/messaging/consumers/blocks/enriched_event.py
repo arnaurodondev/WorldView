@@ -50,6 +50,18 @@ async def _enqueue_enriched(
     # directly working; the production caller in _run_pipeline always supplies
     # the value pulled off the inbound event.
     source_name: str | None = None,
+    # PLAN-0056 Wave C2b: upstream market/source identity (e.g.
+    # "polymarket:<condition_id>") threaded verbatim from the inbound stored event.
+    # Rides along in the enriched payload so the KG PredictionEnrichedConsumer can
+    # resolve the doc back to its real market.  Default None keeps direct-call unit
+    # tests working; the production caller always supplies the value off the event.
+    external_id: str | None = None,
+    # PLAN-0056 Wave C3: upstream document title copied verbatim from the inbound
+    # content.article.stored.v1 event (pure passthrough — no NER/extraction change).
+    # For a Polymarket synthetic doc this IS the market question; the KG
+    # PredictionEnrichedConsumer uses it as the temporal-event title AND as the
+    # MarketPolarityClassifier input.  Default None keeps direct-call unit tests green.
+    source_title: str | None = None,
     published_at: datetime | None,
     is_backfill: bool,
     routing_decision: RoutingDecision,
@@ -217,6 +229,12 @@ async def _enqueue_enriched(
         "source_type": source_type,
         # D-INIT-6: ride-along provenance label
         "source_name": source_name,
+        # PLAN-0056 Wave C2b: ride-along market/source identity for the KG.
+        "external_id": external_id,
+        # PLAN-0056 Wave C3: ride-along document title (= market question for
+        # Polymarket synthetic docs) so the KG can title the temporal event and
+        # classify per-entity polarity without an R7 cross-service DB read.
+        "source_title": source_title,
         "published_at": published_at.isoformat() if published_at else None,
         "is_backfill": is_backfill,
         "routing_tier": effective_tier.value,

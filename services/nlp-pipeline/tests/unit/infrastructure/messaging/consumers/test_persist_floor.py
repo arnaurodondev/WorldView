@@ -99,6 +99,10 @@ def _stub_async_repo() -> MagicMock:
     repo.upsert = AsyncMock()
     repo.link_batch = AsyncMock()
     repo.save_batch = AsyncMock()
+    # BP-719 Mode B: persist_artifacts refreshes the resolved-mention JSONB in
+    # place via ChunkRepository.update_entity_mentions_batch (chunks are inserted
+    # earlier by persist_searchable_artifacts).
+    repo.update_entity_mentions_batch = AsyncMock()
     return repo
 
 

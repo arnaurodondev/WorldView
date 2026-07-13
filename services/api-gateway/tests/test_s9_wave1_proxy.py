@@ -423,6 +423,39 @@ async def test_briefings_morning_proxied(authed_app, authed_mock_clients) -> Non
     assert "/api/v1/briefings/morning" in call_args[0]
 
 
+@pytest.mark.asyncio
+async def test_briefings_morning_prediction_leg_degrades_on_pool_timeout(authed_app, authed_mock_clients) -> None:
+    """A slow/exhausted market_data pool must NOT stall or fail the brief.
+
+    Regression: the best-effort prediction leg calls the market_data client,
+    whose pool_timeout is 30s. When that pool is saturated (leaked connections
+    on a long-lived gateway), a default-timeout call blocked the WHOLE brief for
+    30s — long enough for the frontend proxy to give up and surface a 500. The
+    leg now (a) carries a short per-request timeout so a busy pool fails fast,
+    and (b) is fully swallowed so the brief still returns 200 with
+    ``prediction_signals: null``.
+    """
+    authed_mock_clients.rag_chat.get = AsyncMock(
+        return_value=_mock_response(200, b'{"narrative": "Good morning..."}'),
+    )
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=httpx.PoolTimeout("pool exhausted"))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/briefings/morning",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["prediction_signals"] is None
+    # The leg must pass a short timeout override (not the client-wide 30s) so a
+    # busy pool degrades in seconds rather than holding the brief for 30s.
+    leg_kwargs = authed_mock_clients.market_data.get.call_args.kwargs
+    assert isinstance(leg_kwargs.get("timeout"), httpx.Timeout)
+    assert leg_kwargs["timeout"].read is not None and leg_kwargs["timeout"].read <= 10
+
+
 # ── F-002: Downstream error handling ────────────────────────────────────────
 
 

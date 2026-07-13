@@ -266,10 +266,12 @@ services:
         condition: service_completed_successfully
     env_file:
       - ../../services/portfolio/configs/docker.env
+    # Portfolio (S1) binds 8001 in-container (Dockerfile CMD --port 8001). Publish +
+    # probe 8001 so the healthcheck matches the listener (prod-readiness port fix).
     ports:
-      - "8001:8000"
+      - "8001:8001"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/readyz')"]
       interval: 10s
       timeout: 5s
       start_period: 20s
@@ -587,6 +589,99 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_market_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── PLAN-0056 Wave A3: prediction deeper-stream consumers (history/event/trade/oi) ──
+  market-data-prediction-history-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_history_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  market-data-prediction-event-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_event_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  market-data-prediction-trade-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_trade_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  market-data-prediction-oi-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_oi_consumer_main"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
@@ -1380,6 +1475,60 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.earnings_calendar_dataset_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # ── PLAN-0056 Wave C2/D2: prediction enrichment + move consumers ──────────
+  # Mirror the prod docker-compose.yml entries (own consumer groups) so the
+  # compose↔entrypoint alignment test (T-A-3-01) sees a container for both
+  # prediction_enriched_consumer_main and prediction_move_consumer_main.
+  knowledge-graph-prediction-enriched-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.prediction_enriched_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  knowledge-graph-prediction-move-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.prediction_move_consumer_main"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]

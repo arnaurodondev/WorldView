@@ -11,29 +11,81 @@ from __future__ import annotations
 from datetime import UTC
 from uuid import UUID
 
+import httpx
 import structlog
 
 from rag_chat.application.ports.upstream_clients import ChunkSearchRequest, EnrichedChunkResult
 from rag_chat.domain.entities.chat import ResolvedEntity
-from rag_chat.infrastructure.clients.base import BaseUpstreamClient
+from rag_chat.infrastructure.clients.base import BaseUpstreamClient, UpstreamTransportError
 
 _log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+# RC-1 (2026-07-05): number of attempts for the pre-loop entity-resolution POST.
+# 2 = first try + one retry. The retry exists to survive a STALE pooled
+# keep-alive socket: rag-chat holds the S6 connection idle across a long turn
+# (~80s of tool calls + synthesis), nlp-pipeline drops the idle connection, and
+# the NEXT turn reuses the dead socket → httpx.ConnectError /
+# RemoteProtocolError → UpstreamTransportError(reason="upstream_unreachable").
+# httpx evicts the dead connection from the pool the instant the send fails, so
+# the retry is *guaranteed* to dial a FRESH connection and succeed. We cap at
+# ONE retry so a genuinely-down upstream fails fast (tight 5s timeout) instead
+# of stacking latency onto the chat path.
+_RESOLVE_MAX_ATTEMPTS = 2
+
+# EMBED-RESIL (2026-07-07): attempts for the query-embedding POST (1 try + 1
+# retry). Unlike entity-resolve (which only retries the stale-socket class), the
+# embed hop ALSO retries a transport *timeout*: DeepInfra bge-large is a slow
+# remote model whose first call under concurrent load can blow the read budget
+# while the very next call (warm pool / less contention) succeeds. Bounded to
+# ONE retry so a genuinely-down S6 fails fast instead of stacking chat latency.
+_EMBED_MAX_ATTEMPTS = 2
+
+# Default read timeout for the embed hop when the caller does not pass one.
+# Aligned to the 30s upstream default (see config.embed_call_timeout_seconds).
+_EMBED_DEFAULT_READ_TIMEOUT_S = 30.0
 
 
 class S6Client(BaseUpstreamClient):
     """Concrete HTTP adapter for S6 NLP Pipeline."""
+
+    def __init__(
+        self,
+        base_url: str,
+        timeout: float = 5.0,
+        *,
+        embed_timeout_seconds: float | None = None,
+    ) -> None:
+        """Construct the S6 adapter.
+
+        ``embed_timeout_seconds`` (EMBED-RESIL): read timeout for the
+        ``/api/v1/embed`` hop only. Defaults to ``max(timeout, 30)`` so the slow
+        remote-model call is never killed at the (deployment-tightened ~10s)
+        shared upstream timeout while other S6 hops keep the tighter default.
+        """
+        super().__init__(base_url=base_url, timeout=timeout)
+        self._embed_timeout_seconds: float = (
+            embed_timeout_seconds if embed_timeout_seconds is not None else max(timeout, _EMBED_DEFAULT_READ_TIMEOUT_S)
+        )
 
     # ── Entity resolution ──────────────────────────────────────────────────────
 
     async def resolve_entities(self, query_text: str) -> list[ResolvedEntity]:
         """POST /api/v1/entities/resolve → list of resolved entities.
 
-        Returns an empty list on timeout or HTTP error (safe degradation).
+        Connection resilience (RC-1): a single transport-level failure of the
+        ``upstream_unreachable`` class (stale pooled keep-alive socket →
+        ConnectError / RemoteProtocolError) triggers exactly one retry on a
+        fresh connection before giving up. Read-timeouts and 5xx are NOT
+        retried here — those mean the upstream is reachable but unhealthy, and a
+        retry would only burn the chat latency budget; they propagate as
+        ``UpstreamTransportError`` for the caller to degrade on.
+
+        If ALL attempts fail, this re-raises ``UpstreamTransportError``. The
+        orchestrator's ``ChatPipeline.resolve_entities`` catches it and degrades
+        to an empty entity list so the chat turn still runs (RC-1 graceful
+        degradation) — the resolve step must NEVER hard-fail the whole turn.
         """
-        raw = await self._post(
-            "/api/v1/entities/resolve",
-            {"query_text": query_text},
-        )
+        raw = await self._resolve_with_stale_socket_retry(query_text)
         entities: list[dict] = raw.get("entities", [])
         results: list[ResolvedEntity] = []
         for item in entities:
@@ -52,6 +104,43 @@ class S6Client(BaseUpstreamClient):
             except (KeyError, TypeError, ValueError):
                 continue
         return results
+
+    async def _resolve_with_stale_socket_retry(self, query_text: str) -> dict:
+        """POST /entities/resolve with one retry on a stale-socket transport error.
+
+        Only ``upstream_unreachable`` (ConnectError / RemoteProtocolError — the
+        dead pooled keep-alive socket class) is retried. On the first such
+        failure httpx has already evicted the dead connection from its pool, so
+        simply re-issuing the request opens a FRESH connection — that is the
+        "force a fresh connection" mechanism, no manual pool poking required
+        (poking the shared client's pool would be unsafe for sibling turns
+        using the same S6Client instance concurrently).
+
+        ``upstream_timeout`` / ``upstream_5xx`` are re-raised on the first hit
+        (no retry) — retrying an up-but-unhealthy upstream just spends the chat
+        latency budget. After the last attempt any transport error propagates to
+        the caller for graceful degradation.
+        """
+        for attempt in range(_RESOLVE_MAX_ATTEMPTS):
+            try:
+                return await self._post(
+                    "/api/v1/entities/resolve",
+                    {"query_text": query_text},
+                )
+            except UpstreamTransportError as exc:
+                is_last = attempt == _RESOLVE_MAX_ATTEMPTS - 1
+                # Only the stale-socket class is worth a fresh-connection retry.
+                if exc.reason != "upstream_unreachable" or is_last:
+                    raise
+                _log.warning(  # type: ignore[no-any-return]
+                    "s6_resolve_stale_socket_retry",
+                    reason=exc.reason,
+                    path=exc.path,
+                    attempt=attempt,
+                    elapsed_ms=exc.elapsed_ms,
+                )
+        # Unreachable: the loop either returns or raises on every iteration.
+        return {}  # pragma: no cover
 
     # ── Chunk search ───────────────────────────────────────────────────────────
 
@@ -136,20 +225,50 @@ class S6Client(BaseUpstreamClient):
         query embedding instead of a 1024-dim zero vector (F-RAG-004). The
         endpoint already exists on the S6 service (used by HyDE adapter).
 
-        On any transport/HTTP error we return a zero vector and log a
-        warning — callers that need ANN ranking can detect the empty
-        vector and skip the query.
+        Resilience (EMBED-RESIL 2026-07-07): the embed POST gets its OWN,
+        generous read timeout (``httpx.Timeout`` — BP-235: connect stays tight
+        at 5s while read is aligned to the 30s upstream default) so a
+        slow-but-successful bge-large embedding is not killed at the deployment's
+        tight ~10s shared upstream ReadTimeout. On a transport *timeout* /
+        *unreachable* we retry ONCE on a fresh call before giving up. If the
+        retry also fails, the ``UpstreamTransportError`` (a ``BaseException``,
+        NOT caught by ``except Exception`` below) propagates to the caller so the
+        tool surfaces "cannot reach upstream" rather than silently degrading to a
+        zero vector (BP-623). A non-transport error still degrades to a zero
+        vector so callers can detect the empty vector and skip ANN ranking.
         """
         if not text or not text.strip():
             return [0.0] * 1024
-        try:
-            raw = await self._post("/api/v1/embed", {"text": text})
-            vec = raw.get("embedding")
-            if isinstance(vec, list) and vec:
-                return [float(x) for x in vec]
-        except Exception as exc:
-            _log.warning("s6_embed_text_failed", error=str(exc), text_len=len(text))
-        return [0.0] * 1024
+        embed_timeout = httpx.Timeout(
+            connect=5.0,
+            read=self._embed_timeout_seconds,
+            write=5.0,
+            pool=5.0,
+        )
+        for attempt in range(_EMBED_MAX_ATTEMPTS):
+            try:
+                raw = await self._post("/api/v1/embed", {"text": text}, timeout=embed_timeout)
+                vec = raw.get("embedding")
+                if isinstance(vec, list) and vec:
+                    return [float(x) for x in vec]
+                return [0.0] * 1024
+            except UpstreamTransportError as exc:
+                is_last = attempt == _EMBED_MAX_ATTEMPTS - 1
+                # Retry a transient slow/unreachable upstream exactly once; a
+                # 5xx (up-but-broken) is not worth a retry and propagates.
+                if exc.reason not in ("upstream_timeout", "upstream_unreachable") or is_last:
+                    raise
+                _log.warning(  # type: ignore[no-any-return]
+                    "s6_embed_transport_retry",
+                    reason=exc.reason,
+                    path=exc.path,
+                    attempt=attempt,
+                    elapsed_ms=exc.elapsed_ms,
+                )
+            except Exception as exc:
+                _log.warning("s6_embed_text_failed", error=str(exc), text_len=len(text))
+                return [0.0] * 1024
+        return [0.0] * 1024  # pragma: no cover — loop returns or raises every iteration
 
     # ── Ticker → entity resolution (PLAN-0093 Wave E-4 T-E-4-02) ──────────────
 

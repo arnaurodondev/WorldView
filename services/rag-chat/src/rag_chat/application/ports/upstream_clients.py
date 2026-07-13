@@ -135,6 +135,25 @@ class ContradictionResult:
 
 
 @dataclass
+class DocumentMetadata:
+    """Source-article metadata for a KG-derived citation (from content-store).
+
+    Resolved from a ``doc_id`` carried on a claim / event so a knowledge-graph
+    statement can link back to the news article that produced it. All fields are
+    optional — content-store silently omits missing documents, in which case the
+    caller leaves ``url`` (etc.) as ``None`` and degrades to a non-clickable
+    citation (identical to the pre-backfill behaviour).
+    """
+
+    doc_id: str
+    title: str | None = None
+    url: str | None = None
+    published_at: datetime | None = None
+    source_name: str | None = None
+    source_type: str | None = None
+
+
+@dataclass
 class PortfolioContext:
     """Portfolio summary for a user, returned by S1."""
 
@@ -250,6 +269,32 @@ class S7Port(Protocol):
         limit: int = 5,
     ) -> list[dict]:
         """Fuzzy alias search to resolve an entity name to entity_id candidates."""
+        ...
+
+
+@runtime_checkable
+class ContentStorePort(Protocol):
+    """Content-store client port — resolve ``doc_id`` → source-article metadata.
+
+    Used to backfill knowledge-graph-derived citations (claims, events) with the
+    URL / source / publish-date of the news article they were extracted from, so
+    the chat UI can render a clickable "Read ↗" link. The KG service stores only
+    the ``doc_id`` reference (nlp_db / content-store own the article title + url —
+    R9), so the linkage must be resolved over REST.
+
+    Returns ``{}`` on any HTTP / network error (R9 safe degradation) — the caller
+    falls back to a non-clickable citation.
+    """
+
+    async def get_documents_metadata(
+        self,
+        doc_ids: list[UUID],
+    ) -> dict[UUID, DocumentMetadata]:
+        """POST /api/v1/documents/batch → ``{doc_id: DocumentMetadata}`` map.
+
+        Missing doc_ids are omitted from the returned map. Returns ``{}`` on any
+        error or when ``doc_ids`` is empty.
+        """
         ...
 
 
@@ -653,6 +698,30 @@ class S3BriefPort(Protocol):
         to_date: str | None,
     ) -> list[dict]:
         """GET /v1/fundamentals/earnings-calendar → earnings release dates."""
+        ...
+
+    # PLAN — chat prediction-market tool: keyword/topic/entity search over
+    # Polymarket markets via the existing S9 → S3 list proxy. Backed by the
+    # market-data ``GET /api/v1/prediction-markets`` endpoint which already
+    # supports a free-text ``query`` ILIKE filter on the market question, a
+    # ``category`` equality filter, ``status`` and ``limit`` — so NO new
+    # upstream endpoint is required (R9/R14: S9-proxied, read-only).
+    async def get_prediction_markets(
+        self,
+        query: str | None,
+        category: str | None,
+        status: str,
+        limit: int,
+    ) -> list[dict]:
+        """GET /v1/signals/prediction-markets → list of Polymarket market dicts.
+
+        Each item carries ``market_id``, ``question``, ``outcomes``
+        (``[{name, token_id, price}]`` where price is the implied probability
+        0.0-1.0), ``volume_24h``, ``close_time``, ``resolution_status``,
+        ``market_slug`` (the canonical Polymarket event slug — drives the
+        clickable URL), ``category`` and ``updated_at``. Returns ``[]`` on any
+        HTTP or network error (R9 safe degradation).
+        """
         ...
 
 

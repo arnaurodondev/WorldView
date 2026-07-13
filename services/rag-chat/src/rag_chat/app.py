@@ -39,6 +39,7 @@ from rag_chat.api.routes import chat as chat_router
 from rag_chat.api.routes import internal as internal_router
 from rag_chat.api.routes import internal_ai_brief_flag as internal_ai_brief_flag_router
 from rag_chat.api.routes import internal_costs as internal_costs_router
+from rag_chat.api.routes import internal_llm_usage as internal_llm_usage_router
 from rag_chat.api.routes import proposal as proposal_router
 from rag_chat.api.routes import public_briefings as public_briefings_router
 from rag_chat.api.routes import threads as threads_router
@@ -158,6 +159,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     await jwt_mw.startup()
 
+    # PLAN-0117 W5 (FR-7a): best-effort boot check — WARN on any configured chat
+    # model with no pricing path (would log $0 → silent-zero). Reads LIVE settings.
+    _warn_unpriceable_models_at_startup(settings)
+
     log.info("rag_chat_started", service=settings.service_name)  # type: ignore[no-any-return]
     yield
 
@@ -179,6 +184,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("rag_chat_stopped", service=settings.service_name)  # type: ignore[no-any-return]
 
 
+def _warn_unpriceable_models_at_startup(settings: RagChatSettings) -> None:
+    """PLAN-0117 W5 (FR-7a): boot-time priceability check for rag-chat models.
+
+    Logs a best-effort WARNING listing any *configured* model id that has no
+    pricing path (matrix / provider-cost / local-free). Reads LIVE settings so
+    env overrides are covered. Never raises — a guardrail must not block boot.
+    """
+    from ml_clients.model_registry import warn_unpriceable_models
+
+    # (model_id, provider) for every model id rag-chat can emit. ``None`` model
+    # ids (e.g. an unset grounding_rewrite_model) are filtered out.
+    pairs: list[tuple[str, str]] = [
+        (settings.deepinfra_classification_model, "deepinfra"),
+        (settings.completion_model, settings.completion_provider),
+        # DEF-036: the planner turn can emit cost rows under ``planning_model``
+        # (e.g. Qwen3-235B) on the completion provider — include it so an
+        # unpriceable planner override is caught at boot.
+        (settings.planning_model, settings.completion_provider),
+        (settings.openrouter_completion_model, "openrouter"),
+        (settings.deepinfra_stream_chat_fallback_model, "deepinfra"),
+        (settings.citation_judge_model, settings.citation_judge_provider),
+        (settings.ollama_completion_model, "ollama"),
+        (settings.ollama_reranker_model, "ollama"),
+    ]
+    warn_unpriceable_models("rag-chat", [(m, p) for (m, p) in pairs if m])
+
+
 def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:
     """Build and attach the ChatPipeline and ChatOrchestratorUseCase to app.state."""
     # PLAN-0107 / rag-chat-ml-metrics: build (or fetch the cached) MLMetrics
@@ -193,22 +225,18 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.application.caching.rate_limiter import RateLimiter
     from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
     from rag_chat.application.pipeline.hyde_expander import HydeExpander
-    from rag_chat.application.pipeline.intent_classifier import (
-        DeepInfraIntentClassifier,
-        OllamaIntentClassifier,
-    )
     from rag_chat.application.pipeline.reranker import (
         BGEReranker,
         CohereReranker,
         DeepInfraReranker,
     )
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
-    from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
     from rag_chat.application.security.input_validator import InputValidator
     from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
     from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
     from rag_chat.application.use_cases.get_thread import GetThreadUseCase
     from rag_chat.application.use_cases.persist_chat import ChatPersistenceUseCase
+    from rag_chat.infrastructure.clients.content_store_client import ContentStoreClient
     from rag_chat.infrastructure.clients.s1_client import S1Client
     from rag_chat.infrastructure.clients.s3_client import S3Client
     from rag_chat.infrastructure.clients.s6_client import S6Client
@@ -217,9 +245,20 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.infrastructure.llm.provider_chain import LLMProviderChain
 
     # Upstream service clients
-    s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
+    s6 = S6Client(
+        base_url=settings.s6_base_url,
+        timeout=settings.upstream_timeout_seconds,
+        # EMBED-RESIL: dedicated longer read timeout for the /api/v1/embed hop.
+        embed_timeout_seconds=settings.embed_call_timeout_seconds,
+    )
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
     s3 = S3Client(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
+    # feat/chat-kg-source-links: resolves claim/event doc_id → source-article URL
+    # so KG-derived chat citations become clickable.
+    content_store = ContentStoreClient(
+        base_url=settings.content_store_base_url,
+        timeout=settings.upstream_timeout_seconds,
+    )
     s1 = S1Client(
         base_url=settings.s1_base_url,
         valkey=valkey_client,
@@ -387,29 +426,12 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
 
         embedding_client = _S6EmbeddingAdapter(settings.s6_base_url)
 
-    # ── Intent classifier: DeepInfra GPU (primary) → Ollama (fallback) ─────────
-    # DeepInfraIntentClassifier is used when a deepinfra_api_key is configured.
-    # It uses a 3B model on DeepInfra GPU (~100-200ms) instead of qwen3:0.6b on
-    # CPU Ollama (2-20s, causes 100% fallback to keyword heuristic in practice).
-    # Both classifiers fall back to KeywordHeuristicClassifier on any error.
-    if _deepinfra_api_key:
-        classifier: Any = DeepInfraIntentClassifier(
-            api_key=_deepinfra_api_key,
-            model=settings.deepinfra_classification_model,
-            usage_logger=usage_logger,
-            # PLAN-0107 follow-up: per-call USD cost emit (call_site="intent_classifier").
-            cost_recorder=cost_recorder,
-        )
-    else:
-        classifier = OllamaIntentClassifier(
-            ollama_base_url=settings.ollama_base_url,
-            model=settings.ollama_classification_model,
-            usage_logger=usage_logger,
-            # PLAN-0107 follow-up: same recorder so the Grafana panel sees both
-            # providers under one metric name; per-row attribution in
-            # llm_usage_log via the call_site column.
-            cost_recorder=cost_recorder,
-        )
+    # ── Intent classifier: RETIRED ────────────────────────────────────────────
+    # The pre-agent LLM intent classifier (DeepInfra/Ollama) that fed the
+    # per-intent RetrievalPlanBuilder has been retired. Production chat uses the
+    # agentic tool-use loop; the eval harness (RetrieveOnlyUseCase) is now
+    # intent-free (retrieves from all sources). The Layer-2 LLM *injection-safety*
+    # classifier below is a DIFFERENT subsystem and remains wired.
 
     # ── Reranker selection (PLAN-0052 platform-QA round 5) ──────────────────
     # Priority order:
@@ -463,7 +485,6 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         cost_recorder=cost_recorder,
     )
 
-    _plan_builder = RetrievalPlanBuilder()
     _hyde = HydeExpander(
         llm_provider=providers[0],
         embedding_client=embedding_client,
@@ -613,6 +634,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         s3_brief=s3_brief,
         brief_archive=brief_archive,
         s10=s10_client,
+        content_store=content_store,
         timeout=settings.upstream_timeout_seconds,
     )
     app.state.tool_executor_factory = tool_executor_factory  # expose for tests / health checks
@@ -648,8 +670,6 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     app.state.retrieve_only_uc = RetrieveOnlyUseCase(
         validator=_validator,
         s6_client=s6,
-        classifier=classifier,
-        plan_builder=_plan_builder,
         hyde=_hyde,
         embedder=embedding_client,
         retrieval=_retrieval,
@@ -684,7 +704,12 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
     # S5Client accepts an optional internal_jwt at construction for default auth; passing
     # None here means each gather call supplies the per-request JWT via x_internal_jwt kwarg.
     s5 = S5Client(base_url=settings.s5_base_url, timeout=settings.upstream_timeout_seconds)
-    s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
+    s6 = S6Client(
+        base_url=settings.s6_base_url,
+        timeout=settings.upstream_timeout_seconds,
+        # EMBED-RESIL: dedicated longer read timeout for the /api/v1/embed hop.
+        embed_timeout_seconds=settings.embed_call_timeout_seconds,
+    )
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
     # PLAN-0107 follow-up (brief vector descriptions, P1): intelligence client for
     # the entity narrative. WHY api_gateway_url (not s7_base_url): the intelligence
@@ -1038,6 +1063,7 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
     app.include_router(briefings_router.router)
     app.include_router(public_briefings_router.router)
     app.include_router(internal_costs_router.router)
+    app.include_router(internal_llm_usage_router.router)  # PLAN-0117 W4: FR-6 ingest
     app.include_router(internal_router.router)
     app.include_router(internal_ai_brief_flag_router.router)  # PLAN-0089 Wave L-5a
     app.include_router(proposal_router.router)  # PLAN-0082 Wave B: proposal confirmation

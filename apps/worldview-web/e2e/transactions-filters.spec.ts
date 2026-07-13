@@ -17,6 +17,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { forceAdvancedMode } from "./utils/forceAdvancedMode";
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -203,6 +204,13 @@ async function setupPortfolioRoutes(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+// PLAN-0122 W-B (T-A-B-05): the portfolio page now defaults to SIMPLE. Every
+// spec below asserts the full Advanced layout, so force Advanced before each
+// navigation (R19 — no assertion weakened, only the mode that shows the layout).
+test.beforeEach(async ({ page }) => {
+  await forceAdvancedMode(page);
+});
 
 test.describe("Portfolio /transactions filter bar", () => {
   test("ticker filter narrows the list and Clear filters restores it", async ({

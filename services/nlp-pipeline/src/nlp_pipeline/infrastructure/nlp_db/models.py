@@ -115,6 +115,13 @@ class ChunkEmbeddingModel(Base):
     model_id: Mapped[str] = mapped_column(Text, nullable=False)
     embedding_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="ready")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Denormalized from document_source_metadata.source_type (migration 0024) so
+    # the partial HNSW index idx_chunk_emb_hnsw_<src> can serve a source-filtered
+    # ANN query with the index instead of an exact seq-scan sort. Populated by the
+    # BEFORE INSERT trigger trg_chunk_emb_source_type — application inserts may
+    # leave it NULL and the trigger fills it from the chunk's document. Nullable
+    # for forward-compat (Hard Rule 11).
+    source_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -130,6 +137,9 @@ class SectionEmbeddingModel(Base):
     embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
     model_id: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Denormalized source_type (migration 0024); populated by the BEFORE INSERT
+    # trigger trg_section_emb_source_type. See ChunkEmbeddingModel.source_type.
+    source_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

@@ -1,0 +1,279 @@
+/* @theme worldview-styles-lab */
+/* ================================================================== *
+ * Worldview — STYLE LAB.
+ * A throwaway comparison deck: the SAME sample slides rendered in three
+ * "sharp & restrained" typographic directions so we can pick one before
+ * touching the real deck.
+ *
+ * Shared aesthetic for ALL three (this is the "sharp & restrained" base):
+ *   - square corners (2–3px, not 14px / not 999px pills)
+ *   - 1px hairline borders instead of soft drop-shadows
+ *   - no gradients (flat fills)
+ *   - thin straight-rule connectors instead of chunky ▶ triangles
+ *   - restrained colour: navy ink + ONE blue accent + gold reserved for
+ *     hero numbers only (NOT every bold word) + status green/red
+ *   - act header (small-caps, thin rule) top-left; short footer bottom
+ *
+ * The three directions differ ONLY in typeface, selected per-slide with
+ *   <!-- _class: s-inter -->   Inter, lighter weights
+ *   <!-- _class: s-grotesque --> IBM Plex Sans (technical grotesque)
+ *   <!-- _class: s-serif -->   Source Serif 4 headings (matches thesis)
+ * ================================================================== */
+
+@import 'default';
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap');
+
+:root {
+  --bg:        #FFFFFF;   /* clean white canvas (no tint, no gradient) */
+  --card:      #FFFFFF;
+  --ink:       #16233D;   /* primary navy text                        */
+  --slate:     #5A6677;   /* secondary text                           */
+  --blue:      #2C6AA8;   /* the ONE accent                           */
+  --blue-soft: #EEF3F9;   /* faint fill for highlighted regions       */
+  --gold:      #9A6B0A;   /* RESERVED — hero numbers only             */
+  --green:     #2E8B57;
+  --red:       #C0504D;
+  --line:      #D7DDE7;   /* hairlines / borders (a touch darker = crisp) */
+  --line-2:    #B9C2D1;   /* slightly stronger rule for accents       */
+  --fz:        24px;
+  --radius:    3px;       /* the whole point: tight, square-ish       */
+}
+
+/* ------------------------------ base ------------------------------ */
+section {
+  background: var(--bg);
+  color: var(--ink);
+  font-size: var(--fz);
+  line-height: 1.45;
+  padding: 64px 72px 58px;
+  letter-spacing: 0.1px;
+  /* default font; overridden per style class below */
+  font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* headings inherit family from the style class; only size/weight here */
+h1 { font-size: 42px; font-weight: 700; color: var(--ink); margin: 0 0 14px; letter-spacing: -0.2px; }
+h2 { font-size: 33px; font-weight: 700; color: var(--ink); margin: 0 0 20px; letter-spacing: -0.1px; }
+h3 { font-size: 21px; font-weight: 700; color: var(--ink); margin: 0 0 8px; }
+
+p  { margin: 10px 0; }
+strong { color: var(--ink); font-weight: 700; }   /* emphasis = WEIGHT, not colour */
+em     { color: var(--blue); font-style: normal; font-weight: 600; }
+a  { color: var(--blue); text-decoration: none; }
+ul, ol { margin: 8px 0; padding-left: 1.05em; }
+li { margin: 7px 0; }
+li::marker { color: var(--slate); }
+img { display: block; margin: 0 auto; border-radius: 0; }
+
+.lead  { font-size: 28px; line-height: 1.3; color: var(--ink); font-weight: 500; }
+.sub   { color: var(--slate); font-size: 22px; }
+.muted { color: var(--slate); }
+.small { font-size: 0.82em; }
+.center{ text-align: center; }
+.gold  { color: var(--gold); font-weight: 700; }   /* opt-in only */
+
+/* a thin rule that sits under every content-slide title (discipline) */
+h2.ruled { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+
+/* ============================ header / footer ===================== */
+/* act/section running head, top-left, small-caps, thin rule under it  */
+header {
+  color: var(--slate);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  left: 72px; right: 72px; top: 30px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+/* short footer bottom-left, page number bottom-right (both faint)     */
+footer { color: #9AA6BC; font-size: 12px; left: 72px; bottom: 26px; }
+section::after { color: #9AA6BC; font-size: 12px; font-weight: 500; right: 72px; bottom: 26px; }
+
+/* =============================== cards ============================ */
+.cards { display: flex; gap: 16px; align-items: stretch; margin: 16px 0; }
+.cards.cols-4 .card { flex: 1 1 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  flex: 1;
+}
+.card h3 { margin: 2px 0 6px; }
+.card p  { margin: 0; color: var(--slate); font-size: 18px; }
+.card .tag {
+  display: inline-block; font-size: 13px; font-weight: 600; color: var(--blue);
+  border: 1px solid var(--line-2); border-radius: var(--radius);
+  padding: 1px 8px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+/* accent = a thin top RULE, not a fat coloured bar */
+.card.gold-top { border-top: 2px solid var(--gold); }
+.card.blue-top { border-top: 2px solid var(--blue); }
+
+/* numbered step badge — square, outlined, not a filled circle */
+.numbadge {
+  width: 30px; height: 30px; border-radius: var(--radius);
+  border: 1px solid var(--line-2); background: #fff; color: var(--blue);
+  font-weight: 700; font-size: 17px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* ============================ metric cards ======================= */
+.metrics { display: flex; gap: 16px; margin: 18px 0; justify-content: center; }
+.metric {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 20px 24px; text-align: center; flex: 1;
+}
+.metric .num { font-size: 50px; font-weight: 700; color: var(--gold); line-height: 1; letter-spacing: -1px; }
+.metric .lbl { color: var(--slate); font-size: 16px; margin-top: 8px; line-height: 1.25; }
+.metric.blue .num  { color: var(--blue); }
+.metric.green .num { color: var(--green); }
+
+.hero-num { font-size: 104px; font-weight: 700; color: var(--gold); line-height: 1; letter-spacing: -2px; text-align: center; }
+.hero-lbl { color: var(--slate); font-size: 19px; text-align: center; margin-top: 6px; }
+
+/* ============================ pills / badges ===================== */
+/* pills: square mono chips, not capsules */
+.pill {
+  font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  background: #fff; color: var(--ink); border: 1px solid var(--line-2);
+  border-radius: var(--radius); padding: 2px 9px; font-size: 0.74em; font-weight: 500;
+  white-space: nowrap;
+}
+.badge { display: inline-block; border-radius: var(--radius); padding: 2px 11px; font-weight: 700; font-size: 0.78em; border: 1px solid; }
+.badge.pass    { color: var(--green); border-color: var(--green); background: #fff; }
+.badge.partial { color: var(--gold);  border-color: var(--gold);  background: #fff; }
+
+/* =============================== flows =========================== */
+.flow { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0; margin: 26px 0; }
+.flow .step {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 18px; text-align: center;
+  font-weight: 600; font-size: 19px; min-width: 118px;
+}
+.s, .flow .step .s { display: block; font-size: 13px; color: var(--slate); font-weight: 500; margin-top: 4px; }
+.flow .step.blue { border-color: var(--line-2); background: var(--blue-soft); }
+.flow .step.gold { border-color: var(--gold); }
+.flow .step.bad  { border-color: var(--red); }
+/* THIN STRAIGHT connector: a 1px rule with a small flat arrowhead */
+.flow .arr {
+  width: 46px; height: 1px; background: var(--line-2); position: relative;
+  margin: 0 4px; font-size: 0; padding: 0; align-self: center;
+}
+.flow .arr::after {
+  content: ''; position: absolute; right: -1px; top: -3px;
+  border-left: 6px solid var(--line-2); border-top: 3px solid transparent; border-bottom: 3px solid transparent;
+}
+.flow .arr small { display: none; }
+
+/* ===================== two-column problem/solution =============== */
+.twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 14px; }
+.panel { border-radius: var(--radius); padding: 20px 22px; border: 1px solid var(--line); }
+.panel h3 { margin-top: 0; }
+.panel.bad  { border-left: 3px solid var(--red); }
+.panel.bad h3  { color: var(--red); }
+.panel.good { border-left: 3px solid var(--blue); }
+.panel.good h3 { color: var(--blue); }
+.panel .row { display: flex; align-items: center; gap: 10px; margin: 9px 0; font-size: 19px; }
+.panel .ok  { color: var(--green); font-weight: 800; }
+.panel .no  { color: var(--red);   font-weight: 800; }
+.result { margin-top: 13px; font-weight: 700; }
+.panel.bad .result  { color: var(--red); }
+.panel.good .result { color: var(--blue); }
+
+/* =============================== bars =========================== */
+.bars { margin: 16px 0; }
+.bar-row { margin: 16px 0; }
+.bar-head { display: flex; justify-content: space-between; font-size: 18px; margin-bottom: 6px; }
+.bar-head .v { font-weight: 700; color: var(--blue); }
+.bar-head .v.gold { color: var(--gold); }
+.bar-track { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); height: 22px; position: relative; overflow: hidden; }
+.bar-fill  { background: var(--blue); height: 100%; border-radius: 0; }
+.bar-fill.gold { background: var(--gold); }   /* flat, no gradient */
+
+/* ============================ callouts ========================== */
+.callout { border-radius: var(--radius); padding: 13px 18px; font-size: 18px; border: 1px solid var(--line); }
+.callout.amber { border-left: 3px solid var(--gold); color: var(--ink); }
+.callout.blue  { border-left: 3px solid var(--blue); color: var(--ink); background: var(--blue-soft); }
+
+/* ========================= graph node / edge ==================== */
+.graph { display: flex; align-items: center; justify-content: center; gap: 0; margin: 20px 0; }
+.gnode {
+  display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 14px 24px; border-radius: var(--radius); background: var(--card);
+  border: 1px solid var(--blue); font-weight: 700; font-size: 23px; color: var(--ink);
+  text-align: center; line-height: 1.2;
+}
+.gnode.gold { border-color: var(--gold); }
+.gedge { display: flex; flex-direction: column; align-items: center; padding: 0 6px; min-width: 150px; }
+.gedge .line { width: 100%; height: 1px; background: var(--line-2); position: relative; }
+.gedge .pred { font-family: "IBM Plex Mono", monospace; color: var(--slate); font-weight: 600; font-size: 16px; margin-bottom: 5px; }
+.gedge .arrowhead { color: var(--line-2); font-size: 14px; margin-top: -3px; }
+
+/* ============================ tables =========================== */
+table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 20px; background: transparent; }
+th { background: #fff !important; color: var(--ink); font-weight: 700; text-align: left;
+     padding: 11px 14px; border-bottom: 2px solid var(--ink); }
+td { background: #fff !important; color: var(--ink); padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr.hl td { background: var(--blue-soft) !important; }
+tr:last-child td { border-bottom: none; }
+
+/* ====================== full-slide layouts ===================== */
+/* TITLE — flat, no gradient; a single gold accent rule */
+section.title { background: var(--bg); justify-content: center; }
+section.title h1 { font-size: 88px; letter-spacing: -1.5px; margin-bottom: 8px; font-weight: 700; }
+section.title .accent-line { width: 56px; height: 3px; background: var(--gold); border-radius: 0; margin: 20px 0 22px; }
+section.title .subtitle { font-size: 28px; color: var(--blue); font-weight: 600; }
+section.title .meta { color: var(--slate); font-size: 20px; margin-top: 34px; line-height: 1.5; }
+section.title .meta b, section.title .meta strong { color: var(--ink); font-weight: 700; }
+
+/* ACT DIVIDER — flat, kicker + rule */
+section.divider { justify-content: center; background: var(--bg); }
+section.divider .kicker {
+  color: var(--blue); font-size: 16px; font-weight: 700; letter-spacing: 3px;
+  text-transform: uppercase; margin-bottom: 10px;
+}
+section.divider h1 { font-size: 58px; font-weight: 700; }
+section.divider h1::after {
+  content: ''; display: block; width: 64px; height: 2px; background: var(--gold); margin-top: 18px;
+}
+section.divider .sub { font-size: 23px; margin-top: 20px; }
+
+/* a big style-label banner used only to separate the three sections */
+section.lab-label { justify-content: center; background: var(--ink); color: #fff; }
+section.lab-label h1 { color: #fff; font-size: 60px; font-weight: 700; }
+section.lab-label .sub { color: #AEBBD0; font-size: 24px; }
+section.lab-label .accent-line { width: 56px; height: 3px; background: var(--gold); margin: 18px 0; }
+
+/* ============================================================== *
+ * STYLE NAMESPACES — the only real difference between the three.
+ * ============================================================== */
+
+/* A — Inter, lighter weights (closest to current, just calmer) */
+section.s-inter,
+section.s-inter h1, section.s-inter h2, section.s-inter h3 {
+  font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+section.s-inter h1 { font-weight: 700; }
+section.s-inter h2 { font-weight: 600; }
+
+/* B — IBM Plex Sans (technical grotesque; pairs with Plex Mono pills) */
+section.s-grotesque,
+section.s-grotesque h1, section.s-grotesque h2, section.s-grotesque h3 {
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+section.s-grotesque h1 { font-weight: 600; letter-spacing: -0.5px; }
+section.s-grotesque h2 { font-weight: 600; letter-spacing: -0.3px; }
+section.s-grotesque h3 { font-weight: 600; }
+
+/* C — Source Serif 4 headings (academic; matches the thesis cover) */
+section.s-serif { font-family: "Inter", system-ui, sans-serif; } /* body stays sans for legibility */
+section.s-serif h1, section.s-serif h2, section.s-serif h3,
+section.s-serif.title h1, section.s-serif.divider h1 {
+  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-weight: 600; letter-spacing: 0;
+}
+section.s-serif .subtitle { font-family: "Source Serif 4", Georgia, serif; font-style: italic; font-weight: 400; }

@@ -299,3 +299,23 @@ class TestSecondsUntilNextRun:
         now = datetime(2026, 6, 21, 12, 0, tzinfo=UTC)  # Sunday, past 05:00
         delay = _seconds_until_next_run(now=now, day_of_week=6, hour_utc=5)
         assert delay == pytest.approx(7 * 86400 - (7 * 3600))
+
+
+# ── DEF-002: internal-JWT claims (aud + jti) ──────────────────────────────────
+
+
+def test_sign_internal_jwt_includes_aud_and_jti() -> None:
+    """DEF-002: minted token MUST carry aud + a unique jti (required by middleware)."""
+    from types import SimpleNamespace
+
+    import jwt as pyjwt
+    from market_ingestion.infrastructure.workers.insider_universe_loader import (
+        _sign_internal_jwt,
+    )
+
+    settings = SimpleNamespace(internal_jwt_private_key="")  # HS256 dev fallback
+    decoded = pyjwt.decode(_sign_internal_jwt(settings), options={"verify_signature": False})
+    assert decoded["aud"] == "worldview-internal"
+    assert decoded["iss"] == "worldview-gateway"
+    assert decoded["sub"] == "system:insider-universe-loader"
+    assert decoded["jti"]

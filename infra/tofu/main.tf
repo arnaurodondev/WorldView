@@ -3,7 +3,7 @@ terraform {
 
   required_providers {
     hcloud = {
-      source  = "registry.opentofu.org/providers/hetznercloud/hcloud"
+      source  = "hetznercloud/hcloud"
       version = "~> 1.49"
     }
   }
@@ -24,23 +24,25 @@ terraform {
   #
   # Hetzner S3 endpoint: https://nbg1.your-objectstorage.com
   # Hetzner docs: https://docs.hetzner.com/storage/object-storage/
-  backend "s3" {
-    bucket = "worldview-tfstate"
-    key    = "prod/terraform.tfstate"
-    region = "us-east-1"  # Hetzner S3 requires a region value; any string works
-
-    # Hetzner S3 endpoint for Nuremberg region
-    endpoint = "https://nbg1.your-objectstorage.com"
-
-    # Required for Hetzner S3 compatibility
-    skip_credentials_validation = true
-    skip_metadata_api_check     = true
-    skip_region_validation      = true
-    force_path_style            = true
-
-    # Credentials injected at init time via -backend-config flag
-    # Never hardcode access_key / secret_key here
-  }
+  #
+  # FIRST-DEPLOY (2026-07-07): using LOCAL state (terraform.tfstate in this dir) to
+  # skip the Object Storage bucket + S3 credential setup. terraform.tfstate is
+  # git-ignored. MIGRATE TO REMOTE STATE before relying on this long-term: create the
+  # `worldview-tfstate` bucket + S3 creds (steps above), uncomment the backend below,
+  # and run `tofu init -migrate-state -backend-config=~/.config/tofu/hetzner-s3.tfbackend`.
+  # A laptop disk loss now = lost state → orphaned Hetzner resources, so back up
+  # terraform.tfstate (or migrate) once the cluster is stable.
+  #
+  # backend "s3" {
+  #   bucket = "worldview-tfstate"
+  #   key    = "prod/terraform.tfstate"
+  #   region = "us-east-1"
+  #   endpoint = "https://nbg1.your-objectstorage.com"
+  #   skip_credentials_validation = true
+  #   skip_metadata_api_check     = true
+  #   skip_region_validation      = true
+  #   force_path_style            = true
+  # }
 }
 
 provider "hcloud" {

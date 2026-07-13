@@ -43,6 +43,10 @@ def build_raw_article_payload(
     published_at: str | None,
     is_backfill: bool,
     title: str | None = None,
+    # PLAN-0056 Wave C2b: stable upstream market/source identity carried verbatim
+    # through S5→S6→KG (e.g. "polymarket:<condition_id>").  None for ordinary
+    # articles (which have no distinct external identity beyond source_url).
+    external_id: str | None = None,
 ) -> dict[str, Any]:
     """Build outbox payload matching ``content.article.raw.v1`` Avro schema exactly."""
     return {
@@ -53,6 +57,10 @@ def build_raw_article_payload(
         "doc_id": str(doc_id),
         "source_type": source_type,
         "source_url": source_url,
+        # PLAN-0056 Wave C2b: None for normal articles; the synthetic prediction
+        # emitter sets "polymarket:<condition_id>" so the market identity survives
+        # into the KG.  source_url stays the real URL (not overloaded).
+        "external_id": external_id,
         "minio_bronze_key": minio_bronze_key,
         "content_hash": hashlib.sha256(raw_bytes).hexdigest(),
         "fetch_id": str(fetch_id),

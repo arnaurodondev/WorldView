@@ -40,6 +40,66 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 
+# ── Stage-2 class gate (2026-07-01 ticker mis-resolution fix) ────────────────
+#
+# Stage-2 ticker matching is otherwise CLASS-BLIND: it matches any all-caps
+# <=6-char surface against ``canonical_entities.ticker`` regardless of what
+# GLiNER classified the mention as.  That produced a large systematic
+# mis-resolution class where a surface that is a common word/abbreviation
+# collides with an unrelated equity ticker, e.g. (live counts, nlp_db):
+#   "US"  (currency, 846x) -> a US-ticker equity
+#   "DE"  (location, 326x) -> Deere & Company
+#   "CEO" (person,    95x) -> China Petroleum / Cooper etc.
+#   "MA"  (location,  50x) -> Mastercard Inc
+#   "FTC" (regulatory,37x) -> Filtronic Plc
+#   "AI"  (macro,       -) -> C3.ai, Inc.
+# GLiNER's own class is a HIGH-confidence signal that these tokens are NOT a
+# tradeable security, so we suppress Stage-2 ticker resolution for the
+# categorically-non-equity classes below.
+#
+# WHY A DENYLIST (not "reject organization -> financial_instrument"):
+#   The earlier deferred fix (agent D, 2026-06-21) keyed the guard off the
+#   (mention_class, entity_type) MISMATCH — it rejected an ``organization``
+#   mention resolving to a ``financial_instrument`` canonical.  That BREAKS
+#   Apple: GLiNER tags "Apple"/"AAPL" as ``organization`` while its canonical
+#   row is ``entity_type='financial_instrument'`` — i.e. the legitimate,
+#   overwhelmingly-common case.  The correct axis is the mention_class SEMANTIC
+#   CATEGORY, not its relationship to the canonical's entity_type.  A currency /
+#   location / person / regulator / government body / macro indicator is NEVER a
+#   listed equity, so blocking Stage-2 for those classes cannot drop a real
+#   company mention.  ``organization`` / ``financial_instrument`` /
+#   ``financial_institution`` / ``index`` / ``commodity`` remain ALLOWED, so
+#   Apple, Mastercard-as-org, JPM-as-financial_institution, SPY-as-index and
+#   the (mislabelled) AAPL-as-commodity mentions all still resolve.
+_TICKER_STAGE_DENIED_CLASSES: frozenset[str] = frozenset(
+    {
+        "currency",
+        "location",
+        "person",
+        "regulatory_body",
+        "government_body",
+        "macroeconomic_indicator",
+    }
+)
+
+
+def _ticker_class_value(mention_class: object) -> str:
+    """Return the lowercase enum value for a mention_class (enum or str)."""
+    return str(mention_class.value) if hasattr(mention_class, "value") else str(mention_class)
+
+
+def _ticker_stage_allowed(mention_class: object) -> bool:
+    """Whether Stage-2 ticker resolution may run for this GLiNER class.
+
+    Blocks the categorically-non-equity classes (currency/location/person/
+    regulatory_body/government_body/macroeconomic_indicator) whose surfaces
+    frequently collide with unrelated equity tickers (US/DE/CEO/MA/FTC/AI).
+    Company-compatible classes stay allowed so Apple (organization) and peers
+    are never regressed.
+    """
+    return _ticker_class_value(mention_class) not in _TICKER_STAGE_DENIED_CLASSES
+
+
 def _ticker_candidate(surface: str) -> str | None:
     """Return the ticker symbol to look up for ``surface``, or None if it is not
     ticker-shaped.
@@ -135,8 +195,11 @@ async def _stage2_ticker_isin(
     # Attempt to parse ticker from the mention text (bare uppercase word).
     # _ticker_candidate enforces the case-sensitive gate that keeps mixed-case
     # company acronyms (xAI/Citi) from colliding with unrelated tickers.
+    # _ticker_stage_allowed additionally suppresses the whole ticker path for
+    # categorically-non-equity GLiNER classes (currency/location/person/...),
+    # killing the US/DE/CEO/MA/FTC collision class without touching Apple.
     text = mention.mention_text.strip()
-    ticker = _ticker_candidate(text)
+    ticker = _ticker_candidate(text) if _ticker_stage_allowed(mention.mention_class) else None
     isin = text if len(text) == 12 and text[:2].isalpha() and text[2:].isalnum() else None
 
     entity_id = await alias_repo.ticker_isin_match(ticker=ticker, isin=isin)
@@ -536,12 +599,19 @@ async def run_entity_resolution_block(
     # drop.  ``s2_lookup_key`` remembers the value actually queried per mention so
     # the per-mention classification below can map a hit back to the original
     # surface form (the matches dict is keyed by the queried bare ticker).
+    #
+    # Class gate (2026-07-01): only build a ticker candidate for
+    # company-compatible GLiNER classes.  A currency/location/person/regulator/
+    # gov/macro surface that happens to equal a ticker (US/DE/CEO/MA/FTC/AI) is
+    # never a real equity, so we suppress its Stage-2 lookup entirely.  ISINs are
+    # NOT class-gated: an ISIN is an unambiguous 12-char security identifier that
+    # cannot collide with a common word.
     tickers: list[str] = []
     isins: list[str] = []
     s2_lookup_key: dict[str, str] = {}  # mention_text.strip() -> ticker/isin value queried
     for m in mentions:
         text_stripped = m.mention_text.strip()
-        ticker_candidate = _ticker_candidate(text_stripped)
+        ticker_candidate = _ticker_candidate(text_stripped) if _ticker_stage_allowed(m.mention_class) else None
         if ticker_candidate is not None:
             tickers.append(ticker_candidate)
             s2_lookup_key[text_stripped] = ticker_candidate
@@ -550,10 +620,25 @@ async def run_entity_resolution_block(
             s2_lookup_key[text_stripped] = text_stripped
     ticker_isin_matches: dict[str, UUID] = await alias_repo.batch_ticker_isin_match(tickers, isins)
 
-    def _matched_in_stage2(text: str) -> UUID | None:
-        """Stage-2 entity for ``text``, resolved via its exchange-stripped key."""
-        key = s2_lookup_key.get(text.strip())
-        return ticker_isin_matches.get(key) if key is not None else None
+    def _matched_in_stage2(mention: EntityMention) -> UUID | None:
+        """Stage-2 entity for ``mention``, resolved via its exchange-stripped key.
+
+        Class-aware: a denied-class mention (currency/location/person/...) never
+        matches even if another same-surface mention of an allowed class seeded
+        ``s2_lookup_key`` — the gate is re-checked per mention here so a "MA"
+        tagged ``location`` is not rescued by a "MA" tagged ``organization``.
+        The ISIN path is exempt (unambiguous 12-char identifier).
+        """
+        text_stripped = mention.mention_text.strip()
+        key = s2_lookup_key.get(text_stripped)
+        if key is None:
+            return None
+        # Re-apply the class gate for the ticker path; ISIN keys (12-char) are
+        # always allowed regardless of class.
+        is_isin_key = len(text_stripped) == 12 and text_stripped == key
+        if not is_isin_key and not _ticker_stage_allowed(mention.mention_class):
+            return None
+        return ticker_isin_matches.get(key)
 
     # ── Stage 2.5 batch: class-aware canonical_name match (PLAN-0087 F-LLM-001) ─
     # GLiNER tags Apple/Microsoft/Intel as ``mention_class='organization'`` but
@@ -571,7 +656,7 @@ async def run_entity_resolution_block(
     for m in mentions:
         if m.mention_text.lower().strip() in exact_matches:
             continue
-        if _matched_in_stage2(m.mention_text) is not None:
+        if _matched_in_stage2(m) is not None:
             continue
         mclass_val = m.mention_class.value if hasattr(m.mention_class, "value") else str(m.mention_class)
         stage25_pairs.append((m.mention_text, mclass_val))
@@ -591,7 +676,7 @@ async def run_entity_resolution_block(
         m
         for m in mentions
         if m.mention_text.lower().strip() not in exact_matches
-        and _matched_in_stage2(m.mention_text) is None
+        and _matched_in_stage2(m) is None
         and not _matched_in_stage25(m)
     ]
     fuzzy_matches: dict[str, list[tuple[UUID, float]]] = {}
@@ -630,7 +715,7 @@ async def run_entity_resolution_block(
 
         # Stage 2 result — always emit audit entry (hit or miss) for full trail
         if resolved_id is None:
-            s2_entity = _matched_in_stage2(mention.mention_text)
+            s2_entity = _matched_in_stage2(mention)
             if s2_entity is not None:
                 resolved_id = s2_entity
                 confidence = CONFIDENCE_TICKER_ISIN

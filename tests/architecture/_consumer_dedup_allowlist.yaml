@@ -68,6 +68,56 @@ allowlist:
       Migration to ValkeyDedupMixin is outside PLAN-0084 B-2/B-3 scope.
     granted_at: "2026-05-07"
 
+  # ── PLAN-0056 Wave A3: prediction deeper-stream consumers ────────────────
+  # All four extend BaseKafkaConsumer and rely on natural-key idempotency:
+  # ingestion_events.create_if_not_exists (INSERT … ON CONFLICT DO NOTHING …
+  # RETURNING) inside process_message, within the same DB transaction as the
+  # write. is_duplicate() returns False unconditionally; the atomic insert is
+  # the gate. Same exemption category as PredictionMarketConsumer above.
+  - class_name: PredictionHistoryConsumer
+    module_path: services.market-data.src.market_data.infrastructure.messaging.consumers.prediction_history_consumer
+    justification: >
+      BP-035 pattern: event_id / natural-key dedup is handled atomically inside
+      process_message via ingestion_events.create_if_not_exists (INSERT … ON
+      CONFLICT DO NOTHING … RETURNING) in the same DB transaction as the price
+      history write. is_duplicate() returns False unconditionally; the atomic
+      insert is the idempotency gate. Migration to ValkeyDedupMixin is outside
+      PLAN-0056 scope. Mirrors PredictionMarketConsumer.
+    granted_at: "2026-07-10"
+
+  - class_name: PredictionEventConsumer
+    module_path: services.market-data.src.market_data.infrastructure.messaging.consumers.prediction_event_consumer
+    justification: >
+      BP-035 pattern: natural-key dedup is handled atomically inside
+      process_message via ingestion_events.create_if_not_exists (INSERT … ON
+      CONFLICT DO NOTHING … RETURNING) in the same DB transaction as the
+      prediction-event write. is_duplicate() returns False unconditionally; the
+      atomic insert is the idempotency gate. Migration to ValkeyDedupMixin is
+      outside PLAN-0056 scope. Mirrors PredictionMarketConsumer.
+    granted_at: "2026-07-10"
+
+  - class_name: PredictionTradeConsumer
+    module_path: services.market-data.src.market_data.infrastructure.messaging.consumers.prediction_trade_consumer
+    justification: >
+      BP-035 pattern: natural-key dedup is handled atomically inside
+      process_message via ingestion_events.create_if_not_exists (INSERT … ON
+      CONFLICT DO NOTHING … RETURNING) in the same DB transaction as the trade
+      write. is_duplicate() returns False unconditionally; the atomic insert is
+      the idempotency gate. Migration to ValkeyDedupMixin is outside PLAN-0056
+      scope. Mirrors PredictionMarketConsumer.
+    granted_at: "2026-07-10"
+
+  - class_name: PredictionOIConsumer
+    module_path: services.market-data.src.market_data.infrastructure.messaging.consumers.prediction_oi_consumer
+    justification: >
+      BP-035 pattern: natural-key dedup is handled atomically inside
+      process_message via ingestion_events.create_if_not_exists (INSERT … ON
+      CONFLICT DO NOTHING … RETURNING) in the same DB transaction as the
+      open-interest write. is_duplicate() returns False unconditionally; the
+      atomic insert is the idempotency gate. Migration to ValkeyDedupMixin is
+      outside PLAN-0056 scope. Mirrors PredictionMarketConsumer.
+    granted_at: "2026-07-10"
+
   # ── knowledge-graph ───────────────────────────────────────────────────────
   - class_name: InstrumentDiscoveredConsumer
     module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.instrument_discovered_consumer

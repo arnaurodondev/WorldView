@@ -65,6 +65,43 @@ SYNTHETIC_QUOTE_INSTRUMENT_ID = os.environ.get(
 )
 SYNTHETIC_PORTFOLIO_ID = os.environ.get("SYNTHETIC_PORTFOLIO_ID", "")
 
+# ── DeepInfra key freshness ───────────────────────────────────────────────────
+# The whole ML pipeline (chat, embedding, extraction, relevance, resolution, KG,
+# NL screener) runs on ONE DeepInfra account key duplicated across ~8 env vars.
+# History: when that key was silently revoked/rotated the pipeline died with 401s
+# and NO alert fired (MEMORY: "no freshness alert"). This probe hits DeepInfra's
+# cheapest authenticated endpoint (GET /models) and reports success=0 on 401 so
+# the existing SyntheticProbeDown critical alert fires within 5 minutes.
+# The key is injected via DEEPINFRA_API_KEY (single-source var — see the
+# de-fragilization note in infra/gitops/docs/deepinfra-key-rotation.md). Empty =
+# probe skips (treated as success) so non-ML environments don't false-alarm.
+DEEPINFRA_API_KEY = os.environ.get("DEEPINFRA_API_KEY", "")
+DEEPINFRA_MODELS_URL = os.environ.get("DEEPINFRA_MODELS_URL", "https://api.deepinfra.com/v1/openai/models")
+
+
+async def probe_deepinfra_key() -> None:
+    """Fail loudly when the shared DeepInfra API key is dead (401/403).
+
+    A 401/403 means the account key has been revoked or rotated out from under the
+    running containers — the exact silent-death that halted the ML pipeline before.
+    2xx = healthy; 5xx / network blips raise and are reported as a transient probe
+    failure (self-heals on the next tick). No key configured = skip (success).
+    """
+    if not DEEPINFRA_API_KEY:
+        return
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.get(
+            DEEPINFRA_MODELS_URL,
+            headers={"Authorization": f"Bearer {DEEPINFRA_API_KEY}"},
+        )
+        if resp.status_code in (401, 403):
+            # Explicit, unambiguous failure signal for the alert annotation/logs.
+            raise RuntimeError(
+                f"DeepInfra rejected the shared API key (HTTP {resp.status_code}) — "
+                "the key is dead/rotated; update it in worldview-gitops and redeploy."
+            )
+        resp.raise_for_status()
+
 
 async def probe_market_data_quote() -> None:
     """Check that market data quote endpoint returns a response."""
@@ -90,6 +127,7 @@ PROBES = [
     probe_api_gateway_health,
     probe_market_data_quote,
     probe_portfolio_holdings,
+    probe_deepinfra_key,
 ]
 
 

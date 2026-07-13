@@ -7,12 +7,15 @@ adaptive-boost contract via a spy on `reciprocal_rank_fuse`.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import (
     EnhancedChunkSearchUseCase,
+    _embed_cache_key,
 )
 
 pytestmark = pytest.mark.unit
@@ -244,3 +247,187 @@ async def test_unknown_search_type_raises_value_error() -> None:
             query_embedding=None,
             search_type="bogus",
         )
+
+
+# ── R1 latency fix: parallel-leg hybrid path ─────────────────────────────────
+#
+# These cover the concurrent execution introduced by the R1 SEC-filings re-QA
+# (2026-07-06): the ANN and lexical legs run under asyncio on separate leased
+# sessions, the fused result is IDENTICAL to the sequential path, and result
+# enrichment runs exactly ONCE over the fused top_k (not once per leg).
+
+
+def _make_parallel_use_case(
+    *,
+    ann_results: list[dict] | None = None,
+    lex_rows: list[dict] | None = None,
+    lex_total: int = 7,
+    lexical_boost: float = 1.5,
+    leg_repo: AsyncMock | None = None,
+) -> tuple[EnhancedChunkSearchUseCase, AsyncMock, AsyncMock]:
+    """Build a use case wired for the PARALLEL hybrid path.
+
+    Returns ``(use_case, leg_repo, enrich_repo)``:
+      * ``leg_repo`` backs the per-leg scope (ann_search / lexical_search) — the
+        two concurrent legs each lease it via the injected scope factory.
+      * ``enrich_repo`` is the request-scoped repo used ONLY by
+        ``_enrich_raw_results`` (fetch_entity_mentions) — asserting its call
+        count proves enrichment runs once, over the fused union.
+    """
+    leg = leg_repo or AsyncMock()
+    if leg_repo is None:
+        leg.ann_search = AsyncMock(return_value=(ann_results or [], 11))
+        leg.lexical_search = AsyncMock(return_value=(lex_rows or [], lex_total))
+
+    enrich_repo = AsyncMock()
+    enrich_repo.fetch_entity_mentions = AsyncMock(return_value=[])
+
+    source_meta_repo = AsyncMock()
+    source_meta_repo.batch_get = AsyncMock(return_value={})
+    canon_repo = AsyncMock()
+    canon_repo.batch_get = AsyncMock(return_value={})
+
+    valkey = AsyncMock()
+    valkey.get = AsyncMock(return_value=None)
+    valkey.set = AsyncMock()
+
+    @asynccontextmanager
+    async def _scope():  # type: ignore[no-untyped-def]
+        # A fresh "session" per leg in production; here the shared mock suffices
+        # because the assertions are on call counts / concurrency, not on SQL.
+        yield leg
+
+    uc = EnhancedChunkSearchUseCase(
+        chunk_ann_repo=enrich_repo,
+        source_metadata_repo=source_meta_repo,
+        canonical_entity_repo=canon_repo,
+        valkey=valkey,
+        embedding_client=MagicMock(),
+        chunk_text_store=None,
+        lexical_boost=lexical_boost,
+        chunk_search_scope=_scope,
+        parallel_hybrid=True,
+    )
+    return uc, leg, enrich_repo
+
+
+@pytest.mark.asyncio
+async def test_parallel_hybrid_runs_both_legs_via_scope() -> None:
+    """Parallel path drives ann_search AND lexical_search through the scope repo."""
+    uc, leg, _enrich = _make_parallel_use_case(
+        ann_results=[_raw(uuid.uuid4())],
+        lex_rows=[_raw(uuid.uuid4())],
+    )
+    await uc.execute(
+        query_text="apple revenue growth Q3",
+        query_embedding=_DUMMY_VEC,
+        search_type="hybrid",
+    )
+    leg.ann_search.assert_awaited_once()
+    leg.lexical_search.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_parallel_hybrid_enriches_exactly_once() -> None:
+    """Enrichment runs ONCE over the fused union — not once per leg.
+
+    The old enrich-then-fuse path called fetch_entity_mentions twice (once per
+    leg); the R1 raw-fuse-enrich-once path must call it exactly once.
+    """
+    uc, _leg, enrich = _make_parallel_use_case(
+        ann_results=[_raw(uuid.uuid4())],
+        lex_rows=[_raw(uuid.uuid4())],
+    )
+    await uc.execute(
+        query_text="apple revenue growth Q3",
+        query_embedding=_DUMMY_VEC,
+        search_type="hybrid",
+        include_entities=True,
+    )
+    enrich.fetch_entity_mentions.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_parallel_hybrid_actually_overlaps_legs() -> None:
+    """Prove true concurrency: the lexical leg is in-flight while ANN runs.
+
+    ``lexical_search`` blocks on an event that only ``ann_search`` sets. If the
+    two legs ran sequentially (lexical fully completing before ANN starts) this
+    would deadlock and the ``wait_for`` timeout would fire. Completing proves
+    the legs overlap.
+    """
+    ann_started = asyncio.Event()
+    leg = AsyncMock()
+
+    async def _ann(**_kw):  # type: ignore[no-untyped-def]
+        ann_started.set()
+        return ([_raw(uuid.uuid4())], 11)
+
+    async def _lex(*_a, **_kw):  # type: ignore[no-untyped-def]
+        # Only returns once ANN has begun — i.e. both legs are alive at once.
+        await asyncio.wait_for(ann_started.wait(), timeout=1.0)
+        return ([_raw(uuid.uuid4())], 7)
+
+    leg.ann_search = AsyncMock(side_effect=_ann)
+    leg.lexical_search = AsyncMock(side_effect=_lex)
+
+    uc, _leg, _enrich = _make_parallel_use_case(leg_repo=leg)
+    results, _total, _model = await asyncio.wait_for(
+        uc.execute(
+            query_text="apple revenue growth Q3",
+            query_embedding=_DUMMY_VEC,
+            search_type="hybrid",
+        ),
+        timeout=2.0,
+    )
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_parallel_and_sequential_produce_identical_fusion() -> None:
+    """Recall-equivalence: parallel and sequential paths fuse to the same order."""
+    shared = uuid.uuid4()
+    ann_rows = [_raw(shared, score=0.9), _raw(uuid.uuid4(), score=0.7)]
+    lex_rows = [_raw(shared, score=0.8), _raw(uuid.uuid4(), score=0.6)]
+
+    uc_par, _leg, _enrich = _make_parallel_use_case(ann_results=ann_rows, lex_rows=lex_rows)
+    par_results, par_total, _m = await uc_par.execute(
+        query_text="apple revenue growth Q3",
+        query_embedding=_DUMMY_VEC,
+        search_type="hybrid",
+    )
+
+    uc_seq, _repo = _make_use_case(ann_results=ann_rows, lex_rows=lex_rows)
+    seq_results, seq_total, _m2 = await uc_seq.execute(
+        query_text="apple revenue growth Q3",
+        query_embedding=_DUMMY_VEC,
+        search_type="hybrid",
+    )
+
+    assert [r.chunk_id for r in par_results] == [r.chunk_id for r in seq_results]
+    assert par_total == seq_total
+
+
+@pytest.mark.asyncio
+async def test_parallel_hybrid_propagates_lexical_exception() -> None:
+    """A failing lexical leg surfaces and does not leave the ANN task dangling."""
+    leg = AsyncMock()
+    leg.ann_search = AsyncMock(return_value=([_raw(uuid.uuid4())], 11))
+    leg.lexical_search = AsyncMock(side_effect=RuntimeError("FTS exploded"))
+    uc, _leg, _enrich = _make_parallel_use_case(leg_repo=leg)
+    with pytest.raises(RuntimeError):
+        await uc.execute(
+            query_text="apple revenue growth Q3",
+            query_embedding=_DUMMY_VEC,
+            search_type="hybrid",
+        )
+
+
+def test_embed_cache_key_normalizes_whitespace_and_case() -> None:
+    """Cache key is stable across casing/whitespace and namespaced by model."""
+    a = _embed_cache_key("  Apple   Revenue  ")
+    b = _embed_cache_key("apple revenue")
+    assert a == b
+    # Different model → different key (no cross-model vector reuse).
+    assert _embed_cache_key("apple revenue", model_id="other-model") != b
+    assert b.startswith("s6:v1:emb:")

@@ -41,9 +41,7 @@ if TYPE_CHECKING:
     from rag_chat.application.caching.rate_limiter import RateLimiter
     from rag_chat.application.pipeline.hyde_expander import HydeExpander
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
-    from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
     from rag_chat.application.ports.embedding import EmbeddingPort
-    from rag_chat.application.ports.intent_classifier import IntentClassifierPort
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
     from rag_chat.application.ports.upstream_clients import S6Port
     from rag_chat.application.security.input_validator import InputValidator
@@ -172,15 +170,14 @@ class ChatPipeline:
     llm_chain: LLMProviderChain
     persistence: ChatPersistenceUseCase
 
-    # ── Classical-path collaborators (optional after PLAN-0067 W11-3) ─────────
-    # IntentClassifier, RetrievalPlanBuilder, ParallelRetrievalOrchestrator are
-    # no longer used by ChatOrchestratorUseCase (tool-use path replaced them).
-    # They remain here for RetrieveOnlyUseCase compatibility and are None by
-    # default for the chat pipeline.  Dataclass field ordering: fields with
-    # defaults must come after fields without defaults.
-    # Both OllamaIntentClassifier and DeepInfraIntentClassifier satisfy IntentClassifierPort
-    classifier: IntentClassifierPort | None = None  # type: ignore[assignment]
-    plan_builder: RetrievalPlanBuilder | None = None  # type: ignore[assignment]
+    # ── Classical-path collaborator (optional after PLAN-0067 W11-3) ──────────
+    # ParallelRetrievalOrchestrator is no longer used by ChatOrchestratorUseCase
+    # (the tool-use path replaced it) and is None by default for the chat
+    # pipeline. The pre-agent intent classifier + RetrievalPlanBuilder that used
+    # to sit alongside it have been retired; the eval harness
+    # (RetrieveOnlyUseCase) now drives retrieval directly and intent-free.
+    # Dataclass field ordering: fields with defaults must come after fields
+    # without defaults.
     retrieval: ParallelRetrievalOrchestrator | None = None  # type: ignore[assignment]
 
     # ── E-8: Layer 2 LLM semantic injection classifier (optional) ─────────────
@@ -351,15 +348,38 @@ class ChatPipeline:
         # avoid importing prometheus_client at module-load when these
         # paths are unused (tests, eval harness).
         from rag_chat.application.metrics.prometheus import (
+            rag_entity_resolution_degraded_total,
             rag_entity_resolver_ambiguous_total,
         )
+        from rag_chat.application.pipeline.transport_error import UpstreamTransportError
         from rag_chat.application.services.resolver_gates import (
             GatedEntity,
             ResolverGateConfig,
             filter_resolver_candidates,
         )
 
-        raw_entities = await self.s6_client.resolve_entities(message)
+        # RC-1 (2026-07-05): graceful degradation. The pre-loop S6 resolve is
+        # the #1 chat reliability failure — a stale pooled keep-alive socket
+        # raises ``UpstreamTransportError`` (a BaseException, so a plain
+        # ``except Exception`` would NOT catch it). The S6Client already retried
+        # once on a fresh connection; if it STILL failed, resolution is
+        # genuinely unreachable. We must NOT let that kill the whole turn:
+        # degrade to an empty entity list so the agent loop + synthesis still
+        # run and the user gets an answer (less entity-grounded, but an answer).
+        # Behaviour when resolution SUCCEEDS is unchanged.
+        try:
+            raw_entities = await self.s6_client.resolve_entities(message)
+        except UpstreamTransportError as exc:
+            log.warning(
+                "entity_resolution_degraded",
+                reason=exc.reason,
+                path=exc.path,
+                elapsed_ms=exc.elapsed_ms,
+                detail="S6 /entities/resolve unreachable after retry; proceeding "
+                "with empty resolved entities (RC-1 graceful degradation)",
+            )
+            rag_entity_resolution_degraded_total.labels(reason=exc.reason).inc()
+            return []
         if not raw_entities:
             return raw_entities
 
@@ -437,37 +457,11 @@ class ChatPipeline:
         # round-trip through the constructor and lose ticker/entity_type.
         return [a.payload for a in accepted]
 
-    # ── Step 5: Intent classification + retrieval plan ───────────────────────
-
-    async def classify_and_plan(
-        self,
-        message: str,
-        history: list,
-        entities: list,
-        date_range: Any = None,
-    ) -> tuple:  # (QueryIntent, list[str] sub_questions, str|None rephrased, RetrievalPlan)
-        """Step 5: Intent classification + retrieval plan building.
-
-        Converts history messages to dicts (role/content) before passing to
-        the classifier. Returns (intent, sub_questions, rephrased, plan).
-        """
-        # PLAN-0067 W11-3: classifier and plan_builder are optional on ChatPipeline.
-        # classify_and_plan() is only called by RetrieveOnlyUseCase (eval harness);
-        # ChatOrchestratorUseCase uses the tool-use path and does not call this method.
-        if self.classifier is None or self.plan_builder is None:
-            raise RuntimeError("classify_and_plan() requires classifier and plan_builder (not set on this pipeline)")
-
-        # Convert Message domain objects → plain dicts for the classifier API.
-        # The classifier expects [{"role": "user"|"assistant", "content": "..."}].
-        history_dicts = [{"role": m.role.value, "content": m.content} for m in history]
-
-        intent, sub_questions, rephrased = await self.classifier.classify(message, history_dicts, entities)
-
-        # Build entity IDs tuple for the retrieval plan.
-        entity_ids = tuple(e.entity_id for e in entities)
-        plan = self.plan_builder.build(intent, entity_ids, date_range)
-
-        return intent, sub_questions, rephrased, plan
+    # ── Step 5: Intent classification — RETIRED ──────────────────────────────
+    # The pre-agent LLM intent classifier + RetrievalPlanBuilder that used to
+    # live here (``classify_and_plan``) have been retired. Production chat uses
+    # the agentic tool-use loop; the eval harness (RetrieveOnlyUseCase) drives
+    # retrieval directly and intent-free. See use_cases/retrieve_only.py.
 
     # ── Step 5bis-a: HyDE query expansion ────────────────────────────────────
 

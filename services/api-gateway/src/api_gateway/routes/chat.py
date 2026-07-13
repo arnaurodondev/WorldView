@@ -7,21 +7,27 @@ Split from proxy.py (PLAN-0089 B-3).
 from __future__ import annotations
 
 import uuid as _uuid
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
 
 from api_gateway.routes.chat_safety import (
     build_injection_block_body,
     is_injection_block_response,
     rewrite_sse_chunk_if_injection_block,
 )
-from api_gateway.routes.helpers import _auth_headers, _clients, proxy_json_response
+from api_gateway.routes.helpers import (
+    _auth_headers,
+    _clients,
+    proxy_json_response,
+    proxy_rag_chat_stream,
+    rag_chat_request,
+)
+from observability.logging import get_logger  # type: ignore[import-untyped]
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 router = APIRouter(prefix="/v1")
 
@@ -40,7 +46,12 @@ async def chat(request: Request) -> Any:
     body = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.post(
+    # rag_chat_request maps a transport failure (rag-chat unresolvable during a
+    # container recreate) to a graceful 503/504 instead of an unhandled 500
+    # with a leaked traceback (NEW-5). Genuine 4xx/5xx responses pass through.
+    resp = await rag_chat_request(
+        clients,
+        "post",
         "/api/v1/chat",
         content=body,
         headers={"Content-Type": "application/json", **headers},
@@ -75,36 +86,20 @@ async def chat_stream(request: Request) -> Any:
     headers = _auth_headers(request)
     clients = _clients(request)
 
-    async def _stream_body() -> AsyncIterator[bytes]:
-        async with clients.rag_chat.stream(
-            "POST",
-            "/api/v1/chat/stream",
-            content=body,
-            headers={"Content-Type": "application/json", **headers},
-        ) as resp:
-            async for chunk in resp.aiter_bytes():
-                # Input-safety block presentation (Theme E): if S8 emits an
-                # ``event: error`` for a prompt-injection / PII block, rewrite the
-                # frame so its ``message`` carries a worded explanation (the block
-                # is unchanged — code stays INPUT_REJECTED). Token / status frames
-                # pass through untouched, preserving streaming.
-                yield rewrite_sse_chunk_if_injection_block(chunk)
-
-    return StreamingResponse(
-        _stream_body(),
-        media_type="text/event-stream",
-        # Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat
-        # service so the gateway middleware stack (Prometheus, RequestId) does
-        # not buffer the upstream chunks. Without these, the frontend receives
-        # the entire answer in a single chunk instead of token-by-token.
-        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
-        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
-        # - Connection: keep-alive → multi-minute synthesis turns need this.
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
+    # proxy_rag_chat_stream pre-opens the upstream stream so a connect/resolve
+    # failure (rag-chat unresolvable during a recreate) surfaces as a graceful
+    # 503/504 BEFORE the 200 SSE response-start is committed — the NEW-5 fix for
+    # the unhandled ``httpx.ConnectError`` traceback that used to escape here.
+    # The rewrite callback preserves the Theme-E injection-block re-wording: if
+    # S8 emits an ``event: error`` for a prompt-injection / PII block, the frame's
+    # ``message`` is reworded (code stays INPUT_REJECTED); token/status frames
+    # pass through untouched, preserving streaming.
+    return await proxy_rag_chat_stream(
+        clients,
+        "/api/v1/chat/stream",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+        rewrite=rewrite_sse_chunk_if_injection_block,
     )
 
 
@@ -172,7 +167,9 @@ async def chat_entity_context(request: Request) -> Any:
     headers = _auth_headers(request)
     clients = _clients(request)
 
-    resp = await clients.rag_chat.post(
+    resp = await rag_chat_request(
+        clients,
+        "post",
         "/api/v1/chat/entity-context",
         content=body,
         headers={"Content-Type": "application/json", **headers},
@@ -221,31 +218,14 @@ async def chat_entity_context_stream(request: Request) -> Any:
     headers = _auth_headers(request)
     clients = _clients(request)
 
-    async def _stream_body() -> AsyncIterator[bytes]:
-        async with clients.rag_chat.stream(
-            "POST",
-            "/api/v1/chat/entity-context/stream",
-            content=body,
-            headers={"Content-Type": "application/json", **headers},
-        ) as resp:
-            async for chunk in resp.aiter_bytes():
-                yield chunk
-
-    return StreamingResponse(
-        _stream_body(),
-        media_type="text/event-stream",
-        # Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat
-        # service so the gateway middleware stack (Prometheus, RequestId) does
-        # not buffer the upstream chunks. Without these, the frontend receives
-        # the entire answer in a single chunk instead of token-by-token.
-        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
-        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
-        # - Connection: keep-alive → multi-minute synthesis turns need this.
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
+    # Pre-opened stream → graceful 503/504 on a transport failure instead of an
+    # unhandled 500 traceback (NEW-5). No rewrite: entity-context frames pass
+    # through verbatim.
+    return await proxy_rag_chat_stream(
+        clients,
+        "/api/v1/chat/entity-context/stream",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
     )
 
 
@@ -267,31 +247,14 @@ async def confirm_proposal(proposal_id: str, request: Request) -> Any:
     headers = _auth_headers(request)
     clients = _clients(request)
 
-    async def _stream_body() -> AsyncIterator[bytes]:
-        async with clients.rag_chat.stream(
-            "POST",
-            f"/api/v1/chat/proposals/{proposal_id}/confirm",
-            content=body,
-            headers={"Content-Type": "application/json", **headers},
-        ) as resp:
-            async for chunk in resp.aiter_bytes():
-                yield chunk
-
-    return StreamingResponse(
-        _stream_body(),
-        media_type="text/event-stream",
-        # Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat
-        # service so the gateway middleware stack (Prometheus, RequestId) does
-        # not buffer the upstream chunks. Without these, the frontend receives
-        # the entire answer in a single chunk instead of token-by-token.
-        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
-        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
-        # - Connection: keep-alive → multi-minute synthesis turns need this.
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
+    # Pre-opened stream → graceful 503/504 on a transport failure instead of an
+    # unhandled 500 traceback (NEW-5). No rewrite: action_executed / action_rejected
+    # frames pass through verbatim.
+    return await proxy_rag_chat_stream(
+        clients,
+        f"/api/v1/chat/proposals/{proposal_id}/confirm",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
     )
 
 
@@ -306,7 +269,9 @@ async def create_thread(request: Request) -> Any:
     body = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.post(
+    resp = await rag_chat_request(
+        clients,
+        "post",
         "/api/v1/threads",
         content=body,
         headers={"Content-Type": "application/json", **headers},
@@ -321,7 +286,9 @@ async def list_threads(request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.get(
+    resp = await rag_chat_request(
+        clients,
+        "get",
         "/api/v1/threads",
         params=dict(request.query_params),
         headers=headers,
@@ -336,7 +303,9 @@ async def get_thread(thread_id: str, request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.get(
+    resp = await rag_chat_request(
+        clients,
+        "get",
         f"/api/v1/threads/{thread_id}",
         headers=headers,
     )
@@ -350,7 +319,9 @@ async def delete_thread(thread_id: str, request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.delete(
+    resp = await rag_chat_request(
+        clients,
+        "delete",
         f"/api/v1/threads/{thread_id}",
         headers=headers,
     )
@@ -372,7 +343,9 @@ async def update_thread(thread_id: str, request: Request) -> Any:
     body = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.patch(
+    resp = await rag_chat_request(
+        clients,
+        "patch",
         f"/api/v1/threads/{thread_id}",
         content=body,
         headers={"Content-Type": "application/json", **headers},
@@ -383,6 +356,46 @@ async def update_thread(thread_id: str, request: Request) -> Any:
 # ── Briefings (PRD-0028 Wave S9-1) ───────────────────────────────────────────
 
 
+async def _safe_prediction_brief_leg(request: Request) -> Any | None:
+    """Best-effort prediction-signals leg for the morning brief (PLAN-0056 Wave E1).
+
+    Fetches the top open prediction markets from S3 so the brief can surface
+    portfolio-relevant prediction odds alongside the S8-composed narrative.
+
+    PARTIAL-FAILURE-SAFE: returns ``None`` on ANY error (transport failure,
+    non-200, malformed body) and logs a ``morning_brief_prediction_leg_failed``
+    warning. The caller attaches the result under ``prediction_signals`` — a
+    ``None`` leg never breaks the brief itself (mirrors the ``_safe_*`` pattern
+    in clients/dashboard.py).
+    """
+    try:
+        clients = _clients(request)
+        # Fresh JWT (unique JTI) for this leg — do NOT reuse the brief's headers,
+        # or InternalJWTMiddleware replay-detection could reject one of the calls.
+        #
+        # Short per-request timeout (overrides the client-wide 30s): this leg is
+        # decorative, but the market_data client shares a bounded connection pool
+        # whose pool_timeout is 30s. If that pool is momentarily saturated (a
+        # dashboard fan-out, or leaked connections on a long-lived gateway), a
+        # default-timeout call here would block the WHOLE brief for 30s — long
+        # enough for the frontend proxy to give up and surface a 500. Capping the
+        # leg at 4s means a busy pool degrades it to None almost immediately and
+        # the brief still returns fast.
+        resp = await clients.market_data.get(
+            "/api/v1/prediction-markets",
+            params={"limit": 5, "status": "open"},
+            headers=_auth_headers(request),
+            timeout=httpx.Timeout(4.0, connect=2.0),
+        )
+        if resp.status_code != 200:
+            logger.warning("morning_brief_prediction_leg_failed", status=resp.status_code)
+            return None
+        return resp.json()
+    except Exception:
+        logger.warning("morning_brief_prediction_leg_failed")
+        return None
+
+
 @router.get("/briefings/morning")
 async def get_morning_briefing(request: Request) -> Any:
     """Proxy GET /api/v1/briefings/morning → S8 RAG/Chat service.
@@ -390,6 +403,14 @@ async def get_morning_briefing(request: Request) -> Any:
     Requires authentication. Returns the AI-generated morning market briefing.
     The rag-chat client has a 120 s timeout (app.py lifespan). On timeout we
     return 503 (not 500) so the frontend can show a friendly retry message.
+
+    PLAN-0056 Wave E1: augments the S8 brief with a best-effort
+    ``prediction_signals`` leg (top open prediction markets from S3). The brief
+    is composed in S8 rag-chat, so the gateway plumbing is a thin, partial-
+    failure-safe composition: when the S8 brief returns 200 JSON we attach the
+    prediction leg; if the prediction leg fails it degrades to ``None`` and the
+    brief is returned untouched. Non-200 briefs pass through verbatim (no leg,
+    no re-serialisation) so the BUG-7 5xx sanitisation is preserved.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -402,7 +423,22 @@ async def get_morning_briefing(request: Request) -> Any:
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
-    return proxy_json_response(request, resp)
+
+    # Only augment a healthy JSON brief. Any non-200 (incl. 5xx) passes through
+    # proxy_json_response unchanged — the prediction leg must never turn an
+    # upstream error into a 200.
+    if resp.status_code != 200:
+        return proxy_json_response(request, resp)
+    try:
+        brief_body = resp.json()
+    except Exception:
+        # Unexpected non-JSON 200 — forward verbatim rather than risk mangling it.
+        return proxy_json_response(request, resp)
+
+    prediction_leg = await _safe_prediction_brief_leg(request)
+    if isinstance(brief_body, dict):
+        brief_body["prediction_signals"] = prediction_leg
+    return JSONResponse(content=brief_body, status_code=200)
 
 
 @router.get("/briefings/instrument/{entity_id}")
@@ -471,7 +507,9 @@ async def get_morning_brief_history(request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.get(
+    resp = await rag_chat_request(
+        clients,
+        "get",
         "/api/v1/briefings/morning/history",
         # WHY pass query params: page + page_size are forwarded unchanged so S8
         # applies its own Query constraints (page_size capped at 50).
@@ -491,14 +529,16 @@ async def get_morning_brief_diff(request: Request) -> Any:
     Requires authentication. Returns a text-normalised bullet diff between the
     two most-recent morning briefs for the authenticated user.
 
-    WHY no timeout guard: diff is a pure read (2-row DB fetch + in-memory compare).
-    Network errors still propagate as 5xx FastAPI defaults.
+    Transport failures (rag-chat unresolvable during a recreate) are mapped to a
+    graceful 503/504 by ``rag_chat_request`` (NEW-5), not an unhandled 500.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.get(
+    resp = await rag_chat_request(
+        clients,
+        "get",
         "/api/v1/briefings/morning/diff",
         headers=headers,
     )
@@ -521,7 +561,9 @@ async def submit_bullet_feedback(request: Request) -> Any:
     headers = _auth_headers(request)
     clients = _clients(request)
     body = await request.body()
-    resp = await clients.rag_chat.post(
+    resp = await rag_chat_request(
+        clients,
+        "post",
         "/api/v1/briefings/feedback/bullet",
         content=body,
         headers={**headers, "Content-Type": "application/json"},
@@ -541,7 +583,9 @@ async def submit_brief_feedback(request: Request) -> Any:
     headers = _auth_headers(request)
     clients = _clients(request)
     body = await request.body()
-    resp = await clients.rag_chat.post(
+    resp = await rag_chat_request(
+        clients,
+        "post",
         "/api/v1/briefings/feedback/brief",
         content=body,
         headers={**headers, "Content-Type": "application/json"},
@@ -563,17 +607,18 @@ async def discuss_brief(request: Request) -> Any:
     validates these via Pydantic; forwarding raw bytes avoids double-deserialisation
     and keeps S9 as a thin proxy.
 
-    WHY no timeout guard here: the chat route on S8 may stream; httpx will raise
-    TimeoutException if the first chunk does not arrive within the client timeout
-    configured in app.py lifespan (120 s).  FastAPI's default exception handling
-    converts that to a 5xx which is acceptable for a streaming endpoint.
+    WHY rag_chat_request: this endpoint buffers the S8 JSON response (it is not an
+    SSE proxy). A transport failure or slow-first-chunk is mapped to a graceful
+    504/503 (NEW-5) instead of an unhandled 500 with a leaked traceback.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
     body = await request.body()
-    resp = await clients.rag_chat.post(
+    resp = await rag_chat_request(
+        clients,
+        "post",
         "/api/v1/briefings/chat/discuss",
         content=body,
         headers={**headers, "Content-Type": "application/json"},
@@ -597,7 +642,9 @@ async def create_brief_alert(brief_id: str, request: Request) -> Any:
     headers = _auth_headers(request)
     clients = _clients(request)
     body = await request.body()
-    resp = await clients.rag_chat.post(
+    resp = await rag_chat_request(
+        clients,
+        "post",
         f"/api/v1/briefings/{brief_id}/create-alert",
         content=body,
         headers={**headers, "Content-Type": "application/json"},

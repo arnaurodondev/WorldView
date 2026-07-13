@@ -17,6 +17,7 @@ from knowledge_graph.application.ports.repositories import OutboxRepositoryPort
 from messaging.topics import (  # type: ignore[import-untyped]
     ENTITY_CANONICAL_CREATED,
     GRAPH_STATE_CHANGED,
+    MARKET_PREDICTION_SIGNAL,
 )
 
 if TYPE_CHECKING:
@@ -29,6 +30,8 @@ TOPIC_GRAPH_STATE_CHANGED = GRAPH_STATE_CHANGED
 TOPIC_CONTRADICTION = "intelligence.contradiction.v1"
 TOPIC_RELATION_PROPOSED = "relation.type.proposed.v1"
 TOPIC_ENTITY_CANONICAL_CREATED = ENTITY_CANONICAL_CREATED
+# PLAN-0056 Wave D2 — per-entity prediction signal emitted by PredictionSignalEmitter.
+TOPIC_MARKET_PREDICTION_SIGNAL = MARKET_PREDICTION_SIGNAL
 
 
 class OutboxRepository(OutboxRepositoryPort):

@@ -19,7 +19,11 @@ from typing import TYPE_CHECKING
 import structlog
 from sqlalchemy import text
 
+from observability.metrics import record_silent_zero_cost  # type: ignore[import-untyped]
+
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -51,12 +55,19 @@ class LlmUsageLogRepository:
         estimated_cost_usd: float = 0.0,
         success: bool = True,
         error_code: str | None = None,
+        cost_source: str | None = None,
+        user_id: UUID | None = None,
         **context: object,
     ) -> None:
         """Append a usage log row.
 
         All exceptions are swallowed — this method must never propagate
         an error to the caller (cost logging is a non-critical observer).
+
+        PLAN-0117 W3 (FR-2/FR-3): ``cost_source`` records HOW the cost was
+        derived ("provider" for DeepInfra's verbatim cost, "pricematrix" for
+        Gemini, "local" for Ollama); ``user_id`` is NULL for the system/background
+        KG pipelines (OQ-4).
 
         Args:
         ----
@@ -84,13 +95,15 @@ INSERT INTO llm_usage_log (
     entity_id, relation_id,
     tokens_in, tokens_out, estimated_cost_usd,
     latency_ms, success,
-    service_name, tenant_id, error_code
+    service_name, tenant_id, error_code,
+    cost_source, user_id
 ) VALUES (
     :model_id, :provider, :capability,
     :entity_id, :relation_id,
     :tokens_in, :tokens_out, :estimated_cost_usd,
     :latency_ms, :success,
-    'knowledge-graph', :tenant_id, :error_code
+    'knowledge-graph', :tenant_id, :error_code,
+    :cost_source, :user_id
 )
 """),
                 {
@@ -106,7 +119,20 @@ INSERT INTO llm_usage_log (
                     "success": success,
                     "tenant_id": str(tenant_id) if tenant_id else None,
                     "error_code": error_code,
+                    "cost_source": cost_source,
+                    "user_id": str(user_id) if user_id else None,
                 },
+            )
+            # PLAN-0117 W5 (FR-7b): trip the cross-service silent-zero guard when
+            # this row burned tokens yet persisted $0 on a PAID source (cost_source
+            # NOT IN local|aggregate). Best-effort — never raises.
+            record_silent_zero_cost(
+                "knowledge-graph",
+                model_id=model_id,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                estimated_cost_usd=estimated_cost_usd,
+                cost_source=cost_source,
             )
         except Exception as exc:
             logger.warning("kg_usage_log_failed", error=str(exc))

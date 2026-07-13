@@ -212,7 +212,9 @@ class AlertRuleModel(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "rule_type IN ('PRICE_CROSS','NEWS_COUNT','NEWS_MOMENTUM','KG_CONNECTION','FUNDAMENTAL_CROSS')",
+            # PLAN-0056 Wave D3 widened this to include 'PREDICTION' (migration 0011).
+            "rule_type IN ('PRICE_CROSS','NEWS_COUNT','NEWS_MOMENTUM','KG_CONNECTION',"
+            "'FUNDAMENTAL_CROSS','PREDICTION')",
             name="ck_alert_rules_rule_type",
         ),
         CheckConstraint(

@@ -31,7 +31,7 @@
 
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -42,6 +42,16 @@ import { EmptyState } from "@/components/primitives/EmptyState";
 import { Wallet } from "lucide-react";
 import { AgGridBase } from "@/components/ui/ag-grid/AgGridBase";
 import { holdingsAgColumns } from "./ag-holdings-columns";
+// PLAN-0122 W-E: the Core/Portfolio/Advanced column-group layer. WHY a shared
+// module (not the W-B inline constants): the ⚙ toggle, the table, and the tests
+// all read the SAME membership + persistence, and the visibility maths (which
+// colIds to show/hide for a group state) is centralised + unit-tested there.
+import {
+  type HoldingsColGroups,
+  LOCKED_COL_IDS,
+  computeGroupVisibility,
+  groupStateForMode,
+} from "@/lib/portfolio/holdings-column-groups";
 import { useContextMenuActions } from "@/hooks/useContextMenuActions";
 import type { HoldingRowContext, ActionContext } from "@/lib/command-actions";
 import type { EnrichedHoldingRow } from "./holdings-columns";
@@ -62,6 +72,13 @@ import type {
 // (typically <100ms on cached assets).
 const ClosePositionDialog = lazy(() =>
   import("./ClosePositionDialog").then((m) => ({ default: m.ClosePositionDialog }))
+);
+
+// PLAN-0122 W-D: the honest adjusting-trade Edit Position dialog. Lazy for the
+// same reason as ClosePositionDialog — it only mounts when the user picks
+// "Edit Position" from the row-kebab / right-click menu.
+const EditPositionDialog = lazy(() =>
+  import("./EditPositionDialog").then((m) => ({ default: m.EditPositionDialog }))
 );
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -147,6 +164,19 @@ export interface SemanticHoldingsTableProps {
   accessToken?: string | null;
   /** Called after a successful Close Position so the parent can refetch holdings. */
   onHoldingsRefetch?: () => void;
+  /**
+   * PLAN-0122 W-A/W-E: portfolio detail level. Optional, default "advanced".
+   * Simple forces the Core-only column group; Advanced honours `columnGroups`
+   * (the saved toggle state). See applyGroupColumnVisibility below.
+   */
+  mode?: "simple" | "advanced";
+  /**
+   * PLAN-0122 W-E: the Advanced-mode enabled-groups state from the ⚙
+   * HoldingsColumnGroupToggle (controlled by HoldingsTab). Optional — when
+   * omitted the table falls back to `loadGroupState()` (the persisted default).
+   * Ignored in Simple mode (Simple always forces Core-only).
+   */
+  columnGroups?: HoldingsColGroups;
 }
 
 // ── Context menu overlay ──────────────────────────────────────────────────────
@@ -171,6 +201,10 @@ export function SemanticHoldingsTable({
   portfolioKind,
   accessToken,
   onHoldingsRefetch,
+  // PLAN-0122 W-B/W-E: drives the Simple/Advanced column-group visibility (below).
+  mode = "advanced",
+  // PLAN-0122 W-E: Advanced-mode enabled groups (from the ⚙ toggle).
+  columnGroups,
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -179,13 +213,146 @@ export function SemanticHoldingsTable({
   // ── AG Grid API ref ───────────────────────────────────────────────────────
   const gridApiRef = useRef<GridApi<EnrichedHoldingRow> | null>(null);
 
+  // ── PLAN-0122 W-B/W-E: Simple/Advanced column-group visibility ──────────────
+  // modeRef mirrors the latest `mode` so the STABLE (empty-dep) persistence +
+  // grid-ready callbacks below can read it without being re-created. WHY not
+  // persist while the group layer is applying: the group toggle force-hides/shows
+  // columns; writing THAT to the shared `worldview-holdings-cols` key would leak
+  // group-visibility into the widths/order key (they must stay ORTHOGONAL, R-25).
+  // So group-driven visibility is view-only and never persisted (the group state
+  // has its own `worldview:holdingsColGroups:v1` key).
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
+  // columnGroupsRef mirrors the latest Advanced-mode enabled-groups prop so the
+  // stable callbacks read the current value without being re-created on each
+  // toggle (the effect below re-applies on a genuine change).
+  const columnGroupsRef = useRef(columnGroups);
+  columnGroupsRef.current = columnGroups;
+
+  // suppressPersistRef: set true WHILE we programmatically apply group visibility
+  // so the resulting onColumnStateChanged events do NOT persist to
+  // `worldview-holdings-cols`. AG-Grid fires those events synchronously inside
+  // setColumnsVisible, so wrapping the calls (below) reliably brackets them.
+  const suppressPersistRef = useRef(false);
+
+  // restoreSavedColumnState — re-apply the user's persisted Advanced layout, or,
+  // when nothing is saved, reset every column to its defined default (all visible
+  // except `divYld`). WHY the reset branch matters: after a Simple→Advanced toggle
+  // WITHOUT remount, the grid still holds Simple's force-hidden state; with no
+  // saved layout we must un-hide the non-Core columns so Advanced shows them all.
+  const restoreSavedColumnState = useCallback((api: GridApi<EnrichedHoldingRow>) => {
+    try {
+      const saved = localStorage.getItem(HOLDINGS_COLS_KEY);
+      if (saved) {
+        api.applyColumnState({
+          state: JSON.parse(saved) as Parameters<GridApi["applyColumnState"]>[0]["state"],
+          applyOrder: true,
+        });
+      } else {
+        // No saved layout: reset to defaults — everything visible except divYld
+        // (which keeps its column-def `hide:true`, PRD-0122 §6.7 / OQ-5).
+        api.applyColumnState({
+          defaultState: { hide: false },
+          state: [{ colId: "divYld", hide: true }],
+        });
+      }
+    } catch {
+      /* ignore corrupted state */
+    }
+  }, []);
+
+  // applyGroupColumnVisibility — the Core/Portfolio/Advanced visibility layer
+  // (PLAN-0122 W-E, PRD §6.7). This is applied AFTER `restoreSavedColumnState`
+  // (which restores widths/order from `worldview-holdings-cols`) so the GROUP
+  // layer is the higher-level control and always wins on visibility. The two
+  // localStorage keys are ORTHOGONAL: widths/order in `worldview-holdings-cols`,
+  // group visibility in `worldview:holdingsColGroups:v1`.
+  //   • Simple  → force the Core-only set regardless of the saved group state
+  //               (leaving Simple restores the user's Advanced choice — the saved
+  //               blob is never touched).
+  //   • Advanced→ honour `columnGroups` (or the persisted default via
+  //               groupStateForMode → loadGroupState).
+  // `divYld` is never force-shown here (see holdings-column-groups.ts) so it keeps
+  // its own hide:true and stays individually toggleable via AG-Grid's column menu.
+  const applyGroupColumnVisibility = useCallback(
+    (api: GridApi<EnrichedHoldingRow>, m: "simple" | "advanced") => {
+      // WHY the typeof guard: the jsdom AG Grid stub (vitest.setup.ts) provides a
+      // partial GridApi without setColumnsVisible; guarding keeps the render from
+      // crashing under test while the real GridApi (v31+) always has it.
+      if (typeof api.setColumnsVisible !== "function") return;
+      const groups = groupStateForMode(m, columnGroupsRef.current);
+      const { show, hide } = computeGroupVisibility(groups);
+      // Bracket the mutations so their onColumnStateChanged events don't persist
+      // into the widths/order key (R-25 orthogonality). AG-Grid dispatches these
+      // synchronously, so the flag is safely reset in the finally.
+      suppressPersistRef.current = true;
+      try {
+        api.setColumnsVisible(hide, false);
+        api.setColumnsVisible(show, true);
+        // Anchors are always visible, even if a corrupt state implied otherwise.
+        api.setColumnsVisible([...LOCKED_COL_IDS], true);
+      } finally {
+        suppressPersistRef.current = false;
+      }
+    },
+    [],
+  );
+
+  // React to a runtime mode toggle (Advanced↔Simple) OR a group-toggle change
+  // without a remount. WHY skip the FIRST run: handleGridReady owns the INITIAL
+  // apply. If this effect also ran on mount it would redundantly re-apply (and,
+  // via restore, could clobber the default sort handleGridReady just set). So we
+  // act only on a genuine change after mount.
+  const modeEffectFirstRun = useRef(true);
+  useEffect(() => {
+    if (modeEffectFirstRun.current) {
+      modeEffectFirstRun.current = false;
+      return;
+    }
+    const api = gridApiRef.current;
+    if (!api) return;
+    // On a Simple→Advanced switch the grid still holds Simple's forced state, so
+    // re-restore widths/order first, then re-apply the (Advanced) group layer.
+    if (mode === "advanced") restoreSavedColumnState(api);
+    applyGroupColumnVisibility(api, mode);
+  }, [mode, columnGroups, applyGroupColumnVisibility, restoreSavedColumnState]);
+
   // ── Context menu state ────────────────────────────────────────────────────
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+
+  // ── Floating-menu a11y refs (QA items 1 + 2) ───────────────────────────────
+  // menuRef: the floating menu container, measured for viewport clamping and
+  // queried for the first focusable item on open.
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  // menuTriggerRef: the kebab that opened the menu (null for the right-click
+  // path). Focus is restored here when the menu is dismissed via the keyboard so
+  // a keyboard user is never stranded (item 2). Cleared each open.
+  const menuTriggerRef = useRef<HTMLElement | null>(null);
+  // menuPos: the CLAMPED on-screen position. Computed in a layout effect from the
+  // raw anchor (ctxMenu.x/y) + the measured menu size so the menu can never open
+  // off-screen at the table's right/bottom edge (item 1). null until measured;
+  // the layout effect runs before paint so the unclamped anchor never shows.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  // closeMenu — single close path. `restoreFocus` returns focus to the kebab
+  // (item 2) ONLY for keyboard dismissal (Escape); pointer/outside-click and
+  // action selections pass false so focus follows the pointer / the dialog that
+  // opens next (Radix dialogs steal focus on mount anyway).
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setCtxMenu(null);
+    if (restoreFocus) menuTriggerRef.current?.focus();
+  }, []);
   // PRD-0114 W5-T06: Close Position dialog state.
   // WHY useState (not URL param): the dialog is transient — it should not persist
   // across page refreshes. Storing the target holding in state keeps the dialog
   // lifecycle tied to the current component mount.
   const [closePositionHolding, setClosePositionHolding] = useState<Holding | null>(null);
+
+  // PLAN-0122 W-D: Edit Position dialog state. We store the target holding plus
+  // the live price captured at open time (so EditPositionDialog can default its
+  // adjustment price to the live quote, PRD §6.4). null = dialog closed.
+  const [editPosition, setEditPosition] = useState<{ holding: Holding; livePrice: number } | null>(null);
 
   // useContextMenuActions must be called unconditionally at the top.
   // When ctxMenu is null, row is undefined → groups will be empty.
@@ -206,9 +373,50 @@ export function SemanticHoldingsTable({
   // Close context menu on click outside.
   useEffect(() => {
     if (!ctxMenu) return;
-    const close = () => setCtxMenu(null);
+    const close = () => closeMenu(false);
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
+  }, [ctxMenu, closeMenu]);
+
+  // ── Clamp the floating menu to the viewport (QA item 1) ─────────────────────
+  // The menu is positioned at the raw anchor (mouse coords for right-click, the
+  // kebab's bottom-right for the button). At the table's right/bottom edge that
+  // would push it off-screen — unreachable. useLayoutEffect measures the rendered
+  // menu and shifts it back inside the viewport BEFORE paint (no visible jump):
+  //   • right edge  → shift left so its right side sits `margin` inside innerWidth
+  //   • bottom edge → flip so it opens ABOVE the anchor (kebab drop-ups)
+  // Depends only on `ctxMenu` (the anchor): while the menu is open its size is
+  // stable, so this runs once per open and setMenuPos cannot loop.
+  useLayoutEffect(() => {
+    if (!ctxMenu) {
+      setMenuPos(null);
+      return;
+    }
+    const el = menuRef.current;
+    const margin = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // Fallbacks keep the clamp sane if measurement is unavailable (jsdom): the
+    // min-w-[160px] menu width, and 0 height (no vertical flip until measured).
+    const w = el?.offsetWidth || 160;
+    const h = el?.offsetHeight || 0;
+    let left = ctxMenu.x;
+    let top = ctxMenu.y;
+    if (left + w + margin > vw) left = Math.max(margin, vw - w - margin);
+    if (top + h + margin > vh) top = Math.max(margin, vh - h - margin);
+    setMenuPos({ top, left });
+  }, [ctxMenu]);
+
+  // ── Move focus into the menu on open (QA item 2) ────────────────────────────
+  // A keyboard/AT user who opens the menu should land ON its first actionable
+  // item, not be left at the trigger while an unlabelled overlay appears. We
+  // focus the first enabled menuitem after the menu commits to the DOM.
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const first = menuRef.current?.querySelector<HTMLElement>(
+      '[role="menuitem"]:not([disabled])',
+    );
+    first?.focus();
   }, [ctxMenu]);
 
   // ── Cell flash on live price updates ─────────────────────────────────────
@@ -245,15 +453,7 @@ export function SemanticHoldingsTable({
       gridApiRef.current = params.api;
 
       // P6-2: Restore saved column state (width, order, visibility) from localStorage.
-      try {
-        const saved = localStorage.getItem(HOLDINGS_COLS_KEY);
-        if (saved) {
-          params.api.applyColumnState({
-            state: JSON.parse(saved) as Parameters<GridApi["applyColumnState"]>[0]["state"],
-            applyOrder: true,
-          });
-        }
-      } catch { /* ignore corrupted state */ }
+      restoreSavedColumnState(params.api);
 
       // F-P-025: restore URL-backed sort on mount.
       const col = searchParams?.get("sort");
@@ -270,6 +470,13 @@ export function SemanticHoldingsTable({
           defaultState: { sort: null },
         });
       }
+
+      // PLAN-0122 W-E: apply the Core/Portfolio/Advanced group-visibility layer
+      // LAST — AFTER the per-column state restore + sort — so it is the higher-
+      // level control and wins on visibility (widths/order still came from the
+      // restore above). Runs in BOTH modes: Simple forces Core-only; Advanced
+      // honours the saved/passed group state. `divYld` keeps its own hide.
+      applyGroupColumnVisibility(params.api, modeRef.current);
     },
     // searchParams is stable on mount; this should not re-run on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -303,6 +510,13 @@ export function SemanticHoldingsTable({
   const handleColumnStateChanged = useCallback(() => {
     const api = gridApiRef.current;
     if (!api) return;
+    // PLAN-0122 W-B/W-E: never persist while the group layer is applying (or in
+    // Simple mode, which force-hides the non-Core columns). Persisting either
+    // would leak group-visibility into the widths/order key and, in Simple,
+    // overwrite the user's saved Advanced layout with a Core-only state. The
+    // `setColumnsVisible` calls in applyGroupColumnVisibility fire this handler;
+    // the guard makes group-driven visibility view-only (R-25 orthogonality).
+    if (modeRef.current === "simple" || suppressPersistRef.current) return;
     try {
       localStorage.setItem(HOLDINGS_COLS_KEY, JSON.stringify(api.getColumnState()));
     } catch (e) {
@@ -335,7 +549,34 @@ export function SemanticHoldingsTable({
         name: h.name,
       };
       const mouseEvent = event.event as MouseEvent | undefined;
+      // Right-click has no kebab trigger — clear it so Escape restores focus to
+      // wherever it already was (the row), not a stale prior kebab.
+      menuTriggerRef.current = null;
       setCtxMenu({ row: ctx, x: mouseEvent?.clientX ?? 0, y: mouseEvent?.clientY ?? 0 });
+    },
+    [],
+  );
+
+  // PLAN-0122 W-D: open the SAME floating menu from the pinned-right ACTIONS
+  // kebab. The ACTIONS cell renderer (ag-holdings-columns.tsx) calls this via AG
+  // Grid `context.onOpenRowMenu` with the enriched row + the kebab's screen
+  // position; we build the identical HoldingRowContext the right-click path uses
+  // and open the menu there. This is purely additive — right-click is unchanged.
+  const handleOpenRowMenu = useCallback(
+    (row: EnrichedHoldingRow, x: number, y: number, trigger?: HTMLElement | null) => {
+      const { h } = row;
+      const ctx: HoldingRowContext = {
+        kind: "holding",
+        holdingId: h.holding_id,
+        portfolioId: h.portfolio_id,
+        instrumentId: h.instrument_id,
+        entityId: h.entity_id,
+        ticker: h.ticker,
+        name: h.name,
+      };
+      // Remember the kebab so an Escape dismissal restores focus to it (item 2).
+      menuTriggerRef.current = trigger ?? null;
+      setCtxMenu({ row: ctx, x, y });
     },
     [],
   );
@@ -593,6 +834,10 @@ export function SemanticHoldingsTable({
           // Keyed by instrument_id — matches AssetTypeCellRenderer's lookup
           // key. Empty map (no transactions yet) → renderer shows "—".
           assetClasses: assetClasses ?? {},
+          // PLAN-0122 W-D: the ACTIONS kebab calls this to open the row menu at
+          // its bounding rect. Stable (useCallback) so AG Grid's cached context
+          // stays valid across renders.
+          onOpenRowMenu: handleOpenRowMenu,
         }}
       />
 
@@ -603,10 +848,45 @@ export function SemanticHoldingsTable({
           useContextMenuActions hook. Click-outside closes via document listener. */}
       {ctxMenu && ctxGroups.length > 0 && (
         <div
+          ref={menuRef}
+          // role="menu" + aria-label (QA item 2): the overlay is now an
+          // announced, named menu instead of an anonymous <div>; its children
+          // carry role="menuitem" below.
+          role="menu"
+          aria-label={`Actions for ${ctxMenu.row.ticker || ctxMenu.row.name || "position"}`}
+          // tabIndex so the container itself can hold focus if an item can't.
+          tabIndex={-1}
           className="fixed z-50 min-w-[160px] overflow-hidden rounded-[2px] border border-border bg-card py-1 shadow-md"
-          style={{ top: ctxMenu.y, left: ctxMenu.x }}
+          // Clamped position (item 1); falls back to the raw anchor until the
+          // layout effect measures the menu (never painted — effect runs pre-paint).
+          style={{ top: menuPos?.top ?? ctxMenu.y, left: menuPos?.left ?? ctxMenu.x }}
           // Stop propagation so the document click listener doesn't immediately close the menu.
           onClick={(e) => e.stopPropagation()}
+          // Keyboard support (item 2): Escape closes + restores focus to the
+          // kebab; Arrow Up/Down roves between enabled menuitems so the menu is
+          // fully operable without a pointer.
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              closeMenu(true);
+              return;
+            }
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const items = Array.from(
+                menuRef.current?.querySelectorAll<HTMLElement>(
+                  '[role="menuitem"]:not([disabled])',
+                ) ?? [],
+              );
+              if (items.length === 0) return;
+              const idx = items.indexOf(document.activeElement as HTMLElement);
+              const delta = e.key === "ArrowDown" ? 1 : -1;
+              // Wrap around so Down at the end returns to the top (menu convention).
+              const next = (idx + delta + items.length) % items.length;
+              items[next]?.focus();
+            }
+          }}
         >
           {ctxGroups.map((group, i) => (
             <div key={group.category}>
@@ -619,16 +899,17 @@ export function SemanticHoldingsTable({
                 return (
                   <button
                     key={action.id}
+                    role="menuitem"
                     disabled={!enabled}
                     className={cn(
-                      "flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-foreground",
+                      "flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-foreground focus-visible:outline-none focus-visible:bg-muted/50",
                       enabled
                         ? "hover:bg-muted/50"
                         : "opacity-40 cursor-not-allowed",
                     )}
                     onClick={() => {
                       void action.run(actionCtx);
-                      setCtxMenu(null);
+                      closeMenu(false);
                     }}
                   >
                     <span className="flex-1 text-left">{action.label}</span>
@@ -659,17 +940,36 @@ export function SemanticHoldingsTable({
               (h) => h.holding_id === ctxMenu.row.holdingId
             );
             if (!holding || holding.quantity <= 0) return null;
+            // PLAN-0122 W-D: capture the live price now so EditPositionDialog can
+            // default the adjustment price to the current quote (else avg cost).
+            const livePrice =
+              quotes[holding.instrument_id]?.price ??
+              holding.current_price ??
+              holding.average_cost;
             return (
               <>
                 <div className="my-1 h-px bg-border" />
                 <div className="px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                   Position
                 </div>
+                {/* PLAN-0122 W-D: Edit Position → honest adjusting-trade dialog.
+                    Gated identically to Close (non-root + qty>0). */}
                 <button
-                  className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-negative hover:bg-negative/10"
+                  role="menuitem"
+                  className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-foreground hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
+                  onClick={() => {
+                    setEditPosition({ holding, livePrice });
+                    closeMenu(false);
+                  }}
+                >
+                  <span className="flex-1 text-left">Edit Position</span>
+                </button>
+                <button
+                  role="menuitem"
+                  className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-negative hover:bg-negative/10 focus-visible:outline-none focus-visible:bg-negative/10"
                   onClick={() => {
                     setClosePositionHolding(holding);
-                    setCtxMenu(null);
+                    closeMenu(false);
                   }}
                 >
                   <span className="flex-1 text-left">Close Position</span>
@@ -696,6 +996,25 @@ export function SemanticHoldingsTable({
               onHoldingsRefetch?.();
             }}
             onClose={() => setClosePositionHolding(null)}
+          />
+        </Suspense>
+      )}
+
+      {/* PLAN-0122 W-D: EditPositionDialog — lazy-loaded, only mounts when the
+          user picks "Edit Position". Records an honest adjusting BUY/SELL trade
+          (never mutates the derived holding). Gated on non-root + portfolioId
+          the same way the menu item is. */}
+      {editPosition && portfolioId && (
+        <Suspense fallback={null}>
+          <EditPositionDialog
+            holding={editPosition.holding}
+            portfolioId={portfolioId}
+            currentPrice={editPosition.livePrice}
+            accessToken={accessToken}
+            onSuccess={() => {
+              onHoldingsRefetch?.();
+            }}
+            onClose={() => setEditPosition(null)}
           />
         </Suspense>
       )}

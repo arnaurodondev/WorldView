@@ -237,11 +237,19 @@ class TestFallbackChainDeepInfraExtraction:
         gemini.extract.assert_awaited_once()
 
     def test_deepinfra_cost_logged(self) -> None:
-        """Successful DeepInfra call logs a non-zero estimated_cost_usd."""
+        """Successful DeepInfra call logs a non-zero estimated_cost_usd.
+
+        PLAN-0117 W3: cost now comes from the unified ``resolve_cost`` matrix
+        (R13 — no local char-count heuristic), so the model_id must be a priced
+        one for the matrix path to yield > 0. cost_source is 'pricematrix' when
+        the client does not surface a provider cost.
+        """
         from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
         from ml_clients.dataclasses import ExtractionInput
 
         deepinfra = _make_extraction_client()
+        # A priced DeepInfra model so the matrix fallback returns a non-zero cost.
+        deepinfra.model_id = "Qwen/Qwen3-235B-A22B-Instruct-2507"
         usage_logger = AsyncMock()
         usage_logger.log = AsyncMock(return_value=None)
         client = FallbackChainClient(
@@ -262,6 +270,56 @@ class TestFallbackChainDeepInfraExtraction:
         call_kwargs = usage_logger.log.call_args.kwargs
         assert call_kwargs["estimated_cost_usd"] > 0.0
         assert call_kwargs["provider"] == "deepinfra"
+        assert call_kwargs["cost_source"] == "pricematrix"
+
+    def test_deepinfra_provider_cost_preferred(self) -> None:
+        """PLAN-0117 W3/FR-1: ExtractionOutput.provider_cost_usd → cost_source='provider'."""
+        from decimal import Decimal
+
+        from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
+        from ml_clients.dataclasses import ExtractionInput, ExtractionOutput
+
+        deepinfra = AsyncMock()
+        deepinfra.model_id = "openai/gpt-oss-120b"
+        deepinfra.extract = AsyncMock(
+            return_value=ExtractionOutput(
+                result={"summary": "ok"},
+                raw_response="ok",
+                model_id="openai/gpt-oss-120b",
+                provider_cost_usd=Decimal("0.00000041"),
+            ),
+        )
+        usage_logger = AsyncMock()
+        usage_logger.log = AsyncMock(return_value=None)
+        client = FallbackChainClient(
+            deepinfra_extraction=deepinfra,
+            usage_logger=usage_logger,
+            retry_delays_deepinfra=(),
+        )
+        inp = ExtractionInput(prompt="p", context="c", output_schema={}, model_id="m")
+        asyncio.run(client.extract(inp))
+        call_kwargs = usage_logger.log.call_args.kwargs
+        assert call_kwargs["cost_source"] == "provider"
+        assert call_kwargs["estimated_cost_usd"] == pytest.approx(4.1e-07)
+
+    def test_ollama_extraction_is_local(self) -> None:
+        """PLAN-0117 W3: Ollama-served extraction → cost_source='local', $0."""
+        from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
+        from ml_clients.dataclasses import ExtractionInput
+
+        ollama = _make_extraction_client()  # model_id="test-model", provider ollama
+        usage_logger = AsyncMock()
+        usage_logger.log = AsyncMock(return_value=None)
+        client = FallbackChainClient(
+            ollama_extraction=ollama,
+            usage_logger=usage_logger,
+            retry_delays_ollama=(),
+        )
+        inp = ExtractionInput(prompt="p " * 50, context="c", output_schema={}, model_id="m")
+        asyncio.run(client.extract(inp))
+        call_kwargs = usage_logger.log.call_args.kwargs
+        assert call_kwargs["cost_source"] == "local"
+        assert call_kwargs["estimated_cost_usd"] == 0.0
 
     def test_no_deepinfra_falls_through_to_ollama(self) -> None:
         """When deepinfra_extraction=None, Ollama is called directly (backward-compat)."""

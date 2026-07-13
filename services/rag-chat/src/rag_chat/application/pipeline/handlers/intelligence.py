@@ -23,6 +23,7 @@ from uuid import UUID
 import structlog
 
 from rag_chat.application.services.resolver_gates import TICKER_SHAPE_RE as _TICKER_SHAPE_RE
+from rag_chat.application.services.resolver_gates import is_sec_form_designator
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
@@ -30,7 +31,12 @@ from .base import ToolHandler
 
 if TYPE_CHECKING:
     from rag_chat.application.pipeline.tool_executor import EntityContext, ToolUseBlock
-    from rag_chat.application.ports.upstream_clients import S6Port, S7Port
+    from rag_chat.application.ports.upstream_clients import (
+        ContentStorePort,
+        DocumentMetadata,
+        S6Port,
+        S7Port,
+    )
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -168,6 +174,11 @@ class IntelligenceHandler(ToolHandler):
         # (TypeError: unexpected keyword argument 's6') AND silently
         # regressed search_entity_relations ranking back to zero-vector ANN.
         s6: S6Port | None = None,
+        # feat/chat-kg-source-links: optional content-store client used to
+        # backfill claim/event citations with the source-article URL so a
+        # KG-derived statement links to the news that produced it. None falls
+        # back to the legacy behaviour (url=None, non-clickable citation).
+        content_store: ContentStorePort | None = None,
         # F-LIVE-NEW-001: configurable resolver tuning. Tests inject custom
         # values; production reads from settings via the module-level cache.
         stop_words: frozenset[str] | None = None,
@@ -178,6 +189,7 @@ class IntelligenceHandler(ToolHandler):
         self._entity_context = entity_context
         self._timeout = timeout
         self._s6 = s6
+        self._content_store = content_store
         # s7_intel intentionally unused; accepted to keep factory call uniform.
         self._stop_words: frozenset[str] = stop_words if stop_words is not None else _RESOLVER_STOP_WORDS
         self._similarity_delta_min: float = (
@@ -274,6 +286,15 @@ class IntelligenceHandler(ToolHandler):
         Returns None and logs a warning when resolution fails.
         """
         assert self._s7 is not None  # callers must check self._s7 is not None first
+        # ── SEC-FORM-001: refuse literal SEC-form designators ─────────────────
+        # The LLM sometimes echoes a filing form name ("10-K", "8-K", "S-1")
+        # into a tool ``entity_name``/``entity_id`` argument. A form is not an
+        # entity; without this guard "S-1"/"10-K" would fall through to the
+        # S6 ticker path (the "K" fragment → Kellanova class) or a noisy alias
+        # hit. Refuse outright so the caller degrades gracefully.
+        if is_sec_form_designator(entity_name):
+            log.info("tool_entity_sec_form_skipped", tool=tool_name, entity_name=entity_name)
+            return None
         ctx_name_lower = self._entity_context.name.lower() if self._entity_context else ""
         name_lower = entity_name.lower()
         use_context = self._entity_context is not None and (
@@ -604,6 +625,138 @@ class IntelligenceHandler(ToolHandler):
 
         return None
 
+    async def _resolve_source_docs(
+        self,
+        doc_ids: list[str | None],
+    ) -> dict[UUID, DocumentMetadata]:
+        """Resolve a set of claim/event ``doc_id`` strings → source-article metadata.
+
+        Best-effort enrichment: returns ``{}`` when the content-store client is
+        not wired, no usable doc_ids are present, or the lookup fails for ANY
+        reason (including transport failure). This is intentionally broader than
+        the usual ``except Exception`` R9 guard — the source-link backfill is
+        secondary to the claim/event data itself, so a content-store outage must
+        NOT propagate a ``UpstreamTransportError`` (BaseException) and fail the
+        whole tool result. The citations simply stay non-clickable.
+        """
+        if self._content_store is None:
+            return {}
+        parsed: list[UUID] = []
+        for raw in doc_ids:
+            if not raw:
+                continue
+            try:
+                parsed.append(UUID(str(raw)))
+            except (ValueError, TypeError):
+                continue
+        if not parsed:
+            return {}
+        try:
+            return await asyncio.wait_for(
+                self._content_store.get_documents_metadata(parsed),
+                timeout=self._timeout,
+            )
+        except BaseException as e:
+            log.warning("source_doc_resolution_failed", num_doc_ids=len(parsed), error=str(e))
+            return {}
+
+    @staticmethod
+    def _safe_uuid(value: str | None) -> UUID | None:
+        """Parse a doc_id string to UUID, returning None on any failure."""
+        if not value:
+            return None
+        try:
+            return UUID(str(value))
+        except (ValueError, TypeError):
+            return None
+
+    @classmethod
+    def _lookup_doc(
+        cls,
+        source_docs: dict[UUID, DocumentMetadata],
+        doc_id: str | None,
+    ) -> DocumentMetadata | None:
+        """Return the resolved DocumentMetadata for ``doc_id`` (or None)."""
+        key = cls._safe_uuid(doc_id)
+        if key is None:
+            return None
+        return source_docs.get(key)
+
+    @staticmethod
+    def _citation_from_doc(
+        *,
+        title: str,
+        entity_name: str,
+        doc: DocumentMetadata | None,
+    ) -> CitationMeta:
+        """Build a CitationMeta, backfilling url/source/published_at from ``doc``.
+
+        When ``doc`` is None (no source article resolved) the citation keeps the
+        legacy shape: url=None, source_name="knowledge_graph". When a source
+        article IS resolved, the url + source_name + published_at point at the
+        news article so the chat UI can render a clickable "Read ↗" link.
+        """
+        if doc is None:
+            return CitationMeta(
+                title=title,
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=entity_name,
+            )
+        return CitationMeta(
+            title=title,
+            url=doc.url,
+            # Prefer the article's real source (e.g. "Reuters"); fall back to the
+            # KG marker when content-store had no source_name for the document.
+            source_name=doc.source_name or "knowledge_graph",
+            published_at=doc.published_at,
+            entity_name=entity_name,
+        )
+
+    def _listing_status_item(self, entity_name: str) -> RetrievedItem | None:
+        """Return a listing-status RetrievedItem for a known non-US/private company.
+
+        Area-3 Phase 0+2 (roadmap 2026-07-09): Samsung/Xiaomi/Tencent (non-US
+        listings) and Huawei/ByteDance (private) are not priceable like US stocks.
+        When the LLM asks a KG intelligence tool about one of these, we ALWAYS
+        surface an explicit listing-status statement so the model discusses the
+        company from KG intelligence + news and NEVER fabricates a US ticker or a
+        wrong entity (the ``iter3_apple_competitors_spanish`` failure mode).
+
+        Returns ``None`` for any entity not in the listing registry (the common
+        case) so the normal KG path is entirely unaffected.
+        """
+        from rag_chat.application.services.listing_status import lookup_listing_status
+
+        status = lookup_listing_status(entity_name)
+        if status is None:
+            return None
+        log.info(
+            "tool_listing_status_annotated",
+            entity_name=entity_name,
+            canonical_name=status.canonical_name,
+            is_public=status.is_public,
+            exchange=status.exchange,
+            us_adr_ticker=status.us_adr_ticker,
+        )
+        return RetrievedItem.create(
+            item_id=f"tool:listing_status:{status.canonical_name}",
+            item_type=ItemType.relation,
+            text=status.describe()[:_TOOL_RESULT_MAX_CHARS],
+            # High score/trust: this is an authoritative, deterministic fact that
+            # must reach the synthesis prompt to suppress ticker fabrication.
+            score=0.90,
+            trust_weight=0.95,
+            citation_meta=CitationMeta(
+                title=f"Listing status: {status.canonical_name}",
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=entity_name,
+            ),
+        )
+
     async def _handle_get_entity_graph(
         self,
         tool_call: ToolUseBlock,
@@ -616,9 +769,17 @@ class IntelligenceHandler(ToolHandler):
             log.warning("tool_handler_missing_port", tool="get_entity_graph", port="s7")
             return []
 
+        # Area-3 Phase 0+2: compute the listing-status note (None for the common
+        # US-listed / unknown case) so it can be surfaced whether or not the KG
+        # has graph data for this entity.
+        listing_item = self._listing_status_item(entity_name)
+
         entity_id = await self._resolve_entity_by_name("get_entity_graph", entity_name)
         if entity_id is None:
-            return []
+            # A known non-US/private company may resolve to no entity_id (e.g. a
+            # private org with no aliases yet). Still answer gracefully with the
+            # listing status rather than [] (empty → the model fabricates).
+            return [listing_item] if listing_item is not None else []
 
         t0 = time.monotonic()
         try:
@@ -636,7 +797,10 @@ class IntelligenceHandler(ToolHandler):
 
         if not graph.nodes and not graph.edges:
             log.warning("tool_no_data", tool="get_entity_graph", entity_name=entity_name)
-            return []
+            # Graceful degradation for a known non-US/private company: surface the
+            # listing status instead of [] so the model states the facts and does
+            # not fabricate a ticker.
+            return [listing_item] if listing_item is not None else []
 
         text = self._format_graph(entity_name, graph)
 
@@ -654,10 +818,16 @@ class IntelligenceHandler(ToolHandler):
                 entity_name=entity_name,
             ),
         )
+        # Prepend the listing-status note (when applicable) so the model reads the
+        # "not US-listed / privately held" fact alongside the graph intelligence.
+        items = [listing_item, item] if listing_item is not None else [item]
         log.info(
-            "tool_executed", tool="get_entity_graph", latency_ms=round((time.monotonic() - t0) * 1000), items_returned=1
+            "tool_executed",
+            tool="get_entity_graph",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=len(items),
         )
-        return [item]
+        return items
 
     async def _handle_traverse_graph(
         self,
@@ -775,9 +945,11 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_entity_relations", port="s7")
             return []
+        # Area-3 Phase 0+2: listing-status note for known non-US/private companies.
+        listing_item = self._listing_status_item(entity_name)
         entity_id = await self._resolve_entity_by_name("search_entity_relations", entity_name)
         if entity_id is None:
-            return []
+            return [listing_item] if listing_item is not None else []
         # PLAN-0093 E-4 T-E-4-01: real query embedding instead of a 1024-dim
         # zero vector. The old placeholder made S7 fall back to a non-ranked
         # entity_id filter — the LLM got back the same top-K regardless of
@@ -808,7 +980,7 @@ class IntelligenceHandler(ToolHandler):
 
         if not relations:
             log.warning("tool_no_data", tool="search_entity_relations", entity_name=entity_name)
-            return []
+            return [listing_item] if listing_item is not None else []
 
         lines = [f"Relations for {entity_name}:"]
         for r in relations:
@@ -831,13 +1003,14 @@ class IntelligenceHandler(ToolHandler):
                 entity_name=entity_name,
             ),
         )
+        items = [listing_item, item] if listing_item is not None else [item]
         log.info(
             "tool_executed",
             tool="search_entity_relations",
             latency_ms=round((time.monotonic() - t0) * 1000),
-            items_returned=1,
+            items_returned=len(items),
         )
-        return [item]
+        return items
 
     async def _handle_search_claims(
         self,
@@ -880,6 +1053,11 @@ class IntelligenceHandler(ToolHandler):
             log.warning("tool_no_data", tool="search_claims", entity_name=entity_name)
             return []
 
+        # Backfill citation URLs from the source article each claim was extracted
+        # from (one batched content-store lookup for the whole result set).
+        source_docs = await self._resolve_source_docs([c.doc_id for c in claims])
+        linked = 0
+
         items: list[RetrievedItem] = []
         for claim in claims:
             text = (
@@ -887,6 +1065,9 @@ class IntelligenceHandler(ToolHandler):
                 f"{claim.claim_text} "
                 f"(confidence={claim.extraction_confidence:.2f})"
             )
+            doc = self._lookup_doc(source_docs, claim.doc_id)
+            if doc is not None and doc.url:
+                linked += 1
             items.append(
                 RetrievedItem.create(
                     item_id=f"tool:claim:{claim.claim_id}",
@@ -894,13 +1075,13 @@ class IntelligenceHandler(ToolHandler):
                     text=text[:_TOOL_RESULT_MAX_CHARS],
                     score=claim.extraction_confidence,
                     trust_weight=0.75,
+                    doc_id=self._safe_uuid(claim.doc_id),
+                    published_at=doc.published_at if doc is not None else None,
                     extraction_confidence=claim.extraction_confidence,
-                    citation_meta=CitationMeta(
+                    citation_meta=self._citation_from_doc(
                         title=f"Claim: {claim.claim_type}",
-                        url=None,
-                        source_name="knowledge_graph",
-                        published_at=None,
                         entity_name=entity_name,
+                        doc=doc,
                     ),
                 )
             )
@@ -910,6 +1091,7 @@ class IntelligenceHandler(ToolHandler):
             tool="search_claims",
             latency_ms=round((time.monotonic() - t0) * 1000),
             items_returned=len(items),
+            items_source_linked=linked,
         )
         return items
 
@@ -954,6 +1136,11 @@ class IntelligenceHandler(ToolHandler):
             log.warning("tool_no_data", tool="search_events", entity_name=entity_name)
             return []
 
+        # Backfill citation URLs from the source article each event was extracted
+        # from (one batched content-store lookup for the whole result set).
+        source_docs = await self._resolve_source_docs([e.doc_id for e in events])
+        linked = 0
+
         items: list[RetrievedItem] = []
         for event in events:
             text = (
@@ -962,6 +1149,9 @@ class IntelligenceHandler(ToolHandler):
                 + (f" on {event.event_date}" if event.event_date else "")
                 + f": {event.event_text}"
             )
+            doc = self._lookup_doc(source_docs, event.doc_id)
+            if doc is not None and doc.url:
+                linked += 1
             items.append(
                 RetrievedItem.create(
                     item_id=f"tool:event:{event.event_id}",
@@ -969,12 +1159,12 @@ class IntelligenceHandler(ToolHandler):
                     text=text[:_TOOL_RESULT_MAX_CHARS],
                     score=event.extraction_confidence,
                     trust_weight=0.78,
-                    citation_meta=CitationMeta(
+                    doc_id=self._safe_uuid(event.doc_id),
+                    published_at=doc.published_at if doc is not None else None,
+                    citation_meta=self._citation_from_doc(
                         title=f"Event: {event.event_type}",
-                        url=None,
-                        source_name="knowledge_graph",
-                        published_at=None,
                         entity_name=entity_name,
+                        doc=doc,
                     ),
                 )
             )
@@ -984,6 +1174,7 @@ class IntelligenceHandler(ToolHandler):
             tool="search_events",
             latency_ms=round((time.monotonic() - t0) * 1000),
             items_returned=len(items),
+            items_source_linked=linked,
         )
         return items
 

@@ -1,0 +1,557 @@
+# Schema v2 (PLAN-0099-W4): rubric{} is the judge contract; budgets{} is advisory.
+# Complex multi-hop / comparison / deep-investigation pack
+#
+# Authoring date: 2026-06-30.
+#
+# Target: ~17 questions that REQUIRE 3+ tools spanning DIFFERENT data domains
+# (news AND knowledge-graph/relationships AND fundamentals) plus cross-entity
+# reasoning. These exist to validate the chat upgrade that (a) batches multiple
+# tool calls in parallel in round 1 and (b) performs deeper, adaptive analyst
+# investigations across tools.
+#
+# Design philosophy:
+#   - DIFFERENT from the chain-of-tools pack (20_*): those test a STRICT data
+#     dependency (iter-2 inputs come from iter-1 output). THESE test BREADTH +
+#     SYNTHESIS: several independent sources that should fire in PARALLEL, then
+#     be fused into one cross-entity, multi-hop answer. Many of these are
+#     "compare A and B across news + KG + fundamentals" — exactly the shape the
+#     parallel-batching upgrade targets.
+#   - Every question demands at least THREE distinct tools from at least TWO
+#     domains (news / KG / fundamentals / portfolio / macro).
+#   - `required_facts` are capability-level (e.g. "makes the supply-chain
+#     connection between X and Y"), never a hard fossilised answer, because the
+#     live data moves. We grade the REASONING and the SOURCING, not one string.
+#   - Real tickers only (NVDA/AMD/AAPL/TSMC/MSFT/AVGO/GOOGL/META/INTC/TSLA/QCOM).
+#   - `max_latency_s: 150` — parallel batching helps, but a 3-4 tool
+#     investigation with synthesis is legitimately slower than a single-tool ask;
+#     the 60-120s floors elsewhere would create false-WARN noise.
+#
+# Distribution (17 total):
+#   - 6 head-to-head comparisons (news + fundamentals + KG)
+#   - 5 supply-chain / ripple multi-hop traces (KG + news + fundamentals)
+#   - 3 portfolio-anchored cross-domain investigations
+#   - 3 single-entity deep dives (fundamentals + news + KG together)
+
+# --------------------------------------------------------------------------
+# Head-to-head comparisons — the canonical parallel-batching shape. Both
+# entities are in the prompt, so a good agent fans out MANY tools at once
+# (fundamentals for both + news for both + the shared KG relationship) rather
+# than serialising. Synthesis must weigh all three domains into a verdict.
+# --------------------------------------------------------------------------
+
+- id: cmp_nvda_amd_datacenter_tsmc
+  prompt: Compare NVIDIA and AMD on their latest revenue and data-center momentum, and factor in their
+    shared dependence on TSMC. Who is better positioned right now?
+  category: comparison
+  tags: [complex_investigation, multi_hop, comparison, relationship, financial_data, news]
+  intent: Compare NVDA and AMD across fundamentals and recent news, surface their shared TSMC
+    supply-chain exposure via the graph, then render a positioning verdict.
+  expected_chain: [get_fundamentals_history_batch, get_entity_news, traverse_graph, compare_entities]
+  rubric:
+    expected_tools: [get_fundamentals_history_batch, query_fundamentals, get_entity_news, search_documents,
+      traverse_graph, search_entity_relations, compare_entities]
+    required_facts: [Reports a revenue or revenue-growth figure for BOTH NVIDIA and AMD, References
+        recent data-center or AI news momentum for at least one of the two, Makes the connection that
+        BOTH depend on TSMC for fabrication, Offers a reasoned positioning verdict grounded in the data
+        rather than a bare opinion]
+    forbidden_facts: [Claims NVIDIA and AMD fabricate their own chips in-house, Gives a verdict without
+        citing any fundamental figure]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      NVIDIA: [NVDA, NVIDIA Corporation, Nvidia]
+      AMD: [Advanced Micro Devices, AMD]
+      TSMC: [TSM, Taiwan Semiconductor, Taiwan Semiconductor Manufacturing]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    THREE-DOMAIN FUSION (news + fundamentals + KG), parallel-batchable.
+      Round 1 (parallel): get_fundamentals_history_batch([NVDA, AMD]) +
+        get_entity_news(NVDA) + get_entity_news(AMD) + traverse_graph for the
+        TSMC supplier edge. None of these depend on each other — a good agent
+        fires them together.
+      Synthesis: weigh revenue + data-center momentum + the shared TSMC risk
+        into a single positioning call.
+
+    WHY: this is THE flagship parallel-batching + comparison case. The shared
+    TSMC dependency is the multi-hop twist — both companies route through one
+    supplier, which a fundamentals-only or news-only answer would miss.
+
+    FAILURE MODES TO CATCH:
+      - Answers from training-data priors ("NVIDIA dominates AI") without
+        calling fundamentals for either name.
+      - Serialises NVDA-fully-then-AMD-fully instead of batching (slow, and
+        often runs out of iterations before the TSMC hop).
+      - Never surfaces the shared TSMC dependency — treats them as independent.
+
+- id: cmp_aapl_msft_capital_return_vs_growth
+  prompt: Apple versus Microsoft — compare how each returns capital to shareholders against how fast each
+    is still growing, and tie in what recent news says about each one's outlook.
+  category: comparison
+  tags: [complex_investigation, multi_hop, comparison, financial_data, news]
+  intent: Compare AAPL and MSFT on capital-return and growth metrics from fundamentals, then blend in
+    recent news on each company's forward outlook.
+  expected_chain: [get_fundamentals_history_batch, get_entity_news, compare_entities]
+  rubric:
+    expected_tools: [get_fundamentals_history_batch, query_fundamentals, get_entity_news, search_documents,
+      compare_entities]
+    required_facts: [Cites a growth metric (revenue or EPS growth) for BOTH Apple and Microsoft, References
+        a capital-return signal (dividend, buyback, or payout) for at least one of the two, Summarises
+        at least one recent news theme bearing on either company's outlook]
+    forbidden_facts: [Claims Microsoft pays no dividend, Reports identical figures for both companies
+        as if copied]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      Apple: [AAPL, Apple Inc., Apple Inc]
+      Microsoft: [MSFT, Microsoft Corporation]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Two-domain comparison (fundamentals + news) with a growth-vs-return
+    framing that forces the agent to pull MULTIPLE fundamentals dimensions
+    (not just one metric) and reconcile them with the news narrative.
+    Parallel-batchable: fundamentals-batch + news for both in round 1.
+
+    FAILURE MODES: reports one metric and stops; forgets the news leg;
+    fabricates a buyback figure not present in the tool output.
+
+- id: cmp_googl_meta_ai_ad_moat
+  prompt: Between Alphabet and Meta, whose advertising business looks more defensible right now? Weigh
+    their fundamentals, the latest news on AI competition, and any knowledge-graph links to their rivals.
+  category: comparison
+  tags: [complex_investigation, multi_hop, comparison, relationship, financial_data, news]
+  intent: Compare GOOGL and META ad-business fundamentals, incorporate recent AI-competition news, and
+    use the graph to surface each one's competitive relationships.
+  expected_chain: [get_fundamentals_history_batch, get_entity_news, traverse_graph, get_entity_intelligence]
+  rubric:
+    expected_tools: [get_fundamentals_history_batch, query_fundamentals, get_entity_news, search_documents,
+      traverse_graph, search_entity_relations, get_entity_intelligence, compare_entities]
+    required_facts: [Reports a fundamental figure (revenue, margin, or growth) for BOTH Alphabet and
+        Meta, References recent news bearing on AI or advertising competition, Names at least one competitor
+        or relationship pulled from the knowledge graph for either company]
+    forbidden_facts: [Treats Alphabet and Meta as non-competitors, Gives a defensibility verdict with
+        no fundamental or news evidence]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      Alphabet: [GOOGL, GOOG, Google, Alphabet Inc.]
+      Meta: [META, Meta Platforms, Facebook]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Three-domain fusion with a qualitative "moat/defensibility" verdict that
+    must be grounded, not vibes. Exercises the KG competitor-edge branch
+    alongside fundamentals + news.
+
+- id: cmp_avgo_qcom_diversification
+  prompt: Broadcom and Qualcomm both sell into the smartphone and data-center markets. Compare their
+    revenue mix and recent momentum, and use their relationship graphs to show who is more diversified
+    across customers.
+  category: comparison
+  tags: [complex_investigation, multi_hop, comparison, relationship, financial_data, news]
+  intent: Compare AVGO and QCOM fundamentals and recent news, then use each one's customer/partner
+    relationships in the graph to argue which is more diversified.
+  expected_chain: [get_fundamentals_history_batch, traverse_graph, get_entity_news, compare_entities]
+  rubric:
+    expected_tools: [get_fundamentals_history_batch, query_fundamentals, traverse_graph, search_entity_relations,
+      get_entity_news, search_documents, compare_entities]
+    required_facts: [Reports a revenue or growth figure for BOTH Broadcom and Qualcomm, Uses relationship-graph
+        data (customers, partners, or segments) to characterise diversification for at least one, Reaches
+        a reasoned conclusion on which is more diversified]
+    forbidden_facts: [Claims Qualcomm has no data-center exposure at all, Concludes diversification without
+        referencing any relationship or segment data]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      Broadcom: [AVGO, Broadcom Inc.]
+      Qualcomm: [QCOM, Qualcomm Incorporated]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    KG-heavy comparison: the diversification claim MUST be grounded in graph
+    relationships (customer/partner edges), not just fundamentals. Tests that
+    the agent reaches into the graph for a qualitative structural argument.
+
+- id: cmp_tsmc_intel_foundry_race
+  prompt: TSMC versus Intel in the foundry business — compare their latest financial trajectory, what
+    recent news says about each one's manufacturing roadmap, and which major chip designers depend on
+    each according to the graph.
+  category: comparison
+  tags: [complex_investigation, multi_hop, comparison, relationship, financial_data, news]
+  intent: Compare TSMC and Intel fundamentals and manufacturing news, then use the graph to show which
+    fabless designers depend on each foundry.
+  expected_chain: [get_fundamentals_history_batch, get_entity_news, traverse_graph, compare_entities]
+  rubric:
+    expected_tools: [get_fundamentals_history_batch, query_fundamentals, get_entity_news, search_documents,
+      traverse_graph, search_entity_relations, compare_entities]
+    required_facts: [Reports a financial trajectory figure for BOTH TSMC and Intel, References recent
+        news on either company's manufacturing or foundry roadmap, Names at least one chip designer that
+        depends on TSMC or Intel per the relationship graph]
+    forbidden_facts: [Claims Intel has no foundry ambitions, States a customer dependency with no graph
+        or news basis]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      TSMC: [TSM, Taiwan Semiconductor, Taiwan Semiconductor Manufacturing]
+      Intel: [INTC, Intel Corporation]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Foundry-vs-foundry comparison where the KG hop (who depends on whom) is
+    the differentiating leg. Fundamentals + news + supplier-graph fusion.
+
+- id: cmp_nvda_avgo_ai_infrastructure
+  prompt: NVIDIA and Broadcom are both AI-infrastructure winners but in different ways. Compare their
+    fundamentals and recent news, and explain via the knowledge graph how their roles in the AI stack
+    differ.
+  category: comparison
+  tags: [complex_investigation, multi_hop, comparison, relationship, financial_data, news]
+  intent: Compare NVDA and AVGO fundamentals and recent AI news, then use the graph to contrast their
+    distinct roles (GPUs vs custom silicon/networking) in the AI infrastructure stack.
+  expected_chain: [get_fundamentals_history_batch, get_entity_news, get_entity_intelligence, traverse_graph]
+  rubric:
+    expected_tools: [get_fundamentals_history_batch, query_fundamentals, get_entity_news, search_documents,
+      get_entity_intelligence, traverse_graph, search_entity_relations, compare_entities]
+    required_facts: [Reports a fundamental figure for BOTH NVIDIA and Broadcom, References recent AI-infrastructure
+        news for at least one, Uses graph or intelligence data to differentiate their roles in the AI
+        stack]
+    forbidden_facts: [Describes NVIDIA and Broadcom as offering identical products, Reaches a conclusion
+        with no tool-sourced evidence]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      NVIDIA: [NVDA, NVIDIA Corporation, Nvidia]
+      Broadcom: [AVGO, Broadcom Inc.]
+  budgets:
+    max_latency_s: 150
+
+# --------------------------------------------------------------------------
+# Supply-chain / ripple multi-hop traces — the agent must WALK a chain of
+# entities through the graph (A supplies B supplies C), then fetch news and/or
+# fundamentals at each hop and reason about propagation. These are genuinely
+# multi-hop (not just wide fan-out).
+# --------------------------------------------------------------------------
+
+- id: ripple_tsmc_to_apple_nvidia
+  prompt: Trace how recent TSMC news could ripple through the supply chain to affect Apple and NVIDIA.
+  category: relationship
+  tags: [complex_investigation, multi_hop, relationship, news, reasoning]
+  intent: Pull recent TSMC news, follow the supplier relationships in the graph from TSMC to Apple and
+    NVIDIA, and reason about how the TSMC development propagates downstream.
+  expected_chain: [get_entity_news, traverse_graph, get_entity_paths, get_entity_news]
+  rubric:
+    expected_tools: [get_entity_news, search_documents, traverse_graph, get_entity_paths, search_entity_relations,
+      get_entity_intelligence]
+    required_facts: [Summarises at least one recent TSMC news development, Establishes via the graph that
+        TSMC is a supplier to BOTH Apple and NVIDIA, Reasons explicitly about how the TSMC development
+        could flow through to Apple and/or NVIDIA]
+    forbidden_facts: [Claims Apple and NVIDIA have no relationship to TSMC, Discusses TSMC in isolation
+        with no downstream ripple reasoning]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      TSMC: [TSM, Taiwan Semiconductor, Taiwan Semiconductor Manufacturing]
+      Apple: [AAPL, Apple Inc., Apple Inc]
+      NVIDIA: [NVDA, NVIDIA Corporation, Nvidia]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Classic multi-hop ripple. The agent must (1) get TSMC news, (2) traverse
+    the graph to establish the TSMC->Apple and TSMC->NVIDIA supplier edges,
+    (3) reason about propagation. get_entity_paths is the ideal tool for
+    establishing the connection path.
+
+    FAILURE MODES: talks about TSMC news but never establishes the graph link;
+    asserts the supply-chain link from training data without calling the graph.
+
+- id: ripple_export_controls_semis
+  prompt: If new semiconductor export controls hit the news, which chip companies in our coverage are
+    most exposed, and how would the impact travel through their supplier and customer relationships?
+  category: relationship
+  tags: [complex_investigation, multi_hop, relationship, news, signal, reasoning]
+  intent: Find recent export-control news, identify exposed chip companies, and trace impact through
+    their supplier/customer graph relationships.
+  expected_chain: [search_documents, search_events, traverse_graph, get_entity_intelligence]
+  rubric:
+    expected_tools: [search_documents, get_entity_news, search_events, traverse_graph, search_entity_relations,
+      get_entity_intelligence]
+    required_facts: [References recent news or events about semiconductor export controls, Names at least
+        one specific chip company exposed to the controls, Traces the impact through at least one supplier
+        or customer relationship from the graph]
+    forbidden_facts: [Names companies with no sourced connection to the export-control news, Lists exposed
+        companies with no relationship-graph reasoning]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases: {}
+  budgets:
+    max_latency_s: 150
+  notes: |
+    News -> entities -> graph propagation. Tests the news/event branch feeding
+    the KG traversal. The "how would the impact travel" clause forces the
+    multi-hop reasoning, not just a flat list of exposed names.
+
+- id: ripple_nvidia_supplier_health
+  prompt: Look at NVIDIA's key suppliers, check whether any of them show recent negative news or weak
+    fundamentals, and explain what that could mean for NVIDIA.
+  category: relationship
+  tags: [complex_investigation, multi_hop, relationship, news, financial_data, reasoning]
+  intent: Resolve NVIDIA's suppliers from the graph, fetch news and fundamentals for those suppliers,
+    flag any weakness, and reason about the upstream risk to NVIDIA.
+  expected_chain: [traverse_graph, get_entity_news, get_fundamentals_history_batch, get_entity_intelligence]
+  rubric:
+    expected_tools: [traverse_graph, search_entity_relations, get_entity_news, search_documents, get_fundamentals_history_batch,
+      query_fundamentals]
+    required_facts: [Names at least one specific NVIDIA supplier from the graph, Reports a news OR fundamentals
+        signal for at least one named supplier, Reasons about what a supplier issue could mean for NVIDIA
+        specifically]
+    forbidden_facts: [Analyses NVIDIA's own fundamentals instead of its suppliers, Names suppliers with
+        no graph basis]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      NVIDIA: [NVDA, NVIDIA Corporation, Nvidia]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Supplier-first investigation: the entities of interest emerge from the
+    graph traversal, then get enriched with news + fundamentals. Tests fan-out
+    over the resolved supplier set (batched fundamentals + per-supplier news).
+
+    FAILURE MODE (important): agent inverts the ask and analyses NVDA itself.
+
+- id: ripple_tesla_battery_chain
+  prompt: Trace Tesla's battery and chip supply chain through the graph, and tell me if recent news on
+    any of those upstream suppliers could create a bottleneck for Tesla.
+  category: relationship
+  tags: [complex_investigation, multi_hop, relationship, news, reasoning]
+  intent: Traverse Tesla's upstream suppliers in the graph, fetch recent news for those suppliers, and
+    reason about potential bottlenecks for Tesla.
+  expected_chain: [traverse_graph, get_entity_paths, get_entity_news, search_documents]
+  rubric:
+    expected_tools: [traverse_graph, get_entity_paths, search_entity_relations, get_entity_news, search_documents,
+      get_entity_intelligence]
+    required_facts: [Names at least one upstream supplier of Tesla from the graph, Summarises recent news
+        for at least one such supplier, Reasons about whether that news implies a bottleneck risk for
+        Tesla]
+    forbidden_facts: [Claims Tesla has no suppliers in the graph, Reports Tesla news instead of supplier
+        news]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      Tesla: [TSLA, Tesla, Inc.]
+  budgets:
+    max_latency_s: 150
+
+- id: ripple_aapl_shared_suppliers_nvda
+  prompt: Which suppliers does Apple share with NVIDIA, and based on recent news and those suppliers'
+    fundamentals, is that shared dependency a risk for either company?
+  category: relationship
+  tags: [complex_investigation, multi_hop, relationship, news, financial_data, reasoning]
+  intent: Use the graph to find suppliers common to both Apple and NVIDIA, then evaluate that shared
+    dependency using supplier news and fundamentals.
+  expected_chain: [traverse_graph, get_entity_paths, get_entity_news, get_fundamentals_history_batch]
+  rubric:
+    expected_tools: [traverse_graph, get_entity_paths, search_entity_relations, get_entity_news, search_documents,
+      get_fundamentals_history_batch, query_fundamentals]
+    required_facts: [Identifies at least one supplier common to BOTH Apple and NVIDIA via the graph, References
+        news or fundamentals for that shared supplier, Reasons about whether the shared dependency is
+        a risk]
+    forbidden_facts: [Claims Apple and NVIDIA share no suppliers without checking the graph, Analyses
+        only one of the two companies]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      Apple: [AAPL, Apple Inc., Apple Inc]
+      NVIDIA: [NVDA, NVIDIA Corporation, Nvidia]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Set-intersection over the graph (shared suppliers of two entities) is the
+    hard multi-hop step — get_entity_paths or two traversals then intersect.
+    Then enrich the intersection with news + fundamentals.
+
+# --------------------------------------------------------------------------
+# Portfolio-anchored cross-domain investigations — start from MY holdings,
+# then fan out across news + KG + fundamentals. The entity set is unknown
+# until get_portfolio_context resolves it, so these combine a dependency hop
+# with wide multi-domain fan-out.
+# --------------------------------------------------------------------------
+
+- id: port_semis_export_exposure
+  prompt: Which of my holdings are most exposed to the latest semiconductor export-control news, and why?
+  category: portfolio
+  tags: [complex_investigation, multi_hop, portfolio, news, relationship, reasoning]
+  intent: Resolve the user's holdings, find recent semiconductor export-control news, and reason via
+    the graph/intelligence which held companies are most exposed and why.
+  expected_chain: [get_portfolio_context, search_documents, traverse_graph, get_entity_intelligence]
+  rubric:
+    expected_tools: [get_portfolio_context, search_documents, get_entity_news, search_events, traverse_graph,
+      search_entity_relations, get_entity_intelligence]
+    required_facts: [Resolves the user's actual holdings via the portfolio tool, References recent semiconductor
+        export-control news or events, Names at least one HELD company as exposed and gives a sourced
+        reason for the exposure]
+    forbidden_facts: [Names companies the user does not hold as the exposed positions, Assesses exposure
+        with no reference to the actual news]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases: {}
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Portfolio dependency hop + news + KG. The exposure verdict must intersect
+    the user's REAL holdings with the export-control news, using graph/intel
+    to justify WHY each is exposed.
+
+    FAILURE MODES: answers about famous semi names regardless of the actual
+    portfolio; lists holdings but never connects them to the news.
+
+- id: port_rate_sensitivity_investigation
+  prompt: Given the most recent central-bank rate decision, which of my holdings are most rate-sensitive,
+    and how do their fundamentals back that up?
+  category: portfolio
+  tags: [complex_investigation, multi_hop, portfolio, macro, financial_data, reasoning]
+  intent: Resolve holdings, find the latest rate decision from the economic calendar, and reason with
+    fundamentals which held names are most rate-sensitive.
+  expected_chain: [get_portfolio_context, get_economic_calendar, get_fundamentals_history_batch, query_fundamentals]
+  rubric:
+    expected_tools: [get_portfolio_context, get_economic_calendar, search_events, get_fundamentals_history_batch,
+      query_fundamentals]
+    required_facts: [Resolves the user's actual holdings, References the most recent central-bank rate
+        decision and its date, Identifies at least one held name as rate-sensitive with a fundamentals-based
+        rationale (leverage, growth-duration, margins, etc.)]
+    forbidden_facts: [Cites a future rate decision as already having happened, Names rate-sensitive positions
+        the user does not hold]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases: {}
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Portfolio + macro + fundamentals fusion. Exercises the under-used
+    get_economic_calendar branch alongside personalised context.
+
+- id: port_earnings_risk_scan
+  prompt: Across my portfolio, which upcoming earnings reports carry the most risk given each company's
+    recent news and fundamentals trend?
+  category: portfolio
+  tags: [complex_investigation, multi_hop, portfolio, news, financial_data, reasoning]
+  intent: Resolve holdings, find their upcoming earnings dates, then combine recent news and fundamentals
+    trend per name to rank earnings risk.
+  expected_chain: [get_portfolio_context, get_earnings_calendar, get_entity_news, get_fundamentals_history_batch]
+  rubric:
+    expected_tools: [get_portfolio_context, get_earnings_calendar, get_entity_news, search_documents,
+      get_fundamentals_history_batch, query_fundamentals]
+    required_facts: [Resolves the user's holdings and identifies at least one with an upcoming earnings
+        date, Combines a news signal AND a fundamentals-trend signal for at least one held name, Offers
+        a reasoned risk ranking or highlight]
+    forbidden_facts: [Discusses earnings for tickers the user does not hold, Ranks risk using only one
+        data domain when the question asks for both news and fundamentals]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases: {}
+  budgets:
+    max_latency_s: 150
+
+# --------------------------------------------------------------------------
+# Single-entity deep dives — one company, but the answer is only complete if
+# fundamentals AND news AND the knowledge graph are fused. Tests that the agent
+# recognises a "give me the full picture" ask as multi-tool, not single-tool.
+# --------------------------------------------------------------------------
+
+- id: deep_avgo_full_picture
+  prompt: How do Broadcom's fundamentals, its recent news, and its knowledge-graph relationships together
+    explain its current positioning?
+  category: reasoning
+  tags: [complex_investigation, multi_hop, reasoning, relationship, news, financial_data]
+  intent: Build a full picture of Broadcom by fusing fundamentals, recent news, and graph relationships
+    into one positioning narrative.
+  expected_chain: [query_fundamentals, get_entity_news, traverse_graph, get_entity_intelligence]
+  rubric:
+    expected_tools: [query_fundamentals, get_fundamentals_history_batch, get_entity_news, search_documents,
+      traverse_graph, search_entity_relations, get_entity_intelligence, get_entity_narrative]
+    required_facts: [Cites at least one Broadcom fundamental metric, Summarises at least one recent Broadcom
+        news theme, References at least one knowledge-graph relationship (customer, supplier, competitor,
+        or segment), Synthesises all three into a coherent positioning statement]
+    forbidden_facts: [Answers using only one data domain, Provides positioning with no tool-sourced evidence]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      Broadcom: [AVGO, Broadcom Inc.]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    The explicit "fundamentals AND news AND graph together" phrasing makes
+    this the cleanest test of three-domain fusion on a single entity. All
+    three legs are parallel-batchable in round 1.
+
+    FAILURE MODE: agent answers with a fundamentals dump and skips the graph
+    and news legs (single-domain shortcut).
+
+- id: deep_nvda_bull_bear
+  prompt: Give me the bull and bear case for NVIDIA, grounded in its latest fundamentals, recent news
+    flow, and its position in the AI supply-chain graph.
+  category: reasoning
+  tags: [complex_investigation, multi_hop, reasoning, relationship, news, financial_data]
+  intent: Construct both a bull and a bear case for NVIDIA using fundamentals, recent news, and its
+    supply-chain graph position.
+  expected_chain: [get_fundamentals_history_batch, get_entity_news, traverse_graph, get_entity_intelligence]
+  rubric:
+    expected_tools: [get_fundamentals_history_batch, query_fundamentals, get_entity_news, search_documents,
+      traverse_graph, search_entity_relations, get_entity_intelligence]
+    required_facts: [Presents BOTH a bull and a bear case, Grounds at least one case in a fundamental
+        figure, Grounds at least one case in a recent news item OR a supply-chain graph relationship]
+    forbidden_facts: [Presents only a bull case or only a bear case, Makes claims with no tool-sourced
+        grounding]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      NVIDIA: [NVDA, NVIDIA Corporation, Nvidia]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Balanced two-sided synthesis forces the agent to pull enough evidence to
+    argue BOTH directions — a shallow single-tool answer cannot do this.
+
+- id: deep_meta_contradiction_check
+  prompt: Investigate Meta's current story — pull its fundamentals and recent news, and flag any place
+    where the news narrative and the numbers seem to disagree.
+  category: reasoning
+  tags: [complex_investigation, multi_hop, reasoning, news, financial_data, signal]
+  intent: Fetch Meta's fundamentals and recent news, then explicitly look for contradictions between the
+    narrative and the numbers.
+  expected_chain: [query_fundamentals, get_entity_news, get_contradictions, get_entity_narrative]
+  rubric:
+    expected_tools: [query_fundamentals, get_fundamentals_history_batch, get_entity_news, search_documents,
+      get_contradictions, get_entity_narrative]
+    required_facts: [Cites at least one Meta fundamental metric, Summarises at least one recent Meta news
+        theme, Explicitly assesses whether the narrative and the numbers agree or disagree]
+    forbidden_facts: [Reports numbers and news without ever comparing them, Fabricates a contradiction
+        not supported by the retrieved data]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+    must_not_call: []
+    entity_aliases:
+      Meta: [META, Meta Platforms, Facebook]
+  budgets:
+    max_latency_s: 150
+  notes: |
+    Tests the contradiction/consistency reasoning across two domains and
+    exercises the get_contradictions tool. The agent must actively COMPARE
+    news vs numbers, not just present both.

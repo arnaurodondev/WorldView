@@ -60,6 +60,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     UnitOfWorkProtocol,
 )
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
+from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -176,6 +177,56 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         self._entity_dirtied_topic = entity_dirtied_topic
         self._canon_threshold = canonicalization_threshold
         self._dedup_client = dedup_client
+
+    # ------------------------------------------------------------------
+    # Resilient message handling
+    # ------------------------------------------------------------------
+
+    async def _handle_message(self, msg: Any) -> None:
+        """Deserialize + dispatch one message, SKIPPING un-decodable records.
+
+        Prod-readiness fix (BP-720): commit ``66b0b6416`` appended nullable
+        ``external_id``/``source_title`` to ``nlp.article.enriched.v1.avsc``. The
+        platform decodes with ``fastavro.schemaless_reader`` (positional, NO schema
+        registry, writer==reader assumed), so every pre-2026-07-09 backlog record —
+        written WITHOUT the trailing fields — under-runs the new reader schema and
+        raises ``EOFError`` inside ``deserialize_confluent_avro``. The base
+        ``_handle_message`` wraps that (and any other decode/struct error) into
+        ``MalformedDataError`` (a ``FatalError``), which dead-letters INLINE; a run of
+        ~10.7k old-schema records trips ``dead_letter_cap`` (5000) → the consumer is
+        force-restarted BEFORE committing → it re-reads the same 5000 forever and can
+        NEVER reach today's new-schema NEWS messages at the tail. news→KG enrichment
+        halts 100%.
+
+        Unlike the forward-only PredictionEnrichedConsumer, this consumer must NOT
+        start-at-latest — it still has un-processed NEW-schema NEWS backlog to reach.
+        The correct behaviour is to SKIP only the un-decodable OLD records while
+        processing the good ones: catch the deserialize failure BROADLY (the
+        base-wrapped ``MalformedDataError`` plus raw ``EOFError``/``struct.error`` as
+        defence-in-depth for any path that surfaces the decode error un-wrapped), log
+        it WITH topic/partition/offset, and return normally. The run loop then commits
+        the offset and advances past the poison record. Crucially, ``dead_letter`` is
+        never called on a skip, so the ``dead_letter_cap`` crash-loop can never trip on
+        old-schema records. All OTHER exceptions (genuine processing/DB failures)
+        propagate unchanged into the retry/dead-letter path.
+        """
+        import struct
+
+        try:
+            await super()._handle_message(msg)
+        except (MalformedDataError, EOFError, struct.error) as exc:
+            # Un-decodable record (old-schema/poison). Skip + advance the offset.
+            # The ``nlp.article.enriched.v1.dlq`` topic exists but this consumer's
+            # ``_dead_letter_impl`` is log-only, so a structured skip log IS the
+            # observability signal (dead-letter emission would re-arm the cap crash).
+            logger.warning(
+                "enriched_consumer_deserialize_skipped",
+                topic=msg.topic(),
+                partition=msg.partition(),
+                offset=msg.offset(),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     # ------------------------------------------------------------------
     # Core processing

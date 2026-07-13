@@ -1,4 +1,4 @@
-"""Tool registry builder — registers all 22 platform tools into a ToolRegistry.
+"""Tool registry builder — registers all 27 platform tools into a ToolRegistry.
 
 Extracted from tool_executor.py (PLAN-0089 Wave C-1) to reduce dispatcher size.
 All callers import build_default_registry from tool_executor (re-exported there).
@@ -48,7 +48,16 @@ def validate_registry_parity(registry: ToolRegistry) -> dict[str, int]:
     orphan_in_manifest = manifest_tools - handled_tools
     orphan_in_handlers = handled_tools - manifest_tools
 
-    if orphan_in_manifest or orphan_in_handlers:
+    # EMNLP ablation: when the tool allowlist prunes the registry to a subset,
+    # manifest tools legitimately have no handler; a pruned registry is always a
+    # subset of the manifest, so tolerate that case. Registered-but-unmanifested
+    # handlers remain a real drift and always raise.
+    import os
+
+    _ablation = bool(os.getenv("RAG_CHAT_TOOL_ALLOWLIST")) or os.path.exists(
+        os.getenv("RAG_CHAT_TOOL_ALLOWLIST_FILE", "/app/tool_allowlist.txt")
+    )
+    if orphan_in_handlers or (orphan_in_manifest and not _ablation):
         raise ToolRegistryDriftError(
             "Tool registry drift detected. "
             f"In manifest only: {sorted(orphan_in_manifest)}. "
@@ -58,9 +67,11 @@ def validate_registry_parity(registry: ToolRegistry) -> dict[str, int]:
 
 
 def build_default_registry() -> ToolRegistry:
-    """Factory: create a ToolRegistry with all 22 tools registered.
+    """Factory: create a ToolRegistry with all 27 tools registered.
 
-    Breakdown: 10 v1 + 4 PLAN-0080 v2 + 6 PLAN-0081 v3 + 2 PLAN-0082 v4.
+    Breakdown: 10 v1 + 4 PLAN-0080 v2 + 6 PLAN-0081 v3 + 2 PLAN-0082 v4
+    + later additions (get_path_between, get_entity_news,
+    get_fundamentals_history_batch, query_fundamentals, get_prediction_markets).
 
     Called by api/dependencies.py to wire the ToolExecutor at startup.
     The handlers registered here are placeholder stubs — the actual execution
@@ -173,6 +184,14 @@ def build_default_registry() -> ToolRegistry:
                 "EPS, P/E ratio, market cap) for a SINGLE ticker over N periods. Use when the "
                 "user asks about revenue trends, EPS growth, or multi-quarter financial "
                 "performance for ONE company. "
+                "By default this returns the LATEST N periods (newest first). "
+                "**To answer a question anchored to a SPECIFIC PAST calendar year or quarter "
+                "(e.g. 'each quarter of 2024', 'FY2023 revenue'), you MUST pass `from_date` "
+                "and `to_date` (both, as YYYY-MM-DD) bounding that window** — otherwise you "
+                "will receive the latest quarters (e.g. 2025/2026), NOT the year asked for. "
+                "When a window is given the tool returns ONLY rows whose period_end falls "
+                "inside it, and returns no data if the requested year is unavailable (refuse — "
+                "do not substitute the latest quarters). "
                 "**Do NOT call this in a loop over multiple tickers — use "
                 "`get_fundamentals_history_batch` instead.** Calling this tool N times in "
                 "sequence is 5-10x slower than one batch call and is a tool-selection bug."
@@ -204,11 +223,36 @@ def build_default_registry() -> ToolRegistry:
                     ),
                     required=False,
                 ),
+                # PERIOD-ANCHOR (BP-651): explicit historical window. Both must be
+                # supplied together (a lone bound is ignored). Anchors a past-year
+                # question so it cannot be answered with the latest quarters.
+                ParameterSpec(
+                    name="from_date",
+                    type="date",
+                    description=(
+                        "Inclusive start of a historical window (YYYY-MM-DD). Pass WITH "
+                        "`to_date` to anchor a specific past year/quarter — e.g. for calendar "
+                        "year 2024 use from_date='2024-01-01', to_date='2024-12-31'. Only rows "
+                        "whose period_end falls in [from_date, to_date] are returned. Omit for "
+                        "the latest N periods."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="to_date",
+                    type="date",
+                    description=(
+                        "Inclusive end of a historical window (YYYY-MM-DD). Must be paired with "
+                        "`from_date`. Ignored unless both are provided."
+                    ),
+                    required=False,
+                ),
             ],
             source_type="fundamentals",
             example_queries=[
                 "Show me MSFT's revenue trend over 8 quarters",
                 "What has AAPL's EPS been over the last 2 years?",
+                "Tesla's quarterly revenue for each quarter of 2024",
             ],
         ),
         handler=lambda **_: None,
@@ -986,6 +1030,75 @@ def build_default_registry() -> ToolRegistry:
         handler=lambda **_: None,
     )
 
+    # SEC EDGAR filings tool — surfaces a company's filings with a clickable
+    # EDGAR citation URL on every result.  Distinct from search_documents:
+    # search_documents' advertised ``sec_filing`` source taxonomy does not match
+    # the stored ``sec_edgar`` literal, so filing-only retrieval was effectively
+    # unreachable; this tool pins the correct source_type, dedupes to one row per
+    # filing, and stamps citation_meta.url with the sec.gov filing index URL.
+    registry.register(
+        ToolSpec(
+            name="get_filings",
+            description=(
+                "Retrieves a company's SEC EDGAR filings (10-K, 10-Q, 8-K, DEF 14A, S-1) — each "
+                "returned with a clickable link to the primary filing on sec.gov. "
+                "**Use this tool — NOT search_documents — for ANY question about a company's "
+                "regulatory filings, annual/quarterly reports, or where to read the official "
+                "filing.** Triggers: 'show me Apple's latest 10-K', 'list NVDA's recent 8-K "
+                "filings', 'link me to Tesla's annual report', 'what did MSFT file with the SEC'. "
+                "Identify the company by ticker (or entity_id). Returns filings newest-first with "
+                "the form type, filed date, and the EDGAR URL as the citation source. The "
+                "form_type filter is best-effort (the label is recovered from the filing text); "
+                "when no filing matches it the tool still returns the company's recent filings."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="ticker",
+                    type="string",
+                    description="Stock ticker (e.g. 'AAPL'). Provide this OR entity_id.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="entity_id",
+                    type="string",
+                    description="Canonical entity UUID. Provide this OR ticker.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="form_type",
+                    type="string",
+                    description='Optional SEC form filter, e.g. "10-K", "10-Q", "8-K", "DEF 14A". Best-effort.',
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="date_from",
+                    type="date",
+                    description="Earliest filed date (YYYY-MM-DD). Optional.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="date_to",
+                    type="date",
+                    description="Latest filed date (YYYY-MM-DD). Optional.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="max_results",
+                    type="integer",
+                    description="Max filings to return (1-20). Default 10.",
+                    required=False,
+                ),
+            ],
+            source_type="sec_edgar",
+            example_queries=[
+                "Show me Apple's latest 10-K filing",
+                "List NVDA's recent 8-K filings with links",
+                "Link me to Tesla's annual report on EDGAR",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
     registry.register(
         ToolSpec(
             name="get_market_movers",
@@ -1096,6 +1209,135 @@ def build_default_registry() -> ToolRegistry:
         handler=lambda **_: None,
     )
 
+    # Chat prediction-market tool: Polymarket odds search. Calls the S9-proxied
+    # /v1/signals/prediction-markets list endpoint (which already supports a
+    # free-text ``query`` ILIKE filter on the market question) via S3BriefPort.
+    # Each result carries a clickable citation_meta.url built from market_slug
+    # (canonical https://polymarket.com/event/<slug>).
+    registry.register(
+        ToolSpec(
+            name="get_prediction_markets",
+            description=(
+                "Searches Polymarket prediction markets by topic, entity, or keyword and "
+                "returns the top matching markets with the current outcome probabilities "
+                "(implied odds), resolution date, 24h volume, and category. Use when the "
+                "user asks what the market is pricing for a FUTURE EVENT — elections, Fed "
+                "rate decisions, crypto price targets, AI milestones, sports outcomes, or "
+                "any 'will X happen?' / 'what are the odds of Y' question. Each returned "
+                "market links to its live Polymarket event page. "
+                "DO NOT use for: (1) current stock prices or fundamentals — use "
+                "get_price_history / query_fundamentals. (2) macro data releases (CPI, "
+                "FOMC dates) — use get_economic_calendar. This tool answers betting-market "
+                "odds, not spot market data."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="query",
+                    type="string",
+                    description=(
+                        "Free-text topic / entity / keyword to match against the market "
+                        "question (e.g. 'Fed rate cut', 'Bitcoin 100k', 'presidential "
+                        "election'). Optional — omit to list the most recently-updated "
+                        "open markets."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="category",
+                    type="string",
+                    description=(
+                        "Optional category filter. Suggested values: macro, politics, "
+                        "sports, crypto, ai, energy, tech, general."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="status",
+                    type="string",
+                    description="Market resolution status. Default 'open'.",
+                    required=False,
+                    enum=["open", "resolved", "all"],
+                ),
+                ParameterSpec(
+                    name="limit",
+                    type="integer",
+                    description="Max markets to return (1-50). Default 10.",
+                    required=False,
+                ),
+            ],
+            source_type="market_data",
+            example_queries=[
+                "What are the odds the Fed cuts rates in March?",
+                "What is Polymarket pricing for the next presidential election?",
+                "Show me prediction markets about Bitcoin hitting 100k",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
+    # Area-2 P3 (chat-enhancement-roadmap): curated TAM / market-size reference
+    # tool. Backed by a packaged analyst-estimate YAML table (NOT a live feed) so
+    # projection / what-if questions can GROUND a scenario parameter — a total
+    # addressable market, served-market size, or segment share — instead of only
+    # assuming it. The description states the estimate framing explicitly so the
+    # planner routes sizing/TAM/share questions here and the answer never
+    # overclaims freshness.
+    registry.register(
+        ToolSpec(
+            name="get_market_sizing",
+            description=(
+                "Returns curated TAM / total-addressable-market, served-market-size, and "
+                "segment-share ESTIMATES for a sector or segment. **Use this — NOT memory — "
+                "whenever a projection, what-if, sensitivity, or share-shift question needs a "
+                "market size, TAM, served market, or vendor share as a scenario parameter** "
+                "(e.g. 'if AMD captures 15% of the AI accelerator TAM, what is the revenue "
+                "impact?', 'how big is the data-center CPU market?', 'HBM market share'). "
+                "Covers semiconductor segments (AI accelerator/data-center GPU, data-center "
+                "CPU, HBM, foundry, DRAM, NAND, analog, automotive, EDA), smartphone "
+                "(revenue, units, mobile SoC), and cloud (IaaS/PaaS, SaaS, generative-AI "
+                "platform, cybersecurity, data-center capex). IMPORTANT: this is "
+                "ANALYST-ESTIMATE REFERENCE DATA with an as-of date, NOT a real-time feed — "
+                "present every figure as a dated estimate and cite it "
+                "([get_market_sizing row N]). Retrieve the entity's OWN base figures via "
+                "query_fundamentals / get_fundamentals_history for the anchor; use this tool "
+                "only for the market-size / share scenario parameter."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="query",
+                    type="string",
+                    description=(
+                        "Free-text sector / segment / keyword to match (e.g. 'AI "
+                        "accelerator TAM', 'data-center CPU market', 'HBM share', 'cloud "
+                        "infrastructure', 'smartphone units'). Optional — omit to list "
+                        "reference rows (optionally narrowed by category)."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="category",
+                    type="string",
+                    description="Optional coarse category filter.",
+                    required=False,
+                    enum=["semiconductor", "smartphone", "cloud"],
+                ),
+                ParameterSpec(
+                    name="limit",
+                    type="integer",
+                    description="Max reference rows to return (1-20). Default 5.",
+                    required=False,
+                ),
+            ],
+            source_type="market_data",
+            example_queries=[
+                "How big is the AI accelerator TAM?",
+                "What is the data-center CPU market size and AMD's share?",
+                "If AMD wins 20% of the AI GPU market, what revenue is that?",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
     # PLAN-0082 Wave A + Wave B: register 2 action tools (get_alerts, create_alert).
     # Calls S9-proxied S10 alert endpoints (R14 compliance).
     # create_alert requires user confirmation before execution (requires_confirmation=true).
@@ -1150,7 +1392,16 @@ def build_default_registry() -> ToolRegistry:
                 "EPS, P/E, market cap) for MULTIPLE tickers in a single call. "
                 "Returns a per-ticker dict {ticker: {status: ok|error, periods?, "
                 "reason?}}; partial failures (unknown ticker, missing data) do not fail the "
-                "whole batch. Cap: 25 tickers per call."
+                "whole batch. Cap: 25 tickers per call. "
+                # D-b (2026-07-08): batch date-anchoring — same contract as the
+                # singular get_fundamentals_history tool.
+                "By default this returns the LATEST N periods per ticker. **When the "
+                "question anchors to a specific PAST year or quarter (e.g. 'each company's "
+                "FY2024 Q3 revenue', 'compare 2023 margins'), you MUST pass `from_date` and "
+                "`to_date` (both, as YYYY-MM-DD) bounding that window** — otherwise you get "
+                "the latest quarters and would misreport them as the requested period. When "
+                "a window is given each ticker returns ONLY rows whose period_end falls in "
+                "it; a ticker with no rows in the window is marked 'not covered for that period'."
             ),
             parameters=[
                 ParameterSpec(
@@ -1163,6 +1414,30 @@ def build_default_registry() -> ToolRegistry:
                     name="periods",
                     type="integer",
                     description="Number of quarters per ticker (1-20). Default 5.",
+                    required=False,
+                ),
+                # D-b (2026-07-08): explicit historical-window bounds, mirroring
+                # the singular get_fundamentals_history tool. Both must be supplied
+                # together; a lone bound is ignored (falls back to latest-N).
+                ParameterSpec(
+                    name="from_date",
+                    type="string",
+                    description=(
+                        "Optional ISO date (YYYY-MM-DD). Pair with `to_date` to anchor a "
+                        "specific past year/quarter across ALL tickers — e.g. for calendar "
+                        "year 2024 use from_date='2024-01-01', to_date='2024-12-31'. Only rows "
+                        "whose period_end falls in [from_date, to_date] are returned. Omit for "
+                        "the latest N periods."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="to_date",
+                    type="string",
+                    description=(
+                        "Optional ISO date (YYYY-MM-DD) — the inclusive upper bound, paired with "
+                        "`from_date`. Ignored unless both are provided."
+                    ),
                     required=False,
                 ),
             ],
@@ -1327,5 +1602,27 @@ def build_default_registry() -> ToolRegistry:
         ),
         handler=lambda **_: None,
     )
+
+    # Evaluation-only tool allowlist (EMNLP demo ablation). If the env var
+    # RAG_CHAT_TOOL_ALLOWLIST is set, or the file it points to exists, prune the
+    # registry to the comma/newline-separated tool names given, so the planner
+    # can only choose among them. Absent (the default) is a no-op, so production
+    # behaviour is unchanged. Used to run a document-only-RAG baseline.
+    import os
+
+    _allow = os.getenv("RAG_CHAT_TOOL_ALLOWLIST")
+    _allow_file = os.getenv("RAG_CHAT_TOOL_ALLOWLIST_FILE", "/app/tool_allowlist.txt")
+    if not _allow and os.path.exists(_allow_file):
+        with open(_allow_file) as _f:
+            _allow = _f.read()
+    if _allow:
+        keep = {t.strip() for t in _allow.replace(",", "\n").split() if t.strip()}
+        if keep:
+            registry._specs = {k: v for k, v in registry._specs.items() if k in keep}
+            registry._handlers = {k: v for k, v in registry._handlers.items() if k in keep}
+            # Ablation must never serve a cached full-system answer for a
+            # restricted-tool question, so disable the completion cache in this
+            # process while the allowlist is active.
+            os.environ["RAG_COMPLETION_CACHE_DISABLED"] = "true"
 
     return registry

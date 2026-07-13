@@ -465,6 +465,43 @@ class TemporalEventsListResponse(BaseModel):
     total: int
 
 
+# ── GET /api/v1/entities/{entity_id}/predictions (PLAN-0056 Wave C4) ───────────
+
+
+class EntityPredictionItem(BaseModel):
+    """One prediction market that references a given entity, with polarity.
+
+    Read side of the KG linkage built in PLAN-0056 Waves C2/C2b/C3.
+    ``condition_id`` is the Polymarket conditionId — the critical join key the
+    S9 gateway (Wave E1) uses to hydrate current odds/liquidity from S3.
+    """
+
+    condition_id: str = Field(description="Polymarket conditionId — join key for live odds/liquidity.")
+    question: str = Field(description="The market question (temporal_events.title).")
+    polarity: str | None = Field(
+        default=None,
+        description="Directional signal for the entity: bullish/bearish/neutral, or null.",
+    )
+    polarity_confidence: float | None = Field(
+        default=None,
+        description="Confidence [0,1] of the polarity classification, or null.",
+    )
+    close_time: datetime | None = Field(
+        default=None,
+        description="Market close/resolution time (temporal_events.active_until); null = open.",
+    )
+    confidence: float = Field(description="Confidence [0,1] of the entity-event exposure link.")
+
+
+class EntityPredictionsResponse(BaseModel):
+    """Paginated list of prediction markets referencing an entity (Wave C4)."""
+
+    items: list[EntityPredictionItem]
+    total: int
+    limit: int
+    offset: int
+
+
 # ── POST /api/v1/graph/cypher/path ─────────────────────────────────────────────
 
 

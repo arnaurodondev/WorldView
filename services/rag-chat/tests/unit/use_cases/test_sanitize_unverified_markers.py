@@ -82,3 +82,49 @@ def test_case_insensitive_tag() -> None:
     text = "Founded in 2021 [UNVERIFIED]."
     out = _sanitize_unverified_markers(text)
     assert "UNVERIFIED" not in out.upper().replace("(SOURCE UNVERIFIED)", "")
+
+
+# ── Improvement #1 (2026-07-06): suppress the blanket caveat on GROUNDED answers ──
+
+
+def test_append_disclaimer_false_strips_banner_without_caveat() -> None:
+    """A GROUNDED answer (grounding_passed True → no material unsupported numbers)
+    that happens to carry a leaked banner must be SCRUBBED but NOT get the blanket
+    "could not be matched to a retrieved source" caveat.
+    """
+    text = "Revenue was $24.7B [1].\n\n⚠ Some numbers could not be verified (validator timeout)."
+    out = _sanitize_unverified_markers(text, append_disclaimer=False)
+    # The leaked banner is still removed (defense-in-depth).
+    assert "⚠" not in out
+    # But the needless canonical caveat is NOT appended on a grounded answer.
+    assert _CANONICAL_UNVERIFIED_DISCLAIMER not in out
+    assert out.rstrip().endswith("[1].")
+
+
+def test_append_disclaimer_false_neutralizes_inline_tag_without_caveat() -> None:
+    """A leaked inline ``[unverified]`` tag on a grounded answer is neutralised to
+    prose but still no trailing caveat is added.
+    """
+    text = "Founded in 2021 [unverified] [1]."
+    out = _sanitize_unverified_markers(text, append_disclaimer=False)
+    assert "[unverified]" not in out
+    assert "(source unverified)" in out
+    assert _CANONICAL_UNVERIFIED_DISCLAIMER not in out
+
+
+def test_append_disclaimer_true_is_default_and_unchanged() -> None:
+    """The default (append_disclaimer=True) preserves the legacy behaviour: a
+    banner is collapsed into exactly one canonical caveat.
+    """
+    text = "Revenue was $24.7B.\n\n⚠ Some numbers could not be verified (validator timeout)."
+    out = _sanitize_unverified_markers(text)  # default True
+    assert out.rstrip().endswith(_CANONICAL_UNVERIFIED_DISCLAIMER)
+    assert out.count(_CANONICAL_UNVERIFIED_DISCLAIMER) == 1
+
+
+def test_append_disclaimer_false_noop_on_clean_grounded_answer() -> None:
+    """No marker/banner at all → byte-for-byte unchanged regardless of the flag
+    (a fully-grounded answer never even reaches the append branch).
+    """
+    text = "Apple revenue was $111.184B for Q4 FY2024 [1]."
+    assert _sanitize_unverified_markers(text, append_disclaimer=False) == text

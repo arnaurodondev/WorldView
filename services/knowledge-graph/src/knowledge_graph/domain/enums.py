@@ -92,6 +92,12 @@ class EventType(StrEnum):
     CORPORATE — added by PLAN-0068 Wave A-1 for earnings calendar events ingested
     from Finnhub via the EarningsCalendarDatasetConsumer (consumer 13D-9).
     Requires intelligence-migrations 0018 (adds 'corporate' to the CHECK constraint).
+
+    PREDICTION — added by PLAN-0056 Wave C2 (PRD-0033) for prediction-market
+    events (e.g. Polymarket) ingested via the PredictionEnrichedConsumer. Each
+    NER-enriched Polymarket synthetic document becomes one temporal event with
+    ``event_type='prediction'`` and one exposure per resolved entity. Requires
+    intelligence-migrations 0066 (adds 'prediction' to the CHECK constraint).
     """
 
     GEOPOLITICAL = "geopolitical"
@@ -101,6 +107,7 @@ class EventType(StrEnum):
     NATURAL_DISASTER = "natural_disaster"
     OTHER = "other"
     CORPORATE = "corporate"
+    PREDICTION = "prediction"
 
 
 class ExposureType(StrEnum):

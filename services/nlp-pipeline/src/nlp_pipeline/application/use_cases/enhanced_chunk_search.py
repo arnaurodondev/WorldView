@@ -15,8 +15,12 @@ stored as MinIO objects.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import dataclasses
 import hashlib
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import date
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -35,6 +39,18 @@ if TYPE_CHECKING:
         ChunkTextStorePort,
         DocumentSourceMetadataRepository,
     )
+
+# A zero-arg factory that yields a fresh ``ChunkSearchPort`` bound to its OWN
+# read-replica session, as an async context manager. Injected by the API layer
+# (see api/dependencies.py) so the hybrid path can run its two legs concurrently
+# — each leg leases an isolated session, sidestepping the "AsyncSession is not
+# safe for concurrent use" constraint that forced the old sequential path.
+ChunkSearchScope = Callable[[], AbstractAsyncContextManager["ChunkSearchPort"]]
+
+# Embedding model used for query-time embedding. Pinned here so the Valkey cache
+# key can be computed BEFORE the embed round-trip (the key must include the model
+# so a model swap does not serve stale vectors).
+_QUERY_EMBED_MODEL_ID = "BAAI/bge-large-en-v1.5"
 
 _log = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -90,8 +106,23 @@ class EnrichedChunkResult:
 # ── Use case ──────────────────────────────────────────────────────────────────
 
 
-def _embed_cache_key(text: str) -> str:
-    digest = hashlib.sha256(text.encode()).hexdigest()[:16]
+def _normalize_query(text: str) -> str:
+    """Normalize a query for cache-key stability: trim, collapse whitespace, casefold.
+
+    Keeps semantically-identical queries that differ only in spacing/case on the
+    SAME cache key so repeated chat queries reliably hit the cache.
+    """
+    return " ".join(text.split()).casefold()
+
+
+def _embed_cache_key(text: str, model_id: str = _QUERY_EMBED_MODEL_ID) -> str:
+    """Valkey key for a query embedding, namespaced by embedding model.
+
+    The model id is part of the hashed material so swapping the embedding model
+    (a different vector space) can never serve a stale cross-model vector.
+    """
+    material = f"{model_id}\x00{_normalize_query(text)}".encode()
+    digest = hashlib.sha256(material).hexdigest()[:24]
     return f"s6:v1:emb:{digest}"
 
 
@@ -122,6 +153,14 @@ class EnhancedChunkSearchUseCase:
         embedding_client: EmbeddingClient | None = None,
         chunk_text_store: ChunkTextStorePort | None = None,
         lexical_boost: float = 1.5,
+        # R1 latency fix: when a scope factory is injected AND parallel_hybrid is
+        # on, the hybrid path runs its ANN and lexical legs CONCURRENTLY, each on
+        # its own session leased from this factory. When None, the use case falls
+        # back to the sequential path on the shared request session (still fast:
+        # it now fuses RAW rows and enriches ONCE — see _execute_hybrid).
+        chunk_search_scope: ChunkSearchScope | None = None,
+        parallel_hybrid: bool = True,
+        embed_cache_ttl_s: int = _EMBED_CACHE_TTL,
     ) -> None:
         self._ann = chunk_ann_repo
         self._meta = source_metadata_repo
@@ -133,6 +172,9 @@ class EnhancedChunkSearchUseCase:
         # 1.5 from §0-bis.7; the eval harness's --mode hybrid_boost_sweep
         # picks the optimum value per dataset.
         self._lexical_boost = lexical_boost
+        self._chunk_search_scope = chunk_search_scope
+        self._parallel_hybrid = parallel_hybrid
+        self._embed_cache_ttl_s = embed_cache_ttl_s
 
     async def execute(
         self,
@@ -317,7 +359,29 @@ class EnhancedChunkSearchUseCase:
         entity_types: list[str] | None = None,
         tenant_id: str | None = None,
     ) -> tuple[list[EnrichedChunkResult], int, str]:
-        """Hybrid ANN + lexical path with RRF + adaptive boost (L9)."""
+        """Hybrid ANN + lexical path with RRF + adaptive boost (L9).
+
+        R1 latency fix (2026-07-06)
+        ---------------------------
+        Two structural changes cut end-to-end latency from ~ann+lex to
+        ~max(embed+ann, lex) WITHOUT changing the fused result set:
+
+        1. **Fuse RAW rows, enrich ONCE.** The old code enriched each leg
+           separately (batch metadata + entity mentions + MinIO chunk text),
+           then fused ``EnrichedChunkResult`` objects — running enrichment on up
+           to ``2*top_k`` rows across two serial passes. RRF only uses rank
+           position + ``chunk_id``, so fusing the RAW repo rows and enriching
+           the ``top_k`` UNION exactly once is result-identical and roughly
+           halves enrichment cost.
+
+        2. **Run the legs concurrently.** BM25/FTS needs no query vector, so the
+           lexical leg starts immediately and overlaps the embedding round-trip;
+           the ANN leg starts the moment the vector is ready and overlaps the
+           still-running lexical leg. Each leg leases its OWN session from
+           ``self._chunk_search_scope`` (an AsyncSession cannot be shared across
+           concurrent coroutines). Without a scope factory we fall back to the
+           sequential path on the shared session (still benefits from #1).
+        """
         # Short-query fallback: 1-2 token FTS queries are too noisy.
         if len(query_text.split()) < _HYBRID_MIN_TOKENS:
             _log.info(  # type: ignore[no-any-return]
@@ -339,44 +403,48 @@ class EnhancedChunkSearchUseCase:
                 tenant_id=tenant_id,
             )
 
-        # BP-NEW-ASYNCSESSION (this commit): the two legs are run SEQUENTIALLY,
-        # not concurrently, because both ultimately use the same AsyncSession
-        # held by ``self._repo``. SQLAlchemy AsyncSession is documented as
-        # NOT safe for concurrent use from multiple coroutines (each connection
-        # `_connection_for_bind` operation must complete before the next is
-        # started). Running them under ``asyncio.gather`` raised
-        # ``IllegalStateChangeError`` ("Method 'close()' can't be called here;
-        # method '_connection_for_bind()' is already in progress") on every
-        # request. Fix is sequential: ANN first (typically ~80-150ms), lex
-        # second (~50ms). Total latency ~max+min instead of max — acceptable
-        # tradeoff for correctness. A future wave that injects a session
-        # factory (one session per leg) can restore true parallelism.
-        (ann_results, ann_total, ann_model) = await self._execute_ann(
-            query_text=query_text,
-            query_embedding=query_embedding,
-            granularity=granularity,
-            top_k=top_k,
-            min_score=min_score,
-            include_entities=include_entities,
-            date_from=date_from,
-            date_to=date_to,
-            source_types=source_types,
-            entity_ids=entity_ids,
-            entity_types=entity_types,
-            tenant_id=tenant_id,
-        )
-        (lex_results, lex_total, _lex_model) = await self._execute_lexical(
-            query_text=query_text,
-            top_k=top_k,
-            min_score=min_score,
-            include_entities=include_entities,
-            date_from=date_from,
-            date_to=date_to,
-            source_types=source_types,
-            entity_ids=entity_ids,
-            entity_types=entity_types,
-            tenant_id=tenant_id,
-        )
+        ann_kwargs: dict[str, Any] = {
+            "granularity": granularity,
+            "top_k": top_k,
+            "min_score": min_score,
+            "date_from": date_from,
+            "date_to": date_to,
+            "source_types": source_types or [],
+            "entity_ids": entity_ids,
+            "entity_types": entity_types,
+            "tenant_id": tenant_id,
+        }
+        lex_kwargs: dict[str, Any] = {
+            "query_text": query_text,
+            "mode": "both",
+            "top_k": top_k,
+            "min_score": min_score,
+            "date_from": date_from,
+            "date_to": date_to,
+            "source_types": source_types or None,
+            "entity_ids": entity_ids,
+            "entity_types": entity_types,
+            "tenant_id": tenant_id,
+        }
+
+        if self._chunk_search_scope is not None and self._parallel_hybrid:
+            ann_rows, ann_total, lex_rows, lex_total, embedding_model = await self._run_legs_parallel(
+                query_text=query_text,
+                query_embedding=query_embedding,
+                ann_kwargs=ann_kwargs,
+                lex_kwargs=lex_kwargs,
+            )
+        else:
+            # Sequential fallback on the shared request session — still fuses raw
+            # rows + enriches once (#1), just without inter-leg overlap.
+            vec, embedding_model = await self._resolve_embedding(query_text, query_embedding)
+            ann_rows, ann_total = await self._ann.ann_search(embedding=vec, **ann_kwargs)
+            lex_rows, lex_total = await self._ann.lexical_search(**lex_kwargs)
+
+        # Lexical rows come back without ``granularity`` (chunk-only); inject it
+        # so enrichment and the RRF key both see a uniform shape.
+        for r in lex_rows:
+            r.setdefault("granularity", "chunk")
 
         # Adaptive boost: when the query has identifier-style rare tokens,
         # weight the lexical ranking up. The boost is tunable (L9).
@@ -384,19 +452,73 @@ class EnhancedChunkSearchUseCase:
         lex_weight = self._lexical_boost if analysis.has_rare_token else 1.0
         weights = (1.0, lex_weight)
 
+        # Fuse the RAW repo rows by chunk_id — identical ranking to the old
+        # enrich-then-fuse path (RRF is order-only; the ANN leg's row wins ties
+        # as first-ranking, preserving its metadata for the single enrich pass).
         fused = reciprocal_rank_fuse(
-            [ann_results, lex_results],
+            [ann_rows, lex_rows],
             k=_RRF_K,
-            key=lambda r: r.chunk_id,
+            key=lambda r: r["chunk_id"],
             weights=weights,
         )
 
-        # Truncate to top_k and drop the score (callers re-rank downstream).
-        # `total_searched` reports the union — this is approximate but
-        # matches what the response field is intended to convey.
-        results = [item for item, _score in fused[:top_k]]
+        top_rows = [row for row, _score in fused[:top_k]]
         union_total = ann_total + lex_total
-        return results, union_total, "hybrid+lexical:" + ann_model
+        if not top_rows:
+            return [], union_total, "hybrid+lexical:" + embedding_model
+
+        results = await self._enrich_raw_results(top_rows, include_entities=include_entities)
+        return results, union_total, "hybrid+lexical:" + embedding_model
+
+    async def _run_legs_parallel(
+        self,
+        *,
+        query_text: str,
+        query_embedding: list[float] | None,
+        ann_kwargs: dict[str, Any],
+        lex_kwargs: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]], int, str]:
+        """Run the ANN and lexical legs concurrently, each on its own session.
+
+        Returns ``(ann_rows, ann_total, lex_rows, lex_total, embedding_model)``.
+
+        Overlap schedule:
+          * t0  — start the lexical leg (needs no query vector).
+          * t0  — resolve the query embedding (Valkey cache → DeepInfra) while
+                  the lexical leg runs.
+          * t1  — start the ANN leg as soon as the vector is ready; it overlaps
+                  the still-running lexical leg.
+        Total ≈ max(embed + ann, lex) instead of the old embed + ann + lex.
+        """
+        assert self._chunk_search_scope is not None  # guarded by caller
+
+        lex_task = asyncio.create_task(self._scoped_lexical(lex_kwargs))
+        try:
+            vec, embedding_model = await self._resolve_embedding(query_text, query_embedding)
+            ann_rows, ann_total = await self._scoped_ann(vec, ann_kwargs)
+        except BaseException:
+            # Never leak the background lexical task if embedding/ANN fails.
+            lex_task.cancel()
+            with contextlib.suppress(BaseException):
+                await lex_task
+            raise
+
+        lex_rows, lex_total = await lex_task
+        return ann_rows, ann_total, lex_rows, lex_total, embedding_model
+
+    async def _scoped_ann(self, embedding: list[float], ann_kwargs: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
+        """Run the RAW ANN search on a freshly-leased, isolated session."""
+        assert self._chunk_search_scope is not None
+        async with self._chunk_search_scope() as repo:
+            return await repo.ann_search(embedding=embedding, **ann_kwargs)
+
+    async def _scoped_lexical(self, lex_kwargs: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
+        """Run the RAW lexical search on a freshly-leased, isolated session."""
+        assert self._chunk_search_scope is not None
+        kwargs = dict(lex_kwargs)
+        query_text = kwargs.pop("query_text")
+        async with self._chunk_search_scope() as repo:
+            return await repo.lexical_search(query_text, **kwargs)
 
     # ── Result assembly (shared by all paths) ────────────────────────────────
 
@@ -566,7 +688,7 @@ class EnhancedChunkSearchUseCase:
 
         from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
 
-        outputs = await self._emb.embed([EmbeddingInput(text=query_text, model_id="BAAI/bge-large-en-v1.5")])
+        outputs = await self._emb.embed([EmbeddingInput(text=query_text, model_id=_QUERY_EMBED_MODEL_ID)])
         vec: list[float] = outputs[0].embedding
         model_name = outputs[0].model_id
 
@@ -574,7 +696,7 @@ class EnhancedChunkSearchUseCase:
             try:
                 import json
 
-                await self._valkey.set(cache_key, json.dumps(vec), ex=_EMBED_CACHE_TTL)
+                await self._valkey.set(cache_key, json.dumps(vec), ex=self._embed_cache_ttl_s)
             except Exception:
                 _log.warning("chunk_search_embed_cache_write_failed", key=cache_key, exc_info=True)  # type: ignore[no-any-return]
 

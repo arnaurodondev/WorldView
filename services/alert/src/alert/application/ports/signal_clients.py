@@ -53,3 +53,19 @@ class IS6NewsClient(ABC):
     @abstractmethod
     async def get_trending_momentum(self, entity_id: UUID, window_hours: int) -> tuple[float, int] | None:
         """Return ``(delta_pct, count)`` for an entity in a window, or None if absent."""
+
+
+class IPredictionSignalClient(ABC):
+    """Port for the latest prediction-market signal about an entity (PLAN-0056 Wave D3).
+
+    Backs the event-driven ``PredictionRuleEvaluator``. Read-only and
+    best-effort: implementations return ``None`` on any transport/HTTP error or
+    when no signal exists, so a flaky upstream is treated as "no observation"
+    (no fire, no state change) rather than crashing the consumer.
+    """
+
+    @abstractmethod
+    async def get_latest_impact(self, entity_id: UUID) -> tuple[float, str] | None:
+        """Return ``(market_impact_score, polarity)`` for the entity's most recent
+        prediction signal, or ``None`` when none is available.
+        """

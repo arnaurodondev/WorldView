@@ -30,8 +30,6 @@ dev HS256 fallback when the key is empty).  This mirrors the pattern used by
 
 from __future__ import annotations
 
-import time
-
 import httpx
 
 from market_data.application.ports.intelligence_clients import (
@@ -56,6 +54,7 @@ from market_data.domain.intelligence_rollup import (
 from market_data.domain.intelligence_rollup import (
     S10AlertFlag as S10AlertFlag,
 )
+from observability.internal_jwt import mint_internal_jwt  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
@@ -67,38 +66,18 @@ logger = get_logger(__name__)
 def _make_internal_jwt(private_key_pem: str) -> str:
     """Sign a short-lived (5-minute) internal JWT for system-to-system calls.
 
-    Mirrors ``FundamentalsRefreshWorker._sign_internal_jwt`` exactly —
-    RS256 when ``private_key_pem`` is non-empty; HS256 dev fallback otherwise.
+    DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
+    always carries the required ``aud="worldview-internal"`` claim and a unique
+    ``jti`` — without which ``InternalJWTMiddleware`` returns 401 once real
+    verification is enabled.  RS256 when ``private_key_pem`` is non-empty;
+    HS256 dev fallback (skip_verification path) otherwise.
     """
-    try:
-        import jwt  # PyJWT
-    except ImportError:
-        import PyJWT as jwt  # type: ignore[no-redef]  # noqa: N813
-
-    now = int(time.time())
-    payload = {
-        "iss": "worldview-gateway",
-        "sub": "system:intelligence-rollup-worker",
-        "user_id": "00000000-0000-0000-0000-000000000000",
-        "tenant_id": "00000000-0000-0000-0000-000000000000",
-        "role": "system",
-        "iat": now,
-        "exp": now + 300,
-    }
-
-    if private_key_pem:
-        from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
-        private_key = load_pem_private_key(private_key_pem.encode(), password=None)
-        return str(jwt.encode(payload, private_key, algorithm="RS256"))  # type: ignore[arg-type]
-
-    # Dev fallback — same shared secret as other workers so market-data
-    # skip_verification=True path accepts it transparently.
     return str(
-        jwt.encode(
-            payload,
-            "dev-skip-verification-key-for-kg-structured-enrichment",
-            algorithm="HS256",
+        mint_internal_jwt(
+            sub="system:intelligence-rollup-worker",
+            ttl_seconds=300,
+            private_key_pem=private_key_pem,
+            dev_hs256_secret="dev-skip-verification-key-for-kg-structured-enrichment",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
         )
     )
 
@@ -137,6 +116,26 @@ class _BaseIntelligenceClient:
                 resp = await self._client.get(url, headers=self._auth_headers())
                 if resp.status_code < 500:
                     # 2xx, 3xx, 4xx — don't retry (4xx is caller error, not transient)
+                    # GUARDRAIL (2026-07-01 internal-JWT audit): a 401/403 here means
+                    # the X-Internal-JWT this client mints was missing/invalid/rejected
+                    # by the upstream service. Previously this was returned with NO log
+                    # at all and the caller silently degraded to None — the exact
+                    # silent-401 class that hid the FTS citation-enrichment failure.
+                    # Log auth failures at ERROR so a misconfigured internal-JWT key
+                    # (or an upstream that flipped skip_verification off) surfaces
+                    # immediately instead of masquerading as "no intelligence data".
+                    if resp.status_code in (401, 403):
+                        logger.error(
+                            "intelligence_client_auth_failure",
+                            url=url,
+                            status=resp.status_code,
+                            auth_failure=True,
+                            detail=(
+                                "internal X-Internal-JWT rejected by upstream — "
+                                "intelligence rollup field will be silently empty "
+                                "(check MARKET_DATA_INTERNAL_JWT_PRIVATE_KEY / audience)"
+                            ),
+                        )
                     return resp
                 # 5xx — retry once
                 if attempt == 0:

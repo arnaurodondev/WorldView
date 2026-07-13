@@ -10,10 +10,14 @@ import pytest
 from content_ingestion.config import SECEdgarProviderSettings
 from content_ingestion.domain.entities import Source, SourceType
 from content_ingestion.domain.exceptions import ConfigurationError
-from content_ingestion.infrastructure.adapters.base import RetryConfig
+from content_ingestion.infrastructure.adapters.base import RetryConfig, url_hash
 from content_ingestion.infrastructure.adapters.sec_edgar.adapter import (
     SECEdgarAdapter,
+    _extract_efts_primary_doc,
+    _is_xbrl_or_viewer,
     _parse_published_at,
+    _synthesize_title,
+    resolve_primary_document,
 )
 from content_ingestion.infrastructure.adapters.sec_edgar.client import SECEdgarClient
 
@@ -29,6 +33,28 @@ def _make_source(**kwargs: Any) -> Source:
     }
     defaults.update(kwargs)
     return Source(**defaults)
+
+
+def _manifest(primary_name: str, form_type: str = "10-Q") -> dict[str, Any]:
+    """Build a realistic EDGAR ``index.json`` manifest with a primary doc + XBRL noise."""
+    return {
+        "directory": {
+            "item": [
+                {"name": f"{primary_name}", "type": form_type, "size": "500000"},
+                {"name": "R1.htm", "type": "", "size": "12000"},
+                {"name": "filing_cal.xml", "type": "EX-101.CAL", "size": "8000"},
+                {"name": "exhibit99.htm", "type": "EX-99.1", "size": "3000"},
+            ]
+        }
+    }
+
+
+def _mock_client_with_primary(primary_name: str = "primary-doc.htm") -> AsyncMock:
+    """AsyncMock SECEdgarClient wired so the primary-doc fetch path succeeds."""
+    mock_client = AsyncMock(spec=SECEdgarClient)
+    mock_client.fetch_filing_manifest.return_value = _manifest(primary_name)
+    mock_client.fetch_filing_document.return_value = b"<html>Filing content</html>"
+    return mock_client
 
 
 def _filing(adsh: str, ciks: list[str] | None = None) -> dict[str, Any]:
@@ -114,6 +140,7 @@ class TestSECEdgarAdapterFetch:
             # BP-460: use correct EFTS field names (adsh, ciks)
             _filing("0001234567-26-000001"),
         ]
+        mock_client.fetch_filing_manifest.return_value = _manifest("primary-doc.htm")
         mock_client.fetch_filing_document.return_value = b"<html>Filing content</html>"
 
         adapter = SECEdgarAdapter(
@@ -149,6 +176,7 @@ class TestSECEdgarAdapterFetch:
     async def test_is_backfill_propagated(self) -> None:
         mock_client = AsyncMock(spec=SECEdgarClient)
         mock_client.search_filings.return_value = [_filing("0001234567-26-000003")]
+        mock_client.fetch_filing_manifest.return_value = _manifest("primary-doc.htm")
         mock_client.fetch_filing_document.return_value = b"<html>content</html>"
 
         adapter = SECEdgarAdapter(
@@ -198,6 +226,7 @@ class TestSECEdgarFieldMappingBP460:
                 }
             }
         ]
+        mock_client.fetch_filing_manifest.return_value = _manifest("primary-doc.htm")
         mock_client.fetch_filing_document.return_value = b"<html>index</html>"
 
         adapter = SECEdgarAdapter(
@@ -224,6 +253,7 @@ class TestSECEdgarFieldMappingBP460:
                 }
             }
         ]
+        mock_client.fetch_filing_manifest.return_value = _manifest("primary-doc.htm")
         mock_client.fetch_filing_document.return_value = b"<html>index</html>"
 
         adapter = SECEdgarAdapter(
@@ -251,6 +281,7 @@ class TestSECEdgarFieldMappingBP460:
                 }
             }
         ]
+        mock_client.fetch_filing_manifest.return_value = _manifest("primary-doc.htm")
         mock_client.fetch_filing_document.return_value = b"<html>index</html>"
 
         adapter = SECEdgarAdapter(
@@ -260,7 +291,7 @@ class TestSECEdgarFieldMappingBP460:
         results = await adapter.fetch(_make_source())
         assert len(results) == 1
         expected_url = (
-            "https://www.sec.gov/Archives/edgar/data/320193" "/000147793226002885/0001477932-26-002885-index.htm"
+            "https://www.sec.gov/Archives/edgar/data/320193/000147793226002885/0001477932-26-002885-index.htm"
         )
         assert results[0].url == expected_url
 
@@ -277,6 +308,7 @@ class TestSECEdgarFieldMappingBP460:
                 }
             }
         ]
+        mock_client.fetch_filing_manifest.return_value = _manifest("primary-doc.htm")
         mock_client.fetch_filing_document.return_value = b"<html>index</html>"
 
         adapter = SECEdgarAdapter(
@@ -304,6 +336,7 @@ class TestSECEdgarFieldMappingBP460:
                 }
             }
         ]
+        mock_client.fetch_filing_manifest.return_value = _manifest("primary-doc.htm")
         mock_client.fetch_filing_document.return_value = b"<html>index</html>"
 
         adapter = SECEdgarAdapter(
@@ -380,3 +413,364 @@ class TestSECEdgarAdapterMarketHours:
         now_utc = self._utc("2026-04-07T21:00:00+00:00")
         expected = now_utc + timedelta(seconds=1800)  # type: ignore[operator]
         assert adapter.calculate_next_run_time(now_utc) == expected  # type: ignore[arg-type]
+
+
+class TestIsXbrlOrViewer:
+    """R1 Fix ①: exclude XBRL/taxonomy/viewer artefacts from primary-doc resolution."""
+
+    def test_xml_excluded(self) -> None:
+        assert _is_xbrl_or_viewer("aapl-20230930.xml") is True
+
+    def test_xsd_excluded(self) -> None:
+        assert _is_xbrl_or_viewer("aapl-20230930.xsd") is True
+
+    def test_r_viewer_excluded(self) -> None:
+        assert _is_xbrl_or_viewer("R1.htm") is True
+        assert _is_xbrl_or_viewer("R42.htm") is True
+
+    def test_xbrl_linkbase_html_excluded(self) -> None:
+        for suffix in ("_cal", "_def", "_lab", "_pre", "_ref"):
+            assert _is_xbrl_or_viewer(f"filing{suffix}.htm") is True
+
+    def test_primary_htm_not_excluded(self) -> None:
+        assert _is_xbrl_or_viewer("aapl-20230930.htm") is False
+
+    def test_case_insensitive(self) -> None:
+        assert _is_xbrl_or_viewer("FILING.XML") is True
+        assert _is_xbrl_or_viewer("r7.HTM") is True
+
+
+class TestResolvePrimaryDocument:
+    """R1 Fix ①: pick the largest form-matching HTML doc, excluding XBRL/viewer/index."""
+
+    def _manifest_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"directory": {"item": items}}
+
+    def test_prefers_form_matching_type_over_larger_exhibit(self) -> None:
+        # A larger EX-99 exhibit exists, but the 10-K-typed doc must win.
+        manifest = self._manifest_items(
+            [
+                {"name": "primary-10k.htm", "type": "10-K", "size": "200000"},
+                {"name": "big-exhibit.htm", "type": "EX-99.1", "size": "900000"},
+            ]
+        )
+        assert resolve_primary_document(manifest, form_type="10-K", accession_no="0001-26-1") == "primary-10k.htm"
+
+    def test_excludes_xbrl_and_viewer_files(self) -> None:
+        manifest = self._manifest_items(
+            [
+                {"name": "R1.htm", "type": "", "size": "999999"},
+                {"name": "doc_cal.htm", "type": "", "size": "999999"},
+                {"name": "doc.xml", "type": "10-Q", "size": "999999"},
+                {"name": "the-real-doc.htm", "type": "10-Q", "size": "50000"},
+            ]
+        )
+        assert resolve_primary_document(manifest, form_type="10-Q", accession_no="0001-26-1") == "the-real-doc.htm"
+
+    def test_excludes_index_page_itself(self) -> None:
+        manifest = self._manifest_items(
+            [
+                {"name": "0001-26-1-index.htm", "type": "", "size": "999999"},
+                {"name": "body.htm", "type": "8-K", "size": "10000"},
+            ]
+        )
+        assert resolve_primary_document(manifest, form_type="8-K", accession_no="0001-26-1") == "body.htm"
+
+    def test_largest_html_when_no_type_match(self) -> None:
+        # No type matches the form → fall back to largest non-excluded HTML.
+        manifest = self._manifest_items(
+            [
+                {"name": "small.htm", "type": "", "size": "1000"},
+                {"name": "large.htm", "type": "", "size": "80000"},
+            ]
+        )
+        assert resolve_primary_document(manifest, form_type="10-K", accession_no="0001-26-1") == "large.htm"
+
+    def test_returns_none_when_no_html(self) -> None:
+        manifest = self._manifest_items([{"name": "filing.txt", "type": "10-K", "size": "5000"}])
+        assert resolve_primary_document(manifest, form_type="10-K", accession_no="0001-26-1") is None
+
+    def test_returns_none_on_empty_manifest(self) -> None:
+        assert resolve_primary_document({}, form_type="10-K", accession_no="0001-26-1") is None
+
+    def test_handles_missing_size_field(self) -> None:
+        manifest = self._manifest_items([{"name": "doc.htm", "type": "10-K"}])
+        assert resolve_primary_document(manifest, form_type="10-K", accession_no="0001-26-1") == "doc.htm"
+
+    # ── Issue #3: EFTS primary_doc is authoritative over the largest-.htm heuristic ──
+
+    def test_efts_primary_doc_wins_over_largest_exhibit(self) -> None:
+        # Real-world 8-K trap: the EX-99.1 exhibit is LARGER than the body, so the
+        # largest-.htm heuristic picks the wrong doc. EFTS names the true body →
+        # it must win.
+        manifest = self._manifest_items(
+            [
+                {"name": "form8k.htm", "type": "text.gif", "size": "20000"},
+                {"name": "ex99-1.htm", "type": "text.gif", "size": "900000"},
+            ]
+        )
+        assert (
+            resolve_primary_document(manifest, form_type="8-K", accession_no="0001-26-1", efts_primary_doc="form8k.htm")
+            == "form8k.htm"
+        )
+
+    def test_efts_primary_doc_ignored_when_not_in_manifest(self) -> None:
+        # A stale/typo EFTS filename that is absent from the manifest must NOT be
+        # returned (would 404); fall back to the manifest heuristic.
+        manifest = self._manifest_items([{"name": "real-body.htm", "type": "text.gif", "size": "50000"}])
+        assert (
+            resolve_primary_document(manifest, form_type="8-K", accession_no="0001-26-1", efts_primary_doc="ghost.htm")
+            == "real-body.htm"
+        )
+
+    def test_efts_primary_doc_ignored_when_xbrl_artifact(self) -> None:
+        # EFTS should never hand us an R-viewer, but if it does we fall back.
+        manifest = self._manifest_items([{"name": "body.htm", "type": "text.gif", "size": "50000"}])
+        assert (
+            resolve_primary_document(manifest, form_type="10-K", accession_no="0001-26-1", efts_primary_doc="R1.htm")
+            == "body.htm"
+        )
+
+    def test_efts_primary_doc_trusted_when_manifest_empty(self) -> None:
+        # No manifest available (empty dict) but EFTS gave a plausible body → trust it.
+        assert (
+            resolve_primary_document({}, form_type="10-K", accession_no="0001-26-1", efts_primary_doc="aapl-10k.htm")
+            == "aapl-10k.htm"
+        )
+
+    def test_efts_non_html_primary_doc_falls_back(self) -> None:
+        # EFTS primary is a .txt (old text filing) → not a groundable HTML body,
+        # fall back to the manifest heuristic (here: None, text-only).
+        manifest = self._manifest_items([{"name": "filing.txt", "type": "text.gif", "size": "5000"}])
+        assert (
+            resolve_primary_document(manifest, form_type="8-K", accession_no="0001-26-1", efts_primary_doc="filing.txt")
+            is None
+        )
+
+
+class TestExtractEftsPrimaryDoc:
+    """Issue #3: pull the primary-document filename out of an EFTS hit."""
+
+    def test_from_hit_id_after_colon(self) -> None:
+        filing = {"_id": "0000320193-24-000123:aapl-20240928.htm", "_source": {}}
+        assert _extract_efts_primary_doc(filing, filing["_source"]) == "aapl-20240928.htm"
+
+    def test_source_primary_doc_field_preferred(self) -> None:
+        source = {"primary_doc": "body.htm"}
+        filing = {"_id": "0001-26-1:other.htm", "_source": source}
+        assert _extract_efts_primary_doc(filing, source) == "body.htm"
+
+    def test_camelcase_primary_document_field(self) -> None:
+        source = {"primaryDocument": "body.htm"}
+        assert _extract_efts_primary_doc({"_source": source}, source) == "body.htm"
+
+    def test_returns_none_when_absent(self) -> None:
+        assert _extract_efts_primary_doc({"_id": "no-colon-here"}, {}) is None
+        assert _extract_efts_primary_doc({}, {}) is None
+
+
+class TestSynthesizeTitle:
+    """R1 Fix ①: dsm.title must stop being NULL — synthesize '{FORM} — {Company} ({Period})'."""
+
+    def test_full_title_from_entity_name(self) -> None:
+        src = {"entity_name": "Apple Inc.", "period_ending": "2026-03-31"}
+        assert _synthesize_title(src, "10-Q") == "10-Q — Apple Inc. (2026-03-31)"
+
+    def test_strips_ticker_and_cik_from_display_names(self) -> None:
+        src = {"display_names": ["Apple Inc. (AAPL) (CIK 0000320193)"], "period_ending": "2026-03-31"}
+        assert _synthesize_title(src, "10-K") == "10-K — Apple Inc. (2026-03-31)"
+
+    def test_falls_back_to_file_date_when_no_period(self) -> None:
+        src = {"entity_name": "Test Corp", "file_date": "2026-01-20"}
+        assert _synthesize_title(src, "8-K") == "8-K — Test Corp (2026-01-20)"
+
+    def test_no_period_omits_parenthetical(self) -> None:
+        src = {"entity_name": "Test Corp"}
+        assert _synthesize_title(src, "8-K") == "8-K — Test Corp"
+
+    def test_returns_none_when_no_form_and_no_company(self) -> None:
+        assert _synthesize_title({"period_ending": "2026-03-31"}, "") is None
+
+
+class TestParseCiks:
+    """R1 Fix ②: watchlist CIKs normalise to zero-padded 10-digit form."""
+
+    def test_comma_separated_string(self) -> None:
+        assert SECEdgarAdapter._parse_ciks("320193, 789019") == ["0000320193", "0000789019"]
+
+    def test_list_of_ints(self) -> None:
+        assert SECEdgarAdapter._parse_ciks([320193, 789019]) == ["0000320193", "0000789019"]
+
+    def test_already_padded(self) -> None:
+        assert SECEdgarAdapter._parse_ciks(["0000320193"]) == ["0000320193"]
+
+    def test_none_and_empty(self) -> None:
+        assert SECEdgarAdapter._parse_ciks(None) == []
+        assert SECEdgarAdapter._parse_ciks("") == []
+
+    def test_drops_non_numeric(self) -> None:
+        assert SECEdgarAdapter._parse_ciks("320193, abc, 789019") == ["0000320193", "0000789019"]
+
+
+class TestSECEdgarPrimaryDocFetch:
+    """R1 Fix ①/②: adapter fetches the primary doc, sets a title, skips text-only, scopes by CIK."""
+
+    async def test_fetches_primary_doc_not_index_page(self) -> None:
+        mock_client = _mock_client_with_primary("aapl-10q.htm")
+        mock_client.search_filings.return_value = [_filing("0001234567-26-000001", ciks=["0000320193"])]
+        adapter = SECEdgarAdapter(client=mock_client, retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)))
+
+        results = await adapter.fetch(_make_source())
+
+        assert len(results) == 1
+        # The document fetched must be the resolved primary filename, NOT the -index.htm page.
+        _, kwargs = mock_client.fetch_filing_document.call_args
+        assert kwargs["filename"] == "aapl-10q.htm"
+        assert "-index.htm" not in kwargs["filename"]
+
+    async def test_title_is_synthesized_and_propagated(self) -> None:
+        mock_client = _mock_client_with_primary("doc.htm")
+        mock_client.search_filings.return_value = [
+            {
+                "_source": {
+                    "adsh": "0001234567-26-000001",
+                    "ciks": ["0000320193"],
+                    "entity_name": "Apple Inc.",
+                    "form_type": "10-Q",
+                    "period_ending": "2026-03-31",
+                    "file_date": "2026-04-15",
+                }
+            }
+        ]
+        adapter = SECEdgarAdapter(client=mock_client, retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)))
+
+        results = await adapter.fetch(_make_source())
+
+        assert results[0].title == "10-Q — Apple Inc. (2026-03-31)"
+
+    async def test_skips_filing_with_no_primary_document(self) -> None:
+        mock_client = AsyncMock(spec=SECEdgarClient)
+        mock_client.search_filings.return_value = [_filing("0001234567-26-000001")]
+        # Manifest has only a text file → no groundable HTML → filing skipped.
+        mock_client.fetch_filing_manifest.return_value = {
+            "directory": {"item": [{"name": "filing.txt", "type": "8-K", "size": "5000"}]}
+        }
+        adapter = SECEdgarAdapter(client=mock_client, retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)))
+
+        results = await adapter.fetch(_make_source())
+
+        assert results == []
+        mock_client.fetch_filing_document.assert_not_called()
+
+    async def test_ciks_watchlist_scopes_search_per_cik(self) -> None:
+        mock_client = _mock_client_with_primary("doc.htm")
+        mock_client.search_filings.return_value = []  # no filings — we only assert scoping calls
+        adapter = SECEdgarAdapter(client=mock_client, retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)))
+
+        source = _make_source(config={"ciks": ["0000320193", "0000789019"]})
+        await adapter.fetch(source)
+
+        # One scoped search per watched CIK, each passing the padded CIK to EFTS.
+        passed = {call.kwargs["ciks"] for call in mock_client.search_filings.call_args_list}
+        assert passed == {"0000320193", "0000789019"}
+
+    async def test_no_ciks_falls_back_to_global_search(self) -> None:
+        mock_client = _mock_client_with_primary("doc.htm")
+        mock_client.search_filings.return_value = []
+        adapter = SECEdgarAdapter(client=mock_client, retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)))
+
+        await adapter.fetch(_make_source())
+
+        # Legacy global search: exactly one call, no ciks kwarg supplied.
+        assert mock_client.search_filings.call_count == 1
+        assert "ciks" not in mock_client.search_filings.call_args.kwargs
+
+
+def _dated_filing(adsh: str, file_date: str) -> dict[str, Any]:
+    """EFTS hit with a specific file_date (drives oldest-first ordering)."""
+    return {
+        "_source": {
+            "adsh": adsh,
+            "ciks": ["0000320193"],
+            "entity_name": "Test Corp",
+            "form_type": "10-Q",
+            "file_date": file_date,
+            "period_ending": file_date,
+        }
+    }
+
+
+class TestSECEdgarBoundedCycle:
+    """Issue #1/#2: each fetch cycle does a BOUNDED amount of expensive work + commits."""
+
+    def _adapter(self, mock_client: AsyncMock, cap: int) -> SECEdgarAdapter:
+        cfg = SECEdgarProviderSettings(max_filings_per_cycle=cap)
+        return SECEdgarAdapter(
+            client=mock_client,
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+            provider_cfg=cfg,
+        )
+
+    async def test_caps_expensive_fetches_per_cycle(self) -> None:
+        mock_client = _mock_client_with_primary("doc.htm")
+        # 5 candidate filings, cap of 2 → only 2 manifest+document fetches happen.
+        mock_client.search_filings.return_value = [
+            _dated_filing(f"0001234567-26-00000{i}", f"2026-01-1{i}") for i in range(5)
+        ]
+        adapter = self._adapter(mock_client, cap=2)
+
+        results = await adapter.fetch(_make_source())
+
+        assert len(results) == 2
+        assert mock_client.fetch_filing_manifest.call_count == 2
+        assert mock_client.fetch_filing_document.call_count == 2
+
+    async def test_dedup_skips_do_not_count_against_cap(self) -> None:
+        mock_client = _mock_client_with_primary("doc.htm")
+        mock_client.search_filings.return_value = [
+            _dated_filing(f"0001234567-26-00000{i}", f"2026-01-1{i}") for i in range(5)
+        ]
+        # First three filings already stored (cheap skips); cap=2 must still yield
+        # the two NEW filings — dedup skips are free, only new work is bounded.
+        seen = {url_hash("0001234567-26-000000"), url_hash("0001234567-26-000001"), url_hash("0001234567-26-000002")}
+        exists_fn = AsyncMock(side_effect=lambda h: h in seen)
+        adapter = SECEdgarAdapter(
+            client=mock_client,
+            exists_fn=exists_fn,
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+            provider_cfg=SECEdgarProviderSettings(max_filings_per_cycle=2),
+        )
+
+        results = await adapter.fetch(_make_source())
+
+        assert len(results) == 2
+        assert mock_client.fetch_filing_document.call_count == 2
+
+    async def test_processes_oldest_first(self) -> None:
+        mock_client = _mock_client_with_primary("doc.htm")
+        # Deliberately out-of-order dates; cap=1 → the single fetched filing must be
+        # the OLDEST so the watermark never leap-frogs unfetched older filings.
+        mock_client.search_filings.return_value = [
+            _dated_filing("0001234567-26-000003", "2026-03-20"),
+            _dated_filing("0001234567-26-000001", "2026-01-05"),  # oldest
+            _dated_filing("0001234567-26-000002", "2026-02-10"),
+        ]
+        adapter = self._adapter(mock_client, cap=1)
+
+        results = await adapter.fetch(_make_source())
+
+        assert len(results) == 1
+        # The manifest fetched must be for the oldest filing's accession number.
+        _, kwargs = mock_client.fetch_filing_manifest.call_args
+        assert kwargs["accession_no"] == "0001234567-26-000001"
+
+    async def test_under_cap_fetches_all(self) -> None:
+        mock_client = _mock_client_with_primary("doc.htm")
+        mock_client.search_filings.return_value = [
+            _dated_filing(f"0001234567-26-00000{i}", f"2026-01-1{i}") for i in range(3)
+        ]
+        adapter = self._adapter(mock_client, cap=25)
+
+        results = await adapter.fetch(_make_source())
+
+        assert len(results) == 3

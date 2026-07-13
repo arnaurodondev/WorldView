@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field  # noqa: F401
+from decimal import Decimal
 
 
 @dataclass(frozen=True)
@@ -78,3 +79,10 @@ class ExtractionOutput:
     model_used: str | None = None
     fallback_reason: str = "none"
     attempts: int = 1
+    # ── PLAN-0117 FR-1: provider-reported cost (backward-compatible default) ──
+    # Verbatim ``usage.estimated_cost`` when the provider (DeepInfra) returns it,
+    # as a :class:`decimal.Decimal`; ``None`` when the provider did not report a
+    # cost (→ caller resolves via the price matrix). Surfacing it here lets the
+    # KG fallback chain / S6 deep-extraction stamp ``cost_source="provider"``
+    # without re-parsing the raw HTTP response.
+    provider_cost_usd: Decimal | None = None

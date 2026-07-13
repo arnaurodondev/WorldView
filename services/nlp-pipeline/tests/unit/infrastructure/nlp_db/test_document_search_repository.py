@@ -38,18 +38,23 @@ def _make_session(
     count: int = 0,
     rows: list[MagicMock] | None = None,
 ) -> AsyncMock:
-    """Build an AsyncMock session that returns count on first call, rows on second."""
+    """Build an AsyncMock session returning count for the COUNT query, rows for search.
+
+    HIGH-1: ``search()`` now issues a leading ``set_config('enable_seqscan')``
+    statement (to pin the GIN index), so we dispatch on the SQL text rather than
+    on a fixed call ordinal — set_config is ignored, ``count(*)`` → count,
+    otherwise → rows.
+    """
     session = AsyncMock()
-    call_count = [0]
 
     async def _execute(stmt: Any, *args, **kwargs) -> MagicMock:
-        call_count[0] += 1
         result = MagicMock()
-        if call_count[0] == 1:
-            # First call = count query
+        sql = str(stmt)
+        if "set_config" in sql:
+            return result  # planner hint — result ignored by search()
+        if "count(*)" in sql:
             result.scalar_one.return_value = count
         else:
-            # Second call = search rows
             result.all.return_value = rows or []
         return result
 
@@ -76,6 +81,9 @@ def _make_row(
     snippet_marked: str = "no markers",
     source_type: str = "news",
     final_score: float = 0.4,
+    title: str | None = None,
+    url: str | None = None,
+    published_at: datetime | None = None,
 ) -> MagicMock:
     row = MagicMock()
     row.doc_id = doc_id
@@ -83,6 +91,10 @@ def _make_row(
     row.snippet_marked = snippet_marked
     row.source_type = source_type
     row.final_score = final_score
+    # HIGH-2: the search SELECT now projects title/url/published_at from dsm.
+    row.title = title
+    row.url = url
+    row.published_at = published_at
     return row
 
 
@@ -137,20 +149,46 @@ class TestSearch:
         """source_type='news' maps to the DB enum list via _SOURCE_TYPE_MAP.
 
         The API exposes a coarser taxonomy ('news', 'sec_edgar') than the DB,
-        which stores per-adapter values ('eodhd_news', 'finnhub_news', etc.).
+        which stores the canonical `ContentSourceType` literal per adapter.
         _build_search_params must translate API → DB list so the SQL ANY() clause
-        matches actual rows (PLAN-0064 BUG-2 fix).
+        matches actual rows.
+
+        REGRESSION GUARD (feat/fix-sec-fts-source-type): the LIVE news literals
+        — eodhd / eodhd_ticker_news / finnhub / newsapi — MUST be present, or the
+        'news' filter silently drops ~49k real articles (it previously only
+        listed the legacy seed names). Legacy seed names are still included for
+        backward compatibility.
         """
         request = _make_request(source_type="news")
         params = _build_search_params(request)
-        assert params["source_types"] == ["eodhd_news", "finnhub_news", "press_release"]
+        source_types = params["source_types"]
+        # The four live ContentSourceType news literals must all be present:
+        assert source_types is not None
+        for live_literal in ("eodhd", "eodhd_ticker_news", "finnhub", "newsapi"):
+            assert live_literal in source_types
+        # Legacy seed names retained for backward compatibility:
+        assert "eodhd_news" in source_types
+        assert "press_release" in source_types
 
     @pytest.mark.asyncio
     async def test_search_with_sec_edgar_source_type_filter(self) -> None:
-        """source_type='sec_edgar' maps to the three SEC adapter values."""
+        """source_type='sec_edgar' maps to the literal stored by ingestion.
+
+        REGRESSION GUARD (feat/fix-sec-fts-source-type): the canonical
+        'sec_edgar' literal — the value the SEC EDGAR adapter path actually
+        writes for every one of the 4.5k stored filings — MUST be in the mapped
+        list. The original map only listed per-form seed names (sec_10k/8k/10q)
+        and matched ZERO real filings.
+        """
         request = _make_request(source_type="sec_edgar")
         params = _build_search_params(request)
-        assert params["source_types"] == ["sec_10k", "sec_8k", "sec_10q"]
+        source_types = params["source_types"]
+        assert source_types is not None
+        # The bug: 'sec_edgar' (the live literal) was missing → 0 filings matched.
+        assert "sec_edgar" in source_types
+        # Legacy per-form seed names retained for backward compatibility:
+        for legacy in ("sec_10k", "sec_8k", "sec_10q"):
+            assert legacy in source_types
 
     @pytest.mark.asyncio
     async def test_search_source_type_all_becomes_none(self) -> None:
@@ -227,8 +265,27 @@ class TestSearch:
         assert results[0].entity_hits == []
 
     @pytest.mark.asyncio
-    async def test_search_result_title_and_source_url_are_none(self) -> None:
-        """title and source_url must be None from the repo (use case fills them)."""
+    async def test_search_result_title_url_published_from_dsm(self) -> None:
+        """HIGH-2: title/source_url/published_at come from dsm (selected in SQL).
+
+        Previously the repo nulled these and deferred to an S5 batch call that
+        401'd in the live path. Now they are projected directly from
+        document_source_metadata, so a row carrying them surfaces them verbatim.
+        """
+        pub = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
+        row = _make_row(title="Apple 10-Q", url="https://sec.gov/aapl", published_at=pub)
+        session = _make_session(count=1, rows=[row])
+        repo = AsyncpgDocumentSearchRepository(session)
+
+        results, _ = await repo.search(_make_request())
+
+        assert results[0].title == "Apple 10-Q"
+        assert results[0].source_url == "https://sec.gov/aapl"
+        assert results[0].published_at == pub
+
+    @pytest.mark.asyncio
+    async def test_search_result_null_dsm_metadata_stays_none(self) -> None:
+        """When dsm has no title/url/date, the result fields stay None (fallback)."""
         session = _make_session(count=1, rows=[_make_row()])
         repo = AsyncpgDocumentSearchRepository(session)
 
@@ -236,6 +293,66 @@ class TestSearch:
 
         assert results[0].title is None
         assert results[0].source_url is None
+        assert results[0].published_at is None
+
+
+# ── HIGH-1 perf guard: index pin + deferred snippet ───────────────────────────
+
+
+class TestSearchPerf:
+    @pytest.mark.asyncio
+    async def test_search_issues_enable_seqscan_off(self) -> None:
+        """HIGH-1: search() must pin the GIN index via set_config(enable_seqscan)."""
+        executed: list[str] = []
+        session = AsyncMock()
+
+        async def _execute(stmt: Any, *args, **kwargs) -> MagicMock:
+            executed.append(str(stmt))
+            result = MagicMock()
+            if "count(*)" in str(stmt):
+                result.scalar_one.return_value = 0
+            else:
+                result.all.return_value = []
+            return result
+
+        session.execute = _execute
+        repo = AsyncpgDocumentSearchRepository(session, force_index_scan=True)
+        await repo.search(_make_request())
+
+        assert any("set_config" in s and "enable_seqscan" in s for s in executed)
+
+    @pytest.mark.asyncio
+    async def test_search_skips_planner_hint_when_disabled(self) -> None:
+        """force_index_scan=False must NOT issue the planner-hint statement."""
+        executed: list[str] = []
+        session = AsyncMock()
+
+        async def _execute(stmt: Any, *args, **kwargs) -> MagicMock:
+            executed.append(str(stmt))
+            result = MagicMock()
+            result.scalar_one.return_value = 0
+            return result
+
+        session.execute = _execute
+        repo = AsyncpgDocumentSearchRepository(session, force_index_scan=False)
+        await repo.search(_make_request())
+
+        assert not any("set_config" in s for s in executed)
+
+    def test_ranked_chunks_cte_defers_ts_headline(self) -> None:
+        """HIGH-1: the ranked_chunks CTE must NOT compute ts_headline.
+
+        The snippet is generated only for the paginated page rows in the SELECT
+        leg — computing it for every matched chunk was the ~30s latency source.
+        """
+        from nlp_pipeline.infrastructure.nlp_db.repositories.document_search import (
+            _SEARCH_SELECT,
+        )
+
+        ranked_cte = _SEARCH_CTE.split("top_chunk_per_doc")[0]
+        assert "ts_headline" not in ranked_cte
+        # ts_headline lives in the paginated SELECT leg instead.
+        assert "ts_headline" in _SEARCH_SELECT
 
 
 # ── Facets tests ──────────────────────────────────────────────────────────────

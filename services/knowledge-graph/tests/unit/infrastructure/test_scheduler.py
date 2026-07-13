@@ -321,3 +321,23 @@ class TestBuildWorkersReadWriteFactorySplit:
         # Falls back to write factory when no read replica is configured.
         assert adapter._read_session_factory is write_sf
         assert adapter._sf is write_sf
+
+
+# ── DEF-002: internal-JWT claims (aud + jti) ──────────────────────────────────
+
+
+def test_build_market_data_signer_token_includes_aud_and_jti() -> None:
+    """DEF-002: the signer's token MUST carry aud + a unique jti."""
+    from unittest.mock import MagicMock
+
+    import jwt as pyjwt
+    from knowledge_graph.infrastructure.scheduler.scheduler import build_market_data_signer
+
+    settings = MagicMock()
+    settings.internal_jwt_private_key.get_secret_value.return_value = ""  # HS256 dev path
+    sign = build_market_data_signer(settings)
+    decoded = pyjwt.decode(sign(), options={"verify_signature": False})
+    assert decoded["aud"] == "worldview-internal"
+    assert decoded["iss"] == "worldview-gateway"
+    assert decoded["sub"] == "system:kg-structured-enrichment"
+    assert decoded["jti"]

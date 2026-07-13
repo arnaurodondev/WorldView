@@ -68,9 +68,13 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
-| GET | `/api/v1/prediction-markets` | List prediction markets — query params: `status` (`open`/`resolved`/`cancelled`/`all`), `limit`, `offset` | — |
+| GET | `/api/v1/prediction-markets` | List prediction markets — query params: `status` (`open`/`resolved`/`cancelled`/`all`), `limit`, `offset`, `category`, `query`. Ordered by latest `volume_24h` DESC (recently-traded first). The latest-volume `LEFT JOIN LATERAL` over `prediction_market_snapshots` is time-bounded to `prediction_market_list_volume_window_days` (default 30d) so the TimescaleDB hypertable prunes to recent chunks — an **unbounded** LATERAL cold-scans every weekly chunk per market and 500s the endpoint under load (PLAN-0056 QA). Markets with no snapshot in-window get `volume_24h=null` and sort last. | — |
+| GET | `/api/v1/prediction-markets/categories` | Per-category counts of currently-open markets (PLAN-0053) | — |
+| GET | `/api/v1/prediction-markets/events` | List Polymarket event groups (newest first) — query params: `limit` (1..200), `offset` (PLAN-0056 A4) | — |
+| GET | `/api/v1/prediction-markets/events/{event_id}` | Single event group (HTTP 404 if unknown) (PLAN-0056 A4) | — |
 | GET | `/api/v1/prediction-markets/{market_id}` | Prediction market detail with latest snapshot | — |
-| GET | `/api/v1/prediction-markets/{market_id}/history` | Prediction market price history — query params: `from_dt`, `to_dt` (HTTP 400 if `from_dt >= to_dt`) | — |
+| GET | `/api/v1/prediction-markets/{market_id}/history` | Prediction market history — query params: `from`, `to` (HTTP 400 if `from >= to`), `limit` (1..2000). **Default**: probability snapshots (each includes `liquidity`, PLAN-0056 A1). **With `interval=1h\|1d\|1w`** (+ optional `token_id`): per-token interval price bars from the `prediction_market_prices` hypertable — returns `{market_id, interval, points[]}` (PLAN-0056 A4) | — |
+| GET | `/api/v1/prediction-markets/{market_id}/trades` | Recent executed fills, newest first — query params: `since` (UTC), `limit` (1..200). HTTP 404 if market unknown (PLAN-0056 A4) | — |
 | GET | `/api/v1/market/sector-returns` | Sector heatmap data — query param: `period` (`1D`, `1W`, `1M`). Returns average period return per GICS sector from OHLCV bars. | — |
 | GET | `/api/v1/market/period-movers` | Top gainers or losers — query params: `period` (`1W`/`1M`), `type` (`gainers`/`losers`), `limit` (1–50, default 10). Returns instruments sorted by period_return_pct. | — |
 | GET | `/internal/v1/price/{instrument_id}` | Price snapshot for a single instrument — cache-aside: Valkey → Quote → OHLCV fallback. Returns 404 if no data available. **Internal endpoint — S9 only.** | Valkey |
@@ -110,6 +114,10 @@ or articles, perform NLP processing, manage portfolios.
 | `market.dataset.fetched` | `market-data-intraday-resampling` | Derive 5m/15m/30m/1h/4h/1d bars from `dataset_type=ohlcv, timeframe=1m` events | `event_id` |
 | `market.dataset.fetched` | `market-data-insider-transactions` | Materialize per-transaction insider feed (`dataset_type=insider_transactions`) | `event_id` |
 | `market.prediction.v1` | `market-data-prediction-markets` | Materialize prediction market snapshots (PRD-0019) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
+| `market.prediction.history.v1` | `market-data-prediction-history` | Materialize per-token interval price bars into `prediction_market_prices` (PLAN-0056 A3) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
+| `market.prediction.event.v1` | `market-data-prediction-events` | Upsert Polymarket event groups into `prediction_events` (group_id→event_id) (PLAN-0056 A3) | Atomic `create_if_not_exists` + `ON CONFLICT DO UPDATE` |
+| `market.prediction.trade.v1` | `market-data-prediction-trades` | Materialize individual fills into `prediction_market_trades` (PLAN-0056 A3) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
+| `market.prediction.oi.v1` | `market-data-prediction-oi` | Upsert daily OI / 24h-volume roll-ups into `prediction_market_oi` (PLAN-0056 A3) | Atomic `create_if_not_exists` + `ON CONFLICT DO UPDATE` |
 
 ### Produced
 
@@ -118,6 +126,39 @@ or articles, perform NLP processing, manage portfolios.
 | `market.instrument.created` | `InstrumentCreated` (v3) | `instrument_id` |
 | `market.instrument.updated` | `InstrumentUpdated` | `instrument_id` |
 | `market.instrument.discovered.v1` | `InstrumentDiscovered` | `instrument_id` |
+| `market.prediction.move.v1` | `PredictionMarketMove` (`market.prediction.move`) | `market_id` |
+
+PLAN-0056 Wave D1: the `PredictionMoveDetector` periodic worker emits
+`market.prediction.move.v1` when an open market's implied probability moves
+materially over a lookback window — gated on `|Δ| ≥ τ` AND `liquidity ≥ floor`
+AND `volume_24h ≥ floor` (all env-driven) so noise never fires. Payload carries
+`market_id` (Polymarket conditionId), `token_id`, `outcome_name`, `interval`,
+`prev_price`, `new_price`, `delta`, `direction` (up/down), `liquidity`,
+`volume_24h`, `window_start_ts`, `is_backfill=false`.
+
+**QA fix (2026-07-10) — affirmative-outcome move only.** A Polymarket market is
+binary (Yes/No) and the two tokens move equal-and-opposite, so emitting a move
+per outcome produced two complementary events per `(market_id, window)`. S7's
+signal emitter dedups on a `uuid5` that omits `token_id`, so the two collapsed
+and an arbitrary one won — inverting polarity/adverseness for the No token. The
+detector now emits **at most one** move per market per cycle, for the
+**affirmative** outcome: the outcome named `"yes"` (case-insensitive), else the
+**first** outcome in the market's static `outcomes` list (JSONB order —
+deterministic). This ties the move to the exact frame the polarity classifier
+reasons about. Non-binary markets are tracked by their affirmative/first outcome
+only (accepted simplification). **Window-start fix:** Δ is now measured from the
+true window-start snapshot (`get_earliest_snapshot_at_or_after`, an
+`ORDER BY snapshot_at ASC LIMIT 1` read-replica read) instead of the oldest row
+of the LIMIT-capped `list_snapshots` page — which was only the true start when a
+market had ≤`snapshot_limit` snapshots in the window, otherwise silently
+shrinking the window and dropping slow moves below τ.
+Emitted through the outbox (R8, `partition_key=market_id`) and dispatched by
+`market-data-dispatcher`. Consumed by S7's `PredictionSignalEmitter` (Wave D2)
+which joins `market_id` to entity exposures + polarity and fans a per-entity
+signal out to the alert pipeline. Dedup: an in-memory watermark per
+`(market_id, token_id)` re-emits only when the latest snapshot is strictly
+newer than the last emitted; cross-restart duplicates are absorbed by S7's
+per-`(condition_id, trigger, window)` idempotency.
 
 PLAN-0057 Wave D-2: ohlcv/quotes consumers emit `market.instrument.discovered.v1`
 on first-seen symbols (lightweight: just `instrument_id` + `symbol` + `exchange`).
@@ -285,11 +326,106 @@ CREATE TABLE prediction_market_snapshots (
 );
 CREATE INDEX ix_pms_market_time ON prediction_market_snapshots (market_id, snapshot_at DESC);
 SELECT create_hypertable('prediction_market_snapshots', 'snapshot_at', if_not_exists => TRUE);
+
+-- PLAN-0056 A1 (PRD-0033 §6.1): prediction deeper streams (models + schema this wave;
+-- adapters/consumers/read-routes land in Waves A2–A4). ``event_id`` links a market to
+-- its Polymarket event group (backfilled by the event consumer in A3).
+ALTER TABLE prediction_markets ADD COLUMN event_id TEXT;
+
+-- Per-token interval price history — TimescaleDB hypertable on window_start_ts.
+-- interval is VARCHAR not a PG enum (BP-007) so new interval tokens need no DDL.
+CREATE TABLE prediction_market_prices (
+    id              UUID NOT NULL DEFAULT gen_random_uuid(),
+    market_id       TEXT NOT NULL,
+    token_id        TEXT NOT NULL,
+    outcome_name    TEXT,
+    interval        VARCHAR(4) NOT NULL,
+    window_start_ts TIMESTAMPTZ NOT NULL,
+    price           NUMERIC(12, 6) NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'polymarket_clob',
+    is_backfill     BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (id, window_start_ts)
+);
+CREATE UNIQUE INDEX uq_pmp_market_token_interval_window
+    ON prediction_market_prices (market_id, token_id, interval, window_start_ts);
+CREATE INDEX ix_pmp_market_window ON prediction_market_prices (market_id, window_start_ts DESC);
+SELECT create_hypertable('prediction_market_prices', 'window_start_ts',
+    migrate_data => true, chunk_time_interval => INTERVAL '1 month');
+
+-- Individual trades/fills — TimescaleDB hypertable on ts. side is VARCHAR (BP-007).
+CREATE TABLE prediction_market_trades (
+    id         UUID NOT NULL DEFAULT gen_random_uuid(),
+    market_id  TEXT NOT NULL,
+    trade_id   TEXT NOT NULL,
+    token_id   TEXT NOT NULL,
+    price      NUMERIC(12, 6) NOT NULL,
+    size_usd   NUMERIC(20, 4),
+    side       VARCHAR(8) NOT NULL,
+    ts         TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (id, ts)
+);
+-- ts is included because TimescaleDB requires every UNIQUE index on a hypertable
+-- to contain the partition column; a trade's ts is immutable so dedup is unchanged.
+CREATE UNIQUE INDEX uq_pmt_market_trade ON prediction_market_trades (market_id, trade_id, ts);
+CREATE INDEX ix_pmt_market_ts ON prediction_market_trades (market_id, ts DESC);
+SELECT create_hypertable('prediction_market_trades', 'ts',
+    migrate_data => true, chunk_time_interval => INTERVAL '1 month');
+
+-- Daily open-interest / 24h-volume roll-up — NOT a hypertable (one row per market/day).
+CREATE TABLE prediction_market_oi (
+    id                   UUID NOT NULL DEFAULT gen_random_uuid(),
+    market_id            TEXT NOT NULL,
+    snapshot_date        DATE NOT NULL,
+    total_oi_usd         NUMERIC(20, 4),
+    total_volume_24h_usd NUMERIC(20, 4),
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    updated_at           TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (market_id, snapshot_date)
+);
+
+-- Polymarket "event" groups (a set of related markets) — NOT a hypertable.
+CREATE TABLE prediction_events (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id     TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    category     VARCHAR(50),
+    start_date   TIMESTAMPTZ,
+    end_date     TIMESTAMPTZ,
+    market_count INTEGER NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ DEFAULT now(),
+    updated_at   TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_prediction_events_event_id UNIQUE (event_id)
+);
+
+-- QA fix (migration 044, 2026-07-10): partial index supporting event_id lookups
+-- (the event consumer + entity-predictions API join/filter markets by event).
+CREATE INDEX ix_prediction_markets_event_id
+    ON prediction_markets (event_id) WHERE event_id IS NOT NULL;
+
+-- QA fix (migration 044): 180-day retention on the two prediction hypertables
+-- (trades is unbounded; prices grows per token/interval). Registered only when
+-- the timescaledb extension is present (guarded DO block) so a plain-Postgres DB
+-- is a no-op; add_retention_policy(..., if_not_exists => true) is idempotent.
+SELECT add_retention_policy('prediction_market_trades', INTERVAL '180 days');
+SELECT add_retention_policy('prediction_market_prices',  INTERVAL '180 days');
 ```
+
+### PLAN-0056 A2 — deeper-stream repositories, ports & UoW wiring (no DDL)
+
+Wave A2 adds the persistence layer for the A1 tables (consumers/API/use cases land in A3/A4):
+
+- **Domain entities** (frozen dataclasses in `domain/entities.py`): `PredictionMarketPrice`, `PredictionMarketTrade` (both validate their partition timestamp is UTC-aware in `__post_init__`), `PredictionMarketOI`, `PredictionEvent` (surrogate `id` generated server-side, so not carried on the entity).
+- **Ports** (ABCs in `application/ports/repositories.py`, R25 — no use case imports the Pg classes):
+  - `PredictionMarketPricesRepository` — `insert_if_not_exists(price) -> bool`, `bulk_insert(prices) -> int`, `list_prices(market_id, token_id, interval, from_dt, to_dt, limit)`
+  - `PredictionMarketTradesRepository` — `insert_if_not_exists(trade) -> bool`, `bulk_insert(trades) -> int`, `list_trades(market_id, since, limit)`
+  - `PredictionMarketOIRepository` — `upsert(oi)`, `list_oi(market_id, from_date, to_date, limit)`, `get_latest(market_id)`
+  - `PredictionMarketEventsRepository` — `upsert(event)`, `find_by_event_id(event_id)`, `list_events(limit, offset) -> (list, total)`
+- **Pg implementations** (`infrastructure/db/repositories/prediction_market_repo.py`) mirror `PgPredictionMarketSnapshotRepository`: `ON CONFLICT DO NOTHING` on each UNIQUE index for prices/trades (idempotent inserts, BP-034/035); `bulk_insert` is a single multi-row insert returning the count of rows actually inserted (`RETURNING` + `len(fetchall())`); OI and events use `ON CONFLICT DO UPDATE` (last-write-wins, `updated_at = now()`); `list_*` order DESC on the time key with optional bound-parameter filters.
+- **UoW** (R27): `UnitOfWork` gains write accessors `prediction_market_prices` / `prediction_market_trades` / `prediction_market_oi` / `prediction_events` (lazy-init, cached, write session) and read accessors `*_read` (read/replica session); `ReadOnlyUnitOfWork` gains the same `*_read` accessors — wired exactly like the existing snapshot repo.
 
 ---
 
-## Runtime Processes (8)
+## Runtime Processes (13)
 
 | Process | Purpose |
 |---------|---------|
@@ -298,8 +434,13 @@ SELECT create_hypertable('prediction_market_snapshots', 'snapshot_at', if_not_ex
 | Quotes Consumer | Materialize latest quotes; emit `InstrumentDiscovered` on first-seen symbols |
 | Fundamentals Consumer | Materialize all 18 fundamentals sections + derived snapshot; emit `InstrumentCreated` v3 |
 | Intraday Resampling Consumer | Consume 1m bars and derive 5m/15m/30m/1h/4h/1d derived bars (`IntradayResamplingWorker`) |
-| Outbox Dispatcher | Publish instrument lifecycle events (`InstrumentCreated`, `InstrumentUpdated`, `InstrumentDiscovered`) |
+| Outbox Dispatcher | Publish instrument lifecycle events (`InstrumentCreated`, `InstrumentUpdated`, `InstrumentDiscovered`) + `market.prediction.move.v1` |
+| Prediction Move Detector | Periodic worker (`infrastructure/workers/prediction_move_detector_main.py`, docker-compose `market-data-prediction-move-detector`) — scans open markets' snapshots, emits `market.prediction.move.v1` on gated material moves (PLAN-0056 D1) |
 | Prediction Market Consumer | Materialize `market.prediction.v1` events into `prediction_markets` + `prediction_market_snapshots` |
+| Prediction History Consumer | Materialize `market.prediction.history.v1` per-token interval bars into `prediction_market_prices` (PLAN-0056 A3) |
+| Prediction Event Consumer | Upsert `market.prediction.event.v1` groups into `prediction_events` (group_id→event_id; market linkage set S4-side later) (PLAN-0056 A3) |
+| Prediction Trade Consumer | Materialize `market.prediction.trade.v1` fills into `prediction_market_trades` (PLAN-0056 A3) |
+| Prediction OI Consumer | Upsert `market.prediction.oi.v1` daily roll-ups into `prediction_market_oi` (PLAN-0056 A3) |
 | Insider Transactions Consumer | Materialize per-transaction insider feed (`dataset_type == "insider_transactions"`) into `insider_transactions` — feeds the 6-hourly `insider_net_buy_90d` rollup. Existed in code since PLAN-0089 L-4b but only added to docker-compose on 2026-06-11 (backend-gaps wave 3) — the table was empty until then |
 
 ---
@@ -477,12 +618,21 @@ All variables are prefixed with `MARKET_DATA_`.
 | `MARKET_DATA_INTRADAY_SOURCE_TF` | `1m` | No | Source timeframe for intraday resampling (`IntradayResamplingWorker`). Valid: `1m`, `5m`, `15m`, `1h`. |
 | `MARKET_DATA_HOST` / `MARKET_DATA_PORT` / `MARKET_DATA_DEBUG` | `0.0.0.0` / `8003` / `false` | No | Uvicorn bind + debug flag |
 | `MARKET_DATA_FUNDAMENTALS_TIMEOUT_S` | `90` | No | Per-message watchdog for `FundamentalsConsumer` (BP-617). `consumer_main` co-scales `session_timeout_ms`/`heartbeat_interval_ms`. |
+| `MARKET_DATA_SCREEN_STATEMENT_TIMEOUT_MS` | `8000` | No | Screener statement-timeout ceiling (ms). `query_screen` issues `SET LOCAL statement_timeout` so a pathological plan is cancelled cleanly (`QueryCanceledError` → 504) instead of hanging. Raise under sustained host contention (NEW-6, 2026-07-06). The DISTINCT ON rewrite keeps the screen well under the default. |
 | `MARKET_DATA_INSIDER_ROLLUP_HOUR_UTC` | `3` | No | UTC hour for the daily `insider_net_buy_90d` rollup loop. |
 | `MARKET_DATA_INTELLIGENCE_ROLLUP_HOUR_UTC` | `4` | No | UTC hour for the daily intelligence-rollup sync loop. |
 | `MARKET_DATA_DISPATCHER_POLL_INTERVAL_SECONDS` | `5.0` | No | Outbox dispatcher poll interval. |
 | `MARKET_DATA_DISPATCHER_LEASE_SECONDS` | `30` | No | Outbox row lease duration. |
 | `MARKET_DATA_DISPATCHER_BATCH_SIZE` | `100` | No | Outbox dispatch batch size. |
 | `MARKET_DATA_DISPATCHER_MAX_ATTEMPTS` | `20` | No | Max outbox publish attempts before dead-letter. |
+| `MARKET_DATA_PREDICTION_MOVE_DETECTOR_INTERVAL_SECONDS` | `900` | No | PLAN-0056 D1 — `PredictionMoveDetector` cycle cadence (seconds). |
+| `MARKET_DATA_PREDICTION_MOVE_WINDOW_HOURS` | `24` | No | Lookback window (hours) over which Δ implied-probability is measured. |
+| `MARKET_DATA_PREDICTION_MOVE_INTERVAL_LABEL` | `1d` | No | Free-form window label written to the event `interval` field (1h/1d/1w). |
+| `MARKET_DATA_PREDICTION_MOVE_DELTA_THRESHOLD` | `0.15` | No | Δ gate: min absolute implied-probability swing (0-1) to emit a move. |
+| `MARKET_DATA_PREDICTION_MOVE_MIN_LIQUIDITY_USD` | `5000` | No | Liquidity floor (USD, latest snapshot) — thin markets suppressed. |
+| `MARKET_DATA_PREDICTION_MOVE_MIN_VOLUME_USD` | `1000` | No | 24h-volume floor (USD, latest snapshot) — untraded markets suppressed. |
+| `MARKET_DATA_PREDICTION_MOVE_MARKET_PAGE_SIZE` | `200` | No | Per-cycle safety cap on open markets scanned per page. |
+| `MARKET_DATA_PREDICTION_MOVE_SNAPSHOT_LIMIT` | `500` | No | Per-cycle safety cap on snapshots pulled per market. |
 | `MARKET_DATA_KAFKA_*_CONSUMER_INSTANCE_ID` | `""` | No | Static group-instance IDs for the 6 consumers (ohlcv/quotes/fundamentals/insider_transactions/intraday_resampling/prediction_market) — enables Kafka static membership. |
 | `MARKET_DATA_NLP_PIPELINE_URL` / `MARKET_DATA_CONTENT_STORE_URL` / `MARKET_DATA_KNOWLEDGE_GRAPH_URL` / `MARKET_DATA_ALERT_SERVICE_URL` / `MARKET_DATA_RAG_CHAT_URL` | service DNS defaults | No | Intelligence-rollup client targets (`application/ports/intelligence_clients.py`). |
 | `MARKET_DATA_INTERNAL_JWT_PRIVATE_KEY` | `""` | No | RS256 private key for signing internal service-to-service JWTs (intelligence-rollup outbound calls). |
@@ -536,8 +686,11 @@ python -m market_data.infrastructure.messaging.consumers.quotes_consumer_main
 # Fundamentals consumer (group: market-data-fundamentals)
 python -m market_data.infrastructure.messaging.consumers.fundamentals_consumer_main
 
-# Outbox dispatcher (instrument lifecycle events)
+# Outbox dispatcher (instrument lifecycle events + prediction-move events)
 python -m market_data.infrastructure.messaging.outbox.dispatcher_main
+
+# Prediction move detector (periodic worker — PLAN-0056 D1)
+python -m market_data.infrastructure.workers.prediction_move_detector_main
 ```
 
 ---

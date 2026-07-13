@@ -15,8 +15,10 @@ Subclasses must implement all ``@abstractmethod`` methods.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
+import os
 import random
 import sys
 import time
@@ -929,7 +931,10 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 attempts=self._reconnect_attempts,
                 action="exiting_with_code_2_for_fresh_container",
             )
-            sys.exit(2)
+            # Hard process exit (NOT ``sys.exit`` — a bare SystemExit raised in
+            # this Task-driven coroutine gets captured/swallowed as the Task
+            # result and leaves a zombie; see :meth:`_force_process_exit`).
+            self._force_process_exit(2)
         backoff = self._compute_backoff(self._reconnect_attempts)
         logger.warning(
             "kafka_consumer_reconnecting",
@@ -1602,16 +1607,19 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             await asyncio.sleep(self._config.poll_timeout_seconds)
 
     # PLAN-0093 Wave A-2 (F-LOG-003): connectivity probe configuration.
-    # Tuned conservatively — 60 s between probes x 3 misses = a 3-minute
-    # detection window before we force-exit, which lines up with the
-    # ``kafka_unreachable_for_5min`` alert window with room to spare.  These
-    # are class attributes (not ConsumerConfig fields) because every consumer
-    # in the platform wants the same behaviour and exposing them as knobs
-    # would invite per-service drift, which is the exact pattern the probe
-    # is designed to defend against.
-    _probe_interval_seconds: float = 60.0
-    _probe_failure_threshold: int = 3
-    _probe_list_topics_timeout: float = 5.0
+    # Tuned so a TRANSIENT broker blip under host load does not escalate to a
+    # force-exit: 60 s between probes x 5 misses = a 5-minute detection window,
+    # and each ``list_topics`` metadata call gets a generous 10 s to complete
+    # (the host is CPU-oversubscribed; a 5 s timeout was tripping on ordinary
+    # metadata latency and mislabelling a reachable broker as down).  A genuine
+    # sustained outage still ends in a loud restart — the window is widened, not
+    # removed.  These remain single PLATFORM-WIDE values (not ConsumerConfig
+    # fields) so every consumer behaves identically — the env overrides below
+    # are one global knob each, never a per-service ConsumerConfig field, which
+    # preserves the no-per-service-drift property the probe depends on.
+    _probe_interval_seconds: float = float(os.environ.get("KAFKA_PROBE_INTERVAL_S", "60"))
+    _probe_failure_threshold: int = int(os.environ.get("KAFKA_PROBE_FAILURE_THRESHOLD", "5"))
+    _probe_list_topics_timeout: float = float(os.environ.get("KAFKA_PROBE_LIST_TOPICS_TIMEOUT_S", "10"))
 
     # BP-700: maximum consecutive transient-error RECONNECT cycles before the
     # consumer force-exits for a fresh container.  Reserves terminal stop for a
@@ -1642,6 +1650,50 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
     _lag_stall_probes: int = 5  # consecutive non-draining samples → alert
     _prev_total_lag: int = -1
     _lag_stall_count: int = 0
+
+    def _force_process_exit(self, code: int) -> None:
+        """Terminate the WHOLE process immediately, from any asyncio/task context.
+
+        Why not ``sys.exit()``?  ``sys.exit(code)`` merely raises ``SystemExit``
+        in the *current* coroutine.  When that coroutine is driven by an
+        ``asyncio.Task`` (as both force-exit call sites are — the connectivity
+        probe and the run() poll loop), the ``SystemExit`` is captured as the
+        Task's result rather than tearing the interpreter down.  If a
+        ``done_callback`` on that Task then calls ``task.exception()`` the
+        ``SystemExit`` is *retrieved and swallowed*, so the process keeps
+        running.  That is the exact ZOMBIE we observed in production
+        (BP: connectivity-probe zombie):
+
+          * the probe hit 3 consecutive ``_TRANSPORT`` broker failures under
+            host load and called ``sys.exit(2)``;
+          * the ``SystemExit`` never reached ``asyncio.run``'s frame, the event
+            loop died mid-teardown, and the ``/metrics`` + ``/healthz`` socket
+            was closed;
+          * Docker's healthcheck then got ``Connection refused`` → the
+            container was flagged ``unhealthy`` for 16-41h, yet
+            ``restart: unless-stopped`` NEVER fired because the process never
+            actually exited.
+
+        ``os._exit`` is the only primitive that guarantees the process dies now
+        regardless of the asyncio/executor/greenlet state, so the orchestrator
+        restarts the container with a fresh DNS lookup (the whole point of the
+        force-exit).  We flush stdout/stderr and shut down the logging handlers
+        first so the preceding CRITICAL diagnostic is not lost to the buffers
+        ``os._exit`` would otherwise drop.
+
+        Extracted as a method (rather than an inline ``os._exit``) so unit tests
+        can patch it and assert the escalation fires without terminating the
+        test interpreter.
+        """
+        import logging as _logging
+
+        with contextlib.suppress(Exception):
+            sys.stdout.flush()
+        with contextlib.suppress(Exception):
+            sys.stderr.flush()
+        with contextlib.suppress(Exception):
+            _logging.shutdown()
+        os._exit(code)
 
     async def _connectivity_probe_loop(self) -> None:
         """Periodically probe the broker; force-exit on sustained failure.
@@ -1726,7 +1778,15 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                         consecutive_failures=consecutive_failures,
                         action="exiting_with_code_2_for_dns_refresh",
                     )
-                    sys.exit(2)
+                    # Hard process exit so the container actually restarts.
+                    # ``sys.exit(2)`` here previously left a ZOMBIE: the
+                    # SystemExit was captured as this probe Task's result and
+                    # retrieved (swallowed) by the run() done-callback, the event
+                    # loop died, the /healthz socket closed → Docker reported
+                    # ``unhealthy`` forever while ``restart: unless-stopped``
+                    # never fired.  See :meth:`_force_process_exit`.
+                    self._force_process_exit(2)
+                    return  # unreachable after os._exit; keeps type-checkers happy
 
     async def run(self) -> None:
         """Start consuming messages until :meth:`stop` is called.

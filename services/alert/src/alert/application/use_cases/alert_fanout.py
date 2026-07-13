@@ -17,6 +17,8 @@ the same entity+type within one window are collapsed into one alert.
 Severity (PRD-0021 §6.5):
 - nlp.signal.detected.v1: severity = SeverityThresholds.classify(market_impact_score)
 - graph.state.changed.v1 / intelligence.contradiction.v1: severity = MEDIUM (F-13 override)
+- market.prediction.signal.v1 (PLAN-0056 D3): severity = classify(market_impact_score);
+  the score is already adverse-boosted by S7 (D2), so bearish moves land higher.
 """
 
 from __future__ import annotations
@@ -76,6 +78,9 @@ TOPIC_ALERT_TYPE: dict[str, AlertType] = {
     "nlp.signal.detected.v1": AlertType.SIGNAL,
     "graph.state.changed.v1": AlertType.GRAPH_CHANGE,
     "intelligence.contradiction.v1": AlertType.CONTRADICTION,
+    # PLAN-0056 Wave D3: prediction-market signals fan out like SIGNAL events —
+    # severity from market_impact_score (NOT in the MEDIUM-override set below).
+    "market.prediction.signal.v1": AlertType.PREDICTION,
 }
 
 # Topics that always get MEDIUM severity regardless of market_impact_score (PRD-0021 F-13)
@@ -242,6 +247,58 @@ def _compose_graph_change_detail(event: dict[str, Any]) -> str:
     return head
 
 
+# ── Prediction-market humanisation (PLAN-0056 Wave D3) ─────────────────────────
+# market.prediction.signal.v1 carries (trigger, polarity, question, market_id,
+# url). We turn (trigger, polarity) into a short human phrase so the alert reads
+# "a prediction is moving against <entity>" for adverse (bearish) moves and
+# neutrally for favorable ones. Deterministic (no LLM) — the S7 vocabulary is a
+# fixed 3x3 set. Severity is NOT touched here: it comes from market_impact_score
+# (which S7 D2 already boosts for adverse moves), keeping the SeverityThresholds
+# model the single source of magnitude.
+_PREDICTION_TRIGGER_PHRASE: dict[str, str] = {
+    "new_market": "new prediction market",
+    "material_move": "prediction market moving",
+    "resolution": "prediction market resolved",
+}
+
+# Direction the market is priced FOR the subject entity. ``bearish`` = a
+# bad-for-the-entity outcome is being priced up → risk framing ("against").
+_PREDICTION_POLARITY_DIRECTION: dict[str, str] = {
+    "bearish": "against",
+    "bullish": "in favor of",
+    "neutral": "",
+}
+
+# Cap the market-question tail so the composed title stays scannable in the UI.
+_PREDICTION_QUESTION_MAX = 80
+
+
+def _compose_prediction_detail(event: dict[str, Any]) -> str:
+    """Compose the descriptive tail for a PREDICTION alert from its payload.
+
+    Reads ``trigger``, ``polarity``, and ``question`` to produce text like
+    ``"prediction market moving against: Will <X> miss guidance?"``. Falls back
+    gracefully as fields go missing:
+      - full:    "prediction market moving against: <question>"
+      - no dir:  "prediction market moving: <question>"  (neutral polarity)
+      - no q:    "prediction market moving against"
+      - nothing: "prediction market update"
+    """
+    trigger = str(event.get("trigger") or "").lower()
+    phrase = _PREDICTION_TRIGGER_PHRASE.get(trigger, "prediction market update")
+
+    polarity = str(event.get("polarity") or "").lower()
+    direction = _PREDICTION_POLARITY_DIRECTION.get(polarity, "")
+    head = f"{phrase} {direction}".strip() if direction else phrase
+
+    question = str(event.get("question") or "").strip()
+    if question:
+        if len(question) > _PREDICTION_QUESTION_MAX:
+            question = question[: _PREDICTION_QUESTION_MAX - 3] + "..."
+        return f"{head}: {question}"
+    return head
+
+
 def _compose_alert_title(
     *,
     signal_label: str,
@@ -311,6 +368,14 @@ def _compose_alert_title(
         if subject:
             return f"{subject} — {detail}"
         return detail[:1].upper() + detail[1:]
+
+    if alert_type == AlertType.PREDICTION:
+        # PLAN-0056 Wave D3: compose from trigger + polarity + question so the
+        # row reads "AAPL — prediction market moving against: <question>".
+        detail = _compose_prediction_detail(event) if event is not None else "prediction market update"
+        if subject:
+            return f"{subject} — {detail}"
+        return detail[:1].upper() + detail[1:] if detail else "Prediction market update"
 
     # Defensive: enum extension safety net. Should be unreachable in current code.
     return f"{subject} — alert" if subject else "Alert"
@@ -390,6 +455,9 @@ def _extract_entity_id(event: dict[str, Any], topic: str) -> str | None:
     elif topic == "graph.state.changed.v1":
         raw = event.get("primary_entity_id")
     elif topic == "intelligence.contradiction.v1":
+        raw = event.get("subject_entity_id")
+    elif topic == "market.prediction.signal.v1":
+        # PLAN-0056 Wave D3: the fanout watchlist key is the referenced entity.
         raw = event.get("subject_entity_id")
     else:
         return None
@@ -545,7 +613,27 @@ class AlertFanoutUseCase:
                 event_time = event_time.replace(tzinfo=UTC)
         except (ValueError, AttributeError, TypeError):
             event_time = now
-        dedup_key = Alert.compute_dedup_key(entity_uuid, alert_type, event_time, self._dedup_window)
+        # PLAN-0056 QA: for PREDICTION alerts, split the dedup bucket by the
+        # concrete market (and trigger) so two DISTINCT prediction markets about
+        # the SAME entity within one window do not collide — one would otherwise
+        # silently suppress the other. For every other alert type the
+        # discriminator stays None, preserving the intended per-entity+type
+        # collapse (SIGNAL/GRAPH/CONTRADICTION). Repeated moves on the SAME
+        # market still share a key here and are additionally rate-limited by the
+        # upstream PredictionRuleEvaluator 1h per-market cooldown.
+        dedup_discriminator: str | None = None
+        if alert_type == AlertType.PREDICTION:
+            market_id = str(event.get("market_id") or "").strip()
+            trigger = str(event.get("trigger") or "").strip().lower()
+            if market_id or trigger:
+                dedup_discriminator = f"{market_id}:{trigger}"
+        dedup_key = Alert.compute_dedup_key(
+            entity_uuid,
+            alert_type,
+            event_time,
+            self._dedup_window,
+            discriminator=dedup_discriminator,
+        )
 
         async with self._sf() as session:
             alert_repo, pending_repo, dedup_repo, outbox_repo = self._repo_factory(session)

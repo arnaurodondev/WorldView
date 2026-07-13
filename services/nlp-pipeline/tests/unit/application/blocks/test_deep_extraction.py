@@ -95,6 +95,35 @@ class TestBuildWindows:
     def test_empty_chunks_returns_empty(self) -> None:
         assert _build_windows([], max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS) == []
 
+    def test_max_words_caps_a_huge_filing(self) -> None:
+        """BP-719 Mode B: max_words truncates a huge filing so the ML phase fits.
+
+        A 48k-word 10-Q with max_words=24000 must extract from at most the first
+        24000 words → far fewer windows than the uncapped path (which would time
+        out on the 900s watchdog), and no window carries a word beyond the cap.
+        """
+        huge = " ".join(f"word{i}" for i in range(48_000))
+        chunks = [_make_chunk(huge)]
+
+        uncapped = _build_windows(chunks, max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS)
+        capped = _build_windows(
+            chunks, max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS, max_words=24_000
+        )
+
+        assert len(capped) < len(uncapped)
+        # No word past the cap survived (word24000+ must be absent).
+        joined = " ".join(capped)
+        assert "word24000" not in joined.split()
+        assert "word0" in joined.split()
+
+    def test_max_words_zero_is_no_cap(self) -> None:
+        """max_words=0 (the default) is behaviour-preserving — no truncation."""
+        huge = " ".join(f"word{i}" for i in range(SINGLE_WINDOW_TOKEN_LIMIT + 500))
+        chunks = [_make_chunk(huge)]
+        assert _build_windows(
+            chunks, max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS, max_words=0
+        ) == _build_windows(chunks, max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS)
+
     def test_windows_overlap(self) -> None:
         """Consecutive windows must share overlap words."""
         long_text = " ".join(f"word{i}" for i in range(SINGLE_WINDOW_TOKEN_LIMIT + 500))

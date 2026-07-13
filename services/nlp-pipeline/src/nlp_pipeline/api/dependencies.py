@@ -249,14 +249,72 @@ def get_chunk_search_use_case(
     # embedding_client is set on app.state at startup (app.py:179); pass it
     # through so query_text searches can embed the query without a pre-computed vector.
     embedding_client = getattr(request.app.state, "embedding_client", None)
+    # BUG-3: raise the HNSW candidate pool so selective post-filters (source_type,
+    # tenant, entity, date) keep real rows instead of degenerating to ~0.
+    ef_search = int(getattr(settings, "chunk_ann_ef_search", 200)) if settings is not None else 200
+    # BUG-3 finish: filter-first EXACT KNN when a selective filter is present —
+    # ef_search alone cannot surface a ~2%-density source under a hard post-filter.
+    exact_when_filtered = (
+        bool(getattr(settings, "chunk_ann_exact_when_filtered", True)) if settings is not None else True
+    )
+    exact_max_rows = int(getattr(settings, "chunk_ann_exact_max_rows", 100_000)) if settings is not None else 100_000
+    # S6 chunk-search latency fix: a single indexed source_type (partial HNSW
+    # index idx_chunk_emb_hnsw_<src>, migration 0024) skips the O(bucket) exact
+    # sort. Parse the comma-separated allow-list from settings; the accel ef is
+    # slightly wider than the general ef so a date post-filter still yields top_k.
+    _raw_indexed = (
+        str(getattr(settings, "chunk_ann_indexed_source_types", "sec_edgar")) if settings is not None else "sec_edgar"
+    )
+    indexed_source_types = frozenset(s.strip() for s in _raw_indexed.split(",") if s.strip())
+    accel_ef_search = int(getattr(settings, "chunk_ann_accel_ef_search", 400)) if settings is not None else 400
+
+    def _make_chunk_repo(session: AsyncSession) -> ChunkANNRepository:
+        """Build a ChunkANNRepository with the tuned knobs, bound to *session*.
+
+        Factored out so BOTH the request-scoped repo (shared session, sequential
+        fallback + result enrichment) and the per-leg parallel scopes below use
+        IDENTICAL configuration — otherwise the two hybrid legs could diverge in
+        ef_search / exact-filter behaviour.
+        """
+        return ChunkANNRepository(
+            session,
+            ef_search=ef_search,
+            exact_when_filtered=exact_when_filtered,
+            exact_max_rows=exact_max_rows,
+            indexed_source_types=indexed_source_types,
+            accel_ef_search=accel_ef_search,
+        )
+
+    # ── Per-leg session scope for the parallel hybrid path (R1 latency fix) ────
+    # The hybrid search runs its ANN and lexical legs concurrently, and a single
+    # SQLAlchemy AsyncSession is NOT safe for concurrent use. So each leg leases
+    # its OWN read-replica session from nlp_read_factory via this async-CM
+    # factory. Falls back to the write factory when no read URL is configured
+    # (same rule as get_read_nlp_session). Disabled → sequential shared-session
+    # path (chunk_search_scope stays wired but parallel_hybrid gates it).
+    from contextlib import asynccontextmanager
+
+    nlp_read_factory = getattr(request.app.state, "nlp_read_factory", request.app.state.nlp_session_factory)
+
+    @asynccontextmanager
+    async def _chunk_search_scope() -> AsyncGenerator[ChunkANNRepository, None]:
+        async with nlp_read_factory() as leg_session:
+            yield _make_chunk_repo(leg_session)
+
+    parallel_hybrid = bool(getattr(settings, "chunk_search_parallel_hybrid", True)) if settings is not None else True
+    embed_cache_ttl_s = int(getattr(settings, "chunk_embed_cache_ttl_s", 3600)) if settings is not None else 3600
+
     return EnhancedChunkSearchUseCase(
-        chunk_ann_repo=ChunkANNRepository(nlp_session),
+        chunk_ann_repo=_make_chunk_repo(nlp_session),
         source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
         canonical_entity_repo=CanonicalEntityRepository(intel_session),
         valkey=raw_valkey,
         embedding_client=embedding_client,
         chunk_text_store=chunk_text_store,
         lexical_boost=lexical_boost,
+        chunk_search_scope=_chunk_search_scope,
+        parallel_hybrid=parallel_hybrid,
+        embed_cache_ttl_s=embed_cache_ttl_s,
     )
 
 
@@ -297,7 +355,9 @@ def get_search_documents_use_case(
     # through stacked BaseHTTPMiddleware wrappers in Starlette 0.37.x.
     jwt: str | None = getattr(request.state, "internal_jwt", None)
 
-    repo = AsyncpgDocumentSearchRepository(nlp_session)
+    # HIGH-1: force the GIN index for the FTS scan (planner mis-costs a Seq Scan).
+    force_index_scan = bool(getattr(settings, "fts_force_index_scan", True))
+    repo = AsyncpgDocumentSearchRepository(nlp_session, force_index_scan=force_index_scan)
     s5_client = _S5BatchClient(s5_base_url, jwt=jwt)
     s7_client = _S7BatchClient(s7_base_url, jwt=jwt)
 

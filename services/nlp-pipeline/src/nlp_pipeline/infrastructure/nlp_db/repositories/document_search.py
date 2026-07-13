@@ -3,7 +3,9 @@
 Implements DocumentSearchRepositoryPort using SQLAlchemy AsyncSession with
 raw SQL via ``session.execute(text(...))``. All queries target nlp_db only;
 no cross-DB joins (R9). Entity names are fetched separately by the use case
-via S7 HTTP; document titles are fetched via S5 HTTP (AD-W6-3).
+via S7 HTTP. Document title/url/published_at are selected directly from
+``document_source_metadata`` (HIGH-2 fix — previously deferred to an S5 HTTP
+batch call that 401'd in the live path; S5 now only a rare fallback).
 
 SQL design (PLAN-0064 §3 AD-W6-2 + AD-W6-3):
   - ``websearch_to_tsquery`` for user-facing queries (supports quoted phrases,
@@ -66,24 +68,19 @@ _SEARCH_CTE = """\
 WITH ranked_chunks AS (
     SELECT
         c.doc_id,
-        ts_rank_cd(c.tsv_english, websearch_to_tsquery('english', :q)) AS rank,
-        ts_headline(
-            'english',
-            c.chunk_text,
-            websearch_to_tsquery('english', :q),
-            :ts_headline_opts
-        ) AS snippet_marked
+        c.chunk_id,
+        ts_rank_cd(c.tsv_english, websearch_to_tsquery('english', :q)) AS rank
     FROM chunks c
     WHERE c.tsv_english @@ websearch_to_tsquery('english', :q)
 ),
 top_chunk_per_doc AS (
     SELECT DISTINCT ON (rc.doc_id)
-        rc.doc_id, rc.rank, rc.snippet_marked
+        rc.doc_id, rc.chunk_id, rc.rank
     FROM ranked_chunks rc
     ORDER BY rc.doc_id, rc.rank DESC
 ),
 filtered AS (
-    SELECT t.doc_id, t.rank, t.snippet_marked
+    SELECT t.doc_id, t.chunk_id, t.rank
     FROM top_chunk_per_doc t
     LEFT JOIN document_source_metadata dsm ON dsm.doc_id = t.doc_id
     WHERE
@@ -111,31 +108,61 @@ filtered AS (
         )
 )"""
 
-# ── SELECT leg: apply recency x source-type blend, paginate ─────────────────
+# ── SELECT leg: apply recency x source-type blend, paginate, THEN snippet ────
+# HIGH-1 (perf): the previous query computed ``ts_headline`` for EVERY matched
+# chunk inside ``ranked_chunks`` — for the ``news`` scope that is ~49k highlight
+# generations per request (each re-parses the full chunk_text), which is what
+# pushed latency to ~30s and tripped the S9 30s gateway timeout → 503. We now
+# rank + paginate FIRST (``scored`` CTE: cheap ts_rank_cd only), then generate
+# ts_headline for ONLY the ``page_size`` rows that survive pagination.
 # Blended final_score = rank x source_weight x recency_decay.
 # source_weight: sec_edgar=1.5, news=1.0 (higher for structured filings).
 # recency_decay: exp(-days_since_published/90) — 90-day half-life.
+#
+# HIGH-2: title/url/published_at are selected DIRECTLY from
+# document_source_metadata (dsm) here — the use case no longer depends on the
+# S5 POST /documents/batch call (which 401'd in the live path and was swallowed,
+# leaving every result with null title/url/date).
 _SEARCH_SELECT = """\
+, scored AS (
+    SELECT
+        f.doc_id,
+        f.chunk_id,
+        f.rank,
+        (
+            f.rank
+            * CASE dsm.source_type
+                WHEN 'sec_edgar' THEN 1.5
+                WHEN 'news'      THEN 1.0
+                ELSE                  1.0
+              END
+            * exp(
+                - (extract(epoch from (now() - dsm.published_at)) / 86400.0) / 90.0
+              )
+        ) AS final_score
+    FROM filtered f
+    LEFT JOIN document_source_metadata dsm ON dsm.doc_id = f.doc_id
+    ORDER BY final_score DESC NULLS LAST
+    LIMIT :limit OFFSET :offset
+)
 SELECT
-    f.doc_id,
-    f.rank,
-    f.snippet_marked,
+    s.doc_id,
+    s.rank,
+    s.final_score,
     dsm.source_type AS source_type,
-    (
-        f.rank
-        * CASE dsm.source_type
-            WHEN 'sec_edgar' THEN 1.5
-            WHEN 'news'      THEN 1.0
-            ELSE                  1.0
-          END
-        * exp(
-            - (extract(epoch from (now() - dsm.published_at)) / 86400.0) / 90.0
-          )
-    ) AS final_score
-FROM filtered f
-LEFT JOIN document_source_metadata dsm ON dsm.doc_id = f.doc_id
-ORDER BY final_score DESC NULLS LAST
-LIMIT :limit OFFSET :offset"""
+    dsm.title       AS title,
+    dsm.url         AS url,
+    dsm.published_at AS published_at,
+    ts_headline(
+        'english',
+        c.chunk_text,
+        websearch_to_tsquery('english', :q),
+        :ts_headline_opts
+    ) AS snippet_marked
+FROM scored s
+JOIN chunks c ON c.chunk_id = s.chunk_id
+LEFT JOIN document_source_metadata dsm ON dsm.doc_id = s.doc_id
+ORDER BY s.final_score DESC NULLS LAST"""
 
 # ── COUNT leg: same CTEs, no LIMIT/OFFSET ────────────────────────────────────
 _COUNT_SELECT = "SELECT count(*) FROM filtered"
@@ -168,8 +195,23 @@ class AsyncpgDocumentSearchRepository(DocumentSearchRepositoryPort):
     ``CAST(:param AS type) IS NULL`` short-circuit guards in the SQL.
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, force_index_scan: bool = True) -> None:
         self._session = session
+        # HIGH-1: force the GIN index for the FTS scan (the planner otherwise
+        # mis-costs a Seq Scan that evaluates @@ on every row — ~55s vs ~3s).
+        self._force_index_scan = force_index_scan
+
+    async def _apply_planner_hints(self) -> None:
+        """Disable seq scans for the current transaction (HIGH-1).
+
+        ``set_config(name, value, is_local=true)`` scopes the GUC to the current
+        transaction so it auto-reverts and never leaks onto the pooled
+        connection. The read session runs its statements in an implicit
+        transaction (SQLAlchemy autobegin), so this applies to the count + search
+        queries that follow on the same connection.
+        """
+        if self._force_index_scan:
+            await self._session.execute(text("SELECT set_config('enable_seqscan', 'off', true)"))
 
     async def search(self, request: SearchDocumentsRequest) -> tuple[list[SearchDocumentResult], int]:
         """Execute FTS query using tsv_english GIN index.
@@ -181,9 +223,16 @@ class AsyncpgDocumentSearchRepository(DocumentSearchRepositoryPort):
         """
         params = _build_search_params(request)
 
+        # HIGH-1: pin the GIN index BEFORE the count + search queries run.
+        await self._apply_planner_hints()
+
         # ── Total count (same CTE, no LIMIT) ─────────────────────────────────
+        # HIGH-1: the count query no longer references :ts_headline_opts (snippet
+        # generation moved to the paginated SELECT leg), so it must not be bound
+        # here — bindparams() rejects keys absent from the SQL text.
+        count_params = {k: v for k, v in params.items() if k != "ts_headline_opts"}
         count_sql = _SEARCH_CTE + "\n" + _COUNT_SELECT
-        count_result = await self._session.execute(text(count_sql).bindparams(**params))
+        count_result = await self._session.execute(text(count_sql).bindparams(**count_params))
         total: int = int(count_result.scalar_one())
 
         if total == 0:
@@ -209,10 +258,15 @@ class AsyncpgDocumentSearchRepository(DocumentSearchRepositoryPort):
             results.append(
                 SearchDocumentResult(
                     doc_id=row.doc_id,
-                    title=None,  # filled in by use case via S5 batch call
+                    # HIGH-2: title/url/published_at now come directly from
+                    # document_source_metadata (selected in _SEARCH_SELECT), not
+                    # from the S5 batch call that 401'd in the live path. The use
+                    # case still fills these in as a fallback for the rare docs
+                    # whose dsm row is not yet populated.
+                    title=row.title,
                     source_type=source_type,
-                    source_url=None,  # filled in by use case via S5 batch call
-                    published_at=None,  # filled in by use case via S5 batch call
+                    source_url=row.url,
+                    published_at=row.published_at,
                     snippet=row.snippet_marked,  # still has sentinel bytes
                     match_offsets=[],  # filled in by use case after stripping
                     score=float(row.final_score) if row.final_score is not None else 0.0,
@@ -256,10 +310,62 @@ class AsyncpgDocumentSearchRepository(DocumentSearchRepositoryPort):
 # Maps API source_type values to the actual source_type strings stored in
 # document_source_metadata.  The API exposes a coarser taxonomy than the DB
 # (which records the exact ingestion adapter name).
+#
+# ROOT-CAUSE FIX (feat/fix-sec-fts-source-type): the original lists were written
+# against OLD seed/fixture names ("sec_10k", "eodhd_news", ...) that the LIVE
+# pipeline never produces.  Real ingestion stamps source_type with the canonical
+# `contracts.enums.ContentSourceType` literal carried end-to-end from S4 → S5
+# (content_store_db.documents.source_type) → the S5 `content.article.stored.v1`
+# event → S6 `document_source_metadata.source_type` (set verbatim in
+# article_consumer.py from `value["source_type"]`).  Those literals are:
+#   eodhd, eodhd_ticker_news, finnhub, newsapi, sec_edgar, polymarket, manual,
+#   tenant_upload.
+# Consequence of the mismatch: `?source_type=sec_edgar` mapped to
+# [sec_10k, sec_8k, sec_10q] and matched ~31 stale seed rows while MISSING the
+# 4,503 real `sec_edgar` filings; `?source_type=news` matched ~403 seed rows
+# while MISSING ~49,000 real eodhd/eodhd_ticker_news/finnhub/newsapi articles.
+#
+# Fix: map to the REAL ContentSourceType literals first, and additionally keep
+# the legacy seed names so older fixture/seed rows remain searchable (harmless
+# extra ANY() members — they simply never match in production data).
 _SOURCE_TYPE_MAP: dict[str, list[str]] = {
-    "news": ["eodhd_news", "finnhub_news", "press_release"],
-    "sec_edgar": ["sec_10k", "sec_8k", "sec_10q"],
+    # All non-filing public/news adapters. `eodhd_ticker_news` is the per-ticker
+    # EODHD feed (auto-created per equity); both it and bare `eodhd` are news.
+    "news": [
+        # Live canonical ContentSourceType literals:
+        "eodhd",
+        "eodhd_ticker_news",
+        "finnhub",
+        "newsapi",
+        # Legacy seed/fixture names (kept for backward-compat; absent in prod):
+        "eodhd_news",
+        "finnhub_news",
+        "newsapi_news",
+        "press_release",
+    ],
+    "sec_edgar": [
+        # Live canonical literal — this is the value the SEC EDGAR adapter path
+        # actually writes for every filing (form type is NOT yet structured;
+        # see follow-up note below):
+        "sec_edgar",
+        # Legacy seed/fixture per-form names (kept for backward-compat):
+        "sec_10k",
+        "sec_8k",
+        "sec_10q",
+    ],
 }
+
+# FOLLOW-UP (documented, NOT done here — would need migration + backfill):
+# The SEC EDGAR adapter (S4 sec_edgar/adapter.py) DOES know the form type — the
+# `forms` config ("10-K,10-Q,8-K,DEF14A") is sent to EFTS and each EFTS hit's
+# `_source` carries the form.  Today the adapter discards it: `FetchResult` has
+# no form_type field, so every filing lands under the single generic
+# `source_type='sec_edgar'` and per-form filtering (10-K vs 8-K vs 10-Q) is
+# impossible from structured data.  Recovering it cheaply would require: (a) add
+# an optional `form_type` to the FetchResult / raw event with a default (R11
+# forward-compatible), (b) thread it through S5 + S6, (c) a backfill parsing the
+# ~4.5k stored index docs.  That is a multi-service change with a backfill and is
+# intentionally left as a follow-up rather than half-implemented here.
 
 # Maps date_preset values to a relative window in days before now.
 # "since_last_visit" requires per-user state and is treated as no filter here.

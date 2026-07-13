@@ -213,6 +213,38 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(
             {value.length} / 2000
           </p>
         )}
+
+        {/*
+         * PERSISTENT PLATFORM DISCLAIMER (liability coverage)
+         *
+         * WHY IT LIVES HERE: the composer is the one region that is ALWAYS
+         * mounted on the chat surface (empty state, mid-thread, and while
+         * streaming), so a line rendered here is guaranteed to be visible on
+         * every chat view without our having to duplicate it across the empty
+         * state / message-list / footer. Placing it directly under the input
+         * keeps it adjacent to the action the user just took (asking a
+         * question) — the natural spot for a "this isn't advice" caveat.
+         *
+         * WHY IT IS SUBTLE: we deliberately reuse the smallest muted-caption
+         * scale already used above (the char counter's `text-[10px]
+         * text-muted-foreground`) so the notice reads as ambient chrome rather
+         * than a modal/banner. It must be legally present, not attention-
+         * grabbing. Colour comes from the `--muted-foreground` design token
+         * (via Tailwind's `text-muted-foreground`), NOT a hardcoded hex — this
+         * keeps it correct under the Midnight Pro dark theme and dodges the
+         * known hsl(var()) no-paint bug that bites raw colour literals.
+         *
+         * `role="note"` + a stable `data-cell` give screen readers a landmark
+         * and give tests/analytics a deterministic hook.
+         */}
+        <p
+          role="note"
+          data-cell="composer-disclaimer"
+          className="mt-2 text-center text-[10px] leading-tight text-muted-foreground"
+        >
+          Worldview provides market intelligence for informational purposes only
+          — not financial advice or a recommendation.
+        </p>
       </div>
     );
   },

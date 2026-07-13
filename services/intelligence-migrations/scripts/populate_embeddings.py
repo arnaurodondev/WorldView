@@ -4,10 +4,31 @@ For each row where embedding IS NULL, embeds
 ``f"{canonical_type}: {description}"`` via the configured embedding model
 and writes the VECTOR(1024) result back.
 
+Supports two embedding providers, selected by presence of EMBEDDING_API_KEY:
+
+  * DeepInfra (default in prod) — when EMBEDDING_API_KEY is set, POSTs to the
+    OpenAI-compatible ``{EMBEDDING_BASE_URL}/v1/embeddings`` endpoint with a
+    Bearer token, model ``BAAI/bge-large-en-v1.5`` (1024-dim), and parses
+    ``data[0].embedding``. This is the shared DeepInfra key the rest of the
+    platform uses (see libs/ml-clients DeepInfraEmbeddingAdapter).
+  * Ollama (local dev fallback) — when no API key is present, POSTs to the
+    legacy ``{EMBEDDING_BASE_URL}/api/embeddings`` endpoint (no auth) with
+    model ``bge-large:latest`` and parses the top-level ``embedding`` field.
+
 Requires:
     INTELLIGENCE_DB_URL  — Postgres connection string
-    EMBEDDING_BASE_URL   — Ollama API base (default http://ollama:11434)
-    EMBEDDING_MODEL      — model name (default bge-large:latest — Ollama model tag)
+    EMBEDDING_BASE_URL   — API base
+                           (DeepInfra: https://api.deepinfra.com/v1/openai;
+                            Ollama:    http://ollama:11434)
+    EMBEDDING_MODEL      — model name
+                           (DeepInfra: BAAI/bge-large-en-v1.5;
+                            Ollama:    bge-large:latest)
+    EMBEDDING_API_KEY    — DeepInfra API key (optional; when unset, the Ollama
+                           fallback is used for local dev)
+
+Both providers emit identical 1024-dim vectors (BAAI/bge-large-en-v1.5 is the
+same underlying model as the Ollama ``bge-large:latest`` tag), so the pgvector
+schema is unchanged regardless of provider.
 
 Tolerates embedding service unavailability: logs a warning and exits 0
 so the init container does not block S6/S7 startup. Embeddings will be
@@ -36,6 +57,10 @@ log = structlog.get_logger("populate_embeddings")
 
 EMBEDDING_BASE_URL = os.environ.get("EMBEDDING_BASE_URL", "http://ollama:11434")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "bge-large:latest")
+# When set, we speak DeepInfra's OpenAI-compatible /v1/embeddings API (Bearer
+# auth); when empty/unset we fall back to the legacy Ollama /api/embeddings API
+# (no auth) for local dev. This is the shared platform DeepInfra key.
+EMBEDDING_API_KEY = os.environ.get("EMBEDDING_API_KEY", "").strip()
 EXPECTED_DIM = 1024
 
 
@@ -46,28 +71,55 @@ def get_db_url() -> str:
     return url.replace("postgresql+asyncpg://", "postgresql://")
 
 
+def _extract_embedding(data: dict) -> list[float] | None:
+    """Pull the embedding vector out of either provider's response shape.
+
+    DeepInfra (OpenAI format): ``{"data": [{"embedding": [...], "index": 0}]}``
+    Ollama (legacy format):    ``{"embedding": [...]}``
+    """
+    # OpenAI/DeepInfra shape (``data`` = non-empty list) takes precedence;
+    # otherwise fall back to the Ollama shape (top-level ``embedding`` field).
+    items = data.get("data")
+    embedding = items[0].get("embedding") if isinstance(items, list) and items else data.get("embedding")
+
+    if embedding and len(embedding) == EXPECTED_DIM:
+        return embedding  # type: ignore[no-any-return]
+    log.warning(
+        "Unexpected embedding dimension",
+        got=len(embedding) if embedding else 0,
+        expected=EXPECTED_DIM,
+    )
+    return None
+
+
 def embed_text(text_input: str) -> list[float] | None:
-    """Call Ollama /api/embeddings endpoint. Returns None on failure."""
-    payload = json.dumps({"model": EMBEDDING_MODEL, "prompt": text_input}).encode()
-    url = f"{EMBEDDING_BASE_URL}/api/embeddings"
+    """Embed one string. Returns None on failure (non-blocking by design).
+
+    Selects the provider by EMBEDDING_API_KEY: DeepInfra's OpenAI-compatible
+    ``/v1/embeddings`` when a key is present, else the legacy Ollama
+    ``/api/embeddings`` endpoint.
+    """
+    headers = {"Content-Type": "application/json"}
+    if EMBEDDING_API_KEY:
+        # DeepInfra / OpenAI-compatible: batched ``input`` list + Bearer auth.
+        url = f"{EMBEDDING_BASE_URL}/v1/embeddings"
+        payload = json.dumps({"model": EMBEDDING_MODEL, "input": [text_input]}).encode()
+        headers["Authorization"] = f"Bearer {EMBEDDING_API_KEY}"
+    else:
+        # Legacy Ollama: single ``prompt`` string, no auth.
+        url = f"{EMBEDDING_BASE_URL}/api/embeddings"
+        payload = json.dumps({"model": EMBEDDING_MODEL, "prompt": text_input}).encode()
+
     req = urllib.request.Request(  # noqa: S310 — URL built from trusted env var
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
             data = json.loads(resp.read())
-            embedding = data.get("embedding")
-            if embedding and len(embedding) == EXPECTED_DIM:
-                return embedding  # type: ignore[no-any-return]
-            log.warning(
-                "Unexpected embedding dimension",
-                got=len(embedding) if embedding else 0,
-                expected=EXPECTED_DIM,
-            )
-            return None
+            return _extract_embedding(data)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         log.warning("Embedding service unavailable", error=str(exc))
         return None

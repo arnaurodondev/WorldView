@@ -18,6 +18,8 @@ import signal
 import sys
 from typing import Any
 
+from ml_clients.model_registry import warn_unpriceable_models  # type: ignore[import-not-found]
+
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
@@ -218,6 +220,23 @@ async def main() -> None:
             "embedding_provider": settings.embedding_provider,
             "embedding_model_id": settings.embedding_api_model_id,
         },
+    )
+
+    # PLAN-0117 W5 (FR-7a): best-effort boot check — WARN on any configured model
+    # with no pricing path (would log $0 → silent-zero). Reads LIVE settings.
+    warn_unpriceable_models(
+        "knowledge-graph",
+        [
+            (settings.embedding_api_model_id, "deepinfra"),
+            (settings.deepinfra_extraction_model_id, "deepinfra"),
+            (settings.description_deepinfra_model_id, "deepinfra"),
+            (settings.description_deepinfra_fallback_model_id, "deepinfra"),
+            (settings.narrative_llm_model_id, "deepinfra"),
+            (settings.summary_fallback_model_id, "deepinfra"),
+            (settings.summary_embedding_model_id, "deepinfra"),
+            (settings.path_insight_explanation_model_id, "deepinfra"),
+            (settings.embedding_model_id, "ollama"),
+        ],
     )
 
     # Standalone scheduler: no consumer coroutine — use an async no-op

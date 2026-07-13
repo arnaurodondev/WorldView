@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 import httpx
+from ml_clients.pricing import resolve_cost  # type: ignore[import-untyped]
 from prometheus_client import Counter
 from prompts.classification.article_relevance import ARTICLE_RELEVANCE_SCORER  # type: ignore[import-untyped]
 from sqlalchemy import text
@@ -398,7 +399,11 @@ class ArticleRelevanceScoringWorker:
             )
             resp.raise_for_status()
             latency_ms = int((time.perf_counter() - t0) * 1000)
-            content = resp.json()["choices"][0]["message"]["content"]
+            body = resp.json()
+            content = body["choices"][0]["message"]["content"]
+            # PLAN-0117 FR-1: capture DeepInfra's verbatim per-call cost so the
+            # usage row is cost_source="provider" (authoritative) not a matrix estimate.
+            provider_cost = (body.get("usage") or {}).get("estimated_cost")
             # PLAN-0109 B-1: hardened extraction — empty / <think>-wrapped /
             # markdown-fenced responses no longer kill the article silently.
             try:
@@ -436,6 +441,7 @@ class ArticleRelevanceScoringWorker:
                 tokens_in=len(user_content.split()),
                 tokens_out=len(content.split()),
                 doc_id=doc_id,
+                provider_estimated_cost=provider_cost,
             )
             return max(0.0, min(1.0, score)), sentiment
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
@@ -468,6 +474,7 @@ class ArticleRelevanceScoringWorker:
         tokens_out: int,
         doc_id: UUID,
         error_code: str | None = None,
+        provider_estimated_cost: object = None,
     ) -> None:
         """PLAN-0057 A-5: append one llm_usage_log row per LLM call.
 
@@ -477,9 +484,20 @@ class ArticleRelevanceScoringWorker:
 
         Token counts are word-split estimates (the protocol allows estimates;
         no provider returns exact counts on this code path).
+
+        PLAN-0117 W3 (FR-4b): the cost is resolved via the unified
+        :func:`resolve_cost` rule — DeepInfra ``usage.estimated_cost`` wins
+        (``cost_source="provider"``), else the price matrix. No hardcoded ``$0``.
         """
         if self._usage_logger is None:
             return
+        cost, cost_source = resolve_cost(
+            model_id,
+            provider=provider,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            provider_estimated_cost=provider_estimated_cost,
+        )
         try:
             await self._usage_logger.log(
                 model_id=model_id,
@@ -488,10 +506,11 @@ class ArticleRelevanceScoringWorker:
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 latency_ms=latency_ms,
-                estimated_cost_usd=0.0,
+                estimated_cost_usd=float(cost),
                 success=success,
                 error_code=error_code,
                 doc_id=doc_id,
+                cost_source=cost_source,
             )
         except Exception as exc:  # belt-and-braces — protocol forbids raising
             logger.warning(  # type: ignore[no-any-return]

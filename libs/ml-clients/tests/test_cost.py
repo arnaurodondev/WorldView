@@ -1,9 +1,10 @@
-"""Tests for cost estimation utilities (PLAN-0033 T-A-1-02)."""
+"""Tests for cost estimation utilities (PLAN-0033 T-A-1-02; PLAN-0117 T-A-1-04)."""
 
 from __future__ import annotations
 
 import pytest
-from ml_clients.cost import PRICING, estimate_cost, estimate_tokens_from_text
+from ml_clients.cost import estimate_cost, estimate_tokens_from_text
+from ml_clients.pricing import compute_cost
 
 # ---------------------------------------------------------------------------
 # estimate_cost
@@ -115,7 +116,33 @@ def test_estimate_tokens_from_text_whitespace_only() -> None:
     assert estimate_tokens_from_text("   ") == 1
 
 
+# ---------------------------------------------------------------------------
+# PLAN-0117 T-A-1-04 — cost.py now DELEGATES to pricing.compute_cost.
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.unit
-def test_pricing_dict_has_all_expected_providers() -> None:
-    """Smoke test: PRICING has the four expected provider keys."""
-    assert set(PRICING.keys()) == {"deepinfra", "openrouter", "gemini", "ollama"}
+def test_cost_py_delegates_to_pricing() -> None:
+    """``estimate_cost`` returns exactly ``float(compute_cost(model_id, ...))``.
+
+    The ``provider`` argument is ignored (a model_id uniquely determines
+    pricing) — passing a nonsense provider must not change the result.
+    """
+    for model_id, a, b in (
+        ("Qwen/Qwen3-32B", 1000, 500),
+        ("deepseek-ai/DeepSeek-V4-Flash", 1_000_000, 1_000_000),
+        ("gemini-3.1-flash-lite", 100_000, 50_000),
+        ("openai/gpt-oss-120b", 2000, 1000),
+    ):
+        expected = float(compute_cost(model_id, a, b))
+        assert estimate_cost("deepinfra", model_id, a, b) == expected
+        # provider is ignored — an arbitrary/wrong provider yields the same value
+        assert estimate_cost("totally-made-up-provider", model_id, a, b) == expected
+
+
+@pytest.mark.unit
+def test_cost_py_no_independent_pricing_map() -> None:
+    """The legacy independent ``PRICING`` map is retired (FR-4a unification)."""
+    import ml_clients.cost as cost_mod
+
+    assert not hasattr(cost_mod, "PRICING")

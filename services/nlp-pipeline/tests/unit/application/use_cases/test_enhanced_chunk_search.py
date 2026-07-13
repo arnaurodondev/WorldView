@@ -252,15 +252,20 @@ class TestEnhancedChunkSearchUseCase:
 @pytest.mark.unit
 class TestEmbedCacheKey:
     def test_cache_key_format(self) -> None:
+        # R1: digest widened to 24 hex chars and namespaced by embedding model.
         key = _embed_cache_key("hello world")
         assert key.startswith("s6:v1:emb:")
-        assert len(key) == len("s6:v1:emb:") + 16
+        assert len(key) == len("s6:v1:emb:") + 24
 
     def test_same_text_same_key(self) -> None:
         assert _embed_cache_key("apple") == _embed_cache_key("apple")
 
     def test_different_text_different_key(self) -> None:
         assert _embed_cache_key("apple") != _embed_cache_key("google")
+
+    def test_key_normalizes_case_and_whitespace(self) -> None:
+        # R1: casing / surrounding+internal whitespace collapse to one key.
+        assert _embed_cache_key("  Apple  Inc ") == _embed_cache_key("apple inc")
 
 
 @pytest.mark.unit

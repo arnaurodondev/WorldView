@@ -740,6 +740,86 @@ async def test_nl_screener_returns_502_on_llm_error(authed_app, authed_mock_clie
     assert resp.status_code == 502
 
 
+def _make_deepinfra_ctx_with_usage(
+    llm_content: str,
+    usage: dict | None,
+    status_code: int = 200,
+) -> MagicMock:
+    """Like _make_deepinfra_ctx but embeds a ``usage`` block in the response."""
+    body: dict = {"choices": [{"message": {"content": llm_content}}]}
+    if usage is not None:
+        body["usage"] = usage
+    response_body = json.dumps(body).encode()
+    mock_response = _mock_response(status_code, response_body)
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_client)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_nl_screener_logs_usage_to_s8(authed_app, authed_mock_clients) -> None:
+    """PLAN-0117 W4 (FR-6): screener call POSTs its DeepInfra usage to S8."""
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"fields": [{"name": "sector"}]}).encode()),
+    )
+    # Capture the best-effort usage-ingest POST to S8.
+    authed_mock_clients.rag_chat.post = AsyncMock(
+        return_value=_mock_response(200, b'{"recorded": true}'),
+    )
+    llm_result = {"sector": "Technology"}
+    usage = {"prompt_tokens": 120, "completion_tokens": 40, "estimated_cost": 4.1e-07}
+    with patch(
+        "httpx.AsyncClient",
+        return_value=_make_deepinfra_ctx_with_usage(json.dumps(llm_result), usage),
+    ):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "tech stocks"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
+
+    assert resp.status_code == 200
+    authed_mock_clients.rag_chat.post.assert_awaited_once()
+    call = authed_mock_clients.rag_chat.post.await_args
+    assert call.args[0] == "/internal/v1/llm-usage"
+    payload = call.kwargs["json"]
+    assert payload["capability"] == "screener_nl_translate"
+    assert payload["cost_source"] == "provider"
+    assert payload["tokens_in"] == 120
+    assert payload["estimated_cost_usd"] == 4.1e-07
+
+
+@pytest.mark.asyncio
+async def test_nl_screener_usage_logging_best_effort(authed_app, authed_mock_clients) -> None:
+    """S8 ingest failure must NOT fail the screener request (NFR-1)."""
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"fields": [{"name": "sector"}]}).encode()),
+    )
+    # S8 down → post raises; the screener must still return 200.
+    authed_mock_clients.rag_chat.post = AsyncMock(side_effect=RuntimeError("S8 down"))
+    llm_result = {"sector": "Technology"}
+    usage = {"prompt_tokens": 10, "completion_tokens": 5, "estimated_cost": 1e-07}
+    with patch(
+        "httpx.AsyncClient",
+        return_value=_make_deepinfra_ctx_with_usage(json.dumps(llm_result), usage),
+    ):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "tech stocks"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["filters"]["sector"] == "Technology"
+
+
 # ── PLAN-0092 Wave A: NLScreenerResponse.explanation field tests ─────────────
 
 

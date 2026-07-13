@@ -24,6 +24,7 @@ Usage in nlp-pipeline consumer:
 from __future__ import annotations
 
 import time
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import httpx
@@ -31,6 +32,7 @@ import structlog
 
 from ml_clients.dataclasses import EmbeddingInput, EmbeddingOutput
 from ml_clients.errors import FatalError, RateLimitError, RetryableError, parse_retry_after
+from ml_clients.pricing import compute_cost, provider_cost_to_decimal
 from ml_clients.text_budget import truncate_for_bge
 
 if TYPE_CHECKING:
@@ -100,6 +102,11 @@ class DeepInfraEmbeddingAdapter:
 
         start = time.perf_counter()
         status = "success"
+        # PLAN-0117 FR-1: verbatim DeepInfra ``usage.estimated_cost`` when the
+        # /embeddings response reports it. Function-scoped (set after parsing,
+        # read in the finally block) and guarded so the error path — where
+        # ``data`` was never assigned — cannot NameError.
+        provider_cost_usd: Decimal | None = None
         try:
             # Build text list: apply instruction prefix, THEN truncate by token budget.
             # Truncation runs on the prefixed text (the prefix tokens count toward the
@@ -125,6 +132,12 @@ class DeepInfraEmbeddingAdapter:
                     )
                     resp.raise_for_status()
                     data = resp.json()
+                    # PLAN-0117 FR-1: capture the provider-reported cost verbatim
+                    # (best-effort — the /embeddings endpoint may omit ``usage``,
+                    # in which case we fall back to the price matrix below).
+                    usage_obj = data.get("usage") if isinstance(data, dict) else None
+                    if isinstance(usage_obj, dict):
+                        provider_cost_usd = provider_cost_to_decimal(usage_obj.get("estimated_cost"))
 
             except httpx.TimeoutException as exc:
                 raise RetryableError(f"DeepInfra embedding timeout: {exc}") from exc
@@ -189,6 +202,12 @@ class DeepInfraEmbeddingAdapter:
                 # Word-count approximation for token counts (BAAI/bge-large-en-v1.5)
                 token_count = sum(len(inp.text.split()) for inp in inputs)
                 self._metrics.ml_api_tokens_in_total.labels(model_id=self._model_id).inc(token_count)
-                # DeepInfra BAAI/bge-large-en-v1.5: $0.013 per 1M tokens = $0.000000013 per token
-                cost = token_count * 0.000000013
+                # PLAN-0117 FR-1: prefer the provider-reported cost; else fall back
+                # to the canonical price matrix (``BAAI/bge-large-en-v1.5`` is priced
+                # at $0.010/1M input tokens) instead of the old ad-hoc per-token
+                # literal — single source of truth (FR-4a).
+                if provider_cost_usd is not None:
+                    cost = float(provider_cost_usd)
+                else:
+                    cost = float(compute_cost(self._model_id, token_count, 0))
                 self._metrics.ml_api_estimated_cost_usd_total.labels(model_id=self._model_id).inc(cost)

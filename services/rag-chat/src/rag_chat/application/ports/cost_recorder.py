@@ -40,6 +40,8 @@ class CostRecorder(Protocol):
         tokens_in: int,
         tokens_out: int,
         call_site: str,
+        provider_estimated_cost: object = None,
+        user_id: UUID | None = None,
     ) -> None:
         """Record a single LLM call's cost.
 
@@ -50,6 +52,15 @@ class CostRecorder(Protocol):
                 ``MODEL_PRICING`` key for a non-zero cost).
             tokens_in: Prompt token count returned by the provider.
             tokens_out: Completion token count returned by the provider.
+            provider_estimated_cost: Raw ``usage.estimated_cost`` from the
+                DeepInfra response (float/int/str/None). PLAN-0117 W4 (FR-1):
+                when present it is the **authoritative** cost persisted verbatim
+                with ``cost_source='provider'``; when ``None`` the recorder
+                falls back to the price matrix (never a silent $0 for a paid
+                model). The §2.2 priority is resolved once, centrally, by
+                ``ml_clients.resolve_cost``.
+            user_id: Authenticated end user (PLAN-0117 FR-3); ``None`` for
+                system/background call sites (e.g. cron, intent classifier).
             call_site: Bounded label for the Prometheus counter. Allowed
                 values used today:
                   * ``"tool_loop_iter"`` — provider_chain.chat_with_tools

@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "PredictionMarketTrade",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S4 Content Ingestion (Polymarket Data /trades adapter) — one event per anonymous fill. Consumed by S3 Market Data → prediction_market_trades. PLAN-0056 Wave Z1.",
+  "fields": [
+    {"name": "event_id",         "type": "string",           "doc": "UUIDv7 envelope event identifier"},
+    {"name": "event_type",       "type": "string",           "default": "market.prediction.trade", "doc": "Event type discriminator"},
+    {"name": "schema_version",   "type": "int",              "default": 1},
+    {"name": "occurred_at",      "type": "string",           "default": "1970-01-01T00:00:00Z", "doc": "ISO-8601 UTC timestamp. Default is epoch sentinel — callers MUST always supply a real value."},
+    {"name": "market_id",        "type": "string",           "doc": "Polymarket conditionId"},
+    {"name": "trade_id",         "type": "string",           "doc": "Polymarket trade/fill identifier (dedup key with market_id)"},
+    {"name": "token_id",         "type": "string",           "doc": "Polymarket CLOB token identifier (outcome traded)"},
+    {"name": "price",            "type": "double",           "doc": "Fill price / implied probability [0.0, 1.0]"},
+    {"name": "size_usd",         "type": "double",           "doc": "Fill size in USD"},
+    {"name": "side",             "type": "string",           "doc": "buy | sell"},
+    {"name": "ts",               "type": "string",           "doc": "ISO-8601 UTC fill timestamp"},
+    {"name": "correlation_id",   "type": ["null", "string"], "default": null}
+  ]
+}

@@ -334,6 +334,30 @@ Strips Qwen3 `<think>...</think>` reasoning blocks before returning descriptions
 Sanitizes `canonical_name` (strips control chars + angle brackets) before prompt
 insertion to prevent prompt injection (PRD-0073 §12).
 
+### Priceability Guardrail (PLAN-0117 FR-7)
+
+To guarantee no configured model can silently price to `$0`, the library exposes a
+static (boot/CI-time) priceability check that pairs with a runtime metric.
+
+- **`is_priceable(model_id, *, provider) → bool`** (`ml_clients.pricing`): returns `True`
+  if a model has *any* pricing path — a `MODEL_PRICING` matrix entry, membership in
+  `LOCAL_FREE_MODELS` (Ollama/GLiNER, legitimately `$0`), or a provider-cost path.
+  **DeepInfra models are priceable via the provider-cost path even without a matrix
+  entry**, because DeepInfra returns `usage.estimated_cost` (`cost_source='provider'`).
+- **`ml_clients.model_registry`**: `PLATFORM_MODEL_REGISTRY` enumerates every model the
+  platform is configured to call. `unpriceable_models(models)` returns the subset with no
+  pricing path; `warn_unpriceable_models(models, *, service)` logs a structured WARNING for
+  each at service boot (called by S6/S7/S8/S9 entrypoints).
+- **CI enforcement**: `tests/test_priceability_guardrail.py::test_all_configured_models_priceable`
+  FAILS the build if any model in `PLATFORM_MODEL_REGISTRY` is unpriceable.
+- **Companion runtime metric**: `llm_usage_silent_zero_cost_total{service, model_id}`
+  (defined in `libs/observability` alongside `record_silent_zero_cost()` +
+  `is_silent_zero_cost()`) fires when a persisted `llm_usage_log` row has
+  `tokens_in + tokens_out > 0` AND `estimated_cost_usd == 0` AND
+  `cost_source NOT IN ('local','aggregate')`. The `local` (Ollama/GLiNER) and `aggregate`
+  (S8 `chat_with_tools` wrapper) exemptions are required — both are legitimately `$0`.
+  Prometheus alert `LlmUsageSilentZeroCost`; see `docs/BUG_PATTERNS.md` BP-715.
+
 ---
 
 ## Configuration

@@ -50,8 +50,14 @@ class Settings(BaseSettings):
     valkey_url: str = "redis://localhost:6379/0"
 
     # ── Ollama (local LLM container) ──────────────────────────────────────────
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_classification_model: str = "qwen3:0.6b"
+    # Empty by default: Ollama was removed from the platform (all LLM/embedding paths
+    # use DeepInfra). An empty base URL disables the Ollama readiness probe in
+    # api/health.py (a non-empty default made /readyz hard-fail 503 with no Ollama
+    # deployed). Set RAG_CHAT_OLLAMA_BASE_URL only if a local Ollama is reintroduced.
+    ollama_base_url: str = ""
+    # NOTE: ``ollama_classification_model`` was removed alongside the retirement of
+    # the pre-agent LLM intent classifier (its only consumer). The Layer-2
+    # injection-safety classifier uses ``deepinfra_classification_model`` below.
     ollama_completion_model: str = "deepseek-r1:32b"  # emergency fallback only
     ollama_reranker_model: str = "bge-reranker-v2-m3"
 
@@ -59,11 +65,14 @@ class Settings(BaseSettings):
     deepinfra_api_key: SecretStr | None = None  # primary: configurable via completion_model (DEF-034)
     openrouter_api_key: SecretStr | None = None  # fallback: configurable via openrouter_completion_model (DEF-034)
 
-    # ── Intent classification (DeepInfra GPU) ─────────────────────────────────
+    # ── Classification model (DeepInfra GPU) ──────────────────────────────────
+    # Shared by the Layer-2 LLM injection-SAFETY classifier (LLMInjectionClassifier)
+    # and the default citation judge. The pre-agent intent classifier that also
+    # used this key has been retired; this field is retained because the safety
+    # classifier still depends on it — do NOT remove.
     # PLAN-0061 Wave D (2026-05-02): Llama-3.2-1B/3B are not available on this
     # DeepInfra account. Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo
-    # (~100-200ms GPU, 8B param, ~$0.02/M tokens — sufficient for a 1-token
-    # intent decision and the same model used for classification across S6/S8).
+    # (~100-200ms GPU, 8B param, ~$0.02/M tokens).
     deepinfra_classification_model: str = "Qwen/Qwen3.5-9B"
 
     # ── External reranker (Cohere — replaces bge-reranker-v2-m3 Ollama) ───────
@@ -80,7 +89,21 @@ class Settings(BaseSettings):
 
     # ── Completion model config (PRD-0016 §6.2, T-B-2-01) ────────────────────
     completion_provider: str = "deepinfra"  # RAG_CHAT_COMPLETION_PROVIDER
-    completion_model: str = "deepseek-ai/DeepSeek-V4-Flash-Thinking"  # RAG_CHAT_COMPLETION_MODEL
+    # DEF-035 (2026-07-03): the previous default `deepseek-ai/DeepSeek-V4-Flash-Thinking`
+    # does NOT exist on DeepInfra and 404s — prod only survived via the
+    # RAG_CHAT_COMPLETION_MODEL=openai/gpt-oss-120b env override. Default now points at a
+    # real DeepInfra model (matches prod) so an unset env can't break completions.
+    completion_model: str = "openai/gpt-oss-120b"  # RAG_CHAT_COMPLETION_MODEL
+    # DEF-036 (2026-07-04): planner/synthesis model split.  A model benchmark
+    # (docs/audits/2026-07-04-planner-model-benchmark.md) showed a fast
+    # parallel-tool-calling model (Qwen3-235B-A22B) is best for the tool-loop
+    # PLANNING turn (`chat_with_tools`), while gpt-oss-120b keeps the best
+    # grounding discipline for the final ANSWER SYNTHESIS (`stream_chat`).  This
+    # setting drives ONLY the planning turn; synthesis keeps ``completion_model``.
+    # Default = the SAME value as ``completion_model`` so an unset env is
+    # byte-identical to the old single-model behavior (planning == synthesis);
+    # operators set RAG_CHAT_PLANNING_MODEL=Qwen/Qwen3-235B-A22B to enable the split.
+    planning_model: str = "openai/gpt-oss-120b"  # RAG_CHAT_PLANNING_MODEL
     # OpenRouter fallback model — configurable independently from the DeepInfra primary.
     openrouter_completion_model: str = "deepseek/deepseek-r1-distill-qwen-32b"  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
 
@@ -192,6 +215,10 @@ class Settings(BaseSettings):
     s3_base_url: str = "http://market-data:8003"
     s1_base_url: str = "http://portfolio:8001"
     s5_base_url: str = "http://alert:8010"  # Alert service (S5) — used by BriefingContextGatherer
+    # Content-store (S5-data) base URL — used by ContentStoreClient to resolve a
+    # claim/event ``doc_id`` to its source-article URL so KG-derived citations
+    # become clickable in chat. POST /api/v1/documents/batch (internal, RS256 JWT).
+    content_store_base_url: str = "http://content-store:8005"  # RAG_CHAT_CONTENT_STORE_BASE_URL
     # Deprecated (PRD-0025): S1 Portfolio now uses X-Internal-JWT (RS256) propagated
     # from the ContextVar set by InternalJWTMiddleware. This field is kept with a
     # default to avoid startup ValidationError on existing deployments, but is unused.
@@ -268,6 +295,47 @@ class Settings(BaseSettings):
     # Override via RAG_CHAT_GROUNDING_REWRITE_MODEL.
     grounding_rewrite_model: str | None = None
 
+    # ── get_filings retrieval depth (R1 filings-chat fix, 2026-07-06) ────────
+    # ROOT CAUSE (docs/audits/2026-07-05-r1-sec-filings-reqa.md §Final): the
+    # get_filings tool deduped each filing to its ONE best-ranked chunk and
+    # injected only a ≤400-char snippet — which is the filing's cover /
+    # section-listing header, NOT the numeric-table chunk. The income-statement
+    # and segment-revenue figures live in a DIFFERENT chunk of the same filing,
+    # so the model could identify + attribute the filing but never quote real
+    # revenue/segment numbers ("the specific revenue figures are not present in
+    # the retrieved excerpt").
+    #
+    # Fix: inject the top-N chunks per filing (biased toward the numeric-dense
+    # ones so the financial-statement chunk is included even when it ranks below
+    # the header for the generic filings query) with a larger per-chunk snippet
+    # cap, bounded by a per-filing text budget so the prompt cost stays sane.
+    #
+    # ``filing_chunks_per_filing``: how many chunks of a single filing to surface
+    #   to the LLM (was hard-coded to 1). RAG_CHAT_FILING_CHUNKS_PER_FILING.
+    filing_chunks_per_filing: int = Field(default=3, ge=1, le=8)  # RAG_CHAT_FILING_CHUNKS_PER_FILING
+    # ``filing_snippet_max_chars``: per-chunk body cap (was the hard-coded 400).
+    #   Raised so a chunk's numeric tables are not truncated mid-figure.
+    #   RAG_CHAT_FILING_SNIPPET_MAX_CHARS.
+    filing_snippet_max_chars: int = Field(default=1200, ge=200, le=8000)  # RAG_CHAT_FILING_SNIPPET_MAX_CHARS
+    # ``filing_result_max_chars``: hard ceiling on the total injected text for a
+    #   SINGLE filing row (title + all chunk snippets). Bounds the token budget
+    #   when multiple chunks are concatenated. RAG_CHAT_FILING_RESULT_MAX_CHARS.
+    filing_result_max_chars: int = Field(default=6000, ge=1000, le=16000)  # RAG_CHAT_FILING_RESULT_MAX_CHARS
+    # ``filing_filer_header_chars``: NEW-1 refinement (2026-07-06) — size of the
+    #   cover/header window (from a chunk's START, and BEFORE a registrant-charter
+    #   declaration) inside which the queried company must be named for a filing to
+    #   count as THAT company's filing. The filer identity lives on the cover page;
+    #   a competitor mention deep in the body (41 AMD chunks name "nvidia") must NOT
+    #   corroborate the filer. Larger = more tolerant of long SEC cover boilerplate
+    #   before the registrant line; smaller = stricter. RAG_CHAT_FILING_FILER_HEADER_CHARS.
+    filing_filer_header_chars: int = Field(default=400, ge=80, le=2000)  # RAG_CHAT_FILING_FILER_HEADER_CHARS
+    # ``filing_citation_backfill``: NEW-3 refinement (2026-07-06) — when a retrieved
+    #   sec_edgar filing's material figure appears verbatim in the answer but the
+    #   model omitted the provenance marker, deterministically append that filing's
+    #   citation (was flaky 1-vs-0 run-to-run). Hot-toggle via the SAME env var,
+    #   read per-call in the orchestrator. RAG_CHAT_FILING_CITATION_BACKFILL.
+    filing_citation_backfill: bool = True  # RAG_CHAT_FILING_CITATION_BACKFILL
+
     # ── Trust scoring weights (PLAN-0079 Wave C) ─────────────────────────────
     # The TrustScorer formula is additive:
     #   trust = w_source * source_authority + w_corroboration * corr_factor + w_extraction * extr_factor
@@ -308,6 +376,20 @@ class Settings(BaseSettings):
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit_per_tenant: int = 10  # requests per minute per tenant
     upstream_timeout_seconds: float = 5.0
+
+    # EMBED-RESIL (2026-07-07): dedicated (longer) read timeout for the
+    # query-embedding hop rag-chat → S6 ``/api/v1/embed`` → DeepInfra bge-large.
+    # That hop is a synchronous remote-model call which, under concurrent eval
+    # load, routinely exceeds the shared ``upstream_timeout_seconds`` (deployed
+    # at 10s). A slow-but-successful embedding was being killed at ~10s
+    # ReadTimeout → UpstreamTransportError → search_entity_relations / entity
+    # resolution / semantic search all failed. DeepInfra itself is healthy
+    # (idle ~0.3s) — this is a tight-timeout gap, not an outage. We give the
+    # embed POST its own generous read timeout aligned to the 30s upstream
+    # default while keeping connect tight (BP-235 explicit httpx.Timeout).
+    embed_call_timeout_seconds: float = Field(
+        default=30.0, gt=0.0, le=120.0, validation_alias="RAG_CHAT_EMBED_CALL_TIMEOUT_SECONDS"
+    )
 
     # ── Brief pre-generation (PLAN-0094 W2) ───────────────────────────────────
     # APScheduler-driven worker pre-generates morning briefs for active users

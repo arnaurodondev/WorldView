@@ -13,10 +13,10 @@ alerting:
 scrape_configs:
   - job_name: "portfolio"
     static_configs:
-      # Use container-internal port (right side of host:container mapping).
-      # docker-compose maps 8001:8000 on the host — within the Docker network
-      # the service listens on :8000, not :8001. (BP-175)
-      - targets: ["portfolio:8000"]
+      # Container-internal port. Portfolio (S1) listens on :8001 (Dockerfile CMD
+      # --port 8001; compose maps 8001:8001). Prod-readiness port fix aligned the
+      # listener, healthcheck, gateway URL, and this scrape target all to 8001.
+      - targets: ["portfolio:8001"]
     metrics_path: /metrics
 
   - job_name: "market-ingestion"

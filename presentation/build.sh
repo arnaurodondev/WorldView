@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-THEME="themes/worldview-light.css"
+THEME="themes/worldview-academic.css"
 SRC="deck.md"
 
 # Marp renders via a headless Chromium. If no Chrome/Edge/Firefox is on PATH,

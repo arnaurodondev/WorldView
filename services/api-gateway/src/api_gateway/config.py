@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     rate_limit_financial_mutation_requests: int = 30
     rate_limit_unauthenticated_requests: int = 20
     rate_limit_public_feedback_requests: int = 10
+    # Export tier (GET /*/export): heavy full-table CSV scan + data-harvesting
+    # surface, so it is limited per DAY, not per minute. Env-driven (previously a
+    # hardcoded 10/60s constant in middleware.py). Default: 1 export per day.
+    rate_limit_export_requests: int = 1
+    rate_limit_export_window_seconds: int = 86400
 
     # CORS
     # SEC-008: Port 3001 is the worldview-web frontend.  Port 3000 is unused and

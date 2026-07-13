@@ -432,3 +432,103 @@ async def test_jti_check_fail_open_on_valkey_error() -> None:
 
     # Fail-open: signature + expiry valid → request proceeds.
     assert resp.status_code == 200
+
+
+# ── DEF-002: shared internal-JWT minter (build_internal_jwt_claims / mint) ─────
+#
+# These cover the additive fix that makes every service-to-service minter emit
+# an ``aud="worldview-internal"`` claim and a unique ``jti``.  The round-trip
+# test proves a token from ``mint_internal_jwt`` PASSES ``InternalJWTMiddleware``
+# verification (no skip_verification) — i.e. a future verification-enable is safe.
+
+
+def test_build_internal_jwt_claims_includes_aud_and_jti() -> None:
+    """Claim builder must always emit aud + a unique jti + iss + timestamps."""
+    from observability.internal_jwt import (
+        INTERNAL_JWT_AUDIENCE,
+        INTERNAL_JWT_ISSUER,
+        build_internal_jwt_claims,
+    )
+
+    claims_a = build_internal_jwt_claims(sub="system:test-worker", ttl_seconds=300)
+    claims_b = build_internal_jwt_claims(sub="system:test-worker", ttl_seconds=300)
+
+    assert claims_a["aud"] == INTERNAL_JWT_AUDIENCE == "worldview-internal"
+    assert claims_a["iss"] == INTERNAL_JWT_ISSUER == "worldview-gateway"
+    assert claims_a["sub"] == "system:test-worker"
+    assert claims_a["role"] == "system"
+    assert claims_a["exp"] - claims_a["iat"] == 300
+    # jti present, non-empty, and unique across two calls (fresh UUIDv7 each time).
+    assert claims_a["jti"] and claims_b["jti"]
+    assert claims_a["jti"] != claims_b["jti"]
+
+
+def test_mint_internal_jwt_hs256_dev_fallback_has_aud_and_jti() -> None:
+    """HS256 dev-fallback token (no RS256 key) still carries aud + jti."""
+    from observability.internal_jwt import mint_internal_jwt
+
+    token = mint_internal_jwt(
+        sub="system:test-worker",
+        ttl_seconds=300,
+        dev_hs256_secret="dev-secret",
+    )
+    decoded = jwt.decode(token, options={"verify_signature": False})
+    assert decoded["aud"] == "worldview-internal"
+    assert decoded["iss"] == "worldview-gateway"
+    assert decoded["jti"]
+
+
+async def test_mint_internal_jwt_rs256_roundtrips_through_middleware() -> None:
+    """A minted RS256 token PASSES full InternalJWTMiddleware verification.
+
+    This is the load-bearing guarantee: the shared minter produces tokens that
+    survive the verified-decode path (issuer + audience + required-claims
+    checks), so enabling ``skip_verification=False`` on a target service will
+    NOT 401 legitimate system-to-system traffic.
+    """
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding,
+        NoEncryption,
+        PrivateFormat,
+    )
+
+    from observability.internal_jwt import mint_internal_jwt
+
+    private, public = _generate_rsa_pair()
+    private_pem = private.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()
+
+    # Verification ON (skip_verification defaults to False in _build_app).
+    app, _ = _build_app(keys_by_kid={"v1": public})
+
+    token = mint_internal_jwt(
+        sub="system:test-worker",
+        ttl_seconds=300,
+        private_key_pem=private_pem,
+        kid="v1",
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": token})
+
+    assert resp.status_code == 200
+
+
+async def test_minted_token_missing_aud_would_fail_middleware() -> None:
+    """Regression guard: a token WITHOUT aud is rejected — proving the fix matters."""
+    private, public = _generate_rsa_pair()
+    app, _ = _build_app(keys_by_kid={"v1": public})
+
+    # Hand-build the OLD (broken) claim set: no aud, no jti.
+    now = int(time.time())
+    bad_payload = {
+        "iss": "worldview-gateway",
+        "sub": "system:test-worker",
+        "tenant_id": "00000000-0000-0000-0000-000000000000",
+        "role": "system",
+        "iat": now,
+        "exp": now + 300,
+    }
+    token = jwt.encode(bad_payload, private, algorithm="RS256", headers={"kid": "v1"})
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": token})
+
+    assert resp.status_code == 401

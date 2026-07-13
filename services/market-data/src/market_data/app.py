@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 
 import prometheus_client
 import structlog.contextvars
-from fastapi import FastAPI, Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import FastAPI, Response
+from starlette.datastructures import Headers, MutableHeaders
 
 from market_data.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from observability import (  # type: ignore[import-untyped]
@@ -26,9 +26,10 @@ from observability.sentry import SentrySettings, init_sentry  # type: ignore[imp
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncIterator
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
+    from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
@@ -859,27 +860,55 @@ async def _computed_metrics_refresh_loop(
             await asyncio.sleep(_COMPUTED_METRICS_RETRY_SECONDS)
 
 
-class RequestIdMiddleware(BaseHTTPMiddleware):
-    """Propagate X-Request-ID through the request lifecycle.
+class RequestIdMiddleware:
+    """Propagate X-Request-ID through the request lifecycle (pure-ASGI).
 
     Validates the incoming header: only alphanumeric + hyphens, max 64 chars.
     Invalid or missing values are replaced with a fresh ULID.
+
+    Pure-ASGI (not ``BaseHTTPMiddleware``) — BP-720 amplifier fix (2026-07-09)
+    -------------------------------------------------------------------------
+    Starlette's ``BaseHTTPMiddleware`` runs the downstream app in a *separate*
+    anyio task and bridges it with a memory stream. When a client (rag-chat,
+    10s timeout) cancels a slow request, that indirection means the cancellation
+    does not propagate cleanly into the app task, so a yield-style DB dependency
+    (``get_read_uow``: ``async with SqlAlchemyReadOnlyUnitOfWork(...) as uow:
+    yield uow``) never runs its ``__aexit__`` in-loop. The session is instead
+    garbage-collected, raising ``sqlalchemy.exc.MissingGreenlet`` and orphaning
+    the asyncpg connection instead of returning it to the pool — the pool erodes
+    and later reads block on ``pool_timeout``.
+
+    A pure-ASGI middleware wraps ``send`` without a second task, so client
+    cancellation propagates directly to the app coroutine and the ``async with``
+    teardown runs in the event loop that owns the connection.
     """
 
-    async def dispatch(
-        self,
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # Only HTTP requests carry request-ids; pass websockets/lifespan through.
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         import common.ids
 
-        raw_id = request.headers.get("X-Request-ID", "")
+        raw_id = Headers(scope=scope).get("X-Request-ID", "")
         request_id = raw_id if _VALID_REQUEST_ID_RE.match(raw_id) else common.ids.new_ulid()
         structlog.contextvars.bind_contextvars(request_id=request_id)
-        response: Response = await call_next(request)
-        response.headers["X-Request-ID"] = str(request_id)
-        structlog.contextvars.clear_contextvars()
-        return response
+
+        async def send_with_request_id(message: Message) -> None:
+            # Inject the header on the response-start frame (mutates in place).
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["X-Request-ID"] = str(request_id)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        finally:
+            # Runs in-loop even on client cancellation, so contextvars never leak.
+            structlog.contextvars.clear_contextvars()
 
 
 @asynccontextmanager

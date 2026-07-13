@@ -105,11 +105,28 @@ class ContentIngestionOutboxDispatcher(BaseOutboxDispatcher):
             deleted_schema_str = json.dumps(json.loads((_SCHEMA_DIR / "content.document.deleted.v1.avsc").read_text()))
             deleted_ser = build_avro_serializer(schema_str=deleted_schema_str, registry=registry, config=ser_config)
 
+            # PLAN-0056 Wave B3: serializers for the 4 deeper Polymarket streams.
+            # The OutboxEventValueSerializer routes on the outbox ``event_type``
+            # column (not the topic), so keys are the event_type discriminators
+            # emitted by FetchAndWritePredictionStreamUseCase.
+            def _load(name: str) -> Any:
+                schema_str = json.dumps(json.loads((_SCHEMA_DIR / name).read_text()))
+                return build_avro_serializer(schema_str=schema_str, registry=registry, config=ser_config)
+
+            event_ser = _load("market.prediction.event.v1.avsc")
+            history_ser = _load("market.prediction.history.v1.avsc")
+            trade_ser = _load("market.prediction.trade.v1.avsc")
+            oi_ser = _load("market.prediction.oi.v1.avsc")
+
             self._value_serializer = OutboxEventValueSerializer(
                 {
                     "content.article.raw.v1": article_ser,
                     "market.prediction.snapshot": prediction_ser,
                     "content.document.deleted.v1": deleted_ser,
+                    "market.prediction.event": event_ser,
+                    "market.prediction.history": history_ser,
+                    "market.prediction.trade": trade_ser,
+                    "market.prediction.oi": oi_ser,
                 }
             )
         return self._value_serializer

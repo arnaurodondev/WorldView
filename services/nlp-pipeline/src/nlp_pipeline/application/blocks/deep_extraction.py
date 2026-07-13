@@ -30,6 +30,7 @@ from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
 from ml_clients.errors import RetryableError  # type: ignore[import-not-found]
+from ml_clients.pricing import resolve_cost  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
@@ -151,16 +152,30 @@ _EXTRACTION_SCHEMA: dict[str, object] = {
 # ── Window splitting ──────────────────────────────────────────────────────────
 
 
-def _build_windows(chunks: list[Chunk], max_tokens: int, overlap_tokens: int) -> list[str]:
+def _build_windows(chunks: list[Chunk], max_tokens: int, overlap_tokens: int, max_words: int = 0) -> list[str]:
     """Build text windows from chunks respecting token limits.
 
     Consecutive windows share ``overlap_tokens`` worth of trailing text.
+
+    BP-719 Mode B: when ``max_words > 0`` the concatenated document text is
+    truncated to the first ``max_words`` words BEFORE windowing. This bounds the
+    number of per-window LLM round-trips so the ML phase fits inside the 900s Kafka
+    watchdog on very large filings (a 48k-word 10-Q otherwise produces ~8 sequential
+    12-22s extraction calls and times out → whole message dead-lettered). The
+    document is still fully chunked + embedded elsewhere, so this only bounds
+    KG-relation extraction, never retrieval coverage. ``max_words == 0`` disables
+    the cap (process every window — the pre-BP-719 behaviour).
     """
     if not chunks:
         return []
 
     full_text = " ".join(c.text for c in chunks)
     words = full_text.split()
+
+    if max_words > 0 and len(words) > max_words:
+        words = words[:max_words]
+        full_text = " ".join(words)
+
     total_tokens = len(words)
 
     if total_tokens <= SINGLE_WINDOW_TOKEN_LIMIT:
@@ -288,6 +303,21 @@ async def _run_extraction_window(
                 # configured ``model_id`` when the adapter predates the field.
                 actual_model = getattr(output, "model_used", None) or model_id
                 fallback_reason = getattr(output, "fallback_reason", "none")
+                provider = getattr(extraction_client, "provider", "unknown")
+                tokens_in = len(prompt.split()) + len(window_text.split())
+                tokens_out = len(str(getattr(output, "raw_response", "") or "").split())
+                # PLAN-0117 W3 (FR-4b): resolve the real cost + provenance instead
+                # of the old hardcoded ``0.0``. When the DeepInfra adapter captured
+                # ``usage.estimated_cost`` it is surfaced on ``ExtractionOutput``
+                # (FR-1) and wins (cost_source="provider"); otherwise the price
+                # matrix. Ollama-served extraction resolves to ``$0``/"local".
+                cost, cost_source = resolve_cost(
+                    actual_model,
+                    provider=provider,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    provider_estimated_cost=getattr(output, "provider_cost_usd", None),
+                )
                 await usage_logger.log(
                     model_id=actual_model,
                     # The deep-extraction provider is selected at consumer
@@ -295,17 +325,18 @@ async def _run_extraction_window(
                     # Ollama otherwise). Without a hint on the client we tag
                     # generically; tokens_in/out are word-split estimates per
                     # protocol guidance.
-                    provider=getattr(extraction_client, "provider", "unknown"),
+                    provider=provider,
                     capability="extraction",
-                    tokens_in=len(prompt.split()) + len(window_text.split()),
-                    tokens_out=len(str(getattr(output, "raw_response", "") or "").split()),
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
                     latency_ms=latency_ms,
-                    estimated_cost_usd=0.0,
+                    estimated_cost_usd=float(cost),
                     success=extract_succeeded,
                     error_code=None if extract_succeeded else "model_error",
                     doc_id=doc_id,
                     # Service-specific extra consumed by NlpUsageLogRepository.log.
                     fallback_reason=fallback_reason,
+                    cost_source=cost_source,
                 )
             except Exception as exc:  # protocol forbids raising; belt-and-braces
                 logger.warning(
@@ -387,6 +418,7 @@ async def run_deep_extraction_block(
     entailment_client: ExtractionClient | None = None,
     entailment_config: EntailmentCheckConfig | None = None,
     metrics: NlpMetricsPort = NOOP_METRICS,
+    max_words: int = 0,
 ) -> tuple[ExtractionResult, list[SignalEvent]]:
     """Run Block 10: Deep LLM extraction for MEDIUM and DEEP tiers.
 
@@ -431,8 +463,13 @@ async def run_deep_extraction_block(
     # date from the article's published_at carried in the enriched envelope —
     # so we no longer compute it here.
 
-    # Build text windows
-    windows = _build_windows(chunks, max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS)
+    # Build text windows (BP-719 Mode B: max_words bounds the extracted prefix).
+    windows = _build_windows(
+        chunks,
+        max_tokens=WINDOW_SIZE_TOKENS,
+        overlap_tokens=WINDOW_OVERLAP_TOKENS,
+        max_words=max_words,
+    )
 
     # Run extraction per window.
     #

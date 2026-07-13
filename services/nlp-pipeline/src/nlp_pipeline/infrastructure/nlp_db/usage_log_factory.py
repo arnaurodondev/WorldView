@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -60,9 +62,16 @@ class SessionScopedNlpUsageLogger:
         estimated_cost_usd: float = 0.0,
         success: bool = True,
         error_code: str | None = None,
+        cost_source: str | None = None,
+        user_id: UUID | None = None,
         **context: object,
     ) -> None:
         """Append one usage-log row in a short-lived session.
+
+        PLAN-0117 W3: ``cost_source`` (provenance of ``estimated_cost_usd``) and
+        ``user_id`` are now threaded to the row. Callers resolve the real cost +
+        source via :func:`ml_clients.pricing.resolve_cost` — this logger no longer
+        relies on the ``estimated_cost_usd=0.0`` default to mask an unpriced call.
 
         Best-effort: any exception (DB unreachable, schema drift, etc.) is
         swallowed and emitted as a structlog WARN with ``exc_info=True``.
@@ -87,6 +96,8 @@ class SessionScopedNlpUsageLogger:
                     estimated_cost_usd=estimated_cost_usd,
                     success=success,
                     error_code=error_code,
+                    cost_source=cost_source,
+                    user_id=user_id,
                     **context,
                 )
                 await session.commit()

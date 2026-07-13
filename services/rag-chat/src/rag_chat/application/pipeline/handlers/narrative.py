@@ -16,6 +16,7 @@ from uuid import UUID
 import structlog
 
 from rag_chat.application.services.resolver_gates import TICKER_SHAPE_RE as _TICKER_SHAPE_RE
+from rag_chat.application.services.resolver_gates import is_sec_form_designator
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
@@ -155,6 +156,10 @@ class NarrativeHandler(ToolHandler):
             pass
 
         identifier = llm_entity_id.strip()
+        # ── SEC-FORM-001: a literal filing form name is not an entity ──────────
+        if is_sec_form_designator(identifier):
+            log.info("tool_entity_sec_form_skipped", tool=tool_name, entity_id=identifier)
+            return None
         # ── Step 2: ticker-shaped → S6 ticker resolution ──────────────────────
         if self._s6 is not None and _TICKER_SHAPE_RE.match(identifier):
             try:
@@ -315,6 +320,10 @@ class NarrativeHandler(ToolHandler):
             pass
 
         identifier = raw_id.strip()
+        # SEC-FORM-001: a literal filing form name is not an entity endpoint.
+        if is_sec_form_designator(identifier):
+            log.info("tool_entity_sec_form_skipped", tool=tool_name, entity_id=identifier)
+            return None
         # Ticker-shaped → S6 ticker resolution (phantom-twin aware).
         if self._s6 is not None and _TICKER_SHAPE_RE.match(identifier):
             try:

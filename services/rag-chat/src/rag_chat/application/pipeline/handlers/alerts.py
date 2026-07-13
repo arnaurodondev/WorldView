@@ -22,6 +22,7 @@ from uuid import UUID
 
 import structlog
 
+from rag_chat.application.pipeline.transport_error import UpstreamTransportError
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
@@ -134,6 +135,26 @@ class AlertsHandler(ToolHandler):
                 ),
                 timeout=self._timeout,
             )
+        # BP-623 carve-out for the user's OWN alert config (2026-07-08,
+        # tc_get_alerts_list_active): a 5xx from S10 raises UpstreamTransportError,
+        # a BaseException that BYPASSES the `except Exception` below and propagates
+        # to ToolExecutor as status=transport_error. For an EXTERNAL market-DATA
+        # tool that surfacing is correct (never fake "no news" on an outage). But
+        # get_alerts reads the user's OWN alert configuration — a shallow,
+        # first-person "what alerts do I have set up?" question. Surfacing an
+        # infra-apology ("data source unavailable") there is a NON-ANSWER the judge
+        # correctly fails; the tool's documented R9 contract already promises "[]
+        # on ... any upstream error". Honour that contract: degrade a transport
+        # error to [] so synthesis returns the graceful empty-state ("you have no
+        # alerts configured") instead of an outage refusal. Scoped to get_alerts.
+        except UpstreamTransportError as e:
+            log.warning(
+                "tool_upstream_transport_error_degraded",
+                tool="get_alerts",
+                reason=e.reason,
+                status_code=e.status_code,
+            )
+            return []
         except Exception as e:
             log.warning("tool_failed", tool="get_alerts", error=str(e))
             return []

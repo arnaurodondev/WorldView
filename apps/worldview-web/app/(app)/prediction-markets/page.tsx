@@ -28,6 +28,11 @@ import { cn } from "@/lib/utils";
 import { formatCompactCurrency } from "@/lib/format";
 import { TrendingUp, Search, AlertCircle } from "lucide-react";
 import type { PredictionMarket, PredictionMarketsResponse } from "@/types/api";
+// PLAN-0056 Wave E2: analytical enrichment — event groups, an in-app detail
+// Sheet (opened from a row) and an honest per-row status signal badge.
+import { EventGroupings } from "@/components/prediction-markets/EventGroupings";
+import { MarketDetailSheet } from "@/components/prediction-markets/MarketDetailSheet";
+import { SignalBadge } from "@/components/prediction-markets/SignalBadge";
 
 // ── Pagination constants ──────────────────────────────────────────────────────
 
@@ -162,7 +167,17 @@ type PredictionMarketExtended = PredictionMarket & {
   best_ask?: number | null;
 };
 
-function MarketRow({ market }: { market: PredictionMarketExtended }) {
+function MarketRow({
+  market,
+  onSelect,
+}: {
+  market: PredictionMarketExtended;
+  // PLAN-0056 Wave E2: clicking a row now opens the in-app detail Sheet instead
+  // of navigating straight to Polymarket. The Sheet preserves the list's scroll
+  // + filter state (a route push would tear the list down) and still offers the
+  // external Polymarket link inside it. Passed up so the page owns the Sheet.
+  onSelect: (market: PredictionMarket) => void;
+}) {
   const volume = market.volume_usd ?? 0;
   // HF-10: delegate to the shared formatter ("$1.2M" / "$42.5K" / "$847.00").
   const formattedVolume = formatCompactCurrency(volume, "USD", { maxDecimals: 1 });
@@ -180,24 +195,11 @@ function MarketRow({ market }: { market: PredictionMarketExtended }) {
     Math.min(1, Math.max(0, market.no_probability ?? (1 - (market.yes_probability ?? 0)))) * 100,
   );
 
-  // WHY link to polymarket.com: the prediction markets page is a read-only view;
-  // trading happens on Polymarket's platform.
-  // WHY title-search URL (density bundle 2026-05-09): the historic
-  // ``/event/{slug}`` pattern returned 404 for many markets because the slug we
-  // receive from the Gamma ``markets`` payload does NOT reliably match
-  // Polymarket's canonical event/market paths. The ``/markets?_q=`` search URL
-  // always resolves to a working results page regardless of slug shape — so we
-  // use it as the first-class target and only fall back to ``market.url`` when
-  // S3 supplied an explicit URL.
-  const fallbackUrl = `https://polymarket.com/markets?_q=${encodeURIComponent(market.title ?? "")}`;
-  const targetUrl = market.url && market.url.length > 0 ? market.url : fallbackUrl;
-  const handleRowClick = () => {
-    window.open(targetUrl, "_blank", "noopener,noreferrer");
-  };
+  const handleRowClick = () => onSelect(market);
 
   return (
     <div
-      role="link"
+      role="button"
       data-testid="market-row"
       onClick={handleRowClick}
       // PRD-0089 Wave J: new 7-column layout adds YES%, sparkline, and NO% columns.
@@ -208,9 +210,14 @@ function MarketRow({ market }: { market: PredictionMarketExtended }) {
         "cursor-pointer hover:bg-card/60",
       )}
     >
-      {/* Question — truncated 1 line, 11px */}
-      <div className="min-w-0">
+      {/* Question — truncated 1 line, 11px, with an honest status signal badge.
+          WHY only status here (no "moving"): list rows don't fetch per-row
+          history, so a move badge would be unfounded. The badge shows only for
+          resolved/closed markets (from status); the detail Sheet adds the
+          history-derived "moving" badge. See SignalBadge for the full rationale. */}
+      <div className="flex min-w-0 items-center gap-1.5">
         <p className="truncate text-[11px] text-foreground">{market.title}</p>
+        <SignalBadge status={market.status} className="shrink-0" />
       </div>
 
       {/* YES% — colored based on probability tier */}
@@ -290,6 +297,8 @@ export default function PredictionMarketsPage() {
   const { accessToken } = useAuth();
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>(ALL_CATEGORY);
+  // PLAN-0056 Wave E2: the market selected for the detail Sheet (null = closed).
+  const [selectedMarket, setSelectedMarket] = useState<PredictionMarket | null>(null);
 
   // ── Category pills — server-driven (2026-06-10 filtering fix) ─────────────
   // One cheap GROUP BY on the backend; counts reflect the FULL open universe
@@ -447,6 +456,10 @@ export default function PredictionMarketsPage() {
         </div>
       </div>
 
+      {/* ── Event groupings (collapsible, opt-in context) ───────────────────── */}
+      {/* PLAN-0056 Wave E2: thematic Polymarket event groups above the flat list. */}
+      <EventGroupings />
+
       {/* ── Column headers ───────────────────────────────────────────────────── */}
       {/* PRD-0089 Wave J: updated to match new 6-column layout with YES/sparkline/NO. */}
       <div className="grid grid-cols-[1fr_60px_70px_60px_80px_56px] gap-2 border-b border-border/50 px-3 py-1">
@@ -506,7 +519,11 @@ export default function PredictionMarketsPage() {
           // WHY cast to PredictionMarketExtended: the current API type doesn't
           // include best_bid/best_ask/recent_yes_history (backend gap §B.10).
           // The row renders gracefully when these fields are absent.
-          <MarketRow key={m.market_id} market={m as PredictionMarketExtended} />
+          <MarketRow
+            key={m.market_id}
+            market={m as PredictionMarketExtended}
+            onSelect={setSelectedMarket}
+          />
         ))}
 
         {/* ── Load more button ─────────────────────────────────────────────── */}
@@ -530,6 +547,18 @@ export default function PredictionMarketsPage() {
           </div>
         )}
       </div>
+
+      {/* ── Market detail Sheet ─────────────────────────────────────────────── */}
+      {/* PLAN-0056 Wave E2: right-side panel opened from a row. Controlled by
+          selectedMarket; onOpenChange(false) clears the selection so the list
+          keeps its scroll + filter state underneath. */}
+      <MarketDetailSheet
+        market={selectedMarket}
+        open={selectedMarket !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedMarket(null);
+        }}
+      />
     </div>
   );
 }

@@ -1430,6 +1430,11 @@ export interface Citation {
   url: string;
   source: string;
   relevance_score: number;
+  // ISO-8601 publish timestamp of the backing news/document, when the source
+  // has one (rag-chat emits `published_at`; KG/relation items emit null).
+  // Optional + nullable so existing callers and URL-less KG citations keep
+  // type-checking — the chip renders a date only when this is present.
+  published_at?: string | null;
 }
 
 /**
@@ -1518,6 +1523,104 @@ export interface PredictionMarket {
 export interface PredictionMarketsResponse {
   markets: PredictionMarket[];
   total: number;
+}
+
+// ── Prediction Markets — analytical enrichment (PLAN-0056 Wave E1/E2) ───────
+//
+// WHY these live here (not inline in the api module): the detail Sheet, the
+// ProbabilityChart, the recent-flow strip and the entity-predictions section
+// all consume these shapes. Co-locating the contracts next to PredictionMarket
+// keeps one source of truth so a backend field rename is a single-file edit.
+
+/**
+ * PredictionMarketPricePoint — one interval price bar (S3 A4 prices hypertable).
+ *
+ * `price` is the implied probability in [0,1] for `token_id`/`outcome_name`.
+ * The chart multiplies by 100 to plot a percentage. `interval` echoes the
+ * requested bucket ("1h"/"1d"/"1w"). `liquidity` is forward-compatible: the
+ * interval-bar endpoint does not yet carry it (only the raw-snapshot branch
+ * does), so it is optional and surfaces as null/undefined until S3 adds it.
+ */
+export interface PredictionMarketPricePoint {
+  window_start_ts: string; // ISO 8601 UTC
+  price: number; // implied probability 0.0–1.0
+  interval: string; // "1h" | "1d" | "1w"
+  token_id: string;
+  outcome_name: string | null;
+  liquidity?: number | null;
+}
+
+/**
+ * PredictionMarketPriceHistory — interval price-history series for one market.
+ * Distinct from the legacy snapshot shape returned by getPredictionMarketHistory:
+ * this is the per-token interval-bar view keyed by `points`.
+ */
+export interface PredictionMarketPriceHistory {
+  market_id: string;
+  interval: string;
+  points: PredictionMarketPricePoint[];
+}
+
+/** PredictionMarketTrade — one executed fill (S3 A4 trades). */
+export interface PredictionMarketTrade {
+  ts: string; // ISO 8601 UTC
+  price: number; // implied probability 0.0–1.0 at fill
+  size_usd: number | null; // notional; some feeds omit it
+  side: string; // "buy" | "sell" (free-form)
+  token_id: string;
+}
+
+/** PredictionMarketTrades — recent trades for one market, newest first. */
+export interface PredictionMarketTrades {
+  market_id: string;
+  items: PredictionMarketTrade[];
+  limit: number;
+}
+
+/** PredictionEvent — a Polymarket "event" group (set of related markets). */
+export interface PredictionEvent {
+  event_id: string;
+  name: string;
+  category: string | null;
+  start_date: string | null; // ISO 8601 UTC
+  end_date: string | null; // ISO 8601 UTC
+  market_count: number;
+}
+
+/** PredictionEventsResponse — paginated list of event groups. */
+export interface PredictionEventsResponse {
+  items: PredictionEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * EntityPrediction — one prediction market that references an entity (S7 C4).
+ *
+ * `polarity` is the directional signal FOR THE ENTITY the market references:
+ *   bullish  → the market resolving YES is good for the entity (green)
+ *   bearish  → resolving YES is bad for the entity ("against" it, red)
+ *   neutral / null → no directional read (muted)
+ * `condition_id` is the Polymarket conditionId (join key for live odds). There
+ * is no stored slug here, so links use the title-search fallback via
+ * buildPolymarketUrl(null, question).
+ */
+export interface EntityPrediction {
+  condition_id: string;
+  question: string;
+  polarity: string | null; // "bullish" | "bearish" | "neutral" | null
+  polarity_confidence: number | null; // [0,1]
+  close_time: string | null; // ISO 8601 UTC; null = open
+  confidence: number; // [0,1] exposure-link confidence
+}
+
+/** EntityPredictionsResponse — paginated markets referencing an entity. */
+export interface EntityPredictionsResponse {
+  items: EntityPrediction[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 // ── Economic Calendar ─────────────────────────────────────────────────────

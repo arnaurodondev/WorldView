@@ -7,25 +7,27 @@ variable "hcloud_token" {
 variable "region" {
   description = "Hetzner Cloud datacenter location"
   type        = string
-  default     = "nbg1"  # Nuremberg; alternatives: hel1 (Helsinki), ash (Ashburn)
+  default     = "fsn1"  # fsn1 validated 2026-07-07 (nbg1 lacked cx53 capacity); alts: nbg1, hel1
 }
 
 variable "cp_type" {
   description = "Server type for the control-plane node"
   type        = string
-  default     = "cx32"  # 4 vCPU, 8 GB RAM — sufficient for k3s control-plane
+  # FIX 2026-07-07: cx32/cx42/cx52 do NOT exist in the Hetzner API; the current Intel
+  # shared line is cx23/cx33/cx43/cx53. cx33 = 4 vCPU / 8 GB (same as intended cx32).
+  default     = "cx33"  # 4 vCPU, 8 GB RAM — sufficient for k3s control-plane
 }
 
 variable "worker1_type" {
-  description = "Server type for worker-1 (stateful: Postgres, Kafka, MinIO, Ollama)"
+  description = "Server type for worker-1 (stateful: Postgres, Kafka, MinIO, GLiNER)"
   type        = string
-  default     = "cx52"  # 16 vCPU, 32 GB RAM
+  default     = "cx53"  # 16 vCPU, 32 GB RAM (was cx52 — nonexistent)
 }
 
 variable "worker2_type" {
   description = "Server type for worker-2 (stateless: 10 app services)"
   type        = string
-  default     = "cx42"  # 8 vCPU, 16 GB RAM
+  default     = "cx43"  # 8 vCPU, 16 GB RAM (was cx42 — nonexistent)
 }
 
 variable "ssh_public_key" {

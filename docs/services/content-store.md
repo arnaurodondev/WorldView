@@ -115,6 +115,7 @@ curl -X POST http://localhost:8005/api/v1/documents/batch \
 | `dedup_result` | string | `unique` / `corroborating` / `semantic_near_duplicate` / `same_source_duplicate` / `duplicate_exact` / `duplicate_normalized` |
 | `minio_silver_key` | string | MinIO silver layer clean text key |
 | `source_type` | string | Originating source |
+| `external_id` | string? | Upstream market/source identity (PLAN-0056 Wave C2b), copied verbatim from `content.article.raw.v1` (e.g. `"polymarket:<condition_id>"`) so S6 can ride it onto the enriched event. Nullable, default null (R5). |
 | `title` | string? | Article title |
 | `word_count` | int? | Word count of cleaned text |
 | `published_at` | string? | ISO-8601 UTC publication date (copied from raw) |

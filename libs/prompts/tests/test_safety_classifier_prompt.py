@@ -20,12 +20,14 @@ class TestInjectionSafetyClassifierPrompt:
         assert INJECTION_SAFETY_CLASSIFIER is DIRECT_IMPORT
 
     def test_version_is_semver_4(self) -> None:
-        # Lineage: vN string was "v4" → semver normalised to "4.0".
-        assert INJECTION_SAFETY_CLASSIFIER.version == "4.0"
+        # Lineage: vN string was "v4" → semver normalised to "4.0"; MINOR bumped
+        # to 4.1 for the A6 account/portfolio/alert additive SAFE exemplar. MAJOR
+        # stays 4 (no threat-category change) so the legacy "v4" cache key holds.
+        assert INJECTION_SAFETY_CLASSIFIER.version == "4.1"
 
     def test_identifier_shape(self) -> None:
         ident = INJECTION_SAFETY_CLASSIFIER.identifier()
-        assert ident.startswith("injection_safety_classifier@4.0#")
+        assert ident.startswith("injection_safety_classifier@4.1#")
         # 12-char hex hash suffix.
         assert len(ident.split("#")[-1]) == 12
 
@@ -39,6 +41,14 @@ class TestInjectionSafetyClassifierPrompt:
         # v4 lineage: screener SAFE exemplar must be present (BP-632 regression guard).
         assert "Financial screening" in body
         assert "market cap above $50B" in body
+
+    def test_template_includes_account_alert_safe_exemplar(self) -> None:
+        body = INJECTION_SAFETY_CLASSIFIER.template
+        # 4.1 lineage: A6 account/portfolio/alert SAFE exemplar must be present
+        # so a prompt revert re-introducing the INPUT_REJECTED false-positive on
+        # "What alerts do I currently have set up?" trips this guard immediately.
+        assert "First-person account / portfolio" in body
+        assert "What alerts do I currently have set up?" in body
 
     def test_template_includes_relationship_safe_exemplar(self) -> None:
         body = INJECTION_SAFETY_CLASSIFIER.template

@@ -80,3 +80,36 @@ class S3BriefClient(BaseUpstreamClient):
         # H-1: _get() always returns dict; isinstance(raw, list) was dead code — removed.
         # C-1: use "events" key (matches S9 contract), NOT "earnings" (never set by S9).
         return raw.get("events") or raw.get("data") or []  # type: ignore[return-value]
+
+    async def get_prediction_markets(
+        self,
+        query: str | None = None,
+        category: str | None = None,
+        status: str = "open",
+        limit: int = 10,
+    ) -> list[dict]:
+        """GET /v1/signals/prediction-markets → Polymarket markets list.
+
+        WHY this endpoint: the S9 intelligence router already proxies
+        ``/v1/signals/prediction-markets`` → market-data
+        ``GET /api/v1/prediction-markets`` and forwards ALL query params
+        verbatim. Market-data's list endpoint already supports a free-text
+        ``query`` ILIKE filter on the market question (and ``category`` /
+        ``status`` / ``limit``), so a keyword/topic/entity search needs NO new
+        upstream endpoint. The wire shape is
+        ``{"items": [...], "total", "limit", "offset"}``.
+
+        Returns [] on any error (R9 safe degradation). ``query``/``category``
+        are only sent when non-empty so an empty search lists the most
+        recently-updated open markets.
+        """
+        params: dict = {"status": status, "limit": limit}
+        if query:
+            params["query"] = query
+        if category:
+            params["category"] = category
+        raw = await self._get("/v1/signals/prediction-markets", params=params)
+        if not raw:
+            return []
+        # S3/S9 wrap the rows in "items"; tolerate a "data" alias defensively.
+        return raw.get("items") or raw.get("data") or []  # type: ignore[return-value]

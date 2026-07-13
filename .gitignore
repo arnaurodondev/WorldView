@@ -13,6 +13,7 @@ build/
 # Virtual environments
 .venv/
 .venv-ci-local/
+.venv-demo/
 .venv312
 venv/
 env/
@@ -77,11 +78,38 @@ terraform.tfvars
 *.tfbackend
 *.tfstate*
 
-# Eval run results (timestamped outputs — not source-of-truth artifacts)
+# Eval run results (timestamped/regenerable outputs — not source-of-truth artifacts).
+# Already-tracked result sets stay tracked (gitignore only affects NEW files); commit a
+# curated/thesis-evidence result set explicitly with `git add -f <path>` if needed.
 results/eval_*.json
 results/eval_*.csv
 results/boost_sweep_*.json
 results/routing_dataset/
+# Per-experiment eval output dirs (extraction runs, A/Bs, model switches, llm audits, sweeps).
+results/extraction_*/
+results/*_ab/
+results/*_ab_*/
+results/*_dryrun/
+results/model_switch_*/
+results/gate_residual_*/
+results/llm_audit_*/
+results/recall_probe_*/
+
+# Chat-quality benchmark generated artifacts. The framework code + curated gold set
+# (gold_labels.yaml) ARE tracked; per-run outputs, the trend DB, and regenerated
+# calibration reports are not.
+tests/validation/chat_quality_benchmark/trend/
+tests/validation/chat_quality_benchmark/gold/_calibration_report.*
+tests/validation/chat_quality_benchmark/gold/REVIEW_SHEET.md
+
+# QA / E2E capture artifacts committed under audit dirs (screenshots + captured payloads).
+# Audit *.md reports stay tracked; the regenerable capture data does not.
+docs/audits/**/qa-data*.json
+docs/audits/**/qa-*.json
+docs/audits/**/*.png
+docs/audits/**/screenshots/
+docs/audits/*-qa/
+docs/audits/*-gaps/
 
 # Claude Code local state
 .claude/projects/
@@ -133,3 +161,20 @@ arnau_*.pdf
 results/chat_model_eval/
 results/desc_grounding_eval/
 results/kg_desc_eval/
+scripts/eval_runs/
+
+# Demo recording/screenshot artifacts + its throwaway venv (large, machine-generated)
+demo/
+
+# Personal contact list (not a project artifact)
+contacts.md
+
+# Terraform / OpenTofu local plugin cache + state (machine-generated; state may hold secrets).
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored — the dependency lock should be committed.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+
+# Presentation build tooling + generated output (not product code)
+presentation/script_to_html.py
+presentation/script.html

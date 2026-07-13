@@ -30,8 +30,12 @@ from market_data.infrastructure.db.models import (
     OHLCVBarModel,
     OutboxEventModel,
     OutstandingSharesModel,
+    PredictionEventModel,
     PredictionMarketModel,
+    PredictionMarketOIModel,
+    PredictionMarketPriceModel,
     PredictionMarketSnapshotModel,
+    PredictionMarketTradeModel,
     QuoteModel,
     SecurityModel,
     ShareStatisticsModel,
@@ -332,6 +336,72 @@ class TestPredictionMarketModels:
         constraint_names = {c.name for c in table.constraints}
         assert "uq_pms_market_snapshot" in constraint_names
 
+    def test_prediction_market_has_event_id(self) -> None:
+        """PLAN-0056 A1 / migration 043: prediction_markets gains event_id."""
+        cols = _columns(PredictionMarketModel)
+        assert "event_id" in cols
+
+
+class TestPredictionDeeperStreamModels:
+    """DDL alignment tests for PLAN-0056 A1 deeper-stream tables (PRD-0033 §6.1)."""
+
+    def test_prices_tablename_and_columns(self) -> None:
+        assert PredictionMarketPriceModel.__tablename__ == "prediction_market_prices"
+        cols = _columns(PredictionMarketPriceModel)
+        assert cols == {
+            "id",
+            "market_id",
+            "token_id",
+            "outcome_name",
+            "interval",
+            "window_start_ts",
+            "price",
+            "source",
+            "is_backfill",
+        }
+
+    def test_prices_composite_pk_includes_partition_column(self) -> None:
+        """TimescaleDB requires the time column in the PK — PK is (id, window_start_ts)."""
+        table = _table(PredictionMarketPriceModel)
+        pk_cols = {col.name for col in table.primary_key}
+        assert pk_cols == {"id", "window_start_ts"}
+
+    def test_prices_unique_constraint(self) -> None:
+        table = _table(PredictionMarketPriceModel)
+        constraint_names = {c.name for c in table.constraints}
+        assert "uq_pmp_market_token_interval_window" in constraint_names
+
+    def test_trades_tablename_and_columns(self) -> None:
+        assert PredictionMarketTradeModel.__tablename__ == "prediction_market_trades"
+        cols = _columns(PredictionMarketTradeModel)
+        assert cols == {"id", "market_id", "trade_id", "token_id", "price", "size_usd", "side", "ts"}
+
+    def test_trades_composite_pk_includes_partition_column(self) -> None:
+        table = _table(PredictionMarketTradeModel)
+        pk_cols = {col.name for col in table.primary_key}
+        assert pk_cols == {"id", "ts"}
+
+    def test_trades_unique_market_trade(self) -> None:
+        table = _table(PredictionMarketTradeModel)
+        constraint_names = {c.name for c in table.constraints}
+        assert "uq_pmt_market_trade" in constraint_names
+
+    def test_oi_tablename_and_pk(self) -> None:
+        assert PredictionMarketOIModel.__tablename__ == "prediction_market_oi"
+        table = _table(PredictionMarketOIModel)
+        pk_cols = {col.name for col in table.primary_key}
+        assert pk_cols == {"market_id", "snapshot_date"}
+        cols = _columns(PredictionMarketOIModel)
+        assert {"total_oi_usd", "total_volume_24h_usd", "created_at", "updated_at"} <= cols
+
+    def test_events_tablename_and_unique_event_id(self) -> None:
+        assert PredictionEventModel.__tablename__ == "prediction_events"
+        table = _table(PredictionEventModel)
+        constraint_names = {c.name for c in table.constraints}
+        assert "uq_prediction_events_event_id" in constraint_names
+        cols = _columns(PredictionEventModel)
+        assert {"id", "event_id", "name", "category", "start_date", "end_date", "market_count"} <= cols
+
 
 class TestBaseMetadataCompleteness:
     EXPECTED_TABLES: ClassVar[set[str]] = {
@@ -363,6 +433,11 @@ class TestBaseMetadataCompleteness:
         # PRD-0019: prediction markets
         "prediction_markets",
         "prediction_market_snapshots",
+        # PLAN-0056 A1 (PRD-0033): prediction deeper streams
+        "prediction_market_prices",
+        "prediction_market_trades",
+        "prediction_market_oi",
+        "prediction_events",
     }
 
     def test_all_tables_in_metadata(self):

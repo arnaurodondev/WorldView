@@ -39,11 +39,14 @@ class TestAlertType:
         # a new user-facing concept and uses lowercase for readability in API
         # responses (alert_type: "user_rule" vs. "SIGNAL").
         assert AlertType.USER_RULE == "user_rule"
+        # PLAN-0056 Wave D3: PREDICTION added for prediction-market fanout alerts
+        # (lowercase like USER_RULE — matches the frontend alert_type value).
+        assert AlertType.PREDICTION == "prediction"
 
     @pytest.mark.unit
-    def test_alert_type_has_exactly_four_members(self) -> None:
-        # PLAN-0082 Wave B: updated from 3 → 4 when USER_RULE was added.
-        assert len(AlertType) == 4
+    def test_alert_type_has_exactly_five_members(self) -> None:
+        # PLAN-0082 Wave B: 3 → 4 (USER_RULE). PLAN-0056 Wave D3: 4 → 5 (PREDICTION).
+        assert len(AlertType) == 5
 
     @pytest.mark.unit
     def test_alert_type_from_string(self) -> None:
@@ -51,6 +54,7 @@ class TestAlertType:
         assert AlertType("GRAPH_CHANGE") is AlertType.GRAPH_CHANGE
         assert AlertType("CONTRADICTION") is AlertType.CONTRADICTION
         assert AlertType("user_rule") is AlertType.USER_RULE
+        assert AlertType("prediction") is AlertType.PREDICTION
 
 
 class TestOutboxStatus:

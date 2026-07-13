@@ -69,6 +69,28 @@ class CanonicalNlpArticleEnriched:
     raw_claims_json: str | None = None
     correlation_id: str | None = None
     tenant_id: str | None = None
+    # PLAN-0056 QA (BP-720): external_id/source_title are declared LAST among the
+    # data fields to mirror the Avro record's END-appended order.  The wire schema
+    # is decoded positionally by fastavro (schemaless, no Schema Registry), so
+    # additive fields MUST sit at the tail of the record or a rolling deploy where
+    # the producer ships new bytes before a consumer upgrades misreads every field
+    # after the insertion point.  (Serialization is by-name via to_dict(), so this
+    # declaration order is for consistency/readability with the .avsc — the bytes
+    # come out identical regardless.)
+    # PLAN-0056 Wave C2b (2026-07-10): stable upstream market/source identity
+    # threaded S4→S5→S6 verbatim (e.g. "polymarket:<condition_id>").  Nullable +
+    # default None keeps the schema forward-compatible (R5); legacy producers
+    # that pre-date the field decode to None.  KG PredictionEnrichedConsumer
+    # parses the condition_id out of it so temporal events resolve to a real
+    # market instead of an anonymous doc_id.
+    external_id: str | None = None
+    # PLAN-0056 Wave C3 (2026-07-10): upstream document title copied verbatim from
+    # content.article.stored.v1.title (S6 pure passthrough — no NER change).  For a
+    # Polymarket synthetic doc this IS the market question, which S7's
+    # PredictionEnrichedConsumer uses both as the temporal-event title and as the
+    # input to MarketPolarityClassifier.  Nullable + default None keeps the schema
+    # forward-compatible (R5); legacy producers decode to None.
+    source_title: str | None = None
     event_type: str = field(default="nlp.article.enriched")
     schema_version: int = field(default=1)
 
@@ -89,6 +111,12 @@ class CanonicalNlpArticleEnriched:
             # D-INIT-6: source_name is optional on the wire (Avro default=null) and on
             # legacy events that pre-date the field; cast only when actually present.
             source_name=(str(d["source_name"]) if d.get("source_name") is not None else None),
+            # PLAN-0056 Wave C2b: optional on the wire (Avro default=null) and on
+            # legacy events; cast only when present.
+            external_id=(str(d["external_id"]) if d.get("external_id") is not None else None),
+            # PLAN-0056 Wave C3: optional on the wire (Avro default=null) and on
+            # legacy events; cast only when present.
+            source_title=(str(d["source_title"]) if d.get("source_title") is not None else None),
             published_at=(str(d["published_at"]) if d.get("published_at") is not None else None),
             is_backfill=bool(d.get("is_backfill", False)),
             relation_count=int(d.get("relation_count", 0)),
@@ -135,6 +163,11 @@ class CanonicalNlpArticleEnriched:
             "raw_claims_json": self.raw_claims_json,
             "correlation_id": self.correlation_id,
             "tenant_id": self.tenant_id,
+            # PLAN-0056 QA (BP-720): emit external_id/source_title LAST to mirror the
+            # END-appended Avro record order.  Emitted even when None so the Avro
+            # union picks the null branch rather than reporting a missing field.
+            "external_id": self.external_id,
+            "source_title": self.source_title,
         }
 
 

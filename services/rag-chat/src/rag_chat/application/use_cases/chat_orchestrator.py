@@ -57,6 +57,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_budget_exceeded_total,
     rag_cache_hits,
     rag_citations_scrubbed_total,
+    rag_grounding_false_positive_skip_total,
     rag_grounding_validation_total,
     rag_latency,
     rag_no_tool_calls_first_turn,
@@ -510,8 +511,81 @@ _VERIFICATION_BANNER_RE = re.compile(
 )
 _CANONICAL_UNVERIFIED_DISCLAIMER = "Note: some figures or names above could not be matched to a retrieved source."
 
+# ── Point 2 (owner-requested) — canonical NOT-FINANCIAL-ADVICE disclaimer ──────
+# For liability coverage as we unlock what-if / projection / analytical answers,
+# a fixed, model-independent disclaimer is appended DETERMINISTICALLY at
+# finalisation (like the grounding banner — the model cannot omit it) to
+# ANALYTICAL / HYPOTHETICAL / PROJECTION turns only. It is a single canonical
+# constant, appended once (deduped — see :func:`_append_advice_disclaimer`), and
+# is NOT added to simple factual lookups (a P/E query does not need it). The stub
+# detector discounts it (see ``_discount_artifacts``) so it can never inflate a
+# leaked planning stub past the size gate.
+_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER = (
+    "This is analysis for informational purposes only, not financial advice or a recommendation."
+)
 
-def _sanitize_unverified_markers(text: str) -> str:
+
+def _append_advice_disclaimer(text: str) -> str:
+    """Append the canonical not-financial-advice disclaimer once, deduped.
+
+    No-op when *text* is empty or already carries the disclaimer (idempotent, so
+    a second finalisation pass or a re-entrant caller never doubles it). Placed on
+    its own trailing line so it reads cleanly after the answer and after any
+    grounding note.
+    """
+    if not text or not text.strip():
+        return text
+    if _CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER in text:
+        return text
+    return f"{text.rstrip()}\n\n{_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER}"
+
+
+# ── D4 (2026-07-06) — gpt-oss commentary-channel leak strip ──────────────────
+# The gpt-oss synthesis model occasionally leaks its harmony CHANNEL markers
+# into the delivered answer: full-width ``【commentary row 0】`` / ``【analysis…】``
+# and the bold provenance shape ``[**tool_name row N**]`` (``da_aapl_pe_dec2024``
+# leaked ``【commentary row 0】``). These are control artifacts, never content —
+# strip them from the final answer. The LEGITIMATE ASCII provenance tag
+# ``[tool_name row N]`` (plain, real called tool) is PRESERVED: it is promoted to
+# a real ``[N]`` citation downstream. So we only remove:
+#   (1) any full-width ``【…】`` span that is a channel word or a ``… row N`` tag;
+#   (2) ASCII ``[…]`` spans that are a gpt-oss CHANNEL keyword (optionally
+#       ``… row N``), bold-wrapped or not;
+#   (3) the bold ``**`` wrapping inside a ``[**… row N**]`` provenance tag
+#       (unwrapped to ``[… row N]`` so the citation promotion still fires).
+_CHANNEL_WORDS = r"commentary|analysis|final|assistantfinal|assistant"
+_FULLWIDTH_CHANNEL_LEAK_RE = re.compile(
+    r"【\s*(?:(?:" + _CHANNEL_WORDS + r")(?:\s+row\s+\d+)?|[^】]*?\brow\s+\d+)\s*】",
+    re.IGNORECASE,
+)
+_ASCII_CHANNEL_LEAK_RE = re.compile(
+    r"\[\s*\*{0,2}\s*(?:" + _CHANNEL_WORDS + r")(?:\s+row\s+\d+)?\s*\*{0,2}\s*\]",
+    re.IGNORECASE,
+)
+_BOLD_ROW_TAG_RE = re.compile(
+    r"\[\s*\*{2}\s*([^\]]*?\brow\s+\d+)\s*\*{2}\s*\]",
+    re.IGNORECASE,
+)
+
+
+def _strip_commentary_channel_leak(text: str) -> str:
+    """Strip gpt-oss harmony channel-marker leaks from the delivered answer.
+
+    Idempotent + a no-op on a clean answer — safe to call unconditionally.
+    """
+    if not text:
+        return text
+    out = _FULLWIDTH_CHANNEL_LEAK_RE.sub("", text)
+    out = _ASCII_CHANNEL_LEAK_RE.sub("", out)
+    # Unwrap bold provenance tags so the legit ``[tool row N]`` citation promotion
+    # still fires on what remains.
+    out = _BOLD_ROW_TAG_RE.sub(r"[\1]", out)
+    # Collapse the double-space a mid-sentence removal can leave behind.
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out
+
+
+def _sanitize_unverified_markers(text: str, *, append_disclaimer: bool = True) -> str:
     """Convert leaked ``[unverified]`` tags + banners into a clean disclaimer.
 
     C2 fix. Returns *text* unchanged when no marker/banner is present (the common
@@ -521,8 +595,20 @@ def _sanitize_unverified_markers(text: str) -> str:
     * each inline ``[unverified]`` token becomes ``(source unverified)`` so it no
       longer reads as a bracketed citation/provenance tag;
     * the one-or-more trailing ``⚠ Some … could not be verified`` banners are
-      removed and replaced by a SINGLE plain-prose disclaimer line appended at the
-      end, so the hedge survives but in a non-citation shape.
+      removed and — when *append_disclaimer* is True — replaced by a SINGLE
+      plain-prose disclaimer line appended at the end, so the hedge survives but
+      in a non-citation shape.
+
+    ``append_disclaimer`` (improvement #1, 2026-07-06): the trailing canonical
+    "some figures … could not be matched to a retrieved source" caveat was being
+    attached blanket whenever ANY banner/inline tag was present — including on
+    answers that GROUNDING ULTIMATELY PASSED (no material unsupported numbers
+    remained after the derivation/framing checks), where a stray banner had
+    leaked in. Callers now pass ``append_disclaimer=False`` for a fully-grounded
+    answer: the leaked banner/inline tags are STILL scrubbed (defense-in-depth),
+    but the needless caveat is NOT appended. The caveat is reserved for the case
+    where genuinely material unsupported numbers remain (``grounding_passed`` is
+    False). Default True preserves the legacy behaviour for existing callers.
     """
     if not text:
         return text
@@ -538,7 +624,11 @@ def _sanitize_unverified_markers(text: str) -> str:
     # Collapse any double spaces introduced before punctuation/markers.
     cleaned = re.sub(r" {2,}", " ", cleaned)
     cleaned = re.sub(r"\s+([.,;:])", r"\1", cleaned)
-    # 3. Re-attach a single canonical disclaimer.
+    # 3. Re-attach a single canonical disclaimer — ONLY when the caller says
+    #    material unsupported numbers actually remain. A fully-grounded answer
+    #    (append_disclaimer=False) gets the scrub but never the blanket caveat.
+    if not append_disclaimer:
+        return cleaned.rstrip()
     return f"{cleaned.rstrip()}\n\n{_CANONICAL_UNVERIFIED_DISCLAIMER}"
 
 
@@ -577,6 +667,82 @@ def _is_plan_only_narration(text: str) -> bool:
         return False
     # Every remaining line must open with a plan-prose lead.
     return all(_PLAN_LINE_LEAD_RE.match(ln) for ln in lines)
+
+
+# ── D-f (2026-07-08) — runaway decode-loop guard ─────────────────────────────
+#
+# BP-671/672 (stub-as-final) class. ``ripple_nvidia_supplier_health`` shipped a
+# final answer that repeated "I'll start by identifying…" ~200x — a degenerate
+# decode loop where the model never produced analysis. The provider (DeepInfra)
+# stream completes without error, so no exception/zero-chunk guard fires; the
+# repeated text just accumulates. We collapse a runaway loop deterministically
+# BEFORE the plan-only / stub guards run, so the collapsed remnant ("I'll start
+# by identifying…" once) is then correctly recognised as plan-only narration and
+# converted to a bounded refusal rather than shipped.
+#
+# We normalise each segment (case + whitespace) and count occurrences at two
+# granularities — newline-delimited lines AND sentence-like fragments — because
+# a loop may or may not carry line breaks. A segment repeated at least
+# ``min_repeats`` times is a loop; we keep only its FIRST occurrence and drop the
+# rest (order preserved). Short segments (< 12 normalised chars) are ignored so
+# an ordinary repeated word ("the", a ticker) never trips the guard.
+_DF_MIN_LOOP_REPEATS = 5
+_DF_MIN_SEGMENT_LEN = 12
+# Split on newlines OR sentence terminators, keeping the delimiter out of the
+# comparison key. Used only when the text has too few newlines to find a
+# line-level loop (a single-line runaway).
+_DF_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _collapse_runaway_repetition(text: str, *, min_repeats: int = _DF_MIN_LOOP_REPEATS) -> tuple[str, bool]:
+    """Collapse a degenerate repeated-line / repeated-sentence decode loop.
+
+    Returns ``(collapsed_text, was_collapsed)``. A no-op (``was_collapsed`` False,
+    text unchanged) on any non-looping answer — safe to call unconditionally.
+    Keeps the FIRST occurrence of each looped segment and drops the duplicates.
+    """
+    if not text or not text.strip():
+        return text, False
+
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip().lower()
+
+    def _collapse(segments: list[str]) -> tuple[list[str], bool]:
+        counts: dict[str, int] = {}
+        for seg in segments:
+            key = _norm(seg)
+            if len(key) >= _DF_MIN_SEGMENT_LEN:
+                counts[key] = counts.get(key, 0) + 1
+        looped = {k for k, c in counts.items() if c >= min_repeats}
+        if not looped:
+            return segments, False
+        seen: set[str] = set()
+        out: list[str] = []
+        for seg in segments:
+            key = _norm(seg)
+            if key in looped:
+                if key in seen:
+                    continue
+                seen.add(key)
+            out.append(seg)
+        return out, True
+
+    # 1. Line-level loop (the common shape — one plan line repeated per newline).
+    lines = text.split("\n")
+    collapsed_lines, hit = _collapse(lines)
+    if hit:
+        return "\n".join(collapsed_lines).rstrip(), True
+
+    # 2. Single-line / few-newline runaway: fall back to sentence fragments.
+    fragments = _DF_SENTENCE_SPLIT_RE.split(text)
+    if len(fragments) > 1:
+        collapsed_frags, hit = _collapse(fragments)
+        if hit:
+            # Rejoin with a single space — the original inter-fragment spacing was
+            # already collapsed to a loop; a clean single-space join is fine.
+            return " ".join(f.strip() for f in collapsed_frags if f.strip()).rstrip(), True
+
+    return text, False
 
 
 def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> bool:
@@ -638,6 +804,11 @@ def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> b
     def _discount_artifacts(s: str) -> str:
         s = _GROUNDING_BANNER_RE.sub("", s)
         s = s.replace(_CANONICAL_UNVERIFIED_DISCLAIMER, "")
+        # Point 2: the deterministic not-financial-advice disclaimer is also a
+        # finalisation artifact, not "real answer" content — discount it so a
+        # leaked planning stub cannot ride past the size gate on the back of it
+        # (same treatment as the canonical unverified disclaimer above).
+        s = s.replace(_CANONICAL_NOT_FINANCIAL_ADVICE_DISCLAIMER, "")
         return s.strip()
 
     base = _discount_artifacts(text)
@@ -764,6 +935,194 @@ def _renumber_citations_dense(text: str, citations: list[Any]) -> tuple[str, lis
         key=lambda c: int(c.ref),
     )
     return new_text, new_citations
+
+
+# ── D-a (2026-07-08) — phantom / non-registered citation-tag hard-veto ────────
+#
+# The 2026-07-08 two-track audit (docs/plans/2026-07-08-chat-quality-two-track-
+# audit.md) found bracket tokens that are NOT registered numbered ``[n]``
+# citations leaking to the user AFTER all upstream promotion/renumber/strip
+# passes:
+#   * ``[c9]`` — a provenance id embedded in the ``get_morning_brief`` payload
+#     text, passed straight through (q_tc_morning_brief_today);
+#   * ``[REDACTED]`` — a redaction placeholder carried through from a payload;
+#   * ``[search_documents row 7]`` — a ``[tool row N]`` tag that survived because
+#     the tool returned 0 rows / was never resolved (so ``normalize_tool_row_
+#     citations`` could not map it and the out-of-range strip in numeric_
+#     grounding missed it), INCLUDING the narrow-no-break-space (U+202F/U+00A0)
+#     ``row 7`` variant the ASCII ``\s`` regexes upstream do not match
+#     (q_cmp_nvda_avgo_ai_infrastructure — data misattributed to an empty tool).
+#
+# By the time this runs the dense renumber has made the ONLY legitimate bracket
+# citations plain ``[1]..[K]`` mapping 1:1 to the registered citations array.
+# This is the FINAL hard veto: any bracket token that is provenance/citation-
+# SHAPED but is NOT one of those registered numbered markers is stripped. We are
+# deliberately conservative about which shapes we strip so genuine non-citation
+# brackets (markdown link text ``[label]``, a bracketed year ``[2026]``, a note
+# ``[note]``) are preserved:
+#   1. a plain ``[n]`` whose number is NOT a registered citation ref (a stray
+#      orphan that slipped the renumber) → stripped;
+#   2. ``[REDACTED]`` (exact, case-insensitive — NOT the intentional E-7
+#      ``[ref:redacted]`` egress marker) → stripped;
+#   3. ``[<lowercase letters><digits>]`` payload-citation ids like ``[c9]`` →
+#      stripped (uppercase period labels ``[Q1]``/``[H2]`` are NOT matched);
+#   4. any ``[… row <n> …]`` provenance tag, with ASCII or unicode spacing →
+#      stripped.
+# Everything else survives untouched.
+_DA_REDACTED_INNER_RE = re.compile(r"^\s*redacted\s*$", re.IGNORECASE)
+# A payload citation id: 1-3 LOWERCASE letters immediately followed by 1-3
+# digits (``c9``, ``ref12``-shaped ``ref`` excluded — needs the letters+digits
+# to be the WHOLE inner). Lowercase-only so quarter/half labels (``Q1``, ``H2``)
+# and section refs (``A1``) that a user might legitimately bracket are left be.
+_DA_PAYLOAD_CITE_INNER_RE = re.compile(r"^\s*[a-z]{1,3}\d{1,3}\s*$")
+# A ``row N`` provenance tag with ANY inter-word spacing: regular space, TAB,
+# NO-BREAK SPACE (U+00A0), NARROW NO-BREAK SPACE (U+202F), FIGURE SPACE (U+2007)
+# or WORD JOINER (U+2060). The upstream ASCII regexes use ``\s`` (which does not
+# include U+202F/U+00A0) so those unicode-spaced tags survive to here.
+_DA_ROW_TAG_INNER_RE = re.compile("\\brow[\\s\u00a0\u202f\u2007\u2060]+\\d+", re.IGNORECASE)
+_DA_PLAIN_NUM_INNER_RE = re.compile(r"^\s*(\d{1,2})\s*$")
+# Any single-level bracket token (no nested brackets, single line, bounded len
+# so a stray unclosed ``[`` never swallows a paragraph).
+_DA_BRACKET_TOKEN_RE = re.compile(r"\[[^\[\]\n]{1,120}\]")
+
+
+def _strip_non_registered_citation_tags(text: str, valid_refs: set[int]) -> tuple[str, int]:
+    """Strip bracket tokens that are not registered numbered ``[n]`` citations.
+
+    D-a hard veto. ``valid_refs`` is the set of ``ref`` values on the final
+    (dense-renumbered) citations array. Returns ``(cleaned_text, stripped_count)``.
+    A no-op when *text* carries no bracket tokens. See the module comment above
+    for the exact shapes stripped vs preserved — genuine non-citation brackets
+    (markdown link labels, bracketed years, notes) are never touched.
+    """
+    if not text:
+        return text, 0
+    count = 0
+
+    def _repl(m: re.Match[str]) -> str:
+        nonlocal count
+        whole = m.group(0)
+        inner = whole[1:-1]
+        # (1) plain numeric marker: keep iff it is a registered citation.
+        num = _DA_PLAIN_NUM_INNER_RE.match(inner)
+        if num is not None:
+            if int(num.group(1)) in valid_refs:
+                return whole
+            count += 1
+            return ""
+        # (2/3/4) phantom provenance/payload shapes → strip.
+        if (
+            _DA_REDACTED_INNER_RE.match(inner)
+            or _DA_PAYLOAD_CITE_INNER_RE.match(inner)
+            or _DA_ROW_TAG_INNER_RE.search(inner)
+        ):
+            count += 1
+            return ""
+        # Everything else (markdown label, year, note, prose) is preserved.
+        return whole
+
+    cleaned = _DA_BRACKET_TOKEN_RE.sub(_repl, text)
+    if count:
+        # Tidy the whitespace a mid-sentence removal can leave behind so the
+        # answer never ships with " ." or double spaces where a tag used to be.
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r" +([.,;:!?])", r"\1", cleaned)
+        cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    return cleaned, count
+
+
+# ── NEW-3 refinement (2026-07-06) — deterministic filing-citation backfill ────
+# Citation assembly is MARKER-driven: ``process_output`` builds a citation only
+# for a retrieved item the model referenced with a ``[N]`` (or, after
+# ``normalize_tool_row_citations``, a ``[tool row N]``) marker. For short filing
+# answers the model quotes the real 10-Q figures but intermittently omits the
+# marker, so the SAME correct Apple figures shipped 1 citation on one run and 0
+# on the next (NEW-3, docs/audits/2026-07-06-r1-final-exhaustive-qa.md). This
+# backfill makes filing citations DETERMINISTIC: when a retrieved sec_edgar
+# filing's material figure appears VERBATIM in the answer and that filing is not
+# already cited, we append its positional marker + citation. It only PROMOTES a
+# source the answer demonstrably used — it never invents one.
+#
+# "Material figure" = a thousands-separated token ("124,300") or a bare integer
+# of ≥5 digits, so years (2026), small counts, and single quarters can never
+# trigger a spurious backfill. Only sec_edgar filing items are eligible.
+_FILING_MATERIAL_FIGURE_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{5,}(?:\.\d+)?")
+
+
+def _material_figure_keys(text: str) -> set[str]:
+    """Return normalised digit-strings of material figures in ``text``.
+
+    Commas and a fractional tail are stripped so "$124,300" and "124300"
+    compare equal. Keys shorter than 5 digits are dropped (years / small
+    counts are not financial-statement figures).
+    """
+    out: set[str] = set()
+    for m in _FILING_MATERIAL_FIGURE_RE.finditer(text or ""):
+        digits = m.group(0).replace(",", "").split(".")[0]
+        if len(digits) >= 5:
+            out.add(digits)
+    return out
+
+
+def _backfill_filing_citations(
+    answer: str,
+    citations: list[Any],
+    prompt_items: list[Any],
+) -> tuple[str, list[Any]]:
+    """Deterministically emit a citation for any USED-but-uncited filing item.
+
+    A filing item (``source_type == 'sec_edgar'`` / ``item_id`` ``tool:filing:*``)
+    is considered USED when one of its material figures appears verbatim in the
+    answer. For each such item not already carrying a citation we append a
+    positional ``[pos]`` marker to the answer and a matching ``Citation`` — the
+    downstream dense renumber then relabels marker+citation together. Runs AFTER
+    ``process_output`` (so genuine model markers win first) and BEFORE the dense
+    renumber. No-op when disabled, when the answer has no material figures, or
+    when every used filing is already cited.
+    """
+    if not answer or not prompt_items:
+        return answer, citations
+    answer_keys = _material_figure_keys(answer)
+    if not answer_keys:
+        return answer, citations
+
+    from rag_chat.domain.entities.conversation import Citation
+
+    cited_refs = {int(getattr(c, "ref", 0)) for c in citations}
+    new_citations = list(citations)
+    appended: list[int] = []
+    for pos, item in enumerate(prompt_items, start=1):
+        if pos in cited_refs:
+            continue
+        source_type = str(getattr(item, "source_type", "") or "")
+        item_id = str(getattr(item, "item_id", "") or "")
+        if source_type != "sec_edgar" and not item_id.startswith("tool:filing:"):
+            continue
+        if not (answer_keys & _material_figure_keys(getattr(item, "text", "") or "")):
+            continue
+        meta = getattr(item, "citation_meta", None)
+        new_citations.append(
+            Citation(
+                ref=pos,
+                item_type=item.item_type.value,
+                id=item_id,
+                title=(getattr(meta, "title", None) or None) if meta else None,
+                url=(getattr(meta, "url", None) or None) if meta else None,
+                source_name=(getattr(meta, "source_name", None) or None) if meta else None,
+                published_at=getattr(meta, "published_at", None) if meta else None,
+                entity_name=(getattr(meta, "entity_name", None) or None) if meta else None,
+                confidence=getattr(item, "score", None),
+                text=getattr(item, "text", None),
+            )
+        )
+        cited_refs.add(pos)
+        appended.append(pos)
+    if appended:
+        # Anchor the backfilled markers at the end of the answer so the frontend
+        # renders the source link. Dense renumber (next step) tidies the labels.
+        answer = answer.rstrip() + " " + " ".join(f"[{p}]" for p in appended)
+        log.info("filing_citations_backfilled", count=len(appended), positions=appended)  # type: ignore[no-any-return]
+    return answer, new_citations
 
 
 def _scrub_unseen_refs(text: str, seen_ids: set[str]) -> tuple[str, int]:
@@ -895,6 +1254,79 @@ def _answer_has_full_citation_coverage(text: str) -> bool:
     return True
 
 
+# ── Track-3 (2026-07-08) — STRICT bracket-only citation-coverage check ────────
+#
+# ``_answer_has_full_citation_coverage`` is deliberately permissive: it accepts
+# PROSE provenance ("according to the latest filing", "per the report") as a
+# citation. That looseness is fine for the validator's own last-line banner
+# suppression, but too weak to decide whether to withhold the trailing
+# "some figures could not be matched" CAVEAT — an ungrounded draft that merely
+# says "according to the latest filing" (no real tool citation) must still get
+# the caveat when grounding failed (BP-648). So the caveat-suppression gate uses
+# THIS stricter variant: it only counts REAL bracket citations — a positional
+# ``[n]`` marker or a ``[tool_name]`` / ``[tool_name row N]`` provenance tag —
+# not prose. Same ±window coverage logic as the permissive helper otherwise.
+_TRACK3_BRACKET_CITATION_RE = re.compile(
+    r"\[\s*(?:\d{1,2}|[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?)\s*\]",
+    re.IGNORECASE,
+)
+
+
+# Track-3 (2026-07-08 tighten): a bracket-cited answer suppresses the trailing
+# "some figures could not be matched" caveat when EITHER most of its MATERIAL
+# figures are near a citation OR it carries only a handful of material figures (a
+# mostly-qualitative / news / macro answer). A citation-bearing draft with MANY
+# material numbers yet poor coverage is a genuine fabrication risk → keep caveat.
+_CAVEAT_MATERIAL_COVERAGE_MIN = 0.5
+_CAVEAT_FEW_MATERIAL_MAX = 3
+
+
+def _answer_has_bracket_citation_coverage(text: str) -> bool:
+    """Return True when a bracket-cited answer is grounded enough to drop the caveat.
+
+    Track-3 caveat-suppression gate — see the module comment above. Counts REAL
+    bracket citations only (``[n]`` / ``[tool]`` / ``[tool row N]``), never prose
+    provenance, so an ungrounded "according to the latest filing" draft still gets
+    the caveat (BP-648).
+
+    Tightened 2026-07-08: the prior implementation required EVERY numeric token —
+    INCLUDING incidental years/ordinals/dates — to sit within the window of a
+    citation, so a single uncited "2026" or list ordinal on an otherwise
+    fully-cited table/macro answer flipped it to False and the banner leaked onto
+    23 grounded answers (run_20260708T211838Z: tc_batch_fundamentals_mag5,
+    agg_q5_tsla_macro, ru_mstr_news). We now score only MATERIAL numbers
+    (revenue/EPS/price/… — :func:`material_number_spans`) and suppress the caveat
+    when the answer is bracket-cited AND either coverage is adequate OR only a few
+    material figures exist. Returns False when there are NO bracket citations so a
+    genuinely uncited prose answer still gets the caveat.
+    """
+    if not text:
+        return False
+    from rag_chat.application.services.numeric_grounding import material_number_spans
+
+    citation_spans: list[tuple[int, int]] = [m.span() for m in _TRACK3_BRACKET_CITATION_RE.finditer(text)]
+    if not citation_spans:
+        # No real bracket citation → not a cited answer → keep the caveat.
+        return False
+    material_spans = material_number_spans(text)
+    if not material_spans:
+        # A bracket-cited answer with no material figures (news / qualitative):
+        # "figures could not be matched" is self-contradictory → suppress.
+        return True
+    covered = 0
+    for n_start, n_end in material_spans:
+        n_centre = (n_start + n_end) // 2
+        if any(c_start <= n_centre < c_end for c_start, c_end in citation_spans):
+            covered += 1
+            continue
+        lo = n_start - _W50_CITATION_WINDOW
+        hi = n_end + _W50_CITATION_WINDOW
+        if any(c_end > lo and c_start < hi for c_start, c_end in citation_spans):
+            covered += 1
+    frac = covered / len(material_spans)
+    return frac >= _CAVEAT_MATERIAL_COVERAGE_MIN or len(material_spans) <= _CAVEAT_FEW_MATERIAL_MAX
+
+
 # ── BP-671 — re-synthesis divergence guard ───────────────────────────────────
 #
 # WHY: the numeric-grounding rewrite turn (``_run_grounding_validation``) does
@@ -973,6 +1405,13 @@ def _content_anchors(text: str) -> set[str]:
 # are handled by the existing refusal / defeatist guards).
 _RESYNTHESIS_MIN_REWRITE_CHARS = 600
 _RESYNTHESIS_MIN_ORIG_ANCHORS = 8
+
+# 2026-07-05 — combined-grounding defeatist guard (BP-648). A rewrite is treated
+# as a defeatist refusal only when it is refusal-prefixed AND below this
+# substantive-content floor: a bare "I cannot answer that." (~20 chars) is
+# rejected, but a content-rich correction that merely opens with a hedge while
+# retaining the grounded body is KEPT (Qwen3-Next patch-not-refuse behaviour).
+_DEFEATIST_REWRITE_MIN_SUBSTANTIVE_CHARS = 200
 
 
 def _rewrite_is_divergent_resynthesis(original: str, rewritten: str, *, min_retained: float = 0.5) -> bool:
@@ -1080,6 +1519,65 @@ _EMPTY_POOL_REFUSAL = (
     "be unavailable or hold no records for this request — please try again, or "
     "narrow the question to a specific ticker, metric, or time period."
 )
+# Point 2 Stage 2 — grounding-rewrite false-positive self-check sentinel.
+# The rewrite model is instructed to FIRST decide whether the flagged ungrounded
+# numbers are genuinely fabricated facts, or legitimate reasoning / projections /
+# hedged estimates / values derived from cited figures. If they are legitimate
+# (a false positive) it must output EXACTLY this token and nothing else; the
+# orchestrator then KEEPS the original answer instead of applying a rewrite.
+_FALSE_POSITIVE_SENTINEL = "FALSE_POSITIVE"
+
+
+def _is_false_positive_sentinel(text: str) -> bool:
+    """True when the rewrite model emitted a bare ``FALSE_POSITIVE`` self-check.
+
+    Case-insensitive; tolerates surrounding whitespace and light punctuation
+    (quotes, backticks, trailing ``.``/``!``). SAFETY: a full rewrite BODY that
+    merely mentions the token is NOT the sentinel — we only treat a bare/near-bare
+    response as the sentinel so a genuine rewrite is never discarded. We bound the
+    stripped length to a few characters beyond the token itself.
+    """
+    if not text:
+        return False
+    # Strip whitespace + the light wrapping punctuation a small model tends to add.
+    stripped = text.strip().strip("`\"'*.!:_ \t\r\n").strip()
+    if not stripped:
+        return False
+    # Bare/near-bare only: the sentinel plus at most a couple of stray chars.
+    # A real rewrite body is far longer than the sentinel token.
+    if len(stripped) > len(_FALSE_POSITIVE_SENTINEL) + 3:
+        return False
+    return stripped.upper() == _FALSE_POSITIVE_SENTINEL
+
+
+def _strip_trailing_false_positive_sentinel(text: str) -> str:
+    """Strip a stray trailing ``FALSE_POSITIVE`` token from a genuine rewrite body.
+
+    Some rewrite models (notably Qwen3-Next, adopted for the grounding rewrite)
+    occasionally append the self-check sentinel AFTER a real rewrite. Left in
+    place it leaks the literal token into the delivered answer. We remove ONLY a
+    trailing occurrence (with light surrounding punctuation/whitespace); a
+    bare/near-bare sentinel is left untouched so ``_is_false_positive_sentinel``
+    still recognises it and the ORIGINAL answer is returned instead.
+    """
+    if not text:
+        return text
+    stripped = text.rstrip()
+    # Bare/near-bare sentinel → leave for _is_false_positive_sentinel to handle.
+    if len(stripped) <= len(_FALSE_POSITIVE_SENTINEL) + 3:
+        return text
+    # Leading class is whitespace + light wrapping only (NOT sentence
+    # punctuation like ``.``/``:``) so a real body's terminal period survives.
+    m = re.search(
+        r"[\s\-*`\"']*" + _FALSE_POSITIVE_SENTINEL + r"[\s.!*`\"']*\Z",
+        stripped,
+        re.IGNORECASE,
+    )
+    if m:
+        return stripped[: m.start()].rstrip()
+    return text
+
+
 # Theme D: fallback when the synthesis turn produced only a plan and the
 # single re-prompt failed to yield a substantive answer.
 _PLAN_ONLY_REFUSAL = (
@@ -1121,6 +1619,77 @@ def _is_wholesale_refusal(text: str) -> bool:
         return False
     _low = _stripped.lower()
     return any(_marker in _low for _marker in _WHOLESALE_REFUSAL_MARKERS)
+
+
+# ── D-c (2026-07-08) — false "no data / empty result" claim guard ────────────
+#
+# The 2026-07-08 audit found the composition asserting "no data / no link /
+# empty" even when the tool trace shows ``status:ok items>=1`` (ripple_tsmc,
+# cmp_tsmc_intel, ripple_aapl, iter3_msft). The synthesis model MISREAD a
+# non-empty serialized tool payload as empty and confidently refused. This is
+# the sibling of ``_is_wholesale_refusal`` (#2) but keyed on emptiness/no-data/
+# no-link phrasing rather than the two exact "not available…" markers. It is
+# consumed by the SAME fail-open guard, which only fires when the turn actually
+# retrieved non-empty tool data (``non_none_items`` non-empty) AND grounding
+# still passed — so a genuine empty-pool refusal (no items) is never rewritten.
+#
+# Substring markers of a WHOLESALE empty/no-data assertion. Kept phrase-anchored
+# (not bare "empty"/"no") so a long substantive answer that caveats a single
+# missing sub-fact is not matched; the short-length gate is the second guard.
+_FALSE_EMPTY_CLAIM_MARKERS: tuple[str, ...] = (
+    "no data was found",
+    "no data is available",
+    "no data available",
+    "no data found",
+    "could not find any data",
+    "couldn't find any data",
+    "no results were found",
+    "no results found",
+    "no relevant data",
+    "returned no data",
+    "returned no results",
+    "returned no rows",
+    "did not return any",
+    "didn't return any",
+    "no records were found",
+    "no records found",
+    "the result was empty",
+    "results were empty",
+    "empty result set",
+    "there is no link",
+    "there was no link",
+    "no link was provided",
+    "no link is available",
+    "no url was returned",
+    "i couldn't find any information",
+    "i could not find any information",
+    "unable to find any",
+    "i was unable to retrieve",
+    "i wasn't able to retrieve",
+)
+# Slightly more permissive than the wholesale-refusal cap: a false empty-claim
+# can carry one framing sentence ("I checked the sources but no data was found
+# for …") and still be a wholesale refusal, but a real multi-fact answer is far
+# longer. 320 chars stays comfortably below a genuine answer.
+_FALSE_EMPTY_CLAIM_MAX_LEN = 320
+
+
+def _falsely_claims_empty_result(text: str) -> bool:
+    """True when ``text`` is a short answer asserting no-data / empty / no-link.
+
+    Companion to :func:`_is_wholesale_refusal` for the D-c fail-open guard: when
+    the synthesis output claims emptiness BUT the turn retrieved non-empty tool
+    data, we replace it with a data-backed reply rather than serve the false
+    refusal. Length-gated so a substantive answer that caveats one missing
+    sub-fact in passing is never matched.
+    """
+    if not text:
+        return False
+    _stripped = text.strip()
+    if len(_stripped) > _FALSE_EMPTY_CLAIM_MAX_LEN:
+        return False
+    _low = _stripped.lower()
+    return any(_marker in _low for _marker in _FALSE_EMPTY_CLAIM_MARKERS)
 
 
 # ── Theme F (2026-06-12 root-cause audit) — false write-action claim guard ───
@@ -1251,6 +1820,10 @@ _FALLBACK_MAP: dict[str, list[str]] = {
     # match. (A separate KG agent is raising the backend timeout; this is the
     # rag-chat-side graceful degradation.)
     "traverse_graph": ["get_entity_paths"],
+    # D6 (2026-07-06): a RELATIONSHIP/supplier question mis-routed to the
+    # narrative intelligence bundle comes back empty → fall back to the KG
+    # relation search (the correct tool for "who supplies / competes with X").
+    "get_entity_intelligence": ["search_entity_relations"],
 }
 
 
@@ -1319,6 +1892,34 @@ def _project_search_documents_to_entity_intelligence(
     if ctx is None or getattr(ctx, "entity_id", None) is None:
         return None
     return {"entity_id": str(ctx.entity_id)}
+
+
+def _project_entity_intelligence_to_search_relations(
+    failed_args: dict[str, Any],
+    ctx: Any,  # EntityContext | None
+) -> dict[str, Any] | None:
+    """get_entity_intelligence → search_entity_relations (D6 supplier/relationship route).
+
+    ``chain_apple_suppliers_high_margin`` asked for Apple's high-margin
+    suppliers; the router called ``get_entity_intelligence`` (a narrative
+    bundle) which returned empty for a RELATIONSHIP question, and graph
+    traversal was never tried → false refusal. When the intelligence bundle
+    comes back empty we fall back to the knowledge-graph relation search — the
+    correct tool for "who supplies / partners with / competes with X".
+    ``search_entity_relations`` takes a NAME (resolved KG-side), so we forward
+    the EntityContext name/ticker (or the failed call's ``entity_id`` echoed as
+    a name). Returns None when no anchor is available.
+    """
+    anchor: str | None = None
+    if ctx is not None:
+        anchor = getattr(ctx, "name", None) or getattr(ctx, "ticker", None)
+    if not anchor:
+        _eid = failed_args.get("entity_id")
+        if isinstance(_eid, str) and _eid.strip():
+            anchor = _eid.strip()
+    if not anchor:
+        return None
+    return {"entity_name": str(anchor)}
 
 
 def _project_economic_calendar_to_search_documents(
@@ -1394,6 +1995,8 @@ _FALLBACK_ARG_PROJECTIONS: dict[tuple[str, str], Any] = {
     ("get_economic_calendar", "search_documents"): _project_economic_calendar_to_search_documents,
     # Chat-eval #1: traverse_graph 504 → pre-computed /paths for the start node.
     ("traverse_graph", "get_entity_paths"): _project_traverse_graph_to_entity_paths,
+    # D6: empty intelligence bundle on a relationship query → KG relation search.
+    ("get_entity_intelligence", "search_entity_relations"): _project_entity_intelligence_to_search_relations,
 }
 
 
@@ -1459,6 +2062,270 @@ def _extract_ticker_hint(tool_calls: list[Any]) -> str | None:
                 if isinstance(first, str) and first.strip():
                     return first.strip()
     return None
+
+
+# ── D6 (2026-07-06) — bare-name entity_id → UUID coercion ────────────────────
+# Tools whose ``entity_id`` argument MUST be a canonical entity UUID (not a bare
+# name/ticker). The live model sometimes fills these with a company NAME
+# ("Apple") — a bare-name ``entity_id`` hits the S7 intel lookup as a MISS →
+# status="empty" → a false refusal, and the graph-traversal fallback is never
+# reached (``chain_apple_suppliers_high_margin``). We coerce the bare name to
+# the turn's resolved UUID BEFORE execution (and before dedup so the cache key
+# reflects the UUID).
+_UUID_ENTITY_ID_TOOLS: frozenset[str] = frozenset({"get_entity_intelligence", "get_entity_paths"})
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _build_name_to_uuid_map(entities: list[Any], entity_context: Any) -> dict[str, str]:
+    """Map lower-cased entity name / ticker / matched-text → resolved UUID string.
+
+    Built from the turn's S6-resolved ``entities`` plus the request
+    ``entity_context``. Later-added keys win, but all point at a real UUID so a
+    collision is harmless.
+    """
+    out: dict[str, str] = {}
+
+    def _add(name: Any, uuid_val: Any) -> None:
+        if isinstance(name, str) and name.strip() and uuid_val:
+            out[name.strip().lower()] = str(uuid_val)
+
+    for ent in entities or []:
+        _uuid = getattr(ent, "entity_id", None)
+        _add(getattr(ent, "canonical_name", None), _uuid)
+        _add(getattr(ent, "ticker", None), _uuid)
+        _add(getattr(ent, "matched_text", None), _uuid)
+    if entity_context is not None:
+        _uuid = getattr(entity_context, "entity_id", None)
+        _add(getattr(entity_context, "name", None), _uuid)
+        _add(getattr(entity_context, "ticker", None), _uuid)
+    return out
+
+
+def _coerce_entity_ids_to_uuids(
+    tool_calls: list[Any],
+    entities: list[Any],
+    entity_context: Any,
+) -> int:
+    """Rewrite bare-name ``entity_id``/``entity_ids`` args → resolved UUID in-place.
+
+    Only touches tools in ``_UUID_ENTITY_ID_TOOLS`` and only values that are NOT
+    already a UUID and DO match a resolved entity name/ticker. Anything else is
+    left untouched (a genuinely-unknown name still flows through to the normal
+    empty→fallback path). Returns the number of values coerced.
+    """
+    name_map = _build_name_to_uuid_map(entities, entity_context)
+    if not name_map:
+        return 0
+    coerced = 0
+    for tc in tool_calls:
+        if getattr(tc, "name", None) not in _UUID_ENTITY_ID_TOOLS:
+            continue
+        tc_input = getattr(tc, "input", None)
+        if not isinstance(tc_input, dict):
+            continue
+        _v = tc_input.get("entity_id")
+        if isinstance(_v, str) and _v.strip() and not _UUID_RE.match(_v.strip()):
+            _mapped = name_map.get(_v.strip().lower())
+            if _mapped:
+                tc_input["entity_id"] = _mapped
+                coerced += 1
+        _vs = tc_input.get("entity_ids")
+        if isinstance(_vs, list):
+            for _idx, _iv in enumerate(_vs):
+                if isinstance(_iv, str) and _iv.strip() and not _UUID_RE.match(_iv.strip()):
+                    _mapped = name_map.get(_iv.strip().lower())
+                    if _mapped:
+                        _vs[_idx] = _mapped
+                        coerced += 1
+    return coerced
+
+
+# ── D9 (2026-07-06) — retry-once on transient tool failure ───────────────────
+async def _retry_transient_tool_failures(
+    tool_executor: Any,
+    fresh_calls: list[Any],
+    fresh_results: list[Any],
+) -> int:
+    """Re-issue TRANSIENT tool failures EXACTLY ONCE, mutating *fresh_results*.
+
+    A ``TransportErrorMarker`` (upstream unreachable) or a ``None`` result
+    (status="error" — the tool raised) is retryable. An EMPTY list
+    (status="empty" — "no such data exists") is a legitimate answer and is
+    NEVER retried. A retried call is only ADOPTED when the retry genuinely
+    recovered (a non-error, non-transport result); a second failure keeps the
+    original marker so a genuinely-down upstream still fails fast. Returns the
+    number of calls retried (0 when nothing was transient).
+    """
+    retry_positions = [i for i, r in enumerate(fresh_results) if isinstance(r, TransportErrorMarker) or r is None]
+    if not retry_positions:
+        return 0
+    retry_calls = [fresh_calls[i] for i in retry_positions]
+    try:
+        retry_results = await tool_executor.execute_all(retry_calls)
+    except Exception:  # — a failed retry keeps the original error
+        retry_results = []
+    for pos, res in zip(retry_positions, retry_results, strict=False):
+        if not (isinstance(res, TransportErrorMarker) or res is None):
+            fresh_results[pos] = res
+    return len(retry_positions)
+
+
+def _build_all_errored_message(entities: list[Any], ticker_hint: str | None) -> str:
+    """Worded all-tools-errored answer — resolution-miss vs tool-error (D9).
+
+    When the question's entity WAS resolved (``entities`` non-empty) but every
+    tool still errored, the failure is an upstream DATA error, NOT a resolution
+    miss — telling the user "I couldn't find a match for 'AAPL'" is false. We
+    surface a transient-error message anchored on the resolved name. Only when
+    NO entity resolved do we use the resolver-miss string.
+    """
+    if entities:
+        anchor = ", ".join(
+            f"{getattr(e, 'canonical_name', '')}" f"{f' ({e.ticker})' if getattr(e, 'ticker', None) else ''}"
+            for e in entities
+        )
+        return (
+            f"I'm having trouble retrieving data for {anchor} right now — "
+            "the data source returned an error. Please try again in a moment."
+        )
+    if ticker_hint:
+        return (
+            f"I couldn't find a match for '{ticker_hint}'. Please double-check the "
+            "symbol or provide more context (company name, exchange) and I'll try again."
+        )
+    return (
+        "I couldn't find a match for that symbol. Please double-check it or "
+        "provide more context (company name, exchange) and I'll try again."
+    )
+
+
+# ── D-g (2026-07-08) — entity context-bleed guard for refusals/no-data ───────
+#
+# ``tc_relations_msft`` (a Microsoft question) shipped a refusal that named
+# "Five Below" — a stale/wrong entity bled in from context. A refusal or
+# no-data message MUST speak about the entity RESOLVED for the current turn.
+# This guard rebinds a refusal-shaped final answer to the resolved entity when
+# the answer references NONE of the turn's resolved-entity tokens (so it is
+# either generic — which we still improve by naming the entity — or names the
+# WRONG entity, which we correct). It never touches a substantive answer:
+# gated on refusal-shape + a short length + at least one resolved entity.
+#
+# Generic company-name suffixes we do NOT treat as identifying tokens (so a
+# refusal that merely says "this corporation" is not mistaken for a correct
+# reference to "Microsoft Corporation").
+_DG_GENERIC_NAME_WORDS: frozenset[str] = frozenset(
+    {
+        "inc",
+        "inc.",
+        "corp",
+        "corp.",
+        "corporation",
+        "company",
+        "co",
+        "co.",
+        "ltd",
+        "ltd.",
+        "plc",
+        "group",
+        "holdings",
+        "holding",
+        "the",
+        "and",
+        "class",
+    }
+)
+# Refusal / no-data phrasing (superset of the wholesale + false-empty markers,
+# plus the leads of our own canonical refusal templates) used ONLY to decide
+# whether the final answer is refusal-shaped for the rebind gate.
+_DG_REFUSAL_MARKERS: tuple[str, ...] = (
+    "i couldn't find",
+    "i could not find",
+    "i couldn't retrieve",
+    "i could not retrieve",
+    "i wasn't able",
+    "i was not able",
+    "i'm unable",
+    "i am unable",
+    "unable to find",
+    "unable to retrieve",
+    "couldn't find a match",
+    "could not find a match",
+    "no data",
+    "no results",
+    "no records",
+    "not available in retrieved context",
+    "i'm having trouble retrieving",
+    "i won't report",
+    "i will not report",
+    "i can't help with that",
+    "i cannot help with that",
+)
+_DG_REFUSAL_MAX_LEN = 600
+
+
+def _resolved_entity_tokens(entities: list[Any]) -> set[str]:
+    """Lower-cased identifying tokens (name words + ticker) of resolved entities.
+
+    Generic suffixes ("Inc", "Corp", …) and very short words are dropped so the
+    presence check is anchored on the distinctive part of the name (``microsoft``,
+    ``msft``) rather than a word any refusal could contain.
+    """
+    tokens: set[str] = set()
+    for ent in entities or []:
+        ticker = getattr(ent, "ticker", None)
+        if isinstance(ticker, str) and ticker.strip():
+            tokens.add(ticker.strip().lower())
+        name = getattr(ent, "canonical_name", None)
+        if isinstance(name, str):
+            for word in re.split(r"[^0-9a-zA-Z]+", name):
+                wl = word.strip().lower()
+                if len(wl) >= 3 and wl not in _DG_GENERIC_NAME_WORDS:
+                    tokens.add(wl)
+    return tokens
+
+
+def _entity_anchor(entities: list[Any]) -> str:
+    """Human ``Name (TICKER)`` anchor for the resolved entities (D-g)."""
+    parts: list[str] = []
+    for ent in entities or []:
+        name = str(getattr(ent, "canonical_name", "") or "").strip()
+        ticker = getattr(ent, "ticker", None)
+        if not name:
+            continue
+        parts.append(f"{name} ({ticker})" if ticker else name)
+    return ", ".join(parts)
+
+
+def _bind_refusal_to_resolved_entity(answer: str, entities: list[Any]) -> str:
+    """Rebind a refusal-shaped final answer to the turn's RESOLVED entity (D-g).
+
+    No-op unless: an entity resolved this turn, the answer is refusal/no-data
+    shaped AND short, AND the answer references none of the resolved-entity
+    tokens (so it is generic or names the WRONG/stale entity). In that case the
+    answer is replaced with a refusal explicitly anchored on the resolved
+    entity, so a Microsoft question can never surface a "Five Below" refusal.
+    """
+    if not answer or not answer.strip() or not entities:
+        return answer
+    stripped = answer.strip()
+    if len(stripped) > _DG_REFUSAL_MAX_LEN:
+        return answer
+    low = stripped.lower()
+    if not any(marker in low for marker in _DG_REFUSAL_MARKERS):
+        return answer
+    tokens = _resolved_entity_tokens(entities)
+    if tokens and any(tok in low for tok in tokens):
+        # Refusal already speaks about the resolved entity — leave it alone.
+        return answer
+    anchor = _entity_anchor(entities)
+    if not anchor:
+        return answer
+    return (
+        f"I couldn't retrieve the data needed to answer this question about {anchor}. "
+        "I won't report figures I can't verify against the platform's data. Please try "
+        "again in a moment, or narrow the question to a specific metric or time period."
+    )
 
 
 # Chat-eval pack-10 (2026-06-12): tools that answer UNIVERSE / AGGREGATE /
@@ -1999,6 +2866,15 @@ def _check_entity_grounding(
     for item in retrieved_items:
         # The two fields downstream synthesis cites against.
         cm = getattr(item, "citation_meta", None)
+        # BUG-1 (2026-07-01): prediction-market items are TOPIC-matched to the
+        # query (the market question was ILIKE-matched to the user's topic), NOT
+        # entity-scoped to a canonical ticker. Question-entity resolution routinely
+        # mis-scopes such queries (e.g. "odds for Nikki Haley" → "The US"), so no
+        # entity overlap could ever be found and the guard refused a perfectly good
+        # markets answer. Treat any topic-matched polymarket item as grounding: its
+        # presence means the retrieval already matched the user's topic.
+        if getattr(cm, "source_name", None) == "polymarket":
+            return None
         item_ids: set[str] = set()
         if cm is not None:
             item_ids |= _normalise_entity_identifier(getattr(cm, "entity_name", None))
@@ -2336,12 +3212,42 @@ class ChatOrchestratorUseCase:
         # so the per-intent style addendum reflects what the LLM actually
         # asked the tools to fetch (E-1 T-E-1-02).
         intent = QueryIntent.GENERAL
+        # ── What-if / projection FRAMING (2026-07-05) ─────────────────────────
+        # The live agent-era ``infer_intent`` cannot emit REASONING and its
+        # CONTRADICTION regex never matches projection framing, so gating the
+        # disclaimer + numeric relaxation on the intent ENUM missed every
+        # what-if / projection question (they land GENERAL / FINANCIAL_DATA).
+        # We compute a deterministic question-side framing signal ONCE here (it
+        # is a pure property of the immutable user message) and use it at both
+        # gate sites below instead of the enum check.
+        from rag_chat.application.services.intent_inference import (
+            answer_has_projected_figure,
+            question_is_whatif,
+        )
+
+        _question_is_whatif = question_is_whatif(request.message)
         _tool_use_prompt = get_tool_use_system_prompt(
             intent=intent.value,
             today_iso=_today,
             entity_map_section=_entity_map_section,
         )
         system_prompt = tool_executor._registry.to_system_prompt_section() + "\n\n" + _tool_use_prompt
+
+        # EMNLP ablation (evaluation-only): when the registry has been pruned to
+        # a small allowlist, the static tool-use prompt above still references
+        # the removed tools, so tell the planner explicitly which tools exist.
+        # This turns the document-only baseline into a clean comparison rather
+        # than a tool-removal stress test. No-op in production (29 tools).
+        _ablation_tools = sorted(s.name for s in tool_executor._registry.all_specs())
+        if len(_ablation_tools) < 10:
+            system_prompt += (
+                "\n\nTOOL RESTRICTION (evaluation mode): the ONLY tools that exist "
+                "are: " + ", ".join(_ablation_tools) + ". Ignore every other tool "
+                "name mentioned above; those tools do not exist in this "
+                "configuration. If the question cannot be answered with the "
+                "available tools, say so briefly instead of calling an "
+                "unavailable tool."
+            )
 
         # ── 2026-06-26 #6: language-agnostic tool routing ─────────────────────
         # The Spanish variant of an answerable question mis-routed where the
@@ -2408,6 +3314,14 @@ class ChatOrchestratorUseCase:
         # signal). We keep the MAX across iterations so a tool called twice keeps
         # the larger valid range. Keyed by lower-cased tool name.
         _tool_row_counts: dict[str, int] = {}
+        # BUG-2 mechanism 1 (2026-06-30): map (tool_name_lower, row_index) → the
+        # RetrievedItem that produced it, so the post-synthesis citation pass can
+        # normalise ``[tool_name row N]`` provenance tags (the shape the models
+        # actually emit) into ``[<pos>]`` positional markers the OutputProcessor
+        # can assemble into real citations. ``setdefault`` keeps the FIRST call's
+        # rows when a tool is invoked twice (its 0-indexed rows are what the LLM
+        # cites). Keyed by lower-cased tool name to match the LLM's citation casing.
+        _tool_row_items: dict[tuple[str, int], RetrievedItem] = {}
         # FIX-LIVE-Y: skip-final-stream flag (declared at function scope so
         # the late ``if had_tool_calls and not _skip_final_stream`` guard sees
         # it whether or not the inner branch ran). See FIX-LIVE-Y comments
@@ -2487,6 +3401,23 @@ class ChatOrchestratorUseCase:
             """Return ms since the tool loop started — used by every agent_iteration emit."""
             return int((time.monotonic() - _loop_start_monotonic) * 1000.0)
 
+        # DEF-036 (2026-07-04): planner/synthesis model split. The tool-loop
+        # PLANNING turn (``chat_with_tools`` below) uses ``planning_model`` — a
+        # fast parallel-tool-calling model (Qwen3-235B in the live stack) — while
+        # the final ANSWER SYNTHESIS (``stream_chat``) keeps ``completion_model``
+        # (gpt-oss-120b, best grounding discipline). Resolved ONCE here (lazy
+        # ``Settings()`` mirrors the grounding-rewrite lookup); on construction
+        # failure we degrade to ``None`` → the adapter's configured model, which
+        # is byte-identical to the pre-split single-model behaviour. Default of
+        # ``planning_model`` equals ``completion_model`` so an unset
+        # RAG_CHAT_PLANNING_MODEL keeps planning == synthesis.
+        try:
+            from rag_chat.config import Settings as _RagChatSettings
+
+            _planning_model: str | None = _RagChatSettings().planning_model  # type: ignore[call-arg]
+        except Exception:
+            _planning_model = None
+
         # ── E-6: Agent loop ───────────────────────────────────────────────────
         for iteration in range(budget.max_iterations):
             # PLAN-0107: emit per-iteration progress event BEFORE the
@@ -2520,6 +3451,10 @@ class ChatOrchestratorUseCase:
                     tools=tool_defs if tool_defs else None,
                     max_tokens=budget.max_tokens_per_iter,
                     temperature=0.1,
+                    # DEF-036: run the planning turn on the (fast) planner model.
+                    # ``None`` → adapter's configured model (unchanged behaviour).
+                    # Threads through ProviderChain **kwargs → adapter ``model``.
+                    model=_planning_model,
                     # FIX-LIVE-EE (2026-05-25): only iter-0 gets the in-place
                     # transient-retry path. Mid-loop failures (iter > 0) fall
                     # through to FIX-LIVE-V's recovery branch below, which is
@@ -2532,6 +3467,10 @@ class ChatOrchestratorUseCase:
                     # accepts ``thread_id`` as an optional kwarg; current adapters
                     # ignore unknown kwargs via **kwargs forwarding.
                     thread_id=request.thread_id,
+                    # PLAN-0117 W4 (FR-3): forward the authenticated user so the
+                    # leaf usage-log row is per-user-attributable for future
+                    # cost quotas. NULL for system/background call paths.
+                    user_id=request.user_id,
                 )
             except Exception as exc:
                 # FIX-LIVE-V (2026-05-25): mid-loop chat_with_tools failure
@@ -2654,42 +3593,51 @@ class ChatOrchestratorUseCase:
                         direct_text = _scrubbed_direct.strip()
                     else:
                         direct_text = _scrubbed_direct
+                # ── BUG-4 (2026-06-30): route the FINAL answer through the ────
+                # genuinely-incremental synthesis stream on the common tool-using
+                # flow. When tools have already run this turn (``had_tool_calls``)
+                # and the planning turn returns the answer as direct text, the
+                # OLD path burst-emitted a string-split of an already-generated
+                # answer (``_chunk_text_for_streaming``) — NOT incremental, so the
+                # F1 adapter incremental-yield fix never engaged and the answer
+                # "popped in" as one render. We instead DISCARD the planning-turn
+                # prose and fall through to the post-loop ``stream_chat`` synthesis
+                # (Path B) by leaving ``_skip_final_stream`` False and ``full_text``
+                # empty. That path streams tokens the moment the provider emits
+                # them AND emits ``[tool_name row N]`` provenance the citation
+                # normaliser turns into real citations (BUG-2). Trade-off: one
+                # extra synthesis generation on this flow (the discarded planning
+                # prose); justified because it is the only way to get real
+                # provider-incremental streaming + grounded citations on the
+                # common path.
+                if direct_text and had_tool_calls:
+                    log.info(  # type: ignore[no-any-return]
+                        "direct_text_rerouted_to_synthesis_stream",
+                        iteration=iteration,
+                        direct_len=len(direct_text),
+                        provider=provider_name,
+                    )
+                    # Leave _skip_final_stream=False and full_text="" so Path B
+                    # (had_tool_calls and not _skip_final_stream) synthesises and
+                    # streams the grounded answer incrementally.
+                    break
                 if direct_text:
+                    # NO tools ran this turn — a pure parametric answer with no
+                    # tool results to synthesise from. Re-streaming it would cost a
+                    # second full generation for zero grounding/citation benefit,
+                    # so we keep the chunked burst here (frontend smoothing decouples
+                    # paint cadence for this case). Documented residual of BUG-4.
+                    #
                     # PLAN-0102 W4 T-W4-B (BP-621): record the LLM-generation
                     # wall-clock as ``llm_direct_text_generation`` so the
                     # chat-eval harness can compute ``tps_streaming`` for
-                    # direct-text answers. Without this, every "What is X?"
-                    # question hit the ``llm_synthesis_streaming`` floor and
-                    # returned ``tps_streaming=None`` — the streaming-TPS
-                    # gate had no data on ~100% of questions.
-                    #
-                    # The duration is THIS iteration's ``chat_with_tools``
-                    # call (already captured in ``_planning_elapsed_ms``
-                    # above); the local chunk-and-emit loop below is
-                    # microseconds of string splitting, not generation. We
-                    # record for BOTH iter-0 (pure direct-text answer, no
-                    # tools fired) and iter > 0 (FIX-LIVE-Y path: tools
-                    # fired, then a later iteration returned direct text and
-                    # we skip the second-turn stream) — in both cases this
-                    # iteration's planning call IS the generation that
-                    # produced the user-visible text. ``record_once`` so a
-                    # future loop refactor that re-enters this branch can't
-                    # silently double-count.
+                    # direct-text answers. ``record_once`` so a future loop
+                    # refactor that re-enters this branch can't double-count.
                     phases.record_once("llm_direct_text_generation", _planning_elapsed_ms)
                     for _chunk in _chunk_text_for_streaming(direct_text):
                         yield p.emitter.emit_delta(_chunk)
-                    # FIX-LIVE-Y: when iteration > 0 ends with SUBSTANTIVE
-                    # direct text (e.g. after the all-tools-returned-empty
-                    # graceful path), we MUST suppress the second
-                    # final-streaming turn below. Otherwise a multi-iteration
-                    # loop that started with tool_calls and finished with a
-                    # direct text answer would emit the answer TWICE (once
-                    # here via ``emit_token``, once via ``stream_chat`` at
-                    # line ~1206). Gating on ``direct_text`` (not just
-                    # iteration > 0) keeps the historical behaviour where
-                    # iter-N+1 returns empty text+no tool_calls as a signal
-                    # to "synthesise the final answer from messages" via the
-                    # final ``stream_chat`` turn (existing grounding tests).
+                    # Suppress the second final-streaming turn — we already emitted
+                    # the answer here, so Path B would double-emit.
                     _skip_final_stream = True
                 full_text = direct_text
                 # No tool calls on this iteration — nothing to add to messages.
@@ -2809,6 +3757,20 @@ class ChatOrchestratorUseCase:
                     ),
                 }
 
+            # ── D6 (2026-07-06): bare-name entity_id → UUID coercion ──────────
+            # Do this BEFORE the SSE emit + dedup + execution so (a) the frontend
+            # shows the resolved id, (b) the dedup cache key hashes the UUID, and
+            # (c) the S7 intel lookup gets a UUID instead of a bare name that
+            # would miss → status="empty" → false refusal
+            # (``chain_apple_suppliers_high_margin``).
+            _coerced = _coerce_entity_ids_to_uuids(tool_calls, list(entities), entity_context)
+            if _coerced:
+                log.info(  # type: ignore[no-any-return]
+                    "entity_id_coerced_to_uuid",
+                    coerced_count=_coerced,
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+
             # Emit tool_call SSE events before executing so the frontend spinner appears.
             for tc in tool_calls:
                 _safe_input = {k: v for k, v in tc.input.items() if k not in {"query", "text"}}
@@ -2879,6 +3841,30 @@ class ChatOrchestratorUseCase:
             # Execute fresh tool calls concurrently.
             _tool_t0 = time.monotonic()
             _fresh_results = await tool_executor.execute_all(_fresh_calls) if _fresh_calls else []
+            # D9 (2026-07-06): snapshot the FIRST-batch per-tool latencies before
+            # any retry re-invokes the executor (a retry overwrites
+            # ``last_per_tool_latencies_s`` with only the retried subset, which
+            # would mis-align it with ``_fresh_calls`` below).
+            _first_batch_latencies = getattr(tool_executor, "last_per_tool_latencies_s", None)
+            # ── D9 (2026-07-06): retry-once on TRANSIENT tool failure ────────────
+            # A ``TransportErrorMarker`` (upstream unreachable) or a ``None``
+            # result (status="error" — the tool raised) is a RETRYABLE outage.
+            # The agent used to give up after ONE hard error (the trajectory
+            # judges flagged the missing recovery on iter3_tesla_revenue,
+            # iter3_apple_suppliers, iter3_apple_revenue, da_apple_revenue).
+            # Re-issue ONLY the failing calls, exactly ONCE, before the turn
+            # treats them as failed. An EMPTY list (status="empty" — "no such
+            # data exists") is NEVER retried: it is a legitimate answer and a
+            # re-issue only wastes latency. The single bounded extra pass means a
+            # genuinely-down upstream still fails fast (no retry storm).
+            if _fresh_calls:
+                _retried = await _retry_transient_tool_failures(tool_executor, _fresh_calls, _fresh_results)
+                if _retried:
+                    log.info(  # type: ignore[no-any-return]
+                        "tool_transient_failure_retry",
+                        retry_count=_retried,
+                        request_id=str(getattr(audit, "turn_id", "") or ""),
+                    )
             _tool_latency = time.monotonic() - _tool_t0
             cumulative_tool_latency += _tool_latency
             # PLAN-0099 W1-T03: accumulate cumulative tool fan-out time.
@@ -2890,7 +3876,9 @@ class ChatOrchestratorUseCase:
             # _fresh_calls; cached calls get 0.0 (cache hit is near-instant).
             # isinstance guard: MagicMock test doubles return a MagicMock for any
             # attribute access; we must confirm we got a real list before using it.
-            _raw_latencies = getattr(tool_executor, "last_per_tool_latencies_s", None)
+            # D9: prefer the FIRST-batch snapshot (taken before any retry) so a
+            # retry's shorter latency list cannot mis-align the per-tool timings.
+            _raw_latencies = _first_batch_latencies
             _fresh_latencies: list[float] = (
                 _raw_latencies
                 if isinstance(_raw_latencies, list)
@@ -3042,6 +4030,16 @@ class ChatOrchestratorUseCase:
                 _tn = tc.name.lower()
                 if _count > _tool_row_counts.get(_tn, 0):
                     _tool_row_counts[_tn] = _count
+                # BUG-2 mechanism 1: remember which RetrievedItem produced each
+                # 0-indexed row so ``[tool_name row N]`` citations can later be
+                # mapped to the item's prompt position. Only real (non-transport-
+                # error) result lists carry items; ``setdefault`` preserves the
+                # first call's rows for a tool invoked more than once.
+                if not isinstance(_item, TransportErrorMarker):
+                    _row_list = _item if isinstance(_item, list) else ([_item] if _item is not None else [])
+                    for _row_idx, _row_item in enumerate(_row_list):
+                        if _row_item is not None:
+                            _tool_row_items.setdefault((_tn, _row_idx), _row_item)
                 # 2026-06-26 #1/#7: per-query empty-search bookkeeping. Only
                 # ``search_documents`` is tracked — it is the free-text routing
                 # sink. We key on the normalised query so a re-issued or lightly
@@ -3366,17 +4364,15 @@ class ChatOrchestratorUseCase:
                     # symbol. We stream it as a normal answer (token +
                     # final_answer + done) rather than an error event so the
                     # body is never empty.
+                    # D9 (2026-07-06): distinguish a genuine RESOLUTION MISS (the
+                    # symbol never resolved to a known entity — e.g. "ZZZQQQ") from
+                    # a TOOL ERROR on an ALREADY-RESOLVED entity. When the
+                    # question's entity WAS resolved but every tool still errored
+                    # (surviving the D9 retry above), telling the user "I couldn't
+                    # find a match for 'AAPL'" is false (AAPL is valid;
+                    # ``iter3_apple_revenue_precision`` fabricated exactly that).
                     _ticker_hint = _extract_ticker_hint(tool_calls)
-                    if _ticker_hint:
-                        _worded = (
-                            f"I couldn't find a match for '{_ticker_hint}'. Please double-check the "
-                            "symbol or provide more context (company name, exchange) and I'll try again."
-                        )
-                    else:
-                        _worded = (
-                            "I couldn't find a match for that symbol. Please double-check it or "
-                            "provide more context (company name, exchange) and I'll try again."
-                        )
+                    _worded = _build_all_errored_message(list(entities), _ticker_hint)
                     yield p.emitter.emit_token(_worded)
                     yield p.emitter.emit_final_answer(_worded)
                     yield p.emitter.emit_done()
@@ -3769,6 +4765,9 @@ class ChatOrchestratorUseCase:
                             seed=request.seed,
                             # PLAN-0107: forward thread_id for cost-capture (Agent B).
                             thread_id=request.thread_id,
+                            # PLAN-0117 W4 (FR-3): attribute the synthesis leaf
+                            # cost to the authenticated user for future quotas.
+                            user_id=request.user_id,
                             # Note: tools=[] above (Fix #1 + Fix #2 combined) —
                             # the adapter translates the empty list into
                             # tool_choice="none" so the provider unambiguously
@@ -3928,6 +4927,25 @@ class ChatOrchestratorUseCase:
                     delta_chars=_pre_scrub_len - len(full_text),
                 )
 
+        # ── D-f (2026-07-08): runaway decode-loop guard ───────────────────────
+        # ``ripple_nvidia_supplier_health`` shipped a final answer that repeated
+        # "I'll start by identifying…" ~200x (empty analysis, BP-671/672 stub-as-
+        # final class). Collapse the loop to a single occurrence of each repeated
+        # segment BEFORE the plan-only guard below, so the collapsed remnant is
+        # correctly recognised as plan-only narration and converted to a bounded
+        # refusal (rather than shipping a wall of duplicated prose). Idempotent
+        # and a no-op on any non-looping answer.
+        if full_text:
+            _pre_loop = full_text
+            full_text, _looped = _collapse_runaway_repetition(full_text)
+            if _looped:
+                log.warning(  # type: ignore[no-any-return]
+                    "runaway_repetition_collapsed",
+                    pre_len=len(_pre_loop),
+                    post_len=len(full_text),
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+
         # ── 2026-06-12 root-cause audit Theme D: plan-only synthesis guard ────
         # ``chain_nvda_competitor_growth_rank`` shipped a future-tense PLAN
         # ("I'll start by… **Step 1**… I'll search… Let me first…") as the final
@@ -3963,6 +4981,13 @@ class ChatOrchestratorUseCase:
                     temperature=0.0,
                     tools=[],
                     seed=request.seed,
+                    # PLAN-0117 (attribution): bump the per-thread total + stamp
+                    # the user so degraded-synthesis salvage spend is not dropped
+                    # from chat_threads.estimated_cost_usd / per-user quota.
+                    thread_id=request.thread_id,
+                    user_id=request.user_id,
+                    # Distinguish salvage spend from the real synthesis turn.
+                    call_site="degraded_synthesis",
                 ):
                     _reprompted += _chunk
             except Exception as exc:  # — degrade gracefully, never crash the turn
@@ -4110,6 +5135,21 @@ class ChatOrchestratorUseCase:
         # that gated the completion-cache write (F-LIVE-008: never cache a
         # validator-rejected answer; it poisons the deterministic key for 24h).
         if had_tool_calls and full_text.strip() and grounded:
+            # BUG-2 (2026-07-01): the live model wraps its ``[tool_name row N]``
+            # provenance tags in full-width / CJK brackets (``【search_events row
+            # 1】``). Every citation regex — including the numeric validator's
+            # grounding fast-path (``_has_grounding_citation``) — is anchored on
+            # ASCII brackets, so a CJK-bracketed citation was invisible: a
+            # genuinely-cited number looked unsupported and a spurious rewrite
+            # fired that ALSO dropped the citations. Normalise the brackets to
+            # ASCII ONCE here, before grounding, so the fast-path recognises the
+            # tag (no spurious rewrite) AND the later normalize_tool_row_citations
+            # promotes it to a real ``[N]`` citation.
+            from rag_chat.application.services.numeric_grounding import (
+                normalize_citation_brackets,
+            )
+
+            full_text = normalize_citation_brackets(full_text)
             # RC-1: resolve the optional repair-rewrite model override. Lazy
             # ``Settings()`` mirrors the existing grounding-timeout lookup; a
             # construction failure (missing env) degrades to None → default
@@ -4120,11 +5160,30 @@ class ChatOrchestratorUseCase:
                 _grounding_rewrite_model = _RagChatSettings().grounding_rewrite_model  # type: ignore[call-arg]
             except Exception:
                 _grounding_rewrite_model = None
+            # 2026-07-09 Area 2 P4: build the fundamentals-family value pool from the
+            # rows returned by ANY fundamentals-family tool this turn so the phantom
+            # gate can ALIAS a ``[query_fundamentals row N]`` tag onto its sibling
+            # ``get_fundamentals_history[_batch]`` tool that actually ran and returned
+            # the cited figure. Filter ``_tool_row_items`` (keyed by (tool_name, row))
+            # to the family; an empty pool (no family tool ran / empty result) leaves a
+            # fabricated citation phantom, preserving the anti-fabrication guarantee.
+            from rag_chat.application.services.numeric_grounding import (
+                _FUNDAMENTALS_FAMILY_TOOLS as _FUND_FAMILY,
+            )
+            from rag_chat.application.services.numeric_grounding import (
+                fundamentals_family_value_pool as _fund_pool_fn,
+            )
+
+            _fund_family_rows = [
+                _it for (_tn, _row), _it in _tool_row_items.items() if _tn in _FUND_FAMILY and _it is not None
+            ]
+            _fundamentals_value_pool = _fund_pool_fn(_fund_family_rows) if _fund_family_rows else set()
             async with phase("grounding_validation", phases):
                 full_text, grounding_passed = await self._run_combined_grounding_validation(
                     p=p,
                     response=full_text,
                     tool_items=non_none_items,
+                    fundamentals_value_pool=_fundamentals_value_pool,
                     resolved_entities=list(entities),
                     messages=messages,
                     budget=budget,
@@ -4148,6 +5207,29 @@ class ChatOrchestratorUseCase:
                     # RC-1: configurable repair-rewrite model (None → default
                     # completion model, unchanged behaviour).
                     rewrite_model=_grounding_rewrite_model,
+                    # D1 (2026-07-06): tell the grounding pass a real write
+                    # action succeeded this turn (``create_alert`` ran AND a
+                    # pending_action confirmation was emitted) so the empty-pool
+                    # numeric gate does not clobber the valid confirmation — an
+                    # action tool contributes 0 groundable rows by construction.
+                    write_action_succeeded=(_write_action_ran and _pending_action_emitted),
+                    # PLAN-0117 (attribution): thread the identity down so the
+                    # grounding-repair rewrite's leaf cost bumps the per-thread
+                    # total + stamps the user (per-user quota, PRD-0118).
+                    thread_id=request.thread_id,
+                    user_id=request.user_id,
+                    # Point 2 Stage 2 — relax the numeric gate for analytical /
+                    # hypothetical turns. Gated on the deterministic what-if
+                    # FRAMING signal (question_is_whatif), NOT the intent enum:
+                    # the live infer_intent cannot emit REASONING and its
+                    # CONTRADICTION regex never matches projection framing, so the
+                    # old enum check missed every projection. CONTRADICTION is kept
+                    # (cheap, and bear/bull-case turns are genuinely analytical).
+                    # On a relaxed turn the Stage-1 gate downgrades ONLY a
+                    # FULLY-HEDGED-SENTENCE number (a projection / estimate), never
+                    # a bare factual assertion — the fabrication guarantee is intact
+                    # for factual lookups.
+                    analytical_intent=_question_is_whatif or intent is QueryIntent.CONTRADICTION,
                 )
         elif not grounded:
             # BP-605: never cache a refusal answer — its content is a
@@ -4167,7 +5249,15 @@ class ChatOrchestratorUseCase:
         # citation / empty pool / plan-only) — those fire precisely because the
         # data was NOT usable; this guard is gated on ``non_none_items`` being
         # non-empty AND ``grounded`` still True.
-        if grounded and non_none_items and _is_wholesale_refusal(full_text):
+        # D-c (2026-07-08): the same fail-open also covers the case where the
+        # composition MISREAD a non-empty serialized tool payload as empty and
+        # asserted "no data / no link / empty" (ripple_tsmc, cmp_tsmc_intel,
+        # ripple_aapl, iter3_msft) — the tool trace shows status:ok items>=1.
+        # ``_falsely_claims_empty_result`` recognises that phrasing; gated on the
+        # SAME ``non_none_items`` non-empty + ``grounded`` conditions so a genuine
+        # empty-pool refusal (no retrieved items) is never rewritten.
+        _misread_empty = _is_wholesale_refusal(full_text) or _falsely_claims_empty_result(full_text)
+        if grounded and non_none_items and _misread_empty:
             log.warning(  # type: ignore[no-any-return]
                 "hallucinated_refusal_failed_open",
                 retrieved_item_count=len(non_none_items),
@@ -4237,6 +5327,19 @@ class ChatOrchestratorUseCase:
                     post_len=len(full_text),
                 )
 
+        # ── D4 (2026-07-06): strip gpt-oss commentary-channel leaks ────────────
+        # Runs on EVERY delivered answer (not just the grounded-path branch that
+        # normalises full-width brackets earlier) so ``【commentary row 0】`` and
+        # ``[**tool_name row N**]`` artifacts never reach the user. Idempotent.
+        if full_text:
+            _pre_chan = full_text
+            full_text = _strip_commentary_channel_leak(full_text)
+            if full_text != _pre_chan:
+                log.info(  # type: ignore[no-any-return]
+                    "commentary_channel_leak_stripped",
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+
         # ── C2: sanitise leaked [unverified] tags + verification banners ───────
         # The grounding validator marks unpinned numbers/names with a literal
         # ``[unverified]`` token and appends a ``⚠ Some … could not be verified``
@@ -4245,12 +5348,49 @@ class ChatOrchestratorUseCase:
         # them into a single neutral disclaimer before the answer is finalised.
         if full_text:
             _pre_sanitize = full_text
-            full_text = _sanitize_unverified_markers(full_text)
+            # Improvement #1 (2026-07-06): suppress the blanket "some figures …
+            # could not be matched to a retrieved source" caveat on a GROUNDED
+            # answer. ``grounding_passed`` is the AND of numeric + entity
+            # grounding — it is True exactly when NO material unsupported numbers
+            # remain after the derivation/framing checks (a sibling tightened
+            # those caps in numeric_grounding.py). Only then do we withhold the
+            # caveat; a leaked banner/inline tag is still scrubbed either way.
+            #
+            # Track-3 (2026-07-08) — TIGHTEN the append gate. The banner was still
+            # appearing on FULLY-GROUNDED answers when the numeric validator
+            # over-flagged (``grounding_passed`` False) but every figure is in
+            # fact within ±200 chars of a real ``[tool row N]`` / ``[tool]``
+            # citation. ``_answer_has_full_citation_coverage`` is the exact
+            # last-line safety-net already trusted to suppress the validator
+            # banner elsewhere (both grounding methods call it): reuse it here so
+            # the caveat fires ONLY when grounding failed AND the answer is not
+            # demonstrably fully cited — i.e. genuinely material unsupported
+            # numbers remain. A leaked banner/inline tag is still scrubbed either
+            # way; we are only withholding the redundant trailing caveat.
+            _append_caveat = not (grounding_passed or _answer_has_bracket_citation_coverage(full_text))
+            full_text = _sanitize_unverified_markers(full_text, append_disclaimer=_append_caveat)
             if full_text != _pre_sanitize:
                 log.info(  # type: ignore[no-any-return]
                     "unverified_markers_sanitized",
                     request_id=str(getattr(audit, "turn_id", "") or ""),
                 )
+
+        # ── Point 2 (owner-requested): NOT-FINANCIAL-ADVICE disclaimer ────────
+        # Append the canonical, model-independent disclaimer to ANALYTICAL /
+        # HYPOTHETICAL / PROJECTION turns for liability coverage as we unlock
+        # what-if / projection analysis. Gated on the deterministic FRAMING
+        # signal — NOT the intent enum, which the live infer_intent cannot set to
+        # REASONING and whose CONTRADICTION regex never matches projection framing
+        # (so the old enum check missed every what-if). Fires when EITHER the
+        # QUESTION is a what-if / projection ("assuming X grows 25%, how might FY
+        # revenue evolve") OR the ANSWER states a hedged / projected figure
+        # ("could reach ~$X"). A simple factual lookup ("what is NVDA's P/E") is
+        # neither, so it never gets the disclaimer. Deterministic + deduped
+        # (``_append_advice_disclaimer`` is idempotent), placed after the answer
+        # and after any grounding note. The stub detector discounts it so it
+        # cannot inflate a leaked planning stub past the size gate.
+        if full_text and (_question_is_whatif or answer_has_projected_figure(full_text)):
+            full_text = _append_advice_disclaimer(full_text)
 
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
         # Scrub entity/article refs in the answer that were NOT grounded in any
@@ -4268,6 +5408,74 @@ class ChatOrchestratorUseCase:
         # and return []), so the citation resolver must use the identical
         # fallback or every marker resolves against the wrong list.
         prompt_items = reranked or non_none_items
+
+        # ── BUG-2 mechanism 1: promote [tool_name row N] tags to citations ─────
+        # The synthesis prompt tells the model to cite provenance as
+        # ``[tool_name row N]`` and the live models emit that shape almost
+        # exclusively — but ``process_output`` only assembles citations from the
+        # plain ``[N]`` positional form, so those tags were dropped and the
+        # answer shipped with ``citations:[]`` (the 2026-06-30 investigation). We
+        # rewrite each tag that maps to a genuine retrieved item into its 1-based
+        # prompt position BEFORE assembly (identity match against ``prompt_items``
+        # so reranker reordering is honoured). Tags with no backing item are left
+        # for the out-of-range / phantom strip guards below. Runs AFTER grounding
+        # validation (which relies on the original ``[tool_name row N]`` shape for
+        # phantom detection), so both the streamed answer AND a grounding-rewrite
+        # answer keep their source links.
+        if _tool_row_items and prompt_items:
+            from rag_chat.application.services.numeric_grounding import (
+                normalize_tool_row_citations,
+                resolve_tool_name,
+            )
+
+            # Match by object identity first (fast, exact); fall back to
+            # ``item_id`` so a reranker that returns reordered COPIES of the
+            # items still resolves correctly.
+            _pos_by_obj_id: dict[int, int] = {}
+            _pos_by_item_id: dict[str, int] = {}
+            for _i, _it in enumerate(prompt_items):
+                _pos_by_obj_id[id(_it)] = _i + 1
+                _iid = getattr(_it, "item_id", None)
+                if _iid:
+                    _pos_by_item_id.setdefault(str(_iid), _i + 1)
+
+            def _resolve_row_position(tool_name: str, row_index: int) -> int | None:
+                _it = _tool_row_items.get((tool_name, row_index))
+                if _it is None:
+                    return None
+                _pos = _pos_by_obj_id.get(id(_it))
+                if _pos is not None:
+                    return _pos
+                _iid2 = getattr(_it, "item_id", None)
+                return _pos_by_item_id.get(str(_iid2)) if _iid2 else None
+
+            # 2026-07-01 marker-robustness: expose per-tool row COUNTS so
+            # normalize_tool_row_citations can CLAMP an out-of-range
+            # ``[tool row N]`` (a called tool cited past its last row) to the
+            # last valid row instead of stripping the citation. Returns None for
+            # a never-called tool → the phantom guard still refuses it.
+            def _resolve_row_count(tool_name: str) -> int | None:
+                return _tool_row_counts.get(tool_name)
+
+            # 2026-07-08: resolve an INFORMAL tool name in a ``[tool row N]`` tag
+            # (dropped ``get_`` prefix / ``functions.`` namespace / spelling typo)
+            # back to the REAL called tool so the position/count resolvers — which
+            # key on the real name — can promote it to a numbered citation instead
+            # of leaving it for the strip guards to delete. Resolves only against
+            # tools that ACTUALLY ran this turn; a fabricated name → None.
+            def _resolve_tool_name(tool_name: str) -> str | None:
+                return resolve_tool_name(tool_name, _executed_tool_names)
+
+            _pre_norm = full_text
+            full_text = normalize_tool_row_citations(
+                full_text,
+                _resolve_row_position,
+                _resolve_row_count,
+                _resolve_tool_name,
+            )
+            if full_text != _pre_norm:
+                log.info("tool_row_citations_normalized", request_id=str(getattr(audit, "turn_id", "") or ""))  # type: ignore[no-any-return]
+
         answer, citations = p.process_output(full_text, prompt_items)
 
         # ── 2026-06-26 #3: strip out-of-range [tool row N] citations ───────────
@@ -4295,6 +5503,17 @@ class ChatOrchestratorUseCase:
                 )
                 for _tag in _oor_tags:
                     answer = answer.replace(_tag, "")
+
+        # ── NEW-3 refinement: deterministic filing-citation backfill ──────────
+        # When a retrieved sec_edgar filing's material figure is quoted verbatim
+        # but the model omitted the provenance marker, emit its citation anyway
+        # (was flaky 1-vs-0 run-to-run). Runs AFTER the marker-driven assembly so
+        # genuine model markers win, and BEFORE the orphan-scrub + dense renumber
+        # so the appended [pos] marker is validated and relabelled with the rest.
+        # Hot-toggle via RAG_CHAT_FILING_CITATION_BACKFILL (per-call env read,
+        # same pattern as RAG_COMPLETION_CACHE_DISABLED / suggestions).
+        if prompt_items and os.environ.get("RAG_CHAT_FILING_CITATION_BACKFILL", "true").strip().lower() != "false":
+            answer, citations = _backfill_filing_citations(answer, citations, prompt_items)
 
         # PLAN-0093 E-5 T-E-5-01: strip orphan [N\d+] citation markers that
         # point past the retrieved-item count. The LLM occasionally emits
@@ -4326,6 +5545,25 @@ class ChatOrchestratorUseCase:
             if _orphans:
                 log.warning("citation_marker_orphan", count=_orphans, retrieved=len(reranked))  # type: ignore[no-any-return]
 
+        # ── D-a (2026-07-08): phantom / non-registered citation-tag hard-veto ──
+        # FINAL gate — runs AFTER dense renumber has made the only legitimate
+        # bracket citations plain ``[1]..[K]`` mapping 1:1 to ``citations``.
+        # Strips any bracket token that is provenance/citation-SHAPED but is not
+        # a registered numbered marker: a ``[c9]`` payload id passed through from
+        # ``get_morning_brief``, a ``[REDACTED]`` placeholder, a ``[tool row N]``
+        # tag misattributed to a tool that returned 0 rows / was never resolved
+        # (incl. the narrow-no-break-space ``row 7`` variant the ASCII regexes
+        # miss), and any stray plain ``[n]`` with no backing citation. Genuine
+        # non-citation brackets (markdown labels, years, notes) are preserved.
+        _valid_refs = {int(getattr(c, "ref", 0)) for c in citations}
+        answer, _phantom_tags = _strip_non_registered_citation_tags(answer, _valid_refs)
+        if _phantom_tags:
+            log.warning(  # type: ignore[no-any-return]
+                "non_registered_citation_tags_stripped",
+                count=_phantom_tags,
+                request_id=str(getattr(audit, "turn_id", "") or ""),
+            )
+
         # ── 2026-06-26 #5: never emit a blank/whitespace final answer ─────────
         # safety_pii_executive_home_address returned an empty string — a blank
         # answer is the WRONG way to refuse (the refusal judge cannot credit
@@ -4346,6 +5584,24 @@ class ChatOrchestratorUseCase:
                 "ground in the platform's data. If you have a market- or company-"
                 "related question I can help with, please rephrase it."
             )
+
+        # ── D-g (2026-07-08): bind refusal/no-data answers to the resolved entity ─
+        # A refusal that names the WRONG/stale entity (``tc_relations_msft`` said
+        # "Five Below" on a Microsoft question) is a trust failure. When the final
+        # answer is refusal-shaped but references none of THIS turn's resolved
+        # entities, rebind it to a refusal anchored on the resolved entity. A
+        # refusal carries no legitimate sources, so any surviving citations are
+        # cleared alongside the rewrite. No-op on a substantive answer or when no
+        # entity resolved.
+        _rebound = _bind_refusal_to_resolved_entity(answer, list(entities))
+        if _rebound != answer:
+            log.warning(  # type: ignore[no-any-return]
+                "refusal_rebound_to_resolved_entity",
+                entities=[str(getattr(e, "canonical_name", "") or "") for e in entities],
+                request_id=str(getattr(audit, "turn_id", "") or ""),
+            )
+            answer = _rebound
+            citations = []
 
         # E-12: stash the final answer on the audit object so execute_streaming's
         # finally block can pass it to finalize(). Using a private attribute to avoid
@@ -4553,6 +5809,11 @@ class ChatOrchestratorUseCase:
         run_entity_pass: bool = True,
         seed: int | None = None,
         rewrite_model: str | None = None,
+        thread_id: UUID | None = None,
+        user_id: UUID | None = None,
+        analytical_intent: bool = False,
+        write_action_succeeded: bool = False,
+        fundamentals_value_pool: set[float] | None = None,
     ) -> tuple[str, bool]:
         """RC-1 — single combined numeric + entity-name grounding pass.
 
@@ -4601,10 +5862,13 @@ class ChatOrchestratorUseCase:
         from rag_chat.application.services.numeric_grounding import (
             FieldKind,
             NumericGroundingValidator,
-            find_phantom_tool_citations,
             flatten_tool_values_count,
+            material_unsupported_numbers,
+            numeric_grounding_effectively_passed,
+            partition_phantom_tool_citations,
             pin_numbers_to_tool_values,
             response_has_numeric_claims,
+            strip_tool_row_tags,
         )
 
         _called = list(called_tool_names or [])
@@ -4613,17 +5877,49 @@ class ChatOrchestratorUseCase:
         # ── NUMERIC deterministic gates (PRESERVED EXACTLY) ───────────────────
         # Phantom-citation + empty-pool refusals fire BEFORE any rewrite and
         # never spend an LLM call. Identical to the numeric pass.
-        _phantom = find_phantom_tool_citations(response, _called) if _have_called_set else set()
-        if _phantom:
-            log.warning(  # type: ignore[no-any-return]
-                "numeric_grounding_phantom_citation_refused",
-                phantom_tools=sorted(_phantom),
-                called_tools=sorted({t.lower() for t in _called if t}),
+        # ── P0 (2026-07-01) phantom-citation gate — benign prose no longer refuses ─
+        # A phantom ``[name row N]`` tag is a GENUINE fabricated citation only when
+        # it abuts a MATERIAL numeric claim (the AMD ``$34.6B`` class) → refuse.
+        # A phantom tag on pure prose (the live model tagging its own editorial
+        # ``[commentary row 1]`` on a news answer) is benign → strip the tag, keep
+        # the answer. This restores the previously-passing "latest news on NVIDIA"
+        # flow while preserving the numeric-fabrication guarantee: any fabricated
+        # tool-citation attached to a real figure still refuses the whole answer.
+        if _have_called_set:
+            _phantom_material, _phantom_benign = partition_phantom_tool_citations(
+                response, _called, fundamentals_value_pool=fundamentals_value_pool
             )
-            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
-            return _PHANTOM_CITATION_REFUSAL, False
+            if _phantom_material:
+                log.warning(  # type: ignore[no-any-return]
+                    "numeric_grounding_phantom_citation_refused",
+                    phantom_tools=sorted(_phantom_material),
+                    called_tools=sorted({t.lower() for t in _called if t}),
+                )
+                rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+                return _PHANTOM_CITATION_REFUSAL, False
+            if _phantom_benign:
+                # Strip the benign prose labels so they never leak to the user,
+                # but do NOT refuse — the answer's real content is intact.
+                log.info(  # type: ignore[no-any-return]
+                    "phantom_prose_label_stripped",
+                    stripped_tags=_phantom_benign,
+                )
+                response = strip_tool_row_tags(response, _phantom_benign)
 
-        if response_has_numeric_claims(response) and flatten_tool_values_count(tool_items) == 0:
+        # D1 (2026-07-06): exempt a SUCCESSFUL write-action from the empty-pool
+        # gate. A write action (e.g. ``create_alert``) that returned status="ok"
+        # and emitted a ``pending_action`` legitimately produces a numeric
+        # confirmation ("alert when NVDA drops below $400") but contributes ZERO
+        # groundable RetrievedItems — an ACTION tool has no rows. Without this
+        # carve-out the gate clobbers the valid confirmation with
+        # ``_EMPTY_POOL_REFUSAL`` (the ``tc_create_alert_nvda_below`` FAIL). The
+        # anti-fabrication guarantee is unchanged for read answers: this only
+        # relaxes when the caller proved a real write action succeeded.
+        if (
+            response_has_numeric_claims(response)
+            and flatten_tool_values_count(tool_items) == 0
+            and not write_action_succeeded
+        ):
             log.warning(  # type: ignore[no-any-return]
                 "numeric_grounding_empty_pool_refused",
                 called_tools=sorted({t.lower() for t in _called if t}),
@@ -4670,9 +5966,39 @@ class ChatOrchestratorUseCase:
             entity_first_passed = entity_first.passed
             entity_unsupported = entity_first.unsupported
 
+        # ── BUG-2 mechanism 2: skip the numeric rewrite on QUALITATIVE answers ─
+        # The numeric validator flags incidental prose numbers (dates, counts,
+        # list ordinals, years) as "unsupported" on events / claims /
+        # relationship answers that carry NO material financial figure. Firing a
+        # rewrite for those replaced a good streamed answer with ``[row N]``-style
+        # text and DROPPED its citations (reason=numeric_grounding_failed, seen on
+        # 3 of 4 recent answers — 2026-06-30 investigation). ``material`` is the
+        # subset of unsupported numbers that are genuine financial claims
+        # (revenue/EPS/price/market-cap/ratio/return/shares/headcount, or a large
+        # unclassified magnitude). We treat the numeric pass as effectively
+        # passed when there is NO material claim — preserving the grounding
+        # guarantee for the AMD ``$34.6B`` fabrication class (which IS material
+        # and still triggers the rewrite below).
+        # Point 2 Stage 2 — thread ``analytical_intent`` into the numeric gate so
+        # the Stage 1 relaxation activates on what-if / analytical / contradiction
+        # turns. The relaxation only downgrades a number whose FULL SENTENCE is
+        # hedged (Stage 1's design) — it NEVER exempts a bare factual assertion, so
+        # the fabrication guarantee is preserved.
+        _material_first = material_unsupported_numbers(numeric_first, analytical_intent=analytical_intent)
+        _numeric_ok_first = numeric_grounding_effectively_passed(numeric_first, analytical_intent=analytical_intent)
+
         # ── STRICTER TRIGGER: both classes grounded → no rewrite, no LLM ──────
-        if numeric_first.passed and entity_first_passed:
-            rag_grounding_validation_total.labels(result="passed").inc()
+        if _numeric_ok_first and entity_first_passed:
+            if numeric_first.passed:
+                rag_grounding_validation_total.labels(result="passed").inc()
+            else:
+                # Numeric "failed" but only on incidental (non-material) numbers.
+                log.info(  # type: ignore[no-any-return]
+                    "numeric_grounding_skipped_no_material_claims",
+                    unsupported_total=len(numeric_first.unsupported),
+                    material_total=len(_material_first),
+                )
+                rag_grounding_validation_total.labels(result="passed_qualitative").inc()
             return response, True
 
         # ── C1 #2: fabricated multi-row series → honest fallback (fail-safe) ──
@@ -4687,7 +6013,7 @@ class ChatOrchestratorUseCase:
         # detect_fabricated_series) so a coherent answer is never mangled.
         from rag_chat.application.services.numeric_grounding import detect_fabricated_series
 
-        if not numeric_first.passed and detect_fabricated_series(response, tool_items):
+        if not _numeric_ok_first and detect_fabricated_series(response, tool_items):
             _question = ""
             for _m in reversed(messages):
                 if _m.get("role") == "user" and isinstance(_m.get("content"), str):
@@ -4733,10 +6059,15 @@ class ChatOrchestratorUseCase:
         # pass, including the INTERNAL_VALIDATION framing that stops the LLM
         # echoing tokens back as a refusal).
         prompt_sections: list[str] = []
-        if not numeric_first.passed:
+        # BUG-2 mechanism 2: only ask the LLM to re-ground MATERIAL numbers. When
+        # we reached the rewrite because the ENTITY pass failed while the numeric
+        # failures were purely incidental (dates/counts/years), listing those
+        # would push the model to mangle correct prose. ``_material_first`` is
+        # empty in that case, so the numeric section is skipped entirely.
+        if not _numeric_ok_first:
             bullets = "\n".join(
                 f"- {u.snippet} ({u.field_kind.value}, closest tool value: {u.closest_tool_value})"
-                for u in numeric_first.unsupported
+                for u in _material_first
             )
             entity_block = ""
             if entity_context is not None:
@@ -4791,17 +6122,54 @@ class ChatOrchestratorUseCase:
             return has_prose and not has_tool_calls
 
         filtered_history = [m for m in messages if not _is_prose_assistant(m)]
+        # Point 2 Stage 2 — false-positive self-check preamble. The deterministic
+        # validators are conservative and over-flag: a projection, a hedged
+        # estimate ("roughly ~$15B"), a value derived by arithmetic from cited
+        # figures, or explicit reasoning are all LEGITIMATE and are NOT fabricated
+        # facts. Ask the rewrite model to judge this FIRST. On a false positive it
+        # emits the bare sentinel and we keep the (already-fine) original — a
+        # ~0.8s short-output resolve on gpt-oss-20b instead of a ~15s full rewrite.
+        self_check_preamble = (
+            "You are reviewing your previous answer for numeric/entity grounding.\n"
+            "FIRST, judge whether the flagged items below are GENUINELY fabricated "
+            "facts, or instead LEGITIMATE content: your own explicit reasoning, a "
+            "clearly-labelled projection or scenario, a hedged estimate (e.g. "
+            '"roughly", "approximately", "~"), or a value you DERIVED by arithmetic '
+            "from figures that ARE present in the tool results.\n"
+            f"- If EVERY flagged item is legitimate (a false positive), output EXACTLY "
+            f"`{_FALSE_POSITIVE_SENTINEL}` and NOTHING else — do not explain, do not "
+            "rewrite.\n"
+            "- Otherwise, rewrite the answer with the numbers and names properly "
+            "grounded, following the instructions below.\n\n"
+        )
         rewrite_messages = [
             *filtered_history,
             {
                 "role": "user",
                 "content": (
+                    f"{self_check_preamble}"
                     f"{combined_instructions}\n\n"
-                    "Provide a fresh response that answers the question directly using only "
-                    "values and entities supported by the tool results above. Do NOT "
-                    "acknowledge a prior draft; the user only sees this response. Do NOT "
-                    'begin with phrases such as "You\'re right", "Let me re-examine", '
-                    '"I need to correct", or any apology.'
+                    # 2026-07-05 (Qwen3-Next defeatist fix): the rewrite is a PATCH,
+                    # not a re-answer. The prior wording ("Provide a fresh response
+                    # that answers the question directly using ONLY supported values")
+                    # invited Qwen3-Next to conclude it could not answer at all and
+                    # emit a bare "I cannot calculate this from the retrieved data"
+                    # refusal, which the defeatist guard then discarded — serving the
+                    # ungrounded original with a caveat. Instruct the model to KEEP
+                    # the grounded remainder and only drop/mark the flagged items, and
+                    # to NEVER return a bare refusal.
+                    "Return a CORRECTED version of your answer. KEEP every part that IS "
+                    "supported by the tool results above (including its citations); only "
+                    "REMOVE or explicitly mark the specific flagged figures/names that are "
+                    "not supported — drop them, or annotate them inline as [unverified] "
+                    "(e.g. '(not in retrieved data)'). Preserve the grounded content and "
+                    "answer with whatever the tool results DO support. NEVER replace the "
+                    'answer with a bare refusal such as "I cannot calculate this", "I\'m '
+                    'unable to…", or "the data does not allow…"; if a single value is '
+                    "unsupported, state the grounded facts you DO have and flag only that "
+                    "value. Do NOT acknowledge a prior draft; the user only sees this "
+                    'response. Do NOT begin with phrases such as "You\'re right", "Let me '
+                    're-examine", "I need to correct", or any apology.'
                 ),
             },
         ]
@@ -4832,6 +6200,13 @@ class ChatOrchestratorUseCase:
                 # RC-1: route the single repair completion to the override model
                 # when configured; None preserves the default completion model.
                 model=rewrite_model,
+                # PLAN-0117 (attribution): bump the per-thread total + stamp the
+                # user so grounding-repair rewrite spend is not dropped from
+                # chat_threads.estimated_cost_usd / per-user quota, and tag it
+                # so repair spend is separable from synthesis in the ledger.
+                thread_id=thread_id,
+                user_id=user_id,
+                call_site="grounding_rewrite",
             ):
                 buf += chunk
             return buf
@@ -4851,6 +6226,30 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
+        # Strip a stray trailing FALSE_POSITIVE token some rewrite models append
+        # to a genuine rewrite body (Qwen3-Next), so it can't leak into the
+        # answer. A bare/near-bare sentinel is preserved for the check below.
+        rewritten = _strip_trailing_false_positive_sentinel(rewritten)
+
+        # ── Point 2 Stage 2: false-positive self-check sentinel ───────────────
+        # The rewrite model judged the flagged numbers/names to be legitimate
+        # reasoning / projections / hedged estimates / derived values rather than
+        # fabricated facts, and emitted the bare ``FALSE_POSITIVE`` sentinel. The
+        # ORIGINAL answer is fine → return it unchanged with grounding_passed=True.
+        # SAFETY: ``_is_false_positive_sentinel`` only matches a bare/near-bare
+        # token — a full rewrite body that merely mentions the token is treated as
+        # a rewrite, never discarded.
+        if _is_false_positive_sentinel(rewritten):
+            log.info(  # type: ignore[no-any-return]
+                "grounding_rewrite_false_positive_skipped",
+                original_len=len(response),
+                material_unsupported=len(_material_first),
+                entity_unsupported=len(entity_unsupported),
+            )
+            rag_grounding_false_positive_skip_total.inc()
+            rag_grounding_validation_total.labels(result="false_positive_skip").inc()
+            return response, True
+
         # ── Post-rewrite guards (ALL PRESERVED from both passes) ──────────────
         # 1. Tool-call / planning stub (BP-674/675) — keep the grounded original.
         if _is_tool_call_stub(rewritten):
@@ -4863,9 +6262,35 @@ class ChatOrchestratorUseCase:
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
         # 2. Defeatist short rewrite (BP-648) — keep the original.
+        # BP-648's purpose: never let a rewrite REPLACE a good grounded answer
+        # with a bare "I cannot…" refusal. But with Qwen3-Next as the rewrite
+        # model, a LEGITIMATE correction (dropping / flagging a couple of
+        # ungrounded numbers while keeping the grounded remainder) can open with
+        # a hedge and still be shorter than the original — the old
+        # "refusal-prefixed AND shorter" test discarded those corrections too,
+        # then served the UNGROUNDED original with a blanket caveat (2026-07-05).
+        # Refinement: a rewrite is defeatist ONLY when it is refusal-prefixed AND
+        # NOT substantive — i.e. it dropped below a real-content floor. A bare
+        # "I cannot answer that." (~20 chars) is still rejected (BP-648 intact);
+        # a refusal-prefixed but content-rich correction flows on to
+        # re-validation (which grounds it or banners residual numbers).
         _r_strip = rewritten.lstrip()
-        _refusal_prefixes = ("I cannot", "I am unable", "I'm unable", "I can't")
-        if any(_r_strip.startswith(pref) for pref in _refusal_prefixes) and len(rewritten) < len(response):
+        _refusal_prefixes = (
+            "I cannot",
+            "I am unable",
+            "I'm unable",
+            "I can't",
+            "I could not",
+            "I couldn't",
+        )
+        # Substantive-content floor: a genuine defeatist refusal is short (a
+        # sentence or two of "I can't do this"); a real correction retains the
+        # grounded body. Keep BP-648 conservative — only reject when the rewrite
+        # is BOTH refusal-prefixed AND below the floor AND shorter than the
+        # original it would replace.
+        _is_refusal_prefixed = any(_r_strip.startswith(pref) for pref in _refusal_prefixes)
+        _is_substantive_correction = len(_r_strip) >= _DEFEATIST_REWRITE_MIN_SUBSTANTIVE_CHARS
+        if _is_refusal_prefixed and len(rewritten) < len(response) and not _is_substantive_correction:
             log.warning(  # type: ignore[no-any-return]
                 "combined_grounding_rewrite_rejected_defeatist",
                 rewrite_len=len(rewritten),
@@ -4884,15 +6309,22 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
-        # 4. Phantom-citation re-check on the rewrite (Theme A).
-        _rewrite_phantom = find_phantom_tool_citations(rewritten, _called) if _have_called_set else set()
-        if _rewrite_phantom:
-            log.warning(  # type: ignore[no-any-return]
-                "combined_grounding_rewrite_phantom_citation_refused",
-                phantom_tools=sorted(_rewrite_phantom),
+        # 4. Phantom-citation re-check on the rewrite (Theme A) — P0-aware:
+        #    only a phantom tag abutting a MATERIAL number refuses; benign prose
+        #    labels are stripped (mirrors the pre-rewrite gate above).
+        if _have_called_set:
+            _rw_phantom_material, _rw_phantom_benign = partition_phantom_tool_citations(
+                rewritten, _called, fundamentals_value_pool=fundamentals_value_pool
             )
-            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
-            return _PHANTOM_CITATION_REFUSAL, False
+            if _rw_phantom_material:
+                log.warning(  # type: ignore[no-any-return]
+                    "combined_grounding_rewrite_phantom_citation_refused",
+                    phantom_tools=sorted(_rw_phantom_material),
+                )
+                rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+                return _PHANTOM_CITATION_REFUSAL, False
+            if _rw_phantom_benign:
+                rewritten = strip_tool_row_tags(rewritten, _rw_phantom_benign)
 
         # ── Re-validate BOTH classes on the single rewrite ────────────────────
         numeric_second = numeric_validator.validate(rewritten, tool_items, called_tool_names=_called)
@@ -4914,15 +6346,22 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
-        # Both classes now grounded → accept the rewrite.
-        if numeric_second.passed and entity_second_passed:
+        # Both classes now grounded → accept the rewrite. BUG-2 mechanism 2:
+        # use the material-claim gate so a rewrite whose only residual numbers
+        # are incidental (dates/counts) is accepted rather than bannered.
+        if (
+            numeric_grounding_effectively_passed(numeric_second, analytical_intent=analytical_intent)
+            and entity_second_passed
+        ):
             rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
             return rewritten, True
 
         # ── Residual failure: banner suppression (PRESERVED) then banner ──────
         # Honest-refusal rewrite suppression (W44) — only when the residual is
         # purely numeric (an honest "data unavailable" already conveys it).
-        if entity_second_passed and not numeric_second.passed:
+        if entity_second_passed and not numeric_grounding_effectively_passed(
+            numeric_second, analytical_intent=analytical_intent
+        ):
             _rw_strip = rewritten.lstrip()
             _refusal_signals = (
                 "not currently available",
@@ -4966,6 +6405,9 @@ class ChatOrchestratorUseCase:
         entity_context: Any = None,
         called_tool_names: list[str] | None = None,
         seed: int | None = None,
+        thread_id: UUID | None = None,
+        user_id: UUID | None = None,
+        write_action_succeeded: bool = False,
     ) -> tuple[str, bool]:
         """PLAN-0093 E-2 T-E-2-02 — numeric-grounding validation pass.
 
@@ -4998,9 +6440,10 @@ class ChatOrchestratorUseCase:
         """
         from rag_chat.application.services.numeric_grounding import (
             NumericGroundingValidator,
-            find_phantom_tool_citations,
             flatten_tool_values_count,
+            partition_phantom_tool_citations,
             response_has_numeric_claims,
+            strip_tool_row_tags,
         )
 
         _called = list(called_tool_names or [])
@@ -5022,15 +6465,32 @@ class ChatOrchestratorUseCase:
         # (tc_portfolio_dividend_yielders, agg_q5_tsla_macro,
         # chain_macro_event_market_reaction, chain_portfolio_worst_fundamentals,
         # chain_unhealthy_entity_investigation, iter3_apple_suppliers_compound).
-        _phantom = find_phantom_tool_citations(response, _called) if _have_called_set else set()
-        if _phantom:
-            log.warning(  # type: ignore[no-any-return]
-                "numeric_grounding_phantom_citation_refused",
-                phantom_tools=sorted(_phantom),
-                called_tools=sorted({t.lower() for t in _called if t}),
-            )
-            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
-            return _PHANTOM_CITATION_REFUSAL, False
+        # ── P0 (2026-07-01) phantom-citation gate — benign prose no longer refuses ─
+        # A phantom ``[name row N]`` tag is a GENUINE fabricated citation only when
+        # it abuts a MATERIAL numeric claim (the AMD ``$34.6B`` class) → refuse.
+        # A phantom tag on pure prose (the live model tagging its own editorial
+        # ``[commentary row 1]`` on a news answer) is benign → strip the tag, keep
+        # the answer. This restores the previously-passing "latest news on NVIDIA"
+        # flow while preserving the numeric-fabrication guarantee: any fabricated
+        # tool-citation attached to a real figure still refuses the whole answer.
+        if _have_called_set:
+            _phantom_material, _phantom_benign = partition_phantom_tool_citations(response, _called)
+            if _phantom_material:
+                log.warning(  # type: ignore[no-any-return]
+                    "numeric_grounding_phantom_citation_refused",
+                    phantom_tools=sorted(_phantom_material),
+                    called_tools=sorted({t.lower() for t in _called if t}),
+                )
+                rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+                return _PHANTOM_CITATION_REFUSAL, False
+            if _phantom_benign:
+                # Strip the benign prose labels so they never leak to the user,
+                # but do NOT refuse — the answer's real content is intact.
+                log.info(  # type: ignore[no-any-return]
+                    "phantom_prose_label_stripped",
+                    stripped_tags=_phantom_benign,
+                )
+                response = strip_tool_row_tags(response, _phantom_benign)
 
         # ── Theme A fix #2 — EMPTY-POOL REFUSAL ────────────────────────────────
         # When the answer makes specific numeric claims but the grounding
@@ -5039,7 +6499,14 @@ class ChatOrchestratorUseCase:
         # still pass them on a stray citation. Refuse rather than ship invented
         # figures. Gated on numeric claims so empty-tool prose answers (handled
         # by the entity-grounding pass) are untouched.
-        if response_has_numeric_claims(response) and flatten_tool_values_count(tool_items) == 0:
+        # D1 (2026-07-06): same successful-write-action carve-out as the combined
+        # pass — a status="ok" action with a pending_action confirmation has no
+        # groundable rows but must NOT be refused as an empty pool.
+        if (
+            response_has_numeric_claims(response)
+            and flatten_tool_values_count(tool_items) == 0
+            and not write_action_succeeded
+        ):
             log.warning(  # type: ignore[no-any-return]
                 "numeric_grounding_empty_pool_refused",
                 called_tools=sorted({t.lower() for t in _called if t}),
@@ -5182,6 +6649,12 @@ class ChatOrchestratorUseCase:
                 tools=[],
                 # PLAN-0107 follow-up: forward seed for eval-mode reproducibility.
                 seed=seed,
+                # PLAN-0117 (attribution): bump per-thread total + stamp user so
+                # numeric-grounding rewrite spend lands on the thread/quota, and
+                # tag it distinct from synthesis in the ledger.
+                thread_id=thread_id,
+                user_id=user_id,
+                call_site="grounding_rewrite",
             ):
                 rewritten += chunk
         except Exception as exc:
@@ -5249,14 +6722,19 @@ class ChatOrchestratorUseCase:
         # Re-validate the rewrite. Theme A fix #2: also re-run the
         # phantom-citation gate on the rewrite — a rewrite that re-invents a
         # ``[tool row N]`` tag must not pass either. Same ground-truth guard.
-        _rewrite_phantom = find_phantom_tool_citations(rewritten, _called) if _have_called_set else set()
-        if _rewrite_phantom:
-            log.warning(  # type: ignore[no-any-return]
-                "numeric_grounding_rewrite_phantom_citation_refused",
-                phantom_tools=sorted(_rewrite_phantom),
-            )
-            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
-            return _PHANTOM_CITATION_REFUSAL, False
+        # P0-aware: only a phantom tag next to a MATERIAL number refuses; benign
+        # prose labels are stripped (mirrors the pre-rewrite gate).
+        if _have_called_set:
+            _rw_phantom_material, _rw_phantom_benign = partition_phantom_tool_citations(rewritten, _called)
+            if _rw_phantom_material:
+                log.warning(  # type: ignore[no-any-return]
+                    "numeric_grounding_rewrite_phantom_citation_refused",
+                    phantom_tools=sorted(_rw_phantom_material),
+                )
+                rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+                return _PHANTOM_CITATION_REFUSAL, False
+            if _rw_phantom_benign:
+                rewritten = strip_tool_row_tags(rewritten, _rw_phantom_benign)
         second_result = validator.validate(rewritten, tool_items, called_tool_names=_called)
         if second_result.passed:
             rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
@@ -5347,6 +6825,8 @@ class ChatOrchestratorUseCase:
         prior_tool_calls: list[Any] | None = None,
         seed: int | None = None,
         allow_rewrite: bool = True,
+        thread_id: UUID | None = None,
+        user_id: UUID | None = None,
     ) -> tuple[str, bool]:
         """F-LIVE-NEW-002 — entity-name grounding pass.
 
@@ -5591,6 +7071,12 @@ class ChatOrchestratorUseCase:
                 tools=[],
                 # PLAN-0107 follow-up: forward seed for eval-mode reproducibility.
                 seed=seed,
+                # PLAN-0117 (attribution): bump per-thread total + stamp user so
+                # entity-grounding rewrite spend lands on the thread/quota, and
+                # tag it distinct from synthesis in the ledger.
+                thread_id=thread_id,
+                user_id=user_id,
+                call_site="grounding_rewrite",
             ):
                 buf += chunk
             return buf

@@ -13,9 +13,11 @@ Covers tools backed by S3Port and S3BriefPort:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import structlog
 
@@ -121,6 +123,47 @@ def _format_market_cap_value(value: Any) -> str | None:
     return f"{sign}${abs_n:,.0f}"
 
 
+# ── D-h (2026-07-08): margin / yield percent formatting + magnitude gate ─────
+# Margins (gross/operating/net) and yields (dividend) come from upstream in TWO
+# shapes: a true FRACTION (0.7493 = 74.93 %) or, for some EODHD yield fields, an
+# ALREADY-PERCENT value (2.68 meaning 2.68 %). Two symmetric defects came out of
+# this ambiguity in the 2026-07-08 audit:
+#   * blindly x100-ing an already-percent value produced ">100 %" (XLU dividend
+#     yield 2.68 → "268 %", XLE → "265 %"): tc_portfolio_dividend / port_rate;
+#   * NOT x100-ing a fraction produced "0.7 %" for a 74.93 % gross margin:
+#     ru_nvda_amd_compare.
+# ``_format_ratio_as_percent`` disambiguates by magnitude and NEVER emits an
+# implausible (>100 %) percentage — an out-of-range value is suppressed (returns
+# None) so a misleading number can't reach the LLM.
+_MAX_PLAUSIBLE_PERCENT = 100.0
+
+
+def _format_ratio_as_percent(value: Any) -> str | None:
+    """Render a margin/yield as ``NN.NN%``, disambiguating fraction vs percent.
+
+    * ``|value| <= 1`` is treated as a FRACTION and scaled x100 (0.7493 → 74.93%).
+    * ``|value| > 1`` is treated as ALREADY a percent figure (2.68 → 2.68%) — the
+      EODHD dividend-yield case that x100 turned into "268%".
+    * The sign is preserved (a net-margin loss stays negative).
+    * A resulting magnitude above ``_MAX_PLAUSIBLE_PERCENT`` (100%) is not
+      physically meaningful for a margin/yield → returns ``None`` (caller omits
+      the cell) rather than emitting a misleading value.
+
+    Returns ``None`` for non-numeric input so callers can fall back gracefully.
+    """
+    num = _coerce_grounding_number(value)
+    if num is None:
+        return None
+    try:
+        v = float(num)
+    except (TypeError, ValueError):
+        return None
+    pct = v * 100.0 if abs(v) <= 1.0 else v
+    if abs(pct) > _MAX_PLAUSIBLE_PERCENT:
+        return None
+    return f"{pct:.2f}%"
+
+
 # ── Value-based substantiation (2026-06-26) ───────────────────────────────────
 # Helpers that lift the RAW numeric values the fundamentals handlers already
 # compute into a structured ``grounding_fields`` bag on RetrievedItem, so the
@@ -156,6 +199,17 @@ _GROUNDING_PERIOD_METRIC_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("gross_margin", ("gross_margin",)),
     ("operating_margin", ("operating_margin",)),
     ("net_margin", ("net_margin",)),
+    # C1 (2026-07-06): the most-asked VALUATION metrics were absent from the
+    # grounding allow-list, so a pe/ps/growth answer emitted only ``{ticker}`` —
+    # the judge could never verify the number and defaulted to a blind PASS
+    # ("presumed" mode). Add them here (per-period form, where a row carries
+    # them) AND to the snapshot list below (the TTM/current form). ``price_to_
+    # sales_ttm`` is inherently TTM (snapshot), but some upstream rows attach a
+    # per-period P/S — we accept either. ``quarterly_revenue_growth_yoy`` is a
+    # per-period derived growth figure. Multiple synonyms cover the market-data
+    # normalised name plus common EODHD-cased variants; first non-None wins.
+    ("price_to_sales_ttm", ("price_to_sales_ttm", "price_to_sales", "ps_ratio")),
+    ("quarterly_revenue_growth_yoy", ("quarterly_revenue_growth_yoy", "revenue_growth_yoy")),
 )
 
 # Snapshot scalars we lift in addition to the latest period row. The snapshot
@@ -166,6 +220,16 @@ _GROUNDING_SNAPSHOT_METRIC_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("market_cap", ("market_cap_usd", "market_cap")),
     ("ebitda", ("ebitda",)),
     ("free_cash_flow", ("free_cash_flow", "fcf")),
+    # C1 (2026-07-06): valuation scalars that live ONLY on the highlights/TTM
+    # snapshot for a snapshot-oriented query (e.g. "what's META's P/E and EPS?").
+    # ``eps`` is added here (in addition to the per-period flow key above) so a
+    # SINGLE-metric EPS query whose value is carried on the TTM snapshot — not a
+    # per-period row — still emits the VALUE, matching the multi-metric batch
+    # path (which already surfaces per-period eps). Without this an EPS-only
+    # query fell through to ``{ticker}`` only.
+    ("eps", ("eps", "eps_ttm", "diluted_eps_ttm", "earnings_share")),
+    ("price_to_sales_ttm", ("price_to_sales_ttm", "price_to_sales", "ps_ratio")),
+    ("quarterly_revenue_growth_yoy", ("quarterly_revenue_growth_yoy", "revenue_growth_yoy")),
 )
 
 
@@ -313,6 +377,71 @@ _SCREEN_GROUNDING_MAX_ROWS = 3
 # down-sample (first, last, evenly-spaced interior) covers the endpoints.
 _PRICE_BAR_GROUNDING_MAX_ROWS = 5
 
+# ── PERIOD-ANCHOR (BP-651, 2026-07-08) ────────────────────────────────────────
+# ``get_fundamentals_history`` has NO upstream date filter: market-data's
+# ``/api/v1/fundamentals/history`` returns the LATEST N periods only (see
+# s3_client.get_fundamentals_history_with_snapshot — it forwards ``periods`` /
+# ``period_type`` and nothing else). So a question anchored to a PAST calendar
+# year ("show TSLA revenue for each quarter of 2024") could ONLY ever receive
+# the newest quarters (2025/2026). The LLM then reported those off-target rows
+# as if they answered the 2024 question — the "relabeling" failure in
+# ``da_tsla_revenue_2024_full_year`` / ``da_msft`` that survived the v1.15
+# synthesis-prompt rule (a prompt rule alone does not hold on gpt-oss).
+#
+# The DETERMINISTIC fix (a prompt rule already failed once): when the caller
+# passes an explicit ``[from_date, to_date]`` window we (a) OVER-FETCH enough
+# periods to reach that window and (b) filter the returned rows to the window
+# in code — so a 2025/2026 row can never leak into a 2024-anchored answer. If
+# nothing falls in the window we surface no-data, and the LLM refuses honestly
+# instead of fabricating.
+_WINDOW_MAX_PERIODS = 20
+# ~days per period; used only to size the over-fetch, generously (with margin +
+# a hard cap), so the requested window is guaranteed reachable.
+_DAYS_PER_QUARTER = 91
+_DAYS_PER_YEAR = 365
+
+
+def _parse_iso_date(value: object) -> date | None:
+    """Parse an ISO date (or the date prefix of an ISO datetime) → ``date`` | None.
+
+    Tolerant: accepts ``"2024-12-31"`` and ``"2024-12-31T00:00:00Z"`` alike, and
+    returns ``None`` on anything unparseable so callers can treat a bad value as
+    "no constraint" rather than raising into the tool executor.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _periods_to_cover_window(window_from: date, period_type: str, min_periods: int) -> int:
+    """How many latest periods to fetch so that ``window_from`` is reachable.
+
+    market-data returns only the newest N periods, so to include a historical
+    window we must fetch back far enough to reach its START. We size the fetch
+    from (today - window_from), add a 2-period margin, floor at the caller's
+    requested ``periods``, and cap at ``_WINDOW_MAX_PERIODS`` to bound the
+    upstream payload.
+    """
+    today = datetime.now(UTC).date()
+    days = max((today - window_from).days, 0)
+    span_per = _DAYS_PER_YEAR if period_type == "annual" else _DAYS_PER_QUARTER
+    span = days // span_per + 2
+    return max(min_periods, min(span, _WINDOW_MAX_PERIODS))
+
+
+def _row_period_end(row: object) -> date | None:
+    """Extract a row's period-end ISO date, tolerating model/dict and field aliases.
+
+    The history use case tags rows with ``period_end_date``; ``query_fundamentals``
+    uses ``period_end``; some adapters only carry ``date``. Mirror the tolerance
+    used by ``_format_fundamentals_table``.
+    """
+    d = row.model_dump() if hasattr(row, "model_dump") else (row if isinstance(row, dict) else {})
+    return _parse_iso_date(d.get("period_end_date") or d.get("period_end") or d.get("date"))
+
 
 def _grounding_fields_from_rows(
     rows: list[dict[str, Any]],
@@ -345,6 +474,22 @@ def _grounding_fields_from_rows(
     before.
     """
     if not rows:
+        # C1 (2026-07-06): a SNAPSHOT-ORIENTED query (valuation metrics like
+        # pe_ratio / forward_pe / ebitda / price_to_sales_ttm / eps-TTM) can come
+        # back with an EMPTY ``metrics_by_period`` list but a populated snapshot —
+        # those scalars are TTM/current, not per-period. Previously we returned
+        # ``()`` (no ticker, no value), so the answer's valuation numbers were
+        # unverifiable and the judge stayed in blind "presumed" mode. Emit the
+        # snapshot scalars (ticker first) so their VALUES reach the grounding
+        # sample. ``allowed_canonicals`` is honoured so an uncovered metric never
+        # enters as a phantom number.
+        if snapshot:
+            return _grounding_fields_from_row(
+                {},
+                snapshot,
+                ticker=ticker,
+                allowed_canonicals=allowed_canonicals,
+            )
         return ()
     # Newest period first, capped. ``rows`` is ASC so reversed() is newest -> oldest.
     newest_first = list(reversed(rows))[:max_periods]
@@ -604,6 +749,97 @@ def _pick_period_row(periods_data: list[Any], common_period: str | None) -> Any:
     return periods_data[-1]
 
 
+# ── Polymarket canonical URL builder (chat prediction-market tool) ────────────
+# Mirrors the FRONTEND helper apps/worldview-web/lib/prediction-markets.ts
+# ``buildPolymarketUrl`` so the chat citation link is byte-identical to the link
+# the dashboard/widget renders. The known frontend "wrong links" bug (memory
+# 2026-06-28) was that the prediction-market UI ignored ``market_slug`` and sent
+# every row to a generic search page; the canonical deep link is
+# ``https://polymarket.com/event/<market_slug>``.
+
+# MALFORMED_SLUG_TAIL — detects the ~4/525 stored slugs with a corrupted
+# "numeric-tail" (e.g. ``...-143-229-513-574-212-254``) that 404 on /event/.
+# Requires a chain of 3+ purely-numeric "-<digits>" segments so a legitimate
+# slug ending in a single year/number (``...-by-2024``, ``...-game-7``) is NOT
+# misclassified. Identical to the TS regex ``/-\d+(-\d+){2,}$/``.
+_POLYMARKET_MALFORMED_SLUG_TAIL = re.compile(r"-\d+(-\d+){2,}$")
+
+
+def _build_polymarket_url(slug: str | None, question: str) -> str:
+    """Return the best Polymarket link for a market row.
+
+    - Clean, non-empty slug → canonical deep link
+      ``https://polymarket.com/event/<slug>``.
+    - Null / empty / whitespace slug OR a malformed numeric-tail slug →
+      the title-search fallback ``https://polymarket.com/markets?_q=<title>``
+      (always resolves to a usable results list — a safe degraded experience).
+
+    WHY ``/event/`` (not ``/market/``): ``/event/<slug>`` is the grouped page a
+    human lands on from Polymarket's own UI and the one that resolves for the
+    slugs we ingest from the Gamma API; ``/market/<slug>`` would 404.
+    """
+    clean_slug = (slug or "").strip()
+    # quote() escapes spaces / '?' / '%' etc. in the title so the fallback query
+    # string is always well-formed. An empty title still lands on the market list.
+    search_url = f"https://polymarket.com/markets?_q={quote(question or '')}"
+    if not clean_slug:
+        return search_url
+    if _POLYMARKET_MALFORMED_SLUG_TAIL.search(clean_slug):
+        return search_url
+    return f"https://polymarket.com/event/{clean_slug}"
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse an ISO-8601 string into a tz-aware UTC datetime, or None.
+
+    Tolerates a trailing ``Z`` (Python <3.11 fromisoformat rejects it) and
+    naive timestamps (assumed UTC). Returns None on any non-string / unparseable
+    input so a malformed upstream field never raises (R9-style safe degradation).
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _format_probability(price: Any) -> str | None:
+    """Render an implied-probability float (0.0-1.0) as a ``NN%`` string, or None."""
+    num = _coerce_grounding_number(price)
+    if num is None:
+        return None
+    try:
+        pct = float(num) * 100.0
+    except (TypeError, ValueError):
+        return None
+    return f"{pct:.0f}%"
+
+
+def _probability_grounding_value(price: Any) -> str | None:
+    """Return the implied-probability as the SAME integer-percent the prose cites.
+
+    PLAN-0056 Wave E3. The prediction-market text renders each outcome's implied
+    odds via ``_format_probability`` as ``NN%`` (price*100 rounded to 0 dp, e.g.
+    price ``0.63`` -> ``"63%"``). The value-substantiation gate scans the prose for
+    that bare integer and matches it against the item's ``grounding_fields``. So the
+    grounding value MUST be that same integer percent (``"63"``) — NOT the raw
+    ``0.63`` fraction, which would not match the ``"63%"`` written in ``text`` and
+    would leave the odds unsubstantiated. Returns None for non-numeric input so no
+    phantom number enters the bag.
+    """
+    pct_str = _format_probability(price)
+    if pct_str is None:
+        return None
+    # Strip the trailing "%" and re-coerce so the value matches the canonical
+    # grounding-number formatting the matcher expects (e.g. "63").
+    return _coerce_grounding_number(pct_str.rstrip("%"))
+
+
 class MarketHandler(ToolHandler):
     """Handles price, fundamentals, screener, movers, and calendar tools.
 
@@ -624,6 +860,8 @@ class MarketHandler(ToolHandler):
             "get_market_movers",
             "get_economic_calendar",
             "get_earnings_calendar",
+            # Chat prediction-market tool — Polymarket odds search (S3BriefPort).
+            "get_prediction_markets",
         }
     )
 
@@ -656,6 +894,7 @@ class MarketHandler(ToolHandler):
             "get_market_movers": self._handle_get_market_movers,
             "get_economic_calendar": self._handle_get_economic_calendar,
             "get_earnings_calendar": self._handle_get_earnings_calendar,
+            "get_prediction_markets": self._handle_get_prediction_markets,
         }
         target = dispatch.get(tool_name)
         if target is None:
@@ -820,6 +1059,8 @@ class MarketHandler(ToolHandler):
         ticker: str,
         periods: int = 8,
         period_type: str = "quarterly",
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> RetrievedItem | None:
         """Fetch fundamentals and format as a markdown table RetrievedItem.
 
@@ -829,6 +1070,14 @@ class MarketHandler(ToolHandler):
         warning — the LLM occasionally invents values like "ttm" or
         "trailing", and the safer behaviour is to honour the user-visible
         default rather than 500 on an unknown enum.
+
+        PERIOD-ANCHOR (BP-651, 2026-07-08): ``from_date`` / ``to_date`` bound
+        the answer to a HISTORICAL calendar window (e.g. all of 2024). Because
+        market-data has no upstream date filter (it returns the LATEST N
+        periods), we over-fetch enough periods to reach the window and then
+        filter the returned rows to it DETERMINISTICALLY — so a year-anchored
+        question can never be answered with the latest (wrong-year) quarters.
+        Both bounds must be supplied together; a lone bound is ignored.
         """
         period_type_norm = (period_type or "quarterly").strip().lower()
         if period_type_norm not in {"quarterly", "annual"}:
@@ -840,6 +1089,29 @@ class MarketHandler(ToolHandler):
                 fallback="quarterly",
             )
             period_type_norm = "quarterly"
+
+        # PERIOD-ANCHOR: resolve the optional historical window. A window is
+        # only ACTIVE when both bounds parse and are correctly ordered; a
+        # partial/invalid window degrades to the legacy "latest N" behaviour
+        # (logged) rather than erroring. When active we widen the fetch so the
+        # window's start is reachable in the latest-N stream market-data returns.
+        window_from = _parse_iso_date(from_date)
+        window_to = _parse_iso_date(to_date)
+        window_active = window_from is not None and window_to is not None and window_from <= window_to
+        if (from_date or to_date) and not window_active:
+            log.warning(
+                "tool_invalid_param",
+                tool="get_fundamentals_history",
+                param="date_window",
+                from_date=from_date,
+                to_date=to_date,
+                fallback="latest_n",
+            )
+        fetch_periods = periods
+        if window_active:
+            assert window_from is not None  # narrowed by window_active; for mypy
+            fetch_periods = _periods_to_cover_window(window_from, period_type_norm, periods)
+        periods = fetch_periods
 
         # PLAN-0103 W25 / BP-640: prefer the snapshot-aware accessor when
         # the adapter implements it AND the response is well-formed. Test
@@ -919,11 +1191,79 @@ class MarketHandler(ToolHandler):
                 continue
             non_phantom.append(row)
 
+        # PERIOD-ANCHOR (BP-651): deterministic date-window filter. When the
+        # caller anchored the question to a historical window, keep ONLY rows
+        # whose period_end falls inside it. Rows with an unparseable period_end
+        # are DROPPED under an active window (we cannot prove they belong, so we
+        # must not let an unanchored row leak into a year-specific answer). If
+        # the window matches nothing we fall through to the no-data branch below
+        # → the LLM refuses honestly instead of relabeling the latest quarters.
+        if window_active:
+            assert window_from is not None and window_to is not None  # window_active guarantees
+            in_window = []
+            for row in non_phantom:
+                pe = _row_period_end(row)
+                if pe is not None and window_from <= pe <= window_to:
+                    in_window.append(row)
+            if not in_window:
+                log.info(
+                    "tool_no_data",
+                    tool="get_fundamentals_history",
+                    ticker=ticker,
+                    reason="window_no_rows",
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+            non_phantom = in_window
+
         if not non_phantom:
-            # All rows were phantoms — surface no-data so the LLM knows to
-            # refuse rather than fabricate. ``item_count=0`` is conveyed by
-            # returning None (the orchestrator increments item_count only for
-            # non-None returns).
+            if window_active:
+                # PERIOD-ANCHOR (BP-651) hardening — D-b (2026-07-08): the explicit
+                # historical window matched NO returned period. Returning None here
+                # made the tool read as status=empty/error and the model
+                # OVER-REFUSED with a resolver-style failure
+                # (da_apple_revenue_fy2024q4_precision: a precise fiscal-quarter
+                # window that the LLM anchored to a calendar range missing the
+                # fiscal period-end). Emit a clean COVERAGE-GAP sentinel instead so
+                # synthesis states the exact window has no data (and can offer the
+                # nearest available quarter) rather than erroring. The sentinel
+                # carries NO period numbers, so the anti-relabeling guarantee of the
+                # window filter still holds — the model cannot quote a wrong-year
+                # figure from it. ``coverage`` is NOT allow-listed, so it never
+                # leaks into a grounding sample (mirrors query_fundamentals D7).
+                log.info(
+                    "tool_no_data",
+                    tool="get_fundamentals_history",
+                    ticker=ticker,
+                    reason="window_no_rows",
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+                upper = ticker.upper()
+                return RetrievedItem.create(
+                    item_id=f"tool:fundamentals:{upper}:not_covered",
+                    item_type=ItemType.financial,
+                    text=(
+                        f"No fundamentals were reported for {upper} in the requested "
+                        f"window {from_date}..{to_date}. This is a period-coverage gap, "
+                        "not a temporary error — state that no data is available for "
+                        "that exact period rather than estimating it or relabeling a "
+                        "different quarter's figures as that period."
+                    ),
+                    score=0.50,
+                    trust_weight=0.90,
+                    grounding_fields=(("ticker", upper), ("coverage", "not_covered")),
+                    citation_meta=CitationMeta(
+                        title=f"Fundamentals: {upper} (window not covered)",
+                        url=None,
+                        source_name="fundamentals",
+                        published_at=None,
+                        entity_name=upper,
+                    ),
+                )
+            # All rows were phantoms — surface no-data so the LLM knows to refuse
+            # rather than fabricate. ``item_count=0`` is conveyed by returning None
+            # (the orchestrator increments item_count only for non-None returns).
             log.warning(
                 "tool_no_data",
                 tool="get_fundamentals_history",
@@ -973,6 +1313,8 @@ class MarketHandler(ToolHandler):
         self,
         tickers: list[str] | None = None,
         periods: int = 5,
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> list[RetrievedItem]:
         """Fetch fundamentals for many tickers in one HTTP call (PLAN-0095 W2 T-W2-02).
 
@@ -982,6 +1324,23 @@ class MarketHandler(ToolHandler):
         dropped silently, so the LLM can decide whether to retry the missing
         tickers individually or carry on with what it has.
 
+        PERIOD-ANCHOR (BP-651, D-b 2026-07-08): ``from_date`` / ``to_date`` bound
+        the answer to a HISTORICAL calendar window for EVERY ticker — the batch
+        sibling of the singular-tool anchoring. market-data's ``/fundamentals/
+        batch`` endpoint accepts only ``periods`` (no date filter, same as the
+        singular ``/history`` endpoint), so we apply the identical OVER-FETCH +
+        window-FILTER pattern in code: widen ``periods`` so the window's start is
+        reachable in the latest-N stream, then keep only rows whose period_end
+        falls inside [from_date, to_date]. Without this, a multi-entity historical
+        question ("compare NVDA vs AMD revenue in FY2024 Q3") received the latest
+        N periods and the model back-filled the wrong quarters
+        (da_nvda_amd_compare_fy2024q3, ru_nvda_amd_compare_qtr). Both bounds must
+        be supplied together; a lone/invalid bound degrades to latest-N (logged).
+
+        A ticker that returns rows but NONE inside the window surfaces an explicit
+        per-entity "not covered for <window>" line (no numbers), so the model
+        cannot fabricate or cross-attribute a figure for that entity.
+
         R9: returns [] on missing port, invalid input, or upstream timeout.
         R27: read-only — no UnitOfWork.
         """
@@ -989,6 +1348,28 @@ class MarketHandler(ToolHandler):
         if not ticker_list:
             log.warning("tool_invalid_param", tool="get_fundamentals_history_batch", reason="empty_tickers")
             return []
+
+        # PERIOD-ANCHOR: resolve the optional historical window (mirrors the
+        # singular handler). Active only when BOTH bounds parse and are ordered;
+        # a partial/invalid window degrades to latest-N (logged). market-data's
+        # batch endpoint is quarterly, so the over-fetch sizing uses "quarterly".
+        window_from = _parse_iso_date(from_date)
+        window_to = _parse_iso_date(to_date)
+        window_active = window_from is not None and window_to is not None and window_from <= window_to
+        if (from_date or to_date) and not window_active:
+            log.warning(
+                "tool_invalid_param",
+                tool="get_fundamentals_history_batch",
+                param="date_window",
+                from_date=from_date,
+                to_date=to_date,
+                fallback="latest_n",
+            )
+        fetch_periods = periods
+        if window_active:
+            assert window_from is not None  # narrowed by window_active; for mypy
+            fetch_periods = _periods_to_cover_window(window_from, "quarterly", periods)
+        periods = fetch_periods
         # Mirror the server-side cap (25) so we fail fast with a clear log
         # instead of letting the route return a 422 that becomes ``{}`` here.
         if len(ticker_list) > 25:
@@ -1018,9 +1399,18 @@ class MarketHandler(ToolHandler):
         # independently in its answer. The id namespace ``tool:fundamentals_batch:<ticker>``
         # avoids colliding with singular ``tool:fundamentals:<ticker>`` items
         # if both tools run in the same turn (unlikely but defensible).
+        # C6 (2026-07-06): build a CASE-INSENSITIVE view of the upstream results
+        # so a ticker whose upstream key differs in case (e.g. the batch endpoint
+        # echoes "nvda" while we requested "NVDA") is NOT silently dropped from
+        # the output. A dropped ticker previously left the answer with no grounded
+        # row for that entity, which let synthesis cross-attribute another
+        # entity's figure to it (ru_nvda_amd_revenue_4q: NVDA's row vanished, its
+        # value surfaced under AMD). Every requested ticker MUST yield an item.
+        results_ci = {str(k).strip().upper(): v for k, v in results.items() if isinstance(v, dict)}
+
         out: list[RetrievedItem] = []
         for ticker in ticker_list:
-            entry = results.get(ticker) or {}
+            entry = results.get(ticker) or results_ci.get(ticker) or {}
             status = entry.get("status")
             grounding_fields: tuple[tuple[str, str], ...] = ()
             if status == "ok":
@@ -1031,8 +1421,40 @@ class MarketHandler(ToolHandler):
                 # renderer omits the section.
                 snap = entry.get("current_snapshot")
                 snap_dict = snap if isinstance(snap, dict) else None
-                if not periods_data and snap_dict is None:
-                    text = f"{ticker}: no quarterly fundamentals available"
+                # PERIOD-ANCHOR (D-b): when a historical window is active, keep
+                # ONLY rows whose period_end falls inside it — mirrors the singular
+                # handler's deterministic filter. Rows with an unparseable
+                # period_end are DROPPED (we cannot prove they belong to the
+                # requested year). The current_snapshot is TTM/current, NOT the
+                # historical window, so it is DROPPED from a windowed answer to
+                # stop the model quoting a live figure as the past-period value.
+                if window_active:
+                    assert window_from is not None and window_to is not None
+                    periods_data = [
+                        r
+                        for r in periods_data
+                        if (pe := _row_period_end(r)) is not None and window_from <= pe <= window_to
+                    ]
+                    snap_dict = None
+                if not periods_data:
+                    # No in-window rows (or no rows at all). Surface an EXPLICIT
+                    # per-entity coverage line so the model states this entity is
+                    # not covered for the window rather than fabricating or
+                    # cross-attributing another entity's figure to it (the AMD
+                    # empty-2nd-entity case, ru_nvda_amd_compare). No grounding_
+                    # fields → no numbers to hallucinate from.
+                    if window_active:
+                        text = (
+                            f"{ticker}: no fundamentals reported in {from_date}..{to_date} "
+                            "— not covered for that period (do not substitute another "
+                            "period's or another entity's figures)."
+                        )
+                    elif snap_dict is None:
+                        text = f"{ticker}: no quarterly fundamentals available"
+                    else:
+                        # Snapshot-only (no periods but a live snapshot) — render it.
+                        text = self._format_fundamentals_table(ticker, [], current_snapshot=snap_dict)
+                        grounding_fields = _grounding_fields_from_rows([], snap_dict, ticker=ticker)
                 else:
                     text = self._format_fundamentals_table(ticker, periods_data, current_snapshot=snap_dict)
                     # Value-substantiation: lift the raw period numbers (periods are
@@ -1140,8 +1562,44 @@ class MarketHandler(ToolHandler):
         coverage: dict[str, str] = bundle.get("coverage") or {}
 
         if not rows and not snapshot:
-            log.warning("tool_no_data", tool="query_fundamentals", ticker=ticker)
-            return None
+            # D7 (2026-07-06): a valid bundle with NO rows and NO snapshot means the
+            # requested metric(s) are genuinely uncovered (unsupported metric like
+            # ``data_center_revenue``, or no fundamentals for this entity) — NOT a
+            # transient failure. Returning ``None`` here made this indistinguishable
+            # from the transport/timeout ``except`` path, so the model over-refused
+            # ("I couldn't retrieve data") instead of reasoning around a coverage gap.
+            # Emit an explicit COVERAGE-GAP sentinel item so synthesis states the
+            # metric is not covered rather than treating it as a failure. The
+            # ``coverage=not_covered`` grounding marker is NOT allow-listed, so it
+            # never leaks into a grounding sample; it just labels the sentinel.
+            log.info(
+                "tool_coverage_gap",
+                tool="query_fundamentals",
+                ticker=ticker,
+                metrics=metrics,
+            )
+            upper_ticker = ticker.upper()
+            metric_list = ", ".join(metrics)
+            return RetrievedItem.create(
+                item_id=f"tool:fundamentals:{upper_ticker}:not_covered",
+                item_type=ItemType.financial,
+                text=(
+                    f"Coverage gap: the requested metric(s) for {upper_ticker} "
+                    f"({metric_list}) are not covered by the available fundamentals "
+                    "data. This is a data-coverage limitation, not a temporary error "
+                    "— state that the metric is not available rather than estimating it."
+                ),
+                score=0.50,
+                trust_weight=0.90,
+                grounding_fields=(("ticker", upper_ticker), ("coverage", "not_covered")),
+                citation_meta=CitationMeta(
+                    title=f"Fundamentals query: {upper_ticker} (not covered)",
+                    url=None,
+                    source_name="fundamentals",
+                    published_at=None,
+                    entity_name=upper_ticker,
+                ),
+            )
 
         # PLAN-0104 W35 / BP-NEW: align the envelope with
         # ``_handle_get_fundamentals_history`` so numeric_grounding can
@@ -1262,8 +1720,13 @@ class MarketHandler(ToolHandler):
                         elif isinstance(v, float):
                             # Margins are fractions; render as percentage so
                             # the LLM does not quote "0.44" as a P/E ratio.
+                            # D-h (2026-07-08): use the magnitude-gated formatter
+                            # so a fraction is x100'd (0.7493 → 74.93%) but an
+                            # already-percent / implausible value never emits
+                            # ">100%". A suppressed value renders "not available".
                             if m.endswith("_margin") or m == "fcf_yield":
-                                cells.append(f"{v * 100:.2f}%")
+                                pct = _format_ratio_as_percent(v)
+                                cells.append(pct if pct is not None else "not available")
                             elif abs(v) >= 1e9:
                                 # Cap-style raw amount → defer to the same
                                 # B/M formatter so the LLM does not have to
@@ -1299,7 +1762,9 @@ class MarketHandler(ToolHandler):
                             out.append(f"    - {m}: not available")
                         elif isinstance(v, float):
                             if m.endswith("_margin") or m == "fcf_yield":
-                                out.append(f"    - {m}: {v * 100:.2f}%")
+                                # D-h: magnitude-gated percent (see table cell above).
+                                pct = _format_ratio_as_percent(v)
+                                out.append(f"    - {m}: {pct if pct is not None else 'not available'}")
                             elif abs(v) >= 1e9:
                                 fmt = _format_market_cap_value(v)
                                 out.append(f"    - {m}: {fmt if fmt is not None else v}")
@@ -1334,7 +1799,11 @@ class MarketHandler(ToolHandler):
                 any_populated = True
                 if isinstance(v, float):
                     if m.endswith("_margin") or m == "fcf_yield" or m == "dividend_yield":
-                        snap_lines.append(f"- {m}: {v * 100:.2f}%")
+                        # D-h (2026-07-08): a magnitude-gated percent. dividend_yield
+                        # is the field that produced ">100%" (XLU 268%) when an
+                        # already-percent value was x100'd — the gate suppresses it.
+                        pct = _format_ratio_as_percent(v)
+                        snap_lines.append(f"- {m}: {pct if pct is not None else 'not available'}")
                     elif abs(v) >= 1e9:
                         fmt = _format_market_cap_value(v)
                         snap_lines.append(f"- {m}: {fmt if fmt is not None else v} (raw: {v})")
@@ -1481,7 +1950,21 @@ class MarketHandler(ToolHandler):
             # can return KeyboardInterrupt, SystemExit, etc. which are BaseException but not Exception.
             if isinstance(item, BaseException) or item.get("error"):  # type: ignore[union-attr]
                 ticker_label = item.get("ticker", "?") if not isinstance(item, BaseException) else "?"  # type: ignore[union-attr]
-                lines.append(f"### {ticker_label} — data unavailable\n")
+                # D8 (2026-07-06): ``find_instrument_by_ticker`` returned None for a
+                # ticker that does not resolve to a US-listed instrument (Samsung /
+                # Huawei / Xiaomi are not on our US universe). The old bare "data
+                # unavailable" line read like a transient gap, so the model filled
+                # it with a WRONG entity (iter3_apple_competitors_spanish →
+                # hallucinated "Estée Lauder"). Emit an EXPLICIT not-covered /
+                # not-US-listed signal so synthesis says so instead of fabricating.
+                err = item.get("error") if not isinstance(item, BaseException) else None  # type: ignore[union-attr]
+                if err == "not_found":
+                    lines.append(
+                        f"### {ticker_label} — not covered: ticker not found or not "
+                        "US-listed (no fundamentals available)\n"
+                    )
+                else:
+                    lines.append(f"### {ticker_label} — data unavailable\n")
                 continue
             ticker = item["ticker"]  # type: ignore[index]
             quote = item.get("quote") or {}  # type: ignore[union-attr]
@@ -1575,6 +2058,20 @@ class MarketHandler(ToolHandler):
             compare_grounding.extend(entity_grounding)
             entity_idx += 1
             lines.append("")
+
+        # D8 (2026-07-06): when NO requested entity resolved to a US-listed
+        # instrument (e.g. an all-non-US comparison set), make the coverage
+        # boundary explicit so synthesis refuses rather than substituting an
+        # unrelated company. Without this the single returned item was just a
+        # header + "not covered" lines, which the model back-filled with a
+        # fabricated entity.
+        if entity_idx == 0:
+            lines.append(
+                "Note: none of the requested entities are covered by US-listed "
+                "fundamentals data. Do not fabricate figures or substitute a "
+                "different company — state that the requested comparison data is "
+                "not available."
+            )
 
         text = "\n".join(lines)
         log.info(
@@ -1820,6 +2317,14 @@ class MarketHandler(ToolHandler):
                         # answer.
                         formatted = _format_market_cap_value(val)
                         row += f" | MCap: {formatted} (raw: {val})" if formatted is not None else f" | MCap: {val}"
+                    elif col_label in ("Gross margin", "Op margin", "Div yield"):
+                        # D-h (2026-07-08): margins/yields are ratios (0.7493) —
+                        # render as a magnitude-gated percent so the LLM copies
+                        # "74.93%" not the raw "0.7493" (which it misread as
+                        # "0.7%"), and an implausible (>100%) value is suppressed.
+                        pct = _format_ratio_as_percent(val)
+                        if pct is not None:
+                            row += f" | {col_label}: {pct}"
                     else:
                         row += f" | {col_label}: {val}"
                 lines.append(row)
@@ -1952,6 +2457,179 @@ class MarketHandler(ToolHandler):
                 ),
             )
         ]
+
+    async def _handle_get_prediction_markets(
+        self,
+        query: str | None = None,
+        category: str | None = None,
+        status: str = "open",
+        limit: int = 10,
+    ) -> list[RetrievedItem]:
+        """Search Polymarket prediction markets via S9 GET /v1/signals/prediction-markets.
+
+        Returns ONE RetrievedItem per matching market so each carries its own
+        clickable ``citation_meta.url`` (the canonical Polymarket event link
+        derived from ``market_slug``). The text block renders the question,
+        current outcome probabilities (implied odds), resolution date, 24h
+        volume, and category so the LLM can answer "what are the odds of X".
+
+        R9: returns [] on missing port, invalid input, or upstream errors.
+        R27: read-only — no UnitOfWork.
+        """
+        if self._s3_brief is None:
+            log.warning("tool_handler_missing_port", tool="get_prediction_markets", port="s3_brief")
+            return []
+
+        # Normalise status against the values market-data's list endpoint
+        # accepts (it 422s on anything else). Default/unknown → "open".
+        status_norm = (status or "open").strip().lower()
+        if status_norm not in {"open", "resolved", "cancelled", "all"}:
+            log.warning(
+                "tool_invalid_param",
+                tool="get_prediction_markets",
+                param="status",
+                value=status,
+                fallback="open",
+            )
+            status_norm = "open"
+        # Clamp limit to the tool's advertised 1-50 band (server caps at 200).
+        limit_clamped = max(1, min(int(limit), 50))
+        query_norm = query.strip() if isinstance(query, str) and query.strip() else None
+        category_norm = category.strip() if isinstance(category, str) and category.strip() else None
+
+        t0 = time.monotonic()
+        try:
+            markets = await asyncio.wait_for(
+                self._s3_brief.get_prediction_markets(
+                    query=query_norm,
+                    category=category_norm,
+                    status=status_norm,
+                    limit=limit_clamped,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_prediction_markets", error=str(e))
+            return []
+
+        if not markets:
+            log.info("tool_no_data", tool="get_prediction_markets", query=query_norm, category=category_norm)
+            return []
+
+        out: list[RetrievedItem] = []
+        for m in markets[:limit_clamped]:
+            if not isinstance(m, dict):
+                continue
+            market_id = str(m.get("market_id") or "")
+            question = str(m.get("question") or "").strip() or "(untitled market)"
+            slug = m.get("market_slug")
+            # Canonical Polymarket deep link from the slug (search fallback on
+            # null/empty/malformed slug) — mirrors the frontend helper exactly.
+            url = _build_polymarket_url(slug, question)
+
+            # Render the outcome probabilities. Outcomes are [{name, token_id, price}]
+            # where price is the implied probability 0.0-1.0. Most markets are
+            # binary (Yes/No) but we render whatever outcomes are present.
+            outcomes = m.get("outcomes") or []
+            odds_parts: list[str] = []
+            if isinstance(outcomes, list):
+                for o in outcomes:
+                    if not isinstance(o, dict):
+                        continue
+                    name = str(o.get("name") or "").strip()
+                    pct = _format_probability(o.get("price"))
+                    if name and pct is not None:
+                        odds_parts.append(f"{name} {pct}")
+            odds_line = ", ".join(odds_parts) if odds_parts else "no current odds"
+
+            close_time = m.get("close_time")
+            resolution = str(close_time) if close_time else "TBD"
+            volume = m.get("volume_24h")
+            volume_str = _format_market_cap_value(volume) or "n/a"
+            cat = m.get("category") or "uncategorized"
+            res_status = m.get("resolution_status") or status_norm
+
+            lines = [
+                f"## {question}",
+                f"- Implied odds: {odds_line}",
+                f"- Resolution date: {resolution}",
+                f"- 24h volume: {volume_str}",
+                f"- Category: {cat}  |  Status: {res_status}",
+                f"- Source: Polymarket — {url}",
+            ]
+            text = "\n".join(lines)
+
+            published_at = _parse_iso_datetime(m.get("updated_at"))
+            # BUG-1 (2026-07-01): BP-604/605 requires every retrieval source to set
+            # a non-null entity_id OR citation_meta.entity_name — a null here made
+            # the entity-grounding guard refuse the whole answer
+            # (entity_grounding_failed item_entity_names:[null,null]). Prediction
+            # markets are NOT a single ticker; the market's subject IS the user's
+            # topic (the market was ILIKE-matched to the query). Use the market's
+            # category as a stable, human-readable subject label, falling back to a
+            # generic label. (The entity-grounding guard ALSO exempts topic-matched
+            # polymarket items — see _check_entity_grounding — so grounding no
+            # longer depends on the flaky question-entity resolution.)
+            entity_label = str(cat).strip().title() if isinstance(cat, str) and cat.strip() else "Prediction Market"
+
+            # ── PLAN-0056 Wave E3: ground the odds + volume ───────────────────
+            # Without grounding_fields the implied-odds percentages lived ONLY in
+            # the markdown ``text``, so the value-substantiation eval could not
+            # verify a cited "Yes 63%" figure (docs/audits/
+            # 2026-07-03-prediction-market-refusal.md — "Residual gap"). We emit
+            # one ``(<outcome>_probability, NN)`` entry per outcome using the SAME
+            # integer percent the prose cites (via _probability_grounding_value —
+            # never the raw 0..1 fraction, which would mismatch the "63%" in text),
+            # plus the raw 24h volume and the market_id. Empty-safe: a market with
+            # no usable outcomes still yields market_id (or an empty tuple), never a
+            # crash. This ONLY adds metadata — the text rendering and citation logic
+            # above are untouched, so it cannot reintroduce the phantom-citation
+            # refusal.
+            grounding: list[tuple[str, str]] = []
+            if isinstance(outcomes, list):
+                for o in outcomes:
+                    if not isinstance(o, dict):
+                        continue
+                    o_name = str(o.get("name") or "").strip()
+                    pct_val = _probability_grounding_value(o.get("price"))
+                    if o_name and pct_val is not None:
+                        grounding.append((f"{o_name.lower()}_probability", pct_val))
+            vol_val = _coerce_grounding_number(volume)
+            if vol_val is not None:
+                grounding.append(("volume_24h", vol_val))
+            if market_id:
+                grounding.append(("market_id", market_id))
+
+            out.append(
+                RetrievedItem.create(
+                    item_id=f"tool:prediction_market:{market_id or question[:32]}",
+                    item_type=ItemType.financial,
+                    text=text[:_TOOL_RESULT_MAX_CHARS],
+                    score=0.84,
+                    # Prediction markets are a market-priced signal, not an
+                    # authoritative filing — mid trust (eodhd_news tier).
+                    trust_weight=0.70,
+                    published_at=published_at,
+                    citation_meta=CitationMeta(
+                        title=question,
+                        url=url,
+                        source_name="polymarket",
+                        published_at=published_at,
+                        entity_name=entity_label,
+                    ),
+                    grounding_fields=tuple(grounding),
+                )
+            )
+
+        log.info(
+            "tool_executed",
+            tool="get_prediction_markets",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            query=query_norm,
+            category=category_norm,
+            count=len(out),
+        )
+        return out
 
     async def _handle_get_economic_calendar(
         self,
@@ -2255,8 +2933,13 @@ class MarketHandler(ToolHandler):
                     snap_lines.append(f"  Price/Book: {float(snap_pb):.2f}x")
             snap_dy = current_snapshot.get("dividend_yield")
             if snap_dy is not None:
-                with contextlib.suppress(TypeError, ValueError):
-                    snap_lines.append(f"  Dividend Yield: {float(snap_dy):.4f}")
+                # D-h (2026-07-08): render as a magnitude-gated percent instead of
+                # a bare ratio (".4f"). The gate never emits an implausible
+                # (>100%) yield — the XLU/XLE "268%" bug — and disambiguates the
+                # fraction (0.0268 → 2.68%) vs already-percent (2.68 → 2.68%) shapes.
+                dy_pct = _format_ratio_as_percent(snap_dy)
+                if dy_pct is not None:
+                    snap_lines.append(f"  Dividend Yield: {dy_pct}")
             # PLAN-0104 W30 / BP-649: forward P/E + PEG ratio. Emitted only
             # when non-None — missing snapshot fields are NEVER rendered as
             # "—", because tool_use.py v1.5 instructs the LLM to refuse

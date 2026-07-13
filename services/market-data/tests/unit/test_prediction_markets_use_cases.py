@@ -9,11 +9,21 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from market_data.application.use_cases.query_prediction_markets import (
     CountPredictionMarketCategoriesUseCase,
+    GetPredictionEventUseCase,
     GetPredictionMarketHistoryUseCase,
+    GetPredictionMarketPriceHistoryUseCase,
+    GetPredictionMarketTradesUseCase,
     GetPredictionMarketUseCase,
+    ListPredictionEventsUseCase,
     ListPredictionMarketsUseCase,
 )
-from market_data.domain.entities import PredictionMarket, PredictionMarketSnapshot
+from market_data.domain.entities import (
+    PredictionEvent,
+    PredictionMarket,
+    PredictionMarketPrice,
+    PredictionMarketSnapshot,
+    PredictionMarketTrade,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -52,6 +62,49 @@ def _make_snapshot(
     )
 
 
+def _make_price(
+    token_id: str = "t1",  # noqa: S107
+    interval: str = "1h",
+    price: str = "0.72",
+    outcome_name: str | None = "Yes",
+) -> PredictionMarketPrice:
+    return PredictionMarketPrice(
+        market_id="mkt-001",
+        token_id=token_id,
+        interval=interval,
+        window_start_ts=_SNAP_AT,
+        price=Decimal(price),
+        outcome_name=outcome_name,
+    )
+
+
+def _make_trade(
+    trade_id: str = "trd-1",
+    side: str = "buy",
+    size_usd: str | None = "100.0",
+) -> PredictionMarketTrade:
+    return PredictionMarketTrade(
+        market_id="mkt-001",
+        trade_id=trade_id,
+        token_id="t1",
+        price=Decimal("0.72"),
+        side=side,
+        ts=_SNAP_AT,
+        size_usd=Decimal(size_usd) if size_usd is not None else None,
+    )
+
+
+def _make_event(event_id: str = "evt-001", name: str = "Fed decision") -> PredictionEvent:
+    return PredictionEvent(
+        event_id=event_id,
+        name=name,
+        category="macro",
+        start_date=_NOW,
+        end_date=None,
+        market_count=3,
+    )
+
+
 def _make_uow(
     market: PredictionMarket | None = None,
     markets: list[PredictionMarket] | None = None,
@@ -59,6 +112,11 @@ def _make_uow(
     snapshots: list[PredictionMarketSnapshot] | None = None,
     latest_prices: dict[str, dict[str, float]] | None = None,
     volumes_by_market: dict[str, Decimal | None] | None = None,
+    prices: list[PredictionMarketPrice] | None = None,
+    trades: list[PredictionMarketTrade] | None = None,
+    events: list[PredictionEvent] | None = None,
+    events_total: int = 0,
+    event: PredictionEvent | None = None,
 ) -> MagicMock:
     uow = MagicMock()
 
@@ -76,6 +134,20 @@ def _make_uow(
     snapshots_repo.list_snapshots = AsyncMock(return_value=snapshots or [])
     snapshots_repo.get_latest_prices_batch = AsyncMock(return_value=latest_prices or {})
     uow.prediction_market_snapshots_read = snapshots_repo
+
+    # PLAN-0056 A4: interval prices / trades / events read repos.
+    prices_repo = MagicMock()
+    prices_repo.list_prices = AsyncMock(return_value=prices or [])
+    uow.prediction_market_prices_read = prices_repo
+
+    trades_repo = MagicMock()
+    trades_repo.list_trades = AsyncMock(return_value=trades or [])
+    uow.prediction_market_trades_read = trades_repo
+
+    events_repo = MagicMock()
+    events_repo.list_events = AsyncMock(return_value=(events or [], events_total))
+    events_repo.find_by_event_id = AsyncMock(return_value=event)
+    uow.prediction_events_read = events_repo
 
     return uow
 
@@ -193,6 +265,68 @@ async def test_list_markets_omits_category_when_not_provided() -> None:
 
     call_kwargs = uow.prediction_markets_read.list_markets.call_args.kwargs
     assert call_kwargs["category"] is None
+
+
+# ── PLAN-0056 QA: latest-volume window bound (500 / perf fix) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_markets_forwards_volume_window_to_repo() -> None:
+    """A configured ``volume_window_days`` is passed to ``list_markets``.
+
+    PLAN-0056 QA: this is the perf/500 fix — the repo must receive the window so
+    its latest-volume LATERAL is time-bounded and TimescaleDB can prune chunks.
+    If a refactor drops the plumbing, the endpoint silently reverts to the
+    unbounded full-chunk-scan that 500s under load, and no other test catches it.
+    """
+    uow = _make_uow(markets=[], total=0)
+    uc = ListPredictionMarketsUseCase(uow, volume_window_days=30)
+
+    await uc.execute(status="open")
+
+    call_kwargs = uow.prediction_markets_read.list_markets.call_args.kwargs
+    assert call_kwargs["volume_window_days"] == 30
+
+
+@pytest.mark.asyncio
+async def test_list_markets_forwards_window_to_price_batch() -> None:
+    """The batch price fetch is bounded to the SAME window as the volume LATERAL.
+
+    PLAN-0056 QA: ``get_latest_prices_batch`` is the residual cold
+    hypertable-scan after the LATERAL fix. It must receive ``window_days`` so it
+    prunes chunks AND so a row's prices come from the same recent-window
+    snapshot as its ``volume_24h`` (consistent recency).
+    """
+    market = _make_market()
+    uow = _make_uow(
+        markets=[market],
+        total=1,
+        latest_prices={"mkt-001": {"Yes": 0.7, "No": 0.3}},
+        volumes_by_market={"mkt-001": Decimal("100")},
+    )
+    uc = ListPredictionMarketsUseCase(uow, volume_window_days=30)
+
+    await uc.execute(status="open")
+
+    batch_call = uow.prediction_market_snapshots_read.get_latest_prices_batch.call_args
+    assert batch_call.kwargs["window_days"] == 30
+
+
+@pytest.mark.asyncio
+async def test_list_markets_defaults_volume_window_to_none() -> None:
+    """When no window is configured the use case forwards ``None`` (unbounded).
+
+    Pins the default so a legacy/tests-only construction keeps the previous
+    unbounded behaviour rather than accidentally bounding to 0 days (which would
+    return NULL volume for every market).
+    """
+    uow = _make_uow(markets=[], total=0)
+    uc = ListPredictionMarketsUseCase(uow)
+
+    await uc.execute(status="open")
+
+    call_kwargs = uow.prediction_markets_read.list_markets.call_args.kwargs
+    assert call_kwargs["volume_window_days"] is None
 
 
 # ── GetPredictionMarketUseCase ────────────────────────────────────────────────
@@ -365,3 +499,140 @@ async def test_count_categories_empty() -> None:
     result = await use_case.execute()
 
     assert result == []
+
+
+# ── PLAN-0056 A4: GetPredictionMarketPriceHistoryUseCase ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_price_history_reads_prices_repo() -> None:
+    """When market exists, execute reads interval bars from prices_read.list_prices."""
+    market = _make_market()
+    bars = [_make_price(interval="1h"), _make_price(interval="1h", price="0.70")]
+    uow = _make_uow(market=market, prices=bars)
+
+    uc = GetPredictionMarketPriceHistoryUseCase(uow)
+    result = await uc.execute("mkt-001", interval="1h", limit=500)
+
+    assert result is not None
+    assert len(result) == 2
+    # It must query the prices hypertable, NOT the snapshots repo.
+    call_kwargs = uow.prediction_market_prices_read.list_prices.call_args.kwargs
+    assert call_kwargs["interval"] == "1h"
+    uow.prediction_market_snapshots_read.list_snapshots.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_price_history_forwards_token_id() -> None:
+    """token_id is forwarded verbatim to the repo to narrow to one series."""
+    uow = _make_uow(market=_make_market(), prices=[])
+    uc = GetPredictionMarketPriceHistoryUseCase(uow)
+
+    await uc.execute("mkt-001", interval="1d", token_id="t1")
+
+    call_kwargs = uow.prediction_market_prices_read.list_prices.call_args.kwargs
+    assert call_kwargs["token_id"] == "t1"  # noqa: S105
+
+
+@pytest.mark.asyncio
+async def test_price_history_market_not_found_returns_none() -> None:
+    """execute returns None when the market does not exist (→ 404 upstream)."""
+    uow = _make_uow(market=None)
+    uc = GetPredictionMarketPriceHistoryUseCase(uow)
+
+    result = await uc.execute("missing", interval="1h")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_price_history_from_after_to_raises() -> None:
+    """from_dt > to_dt raises ValueError (→ 400 upstream)."""
+    uow = _make_uow(market=_make_market())
+    uc = GetPredictionMarketPriceHistoryUseCase(uow)
+    from_dt = datetime(2026, 4, 9, tzinfo=UTC)
+    to_dt = datetime(2026, 4, 1, tzinfo=UTC)
+
+    with pytest.raises(ValueError, match="before"):
+        await uc.execute("mkt-001", interval="1h", from_dt=from_dt, to_dt=to_dt)
+
+
+# ── PLAN-0056 A4: GetPredictionMarketTradesUseCase ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trades_returns_list() -> None:
+    """execute returns the trade list for an existing market."""
+    trades = [_make_trade("trd-1"), _make_trade("trd-2", side="sell")]
+    uow = _make_uow(market=_make_market(), trades=trades)
+
+    uc = GetPredictionMarketTradesUseCase(uow)
+    result = await uc.execute("mkt-001", limit=100)
+
+    assert result is not None
+    assert len(result) == 2
+
+
+@pytest.mark.asyncio
+async def test_trades_forwards_since_filter() -> None:
+    """The since bound is forwarded to the repo verbatim."""
+    since = datetime(2026, 4, 9, 10, 0, 0, tzinfo=UTC)
+    uow = _make_uow(market=_make_market(), trades=[])
+    uc = GetPredictionMarketTradesUseCase(uow)
+
+    await uc.execute("mkt-001", since=since, limit=50)
+
+    call_kwargs = uow.prediction_market_trades_read.list_trades.call_args.kwargs
+    assert call_kwargs["since"] == since
+    assert call_kwargs["limit"] == 50
+
+
+@pytest.mark.asyncio
+async def test_trades_market_not_found_returns_none() -> None:
+    """execute returns None when the market does not exist (→ 404 upstream)."""
+    uow = _make_uow(market=None)
+    uc = GetPredictionMarketTradesUseCase(uow)
+
+    result = await uc.execute("missing")
+    assert result is None
+    uow.prediction_market_trades_read.list_trades.assert_not_awaited()
+
+
+# ── PLAN-0056 A4: ListPredictionEventsUseCase / GetPredictionEventUseCase ─────
+
+
+@pytest.mark.asyncio
+async def test_list_events_returns_events_and_total() -> None:
+    """execute returns (events, total) straight from the repo."""
+    events = [_make_event("evt-001"), _make_event("evt-002", name="Election")]
+    uow = _make_uow(events=events, events_total=2)
+
+    uc = ListPredictionEventsUseCase(uow)
+    result, total = await uc.execute(limit=50, offset=0)
+
+    assert total == 2
+    assert len(result) == 2
+    call_kwargs = uow.prediction_events_read.list_events.call_args.kwargs
+    assert call_kwargs["limit"] == 50
+    assert call_kwargs["offset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_event_found_returns_entity() -> None:
+    """execute returns the event when it exists."""
+    event = _make_event("evt-001")
+    uow = _make_uow(event=event)
+
+    uc = GetPredictionEventUseCase(uow)
+    result = await uc.execute("evt-001")
+
+    assert result is event
+
+
+@pytest.mark.asyncio
+async def test_get_event_not_found_returns_none() -> None:
+    """execute returns None when the event does not exist (→ 404 upstream)."""
+    uow = _make_uow(event=None)
+    uc = GetPredictionEventUseCase(uow)
+
+    result = await uc.execute("missing")
+    assert result is None

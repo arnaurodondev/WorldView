@@ -390,6 +390,8 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
   "doc_id": "UUID string",
   "source_type": "string",
   "source_name": "string | null",
+  "external_id": "string | null",
+  "source_title": "string | null",
   "published_at": "ISO-8601 | null",
   "routing_tier": "suppress | light | medium | deep",
   "routing_score": "float [0,1]",
@@ -401,6 +403,23 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
   "tenant_id": "UUID string | null"
 }
 ```
+
+> **`external_id` passthrough (PLAN-0056 Wave C2b)**: `external_id` is a pure, in-memory
+> passthrough — S6 reads it off the inbound `content.article.stored.v1` event
+> (`process_message` → `_run_pipeline` → `_enqueue_enriched`) and rides it verbatim onto
+> `nlp.article.enriched.v1`. It is NOT persisted to `nlp_db` and NOT re-read; there is no
+> NER/extraction change and no migration. Absent on non-prediction / legacy events → null.
+> The KG `PredictionEnrichedConsumer` parses the `condition_id` out of it to resolve a
+> synthetic prediction doc to its real Polymarket market.
+
+> **`source_title` passthrough (PLAN-0056 Wave C3)**: same mechanism as `external_id` — a
+> pure, in-memory passthrough. S6 copies the (recovered) inbound document `title` onto the
+> enriched event's `source_title` (`process_message` sets `source_title=doc_title` →
+> `_run_pipeline` → `_enqueue_enriched`). NOT persisted, NOT re-read, no NER/extraction
+> change, no migration. For a Polymarket synthetic doc the title IS the market question, so
+> the KG uses `source_title` as the prediction temporal-event title AND as the input to the
+> `MarketPolarityClassifier` (per-entity bullish/bearish/neutral polarity). Absent on
+> legacy/title-less events → null.
 
 ---
 
@@ -861,3 +880,19 @@ Structured log output (structlog, JSON format) includes: `service=nlp-pipeline`,
 2. Inspect the error detail for the root cause.
 3. Fix the underlying issue (schema mismatch, DB error, etc.).
 4. Retry or resolve via `POST /admin/dlq/{id}/retry` or `POST /admin/dlq/{id}/resolve`.
+
+## LLM Cost Metering & Guardrails (PLAN-0117)
+
+Every `llm_usage_log` row written to `nlp_db` now stamps `cost_source` and `user_id`,
+and the per-call cost is resolved via the unified `resolve_cost` (delegating to
+`ml_clients.pricing`) — never hardcoded to `$0`. Ollama/GLiNER local calls carry
+`cost_source='local'` and are legitimately free.
+
+- **Silent-zero metric**: the write choke-point `NlpUsageLogRepository.log` emits the
+  cross-service counter `llm_usage_silent_zero_cost_total{service, model_id}` whenever a
+  row has `tokens_in + tokens_out > 0` AND `estimated_cost_usd == 0` AND
+  `cost_source NOT IN ('local','aggregate')` — i.e. a paid provider call that priced to
+  zero. This should never fire in steady state (Prometheus alert `LlmUsageSilentZeroCost`).
+- **Boot-time priceability warning**: the article-consumer entrypoint calls
+  `warn_unpriceable_models(...)` at startup, logging a structured WARNING for any configured
+  model that has no pricing path. See `docs/BUG_PATTERNS.md` BP-715.

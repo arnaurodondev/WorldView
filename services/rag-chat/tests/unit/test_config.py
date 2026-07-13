@@ -41,6 +41,60 @@ def test_citation_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.citation_run_budget_s == 600.0
 
 
+def test_completion_model_default_is_real_deepinfra_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DEF-035: the completion_model default must be a model that exists on DeepInfra.
+
+    The previous default ``deepseek-ai/DeepSeek-V4-Flash-Thinking`` 404s on
+    DeepInfra — an unset ``RAG_CHAT_COMPLETION_MODEL`` would break completions.
+    The default now matches prod (``openai/gpt-oss-120b``).
+    """
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    s = _make_settings()
+    assert s.completion_model == "openai/gpt-oss-120b"
+    # Regression guard: the known-404 model must never be the default again.
+    assert "DeepSeek-V4-Flash-Thinking" not in s.completion_model
+
+
+def test_planning_model_defaults_to_completion_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DEF-036: with RAG_CHAT_PLANNING_MODEL unset, planning_model == completion_model.
+
+    The planner/synthesis split must be a no-op by default: an unset env means
+    the tool-loop planning turn uses the SAME model as synthesis (gpt-oss-120b),
+    so behaviour is byte-identical to the pre-split single-model orchestrator.
+    """
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    s = _make_settings()
+    assert s.planning_model == "openai/gpt-oss-120b"
+    # The whole point of the safe default: planning == synthesis when unset.
+    assert s.planning_model == s.completion_model
+
+
+def test_planning_model_env_override_is_respected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DEF-036: RAG_CHAT_PLANNING_MODEL overrides the planner model independently.
+
+    Setting the planner env to the fast Qwen3-235B model must NOT change
+    ``completion_model`` (synthesis stays on gpt-oss-120b) — the two are split.
+    """
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    s = _make_settings(planning_model="Qwen/Qwen3-235B-A22B-Instruct-2507")
+    assert s.planning_model == "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    # Synthesis model must be untouched by a planner override.
+    assert s.completion_model == "openai/gpt-oss-120b"
+    assert s.planning_model != s.completion_model
+
+
 def test_citation_judge_provider_validates_enum(monkeypatch: pytest.MonkeyPatch) -> None:
     """Invalid citation_judge_provider raises ValidationError."""
     for key in list(os.environ):

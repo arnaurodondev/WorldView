@@ -109,3 +109,40 @@ describe("createPortfoliosApi().addPosition — request body (T-5-02, PLAN-0108)
     expect(body.price).toBe(75.5);
   });
 });
+
+// ── PLAN-0122 W-C (R-13): optional tradeDate → executed_at ─────────────────────
+//
+// WHY these tests: the trade-date picker in AddPositionDialog depends on the
+// gateway threading a chosen date into `executed_at`. The param is optional and
+// TRAILING so every existing 4-arg caller is unaffected (backward-compat). These
+// pin both branches: provided ⇒ that date; omitted ⇒ "now".
+
+describe("createPortfoliosApi().addPosition — optional tradeDate (PLAN-0122 R-13)", () => {
+  it("uses the provided tradeDate for executed_at when given", async () => {
+    const api = createPortfoliosApi("test-token");
+    await api.addPosition("port-1", "inst-1", 10, 100, "2020-01-15T00:00:00Z");
+
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
+
+    // The chosen date flows straight through to S1's executed_at field.
+    expect(body.executed_at).toBe("2020-01-15T00:00:00Z");
+  });
+
+  it("defaults executed_at to now when tradeDate is omitted (backward-compat)", async () => {
+    const before = Date.now();
+    const api = createPortfoliosApi("test-token");
+    // Called with the ORIGINAL 4-arg signature — proves existing callers are safe.
+    await api.addPosition("port-1", "inst-1", 10, 100);
+    const after = Date.now();
+
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
+
+    // executed_at is an ISO "now" string within the call window.
+    expect(typeof body.executed_at).toBe("string");
+    const ts = Date.parse(body.executed_at as string);
+    expect(ts).toBeGreaterThanOrEqual(before);
+    expect(ts).toBeLessThanOrEqual(after);
+  });
+});

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -221,6 +222,75 @@ async def test_lag_record_is_throttled() -> None:
             consumer._record_consumer_lag()
 
     assert calls["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# IntelligenceConsumer — idle heartbeat refresh (PLAN-0056 live-QA BUG 5)
+# ---------------------------------------------------------------------------
+
+
+def _make_intelligence_consumer(heartbeat_path: str) -> object:
+    from alert.infrastructure.messaging.consumers.intelligence_consumer import IntelligenceConsumer
+
+    from messaging.kafka.consumer.base import ConsumerConfig
+
+    config = ConsumerConfig(
+        bootstrap_servers="localhost:9092",
+        group_id="alert-service-group",
+        topics=["market.prediction.signal.v1"],
+    )
+    consumer = IntelligenceConsumer(config=config, fanout_use_case=MagicMock(), dedup_client=None)
+    consumer._heartbeat_path = heartbeat_path  # type: ignore[attr-defined]
+    return consumer
+
+
+def test_idle_poll_cycle_refreshes_heartbeat_file(tmp_path: Any) -> None:
+    """BUG 5: an idle poll cycle (no message) must refresh the heartbeat FILE.
+
+    The Docker healthcheck stats the heartbeat file mtime with a 300s window.
+    Before the fix the file was only touched on construction + per processed
+    message, so a consumer assigned only empty topics froze the file at boot and
+    the healthcheck went ``unhealthy`` forever despite a live poll loop.
+    """
+    import os
+    import time
+
+    hb = str(tmp_path / "hb")
+    consumer = _make_intelligence_consumer(hb)
+
+    # Simulate a stale file (as if frozen at boot long ago).
+    with open(hb, "a"):
+        os.utime(hb, (0, 0))
+    assert os.path.getmtime(hb) < 1.0
+
+    before_progress = consumer.last_progress_monotonic  # type: ignore[attr-defined]
+
+    # The base loop calls _record_progress after every successful poll (idle OR
+    # message; BP-700). Invoke it directly to exercise the IDLE path.
+    consumer._record_progress()  # type: ignore[attr-defined]
+
+    # File mtime is now fresh → healthcheck stays healthy on an idle topic.
+    assert time.time() - os.path.getmtime(hb) < 5.0
+    # The poll-cycle marker advanced …
+    assert consumer.last_poll_monotonic > 0.0  # type: ignore[attr-defined]
+    # … but the message-progress marker did NOT (no message was processed).
+    assert consumer.last_progress_monotonic == before_progress  # type: ignore[attr-defined]
+
+
+def test_touch_heartbeat_advances_message_marker(tmp_path: Any) -> None:
+    """A processed message advances BOTH the file and the message-progress marker."""
+    import os
+    import time
+
+    hb = str(tmp_path / "hb")
+    consumer = _make_intelligence_consumer(hb)
+    with open(hb, "a"):
+        os.utime(hb, (0, 0))
+
+    consumer._touch_heartbeat()  # type: ignore[attr-defined]
+
+    assert time.time() - os.path.getmtime(hb) < 5.0
+    assert consumer.last_progress_monotonic > 0.0  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

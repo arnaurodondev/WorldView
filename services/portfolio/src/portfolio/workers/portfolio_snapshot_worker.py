@@ -39,16 +39,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import time
 import urllib.parse
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import httpx
-import jwt as pyjwt
 
 from observability import get_logger, start_metrics_server  # type: ignore[import-untyped]
+from observability.internal_jwt import mint_internal_jwt  # type: ignore[import-untyped]
 from portfolio.application.use_cases.compute_portfolio_value import (
     ComputePortfolioValueCommand,
     ComputePortfolioValueUseCase,
@@ -133,23 +132,17 @@ def is_trading_day(d: date) -> bool:
 def _system_jwt_headers() -> dict[str, str]:
     """Generate ``X-Internal-JWT`` for service-to-service calls to market-data.
 
-    Same rationale as ``BrokerageTransactionSyncWorker._system_jwt_headers``:
-    in dev S3 runs with ``skip_verification=True`` and accepts any
-    decodable JWT. Production needs a real S9-signed token.
+    DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
+    always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
+    ``InternalJWTMiddleware`` once real verification is enabled).  Same
+    rationale as ``BrokerageTransactionSyncWorker._system_jwt_headers``: in dev
+    S3 runs with ``skip_verification=True`` and accepts any decodable JWT.
+    Production needs a real S9-signed token.
     """
-    now = int(time.time())
-    token = pyjwt.encode(
-        {
-            "iss": "worldview-gateway",
-            "sub": "system:portfolio-snapshot",
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "tenant_id": "00000000-0000-0000-0000-000000000000",
-            "role": "system",
-            "iat": now,
-            "exp": now + 86400,
-        },
-        "dev-skip-verification-key-for-portfolio-snapshot-worker",
-        algorithm="HS256",
+    token = mint_internal_jwt(
+        sub="system:portfolio-snapshot",
+        ttl_seconds=86400,
+        dev_hs256_secret="dev-skip-verification-key-for-portfolio-snapshot-worker",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
     )
     return {"X-Internal-JWT": token}
 

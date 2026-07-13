@@ -79,7 +79,10 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.enriched_event impor
 )
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.helpers import _normalize_ref_variants
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.ml_phase import MLPhaseResult, run_ml_phase
-from nlp_pipeline.infrastructure.messaging.consumers.blocks.persist import persist_artifacts
+from nlp_pipeline.infrastructure.messaging.consumers.blocks.persist import (
+    persist_artifacts,
+    persist_searchable_artifacts,
+)
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.provisional import (
     _collect_extraction_refs,
     synthesize_provisional_refs,
@@ -788,6 +791,12 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         is_backfill = bool(value.get("is_backfill", False))
         correlation_id: str | None = value.get("correlation_id") or None
         source_name: str | None = value.get("source_name")
+        # PLAN-0056 Wave C2b: upstream market/source identity (e.g.
+        # "polymarket:<condition_id>"), threaded verbatim from content.article.stored.v1
+        # onto the enriched event so the KG can resolve prediction docs to a real
+        # market.  Absent on legacy/non-prediction events → None (pure passthrough,
+        # no NER/extraction change).
+        external_id: str | None = value.get("external_id") or None
 
         # ── Tenant resolution with legacy-passthrough sentinel (PLAN-0096 W4) ──
         # Pre-PLAN-0086 Avro payloads have no ``tenant_id`` field.  Migration
@@ -858,12 +867,18 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 minio_key=minio_key,
                 source_type=source_type,
                 source_name=source_name,
+                external_id=external_id,
                 published_at=published_at,
                 extracted_at=extracted_at,
                 is_backfill=is_backfill,
                 correlation_id=correlation_id,
                 tenant_id=tenant_id,
                 doc_title=doc_title,
+                # PLAN-0056 Wave C3: carry the (recovered) document title onto the
+                # enriched event as source_title.  For a Polymarket synthetic doc
+                # this IS the market question — the KG needs it to title the
+                # prediction temporal event and classify per-entity polarity.
+                source_title=doc_title,
             )
 
         url = value.get("url") or await extract_url_from_silver(self._storage, self._settings.silver_bucket, minio_key)
@@ -1098,12 +1113,18 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         minio_key: str,
         source_type: str,
         source_name: str | None = None,
+        # PLAN-0056 Wave C2b: upstream market/source identity, threaded verbatim to
+        # the enriched event (default None keeps existing direct-call unit tests green).
+        external_id: str | None = None,
         published_at: datetime | None,
         extracted_at: datetime,
         is_backfill: bool,
         correlation_id: str | None,
         tenant_id: uuid.UUID | None = None,
         doc_title: str | None = None,
+        # PLAN-0056 Wave C3: document title threaded verbatim onto the enriched
+        # event's source_title (default None keeps existing direct-call unit tests green).
+        source_title: str | None = None,
     ) -> None:
         """Download text and run Blocks 3-10 with D-004 dual-DB commit ordering."""
 
@@ -1138,16 +1159,54 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # constructed with it (avoids the post-construction stamp going
         # missing in any future refactor).  The explicit post-construction
         # stamp below is retained as a belt-and-braces safeguard.
-        mentions, stats = await run_ner_block(
-            doc_id=doc_id,
-            sections=sections,
-            ner_client=self._ner,
-            threshold=self._settings.gliner_threshold,
-            batch_size=self._settings.gliner_batch_size,
-            ner_model_id=self._settings.ner_model_id,
-            section_token_limit=self._settings.gliner_section_token_limit,
-            tenant_id=tenant_id,
-        )
+        # BP-718 (SEC-filings corpus-coverage gap): NER is NON-FATAL.
+        # ROOT CAUSE — the article consumer persists chunk_text + chunk_embeddings
+        # only at the very END of the pipeline (``persist_artifacts``), AFTER NER
+        # (this block) and the LLM deep-extraction ML phase. A GLiNER outage
+        # (``connection error`` / ``Server disconnected`` / ``Name or service not
+        # known``) therefore aborted the WHOLE message → DLQ, so the document's
+        # SEARCHABLE chunks + embeddings were never written — even though chat
+        # retrieval does not need entity mentions at all. During the 2026-07-05 bulk
+        # SEC backfill (2,265 filings) GLiNER was flaky and thousands of large
+        # 10-Q/10-K filings were DLQ'd whole: content_store held them, but the chat
+        # corpus (nlp_db chunks) never received them, so NVIDIA/Microsoft/Amazon
+        # revenue could not be answered from the filings corpus (only Apple's one
+        # 10-Q, ingested earlier when the pipeline was healthy, worked).
+        #
+        # FIX — treat a GLiNER failure as "zero mentions" rather than a hard error.
+        # The Block-4 contract already guarantees "zero mentions NEVER suppresses a
+        # document", so downstream routing/embedding/persist all tolerate an empty
+        # mention list. The document still gets chunked + embedded + indexed and is
+        # immediately answerable in chat; entity mentions can be backfilled later by
+        # ``workers/backfill_entity_mentions.py`` once GLiNER recovers. This trades a
+        # transient loss of KG enrichment for durable retrieval coverage — the right
+        # tradeoff for a filings corpus whose primary value is its numeric text.
+        try:
+            mentions, stats = await run_ner_block(
+                doc_id=doc_id,
+                sections=sections,
+                ner_client=self._ner,
+                threshold=self._settings.gliner_threshold,
+                batch_size=self._settings.gliner_batch_size,
+                ner_model_id=self._settings.ner_model_id,
+                section_token_limit=self._settings.gliner_section_token_limit,
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            # GLiNER unavailable/slow — do NOT drop the document. Proceed with no
+            # mentions so chunk_text + chunk_embeddings still persist and the filing
+            # becomes searchable. Logged at WARNING (not raised) so the message is
+            # NOT routed to the DLQ for a purely-enrichment failure.
+            from nlp_pipeline.domain.models import DocumentEntityStats
+
+            logger.warning(
+                "article_consumer.ner_block_failed_nonfatal",
+                doc_id=str(doc_id),
+                source_type=source_type,
+                exc_info=True,
+            )
+            mentions = []
+            stats = DocumentEntityStats(doc_id=doc_id)
         for _i, m in enumerate(mentions):
             m.mention_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(_i), m.mention_text.lower().strip()))
         # PLAN-0098 W2 T-W2-01 (BP-586): unconditional stamp.  ``tenant_id`` is
@@ -1248,6 +1307,47 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             lede=_lede,
             source_type=source_type,
         )
+
+        # ── PHASE 1 (BP-719 Mode B): persist the SEARCHABLE artefacts in their OWN
+        # committed nlp_db transaction BEFORE the ML enrichment phase. ────────────
+        # ROOT CAUSE — the pipeline used to write chunk_text + chunk_embeddings (the
+        # artefacts chat's get_filings retrieves) only at the very END, inside the
+        # same trailing transaction as Blocks 8-10. On a large 10-Q the per-chunk
+        # deep-extraction (Block 10) blew past the 900s Kafka message watchdog; the
+        # watchdog cancelled the WHOLE message → the transaction rolled back → the
+        # chunks were NEVER written and the doc dead-lettered (~500+ DLQ rows,
+        # ~3,150 content_store docs incl. NVIDIA/MSFT 10-Qs missing from nlp_db, so
+        # chat could not answer their revenue).
+        #
+        # FIX — commit sections + chunks + embeddings first, in a standalone
+        # transaction. Enrichment (Blocks 8-10 + entity_mentions) then runs
+        # best-effort in the second transaction below; if it fails / times out /
+        # dead-letters, the searchable doc SURVIVES and mentions are backfillable
+        # (workers/backfill_entity_mentions.py). Skipped entirely when the doc
+        # produced no sections/chunks (e.g. SUPPRESS/HALT with empty output) so a
+        # no-op article does not open a needless transaction. Idempotent: chunk /
+        # section / embedding writes all use ON CONFLICT DO NOTHING with
+        # deterministic ids, so a redelivery of the same message never duplicates.
+        if sections or chunks:
+            async with self._nlp_sf() as searchable_s:
+                chunks = await persist_searchable_artifacts(
+                    nlp_session=searchable_s,
+                    section_repo=SectionRepository(searchable_s),
+                    chunk_repo=ChunkRepository(searchable_s),
+                    doc_id=doc_id,
+                    sections=sections,
+                    chunks=chunks,
+                    chunk_embs=chunk_embs,
+                    section_embs=section_embs,
+                    pending=pending,
+                    gliner_mention_floor=self._settings.gliner_mention_floor,
+                    settings=self._settings,
+                    # Pre-resolution GLiNER mentions — the best entity metadata
+                    # available before Block 9. persist_artifacts later refreshes the
+                    # JSONB with the resolved mentions on the happy path.
+                    ner_mentions=mentions,
+                )
+                await searchable_s.commit()
 
         # Blocks 8-10 + atomic DB write with D-004 dual-session ordering.
         # ALL repositories are constructed here (in article_consumer namespace)
@@ -1381,6 +1481,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     doc_id=doc_id,
                     source_type=source_type,
                     source_name=source_name,
+                    external_id=external_id,
+                    # PLAN-0056 Wave C3: carry the document title (market question
+                    # for Polymarket synthetic docs) onto the enriched event.
+                    source_title=source_title,
                     published_at=published_at,
                     is_backfill=is_backfill,
                     routing_decision=routing_decision,

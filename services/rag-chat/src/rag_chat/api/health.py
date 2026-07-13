@@ -52,17 +52,24 @@ async def readyz(request: Request) -> Response:
         checks["rag_db"] = "error"
         ok = False
 
-    # 2. Ollama — GET /api/tags
-    try:
-        settings: RagChatSettings = request.app.state.settings
-        async with httpx.AsyncClient(timeout=3.0) as hc:
-            r = await hc.get(f"{settings.ollama_base_url}/api/tags")
-            r.raise_for_status()
-        checks["ollama"] = "ok"
-    except Exception:
-        _log.warning("readyz_ollama_failed", exc_info=True)  # type: ignore[no-any-return]
-        checks["ollama"] = "error"
-        ok = False
+    # 2. Ollama — GET /api/tags. Ollama was dropped from the platform (all LLM/
+    #    embedding paths use DeepInfra); when no ollama_base_url is configured the
+    #    dependency does not exist, so skip the probe instead of hard-failing readiness
+    #    (an unset/empty URL previously made /readyz return 503 forever → the pod never
+    #    became Ready). Only probe Ollama when a base URL is explicitly configured.
+    settings: RagChatSettings = request.app.state.settings
+    if settings.ollama_base_url:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as hc:
+                r = await hc.get(f"{settings.ollama_base_url}/api/tags")
+                r.raise_for_status()
+            checks["ollama"] = "ok"
+        except Exception:
+            _log.warning("readyz_ollama_failed", exc_info=True)  # type: ignore[no-any-return]
+            checks["ollama"] = "error"
+            ok = False
+    else:
+        checks["ollama"] = "disabled"
 
     # 3. Valkey — PING
     try:

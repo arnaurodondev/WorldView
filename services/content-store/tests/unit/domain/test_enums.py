@@ -41,6 +41,9 @@ class TestSourceType:
     def test_all_sources(self) -> None:
         # tenant_upload added in PLAN-0086 Wave A-1 for multi-tenant private content
         # eodhd_ticker_news added in PLAN-0106 for the EODHD ticker-news adapter
+        # polymarket_gamma_events / polymarket_clob / polymarket_data_trades /
+        # polymarket_data_oi added in PLAN-0056 Wave Z1 for the deeper Polymarket
+        # prediction-market streams (SourceType re-exports contracts.ContentSourceType).
         expected = {
             "eodhd",
             "eodhd_ticker_news",
@@ -49,6 +52,10 @@ class TestSourceType:
             "newsapi",
             "manual",
             "polymarket",
+            "polymarket_gamma_events",
+            "polymarket_clob",
+            "polymarket_data_trades",
+            "polymarket_data_oi",
             "tenant_upload",
         }
         assert {v.value for v in SourceType} == expected

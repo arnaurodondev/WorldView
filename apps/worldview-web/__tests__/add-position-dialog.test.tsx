@@ -11,11 +11,21 @@
  * DESIGN REFERENCE: PLAN-0059 F-2 Form Layer.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { z } from "zod";
 import { AddPositionDialog } from "@/features/portfolio/components/AddPositionDialog";
+
+// WHY mock useDebounce as identity (PLAN-0122 W-C): the ticker typeahead debounces
+// the query by 250 ms via useDebounce. In tests we want the debounced value to
+// update synchronously so the typeahead fires without a real timer wait — the
+// EntityPicker/InstrumentPicker tests use the same identity-mock convention.
+vi.mock("@/hooks/useDebounce", () => ({
+  useDebounce: (v: string) => v,
+}));
 
 // ── Hoisted mock functions ────────────────────────────────────────────────────
 // WHY vi.hoisted: vi.mock() factory functions are hoisted to the top of the
@@ -56,6 +66,14 @@ const SAMPLE_INSTRUMENT = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+// WHY a QueryClientProvider wrapper (PLAN-0122 W-C): the ticker typeahead now uses
+// TanStack Query (useQuery keyed ["instrument-search", q]); without a provider the
+// hook throws "No QueryClient set". retry:false keeps failed queries deterministic.
+function wrapper({ children }: { children: ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
+
 function renderDialog(overrides: Partial<Parameters<typeof AddPositionDialog>[0]> = {}) {
   const onOpenChange = vi.fn();
   const onSuccess = vi.fn();
@@ -68,6 +86,7 @@ function renderDialog(overrides: Partial<Parameters<typeof AddPositionDialog>[0]
       accessToken="test-token"
       {...overrides}
     />,
+    { wrapper },
   );
   return { onOpenChange, onSuccess };
 }
@@ -93,6 +112,11 @@ beforeEach(() => {
   mockSearchInstruments.mockReset();
   mockAddPosition.mockReset();
   mockToastSuccess.mockReset();
+  // WHY a default resolved value (PLAN-0122 W-C): the typeahead's useQuery calls
+  // searchInstruments on any typed ticker. Without a default, an un-stubbed mock
+  // returns undefined and TanStack Query errors on undefined data. Tests that need
+  // a real match override this with a persistent mockResolvedValue below.
+  mockSearchInstruments.mockResolvedValue({ results: [], query: "" });
 });
 
 // ── Ticker required ────────────────────────────────────────────────────────
@@ -185,23 +209,31 @@ describe("AddPositionDialog — avgPrice validation schema (BP-328)", () => {
 describe("AddPositionDialog — success path", () => {
   it("calls searchInstruments then addPosition on valid submit", async () => {
     const user = userEvent.setup();
-    mockSearchInstruments.mockResolvedValueOnce({ results: [SAMPLE_INSTRUMENT] });
+    // WHY persistent (not Once): searchInstruments is called by BOTH the typeahead
+    // useQuery and the submit-time fallback resolve. A persistent mock serves both.
+    mockSearchInstruments.mockResolvedValue({ results: [SAMPLE_INSTRUMENT] });
     mockAddPosition.mockResolvedValueOnce({ transaction_id: "tx-1" });
     const { onSuccess } = renderDialog();
 
+    // Type without picking a dropdown row → submit uses the fallback resolve (R-14).
     await user.type(screen.getByPlaceholderText(/aapl/i), "AAPL");
     await fillQuantity(user, "10");
     await user.click(screen.getByRole("button", { name: /add position/i }));
 
     await waitFor(() => {
+      // The submit-time fallback resolve fires with limit=1 (distinct from the
+      // typeahead's limit=8 call) — proving the fallback path still works.
       expect(mockSearchInstruments).toHaveBeenCalledWith("AAPL", 1);
     });
     await waitFor(() => {
+      // WHY a 5th arg now: addPosition gained an optional tradeDate (PLAN-0122 R-13).
+      // The dialog always sends the picked trade date as `${YYYY-MM-DD}T00:00:00Z`.
       expect(mockAddPosition).toHaveBeenCalledWith(
         "port-1",
         "ins-aapl",
         expect.any(Number),
         expect.any(Number),
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}T00:00:00Z$/),
       );
     });
     await waitFor(() => {
@@ -211,7 +243,7 @@ describe("AddPositionDialog — success path", () => {
 
   it("shows server error when addPosition throws", async () => {
     const user = userEvent.setup();
-    mockSearchInstruments.mockResolvedValueOnce({ results: [SAMPLE_INSTRUMENT] });
+    mockSearchInstruments.mockResolvedValue({ results: [SAMPLE_INSTRUMENT] });
     mockAddPosition.mockRejectedValueOnce(new Error("Insufficient buying power"));
     renderDialog();
 
@@ -281,7 +313,7 @@ describe("AddPositionDialog — FR-8 toast copy (portfolioKind)", () => {
     // WHY manual: manual portfolios trigger async W1 consumer recompute.
     // The 'within seconds' copy sets the user's expectation correctly.
     const user = userEvent.setup();
-    mockSearchInstruments.mockResolvedValueOnce({ results: [SAMPLE_INSTRUMENT] });
+    mockSearchInstruments.mockResolvedValue({ results: [SAMPLE_INSTRUMENT] });
     mockAddPosition.mockResolvedValueOnce({ transaction_id: "tx-manual" });
 
     renderDialog({ portfolioKind: "manual" });
@@ -303,7 +335,7 @@ describe("AddPositionDialog — FR-8 toast copy (portfolioKind)", () => {
     // WHY brokerage: brokerage portfolios sync from broker — no async consumer
     // recompute — so the generic copy is correct (no 'within seconds' promise).
     const user = userEvent.setup();
-    mockSearchInstruments.mockResolvedValueOnce({ results: [SAMPLE_INSTRUMENT] });
+    mockSearchInstruments.mockResolvedValue({ results: [SAMPLE_INSTRUMENT] });
     mockAddPosition.mockResolvedValueOnce({ transaction_id: "tx-brokerage" });
 
     renderDialog({ portfolioKind: "brokerage" });
@@ -320,5 +352,146 @@ describe("AddPositionDialog — FR-8 toast copy (portfolioKind)", () => {
       "Transaction recorded",
       expect.anything(),
     );
+  });
+});
+
+// ── PLAN-0122 W-C §6.3: trade-date picker (R-11) ──────────────────────────────
+
+/** Rebuild today's local YYYY-MM-DD the same way the component does. */
+function localTodayStr(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+describe("AddPositionDialog — trade-date picker (PLAN-0122 R-11)", () => {
+  it("defaults the trade date to today and flows the chosen date into executed_at", async () => {
+    const user = userEvent.setup();
+    mockSearchInstruments.mockResolvedValue({ results: [SAMPLE_INSTRUMENT] });
+    mockAddPosition.mockResolvedValueOnce({ transaction_id: "tx-date" });
+    renderDialog();
+
+    const dateInput = screen.getByLabelText(/trade date/i) as HTMLInputElement;
+    // Default is today (local date, not UTC).
+    expect(dateInput.value).toBe(localTodayStr());
+
+    // Back-date to a past day and submit (typed ticker, no pick → fallback resolve).
+    fireEvent.change(dateInput, { target: { value: "2020-01-15" } });
+    await user.type(screen.getByPlaceholderText(/aapl/i), "AAPL");
+    await fillQuantity(user, "3");
+    await user.click(screen.getByRole("button", { name: /add position/i }));
+
+    await waitFor(() => {
+      // The 5th arg is the chosen date as a midnight-UTC datetime string.
+      expect(mockAddPosition).toHaveBeenCalledWith(
+        "port-1",
+        "ins-aapl",
+        expect.any(Number),
+        expect.any(Number),
+        "2020-01-15T00:00:00Z",
+      );
+    });
+  });
+
+  it("blocks a future trade date and does not post the transaction", async () => {
+    const user = userEvent.setup();
+    mockSearchInstruments.mockResolvedValue({ results: [SAMPLE_INSTRUMENT] });
+    renderDialog();
+
+    const dateInput = screen.getByLabelText(/trade date/i);
+    fireEvent.change(dateInput, { target: { value: "2999-12-31" } });
+    await user.type(screen.getByPlaceholderText(/aapl/i), "AAPL");
+    await fillQuantity(user, "3");
+    await user.click(screen.getByRole("button", { name: /add position/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Trade date can't be in the future."),
+      ).toBeInTheDocument();
+    });
+    // Zod blocked the submit before any network call.
+    expect(mockAddPosition).not.toHaveBeenCalled();
+  });
+});
+
+// ── PLAN-0122 W-C §6.3: debounced ticker typeahead (R-12, R-14) ───────────────
+
+describe("AddPositionDialog — ticker typeahead (PLAN-0122 R-12/R-14)", () => {
+  it("shows a dropdown as the user types and selecting a row skips the submit-time resolve", async () => {
+    const user = userEvent.setup();
+    mockSearchInstruments.mockResolvedValue({ results: [SAMPLE_INSTRUMENT] });
+    mockAddPosition.mockResolvedValueOnce({ transaction_id: "tx-pick" });
+    renderDialog();
+
+    // Type a partial ticker → the debounced typeahead surfaces the match.
+    await user.type(screen.getByPlaceholderText(/aapl/i), "AAP");
+    const row = await screen.findByText("Apple Inc.");
+
+    // Pick the row (mouse click → exercises the onClick half of the dual handler).
+    await user.click(row);
+
+    await fillQuantity(user, "5");
+    await user.click(screen.getByRole("button", { name: /add position/i }));
+
+    await waitFor(() => {
+      // addPosition received the STASHED instrument_id from the pick.
+      expect(mockAddPosition).toHaveBeenCalledWith(
+        "port-1",
+        "ins-aapl",
+        expect.any(Number),
+        expect.any(Number),
+        expect.any(String),
+      );
+    });
+    // The submit-time fallback (limit=1) was SKIPPED because the pick already
+    // resolved the instrument — only the typeahead's limit=8 call ever ran.
+    expect(mockSearchInstruments).not.toHaveBeenCalledWith(expect.anything(), 1);
+  });
+
+  it("renders the empty state and still resolves a typed-but-unpicked ticker at submit (fallback)", async () => {
+    const user = userEvent.setup();
+    // Typeahead finds nothing for this prefix.
+    mockSearchInstruments.mockResolvedValue({ results: [] });
+    renderDialog();
+
+    await user.type(screen.getByPlaceholderText(/aapl/i), "ZZ");
+    await waitFor(() => {
+      expect(screen.getByText(/No instruments match/i)).toBeInTheDocument();
+    });
+
+    // Now the submit-time resolve succeeds → the fallback path still works (R-14).
+    mockSearchInstruments.mockResolvedValue({ results: [SAMPLE_INSTRUMENT] });
+    mockAddPosition.mockResolvedValueOnce({ transaction_id: "tx-fallback" });
+    await fillQuantity(user, "2");
+    await user.click(screen.getByRole("button", { name: /add position/i }));
+
+    await waitFor(() => {
+      expect(mockSearchInstruments).toHaveBeenCalledWith("ZZ", 1);
+    });
+    await waitFor(() => {
+      expect(mockAddPosition).toHaveBeenCalled();
+    });
+  });
+
+  it("clears the stashed instrument_id when the ticker is hand-edited after a pick", async () => {
+    const user = userEvent.setup();
+    mockSearchInstruments.mockResolvedValue({ results: [SAMPLE_INSTRUMENT] });
+    mockAddPosition.mockResolvedValueOnce({ transaction_id: "tx-edit" });
+    renderDialog();
+
+    // Pick a row (stashes ins-aapl), then hand-edit the ticker text.
+    await user.type(screen.getByPlaceholderText(/aapl/i), "AAP");
+    await user.click(await screen.findByText("Apple Inc."));
+    await user.type(screen.getByPlaceholderText(/aapl/i), "X"); // → AAPLX
+
+    await fillQuantity(user, "1");
+    await user.click(screen.getByRole("button", { name: /add position/i }));
+
+    // Because the manual edit invalidated the stash, submit RE-RESOLVES via limit=1.
+    await waitFor(() => {
+      expect(mockSearchInstruments).toHaveBeenCalledWith("AAPLX", 1);
+    });
   });
 });

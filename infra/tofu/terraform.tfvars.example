@@ -10,17 +10,25 @@
 #   tofu plan
 #   tofu apply
 
-hcloud_token   = "REPLACE_ME_hetzner_cloud_api_token"
-k3s_token      = "REPLACE_ME_run: openssl rand -hex 32"
-developer_ip   = "REPLACE_ME_your_public_ip/32"  # find with: curl -s https://api.ipify.org
-
+# ── Required variables ────────────────────────────────────────────────────────
+hcloud_token   = "REPLACE_ME_hetzner_cloud_api_token"     # Project → Security → API Tokens (Read/Write)
+k3s_token      = "REPLACE_ME_run: openssl rand -hex 32"   # shared cluster-join secret
+developer_ip   = "REPLACE_ME_your_public_ip/32"           # find with: curl -s https://api.ipify.org
 # Contents of your SSH public key (not the path, the actual key string)
 ssh_public_key = "ssh-ed25519 AAAAC3... your_email@example.com"
 
-# Optional: uncomment and fill when domain is purchased
-# domain = "worldview.yourdomain.com"
+# ── Production domain ─────────────────────────────────────────────────────────
+# Used as an extra TLS SAN on the k3s API server and for ingress certs.
+# The public ingress IP is created at runtime by the Hetzner CCM (Traefik LB) —
+# after bootstrap, run `tofu output ingress_ip_command`, execute it, and point
+# this domain's DNS A record at the returned IP.
+domain = "worldview.yourdomain.com"   # required in prod; leave "" for IP-only bring-up
 
-# Node types (defaults are optimal; change only if you need to scale down cost)
-# cp_type      = "cx32"   # 4 vCPU, 8 GB — ~€6/mo
-# worker1_type = "cx52"   # 16 vCPU, 32 GB — ~€24/mo (stateful)
-# worker2_type = "cx42"   # 8 vCPU, 16 GB — ~€12/mo (stateless)
+# ── Node types ────────────────────────────────────────────────────────────────
+# Defaults are optimal; change only if you need to scale cost.
+# IMPORTANT: the stateful node (worker1) MUST have >= 32 GB RAM. It co-hosts
+# Postgres, Kafka, MinIO, Valkey and GLiNER; anything smaller OOM-kills
+# under load even with the 8 GB swapfile the cloud-init provisions.
+# cp_type      = "cx32"   # 4 vCPU, 8 GB  (control-plane)
+# worker1_type = "cx52"   # 16 vCPU, 32 GB (stateful — do NOT go below 32 GB)
+# worker2_type = "cx42"   # 8 vCPU, 16 GB (stateless — 10 app services)

@@ -10,12 +10,14 @@ read (replica) session.
 from __future__ import annotations
 
 from datetime import date
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from sqlalchemy import Numeric, and_, func, select, text
+from sqlalchemy import Numeric, and_, func, literal, select, text, union_all
 
 from market_data.application.ports.repositories import MetricDataPoint, ScreenFilter, ScreenResult
+from market_data.config import Settings
 from market_data.domain.entities import ScreenFieldMetadata
 from market_data.infrastructure.db.models.fundamental_metrics import FundamentalMetricModel
 from market_data.infrastructure.db.models.fundamentals.technicals_snapshots import TechnicalsSnapshotModel
@@ -129,6 +131,24 @@ if TYPE_CHECKING:
 
 _log = structlog.get_logger(__name__)
 
+
+@lru_cache(maxsize=1)
+def _screen_statement_timeout_ms() -> int:
+    """Return the configured screener statement-timeout ceiling (ms).
+
+    NEW-6 (2026-07-06): the value was previously hardcoded to 8000 in
+    ``query_screen``. It now comes from ``Settings.screen_statement_timeout_ms``
+    (env ``MARKET_DATA_SCREEN_STATEMENT_TIMEOUT_MS``) so ops can raise the ceiling
+    under sustained host contention without a redeploy.
+
+    ``Settings()`` reads the process environment once; the result is memoised for
+    the process lifetime (env is fixed per container). Tests that need a different
+    ceiling can ``_screen_statement_timeout_ms.cache_clear()`` after patching the
+    env, or monkeypatch this function directly.
+    """
+    return int(Settings().screen_statement_timeout_ms)  # type: ignore[call-arg]
+
+
 # PLAN-0103 W16 (BP-635, 2026-05-30): introspect the real
 # ``instrument_fundamentals_snapshot`` table to discover which of the
 # ``_SNAP_FIELDS`` columns physically exist in the deployed schema.
@@ -228,16 +248,52 @@ async def _fetch_page_extras(
     m = FundamentalMetricModel
 
     # ── 1. Latest key-metric values (POST-branch union, gap #1) ──────────────
-    # DISTINCT ON (instrument_id, metric) + ORDER BY as_of_date DESC gives the
-    # newest row per pair in ONE index-driven query instead of N LATERALs.
+    # One UNION-ALL arm per metric, each a single-metric ``DISTINCT ON
+    # (instrument_id)`` scan, gives the newest row per (instrument, metric).
+    #
+    # ── NEW-6 R3 (2026-07-06): why NOT one ``metric IN (...)`` DISTINCT ON ────
+    # ROOT CAUSE of the still-504-ing ``sector=Technology + market_cap`` screen
+    # (audit 2026-07-06-r1-final-exhaustive-qa.md, NEW-6 PARTIAL): the earlier
+    # single-statement form
+    #     SELECT DISTINCT ON (instrument_id, metric) …
+    #     WHERE instrument_id IN (:page_ids) AND metric IN (:19 key metrics)
+    #     ORDER BY instrument_id, metric, as_of_date DESC
+    # put TWO ``= ANY`` arrays (19 metrics x 50 page ids) on the covering index
+    # ``ix_fundamental_metrics_metric_instr_date_val`` (metric, instrument_id,
+    # as_of_date DESC). PostgreSQL's ScalarArrayOp handling re-descends the btree
+    # for each of the ~950 (metric, instrument_id) combinations, so the Index
+    # Only Scan burned ~13.5 s of pure CPU returning 13,374 history rows only to
+    # DISTINCT them down to 828 — the whole screen blew the 8 s statement_timeout
+    # (EXPLAIN ANALYZE live: scan 13,530 ms, total 14,316 ms). The
+    # market-cap-SORT path (NEW-6 first fix) was fast because the no-metric branch
+    # calls ``_fetch_page_extras`` with EMPTY ``extra_metrics`` — it never hit
+    # this block; only the metric-FILTER branch (which unions the 19 display
+    # metrics) did, so only the sector+metric screen 504'd.
+    #
+    # FIX: split into one arm per metric. Each arm has a SINGLE scalar
+    # ``metric = :m`` leading-column equality + ``instrument_id IN (:page_ids)``,
+    # which is the exact fast single-value-leading shape the sort path already
+    # rides (~86 ms per metric). PostgreSQL runs the 19 arms as a Parallel Append
+    # → end-to-end ~0.6 s (14.3 s -> 0.6 s, ~24x). Result is IDENTICAL: verified
+    # live with an ``EXCEPT`` diff of the old vs new form for the
+    # ``sector=Technology`` page (828 = 828 rows, symmetric diff 0/0).
+    # ``literal(metric_name)`` carries the metric name through so the arms share a
+    # (instrument_id, metric, value_numeric) column shape; it is a bound
+    # parameter (never string-interpolated) so it is injection-safe.
     if extra_metrics:
         try:
-            metric_stmt = (
-                select(m.instrument_id, m.metric, m.value_numeric)
-                .where(m.instrument_id.in_(page_ids), m.metric.in_(extra_metrics))
-                .order_by(m.instrument_id, m.metric, m.as_of_date.desc())
-                .distinct(m.instrument_id, m.metric)
-            )
+            per_metric_selects: list[Any] = [
+                select(
+                    m.instrument_id.label("instrument_id"),
+                    literal(metric_name).label("metric"),
+                    m.value_numeric.label("value_numeric"),
+                )
+                .where(m.metric == metric_name, m.instrument_id.in_(page_ids))
+                .order_by(m.instrument_id, m.as_of_date.desc())
+                .distinct(m.instrument_id)
+                for metric_name in extra_metrics
+            ]
+            metric_stmt = union_all(*per_metric_selects)
             metric_rows: Any = await session.execute(metric_stmt)
             for iid, metric_name, value in metric_rows.all():
                 if value is not None:
@@ -546,9 +602,13 @@ async def query_screen(
     ``asyncpg.QueryCanceledError`` → HTTP 504 (handled by FastAPI's exception
     middleware). SET LOCAL restricts the timeout to this transaction only.
     """
-    # Apply an 8 s statement timeout for the duration of this read transaction.
-    # SET LOCAL is session-safe for pooled connections (reverts at transaction end).
-    await session.execute(text("SET LOCAL statement_timeout = '8000'"))
+    # Apply the configured statement timeout for the duration of this read
+    # transaction. SET LOCAL is session-safe for pooled connections (reverts at
+    # transaction end). The timeout value is an ``int`` from settings — never user
+    # input — so interpolating it into the SET statement is injection-safe
+    # (statement_timeout is a GUC that cannot be parameterised via bind params).
+    timeout_ms = _screen_statement_timeout_ms()
+    await session.execute(text(f"SET LOCAL statement_timeout = '{timeout_ms}'"))
 
     # ── Default ORDER BY (2026-06-12, chat-eval root cause #5) ───────────────
     # WHY: before this, an absent ``sort_by`` left BOTH branches sorting by
@@ -755,33 +815,24 @@ async def query_screen(
         def _latest_metric_sq(metric_name: str, alias: str) -> Any:
             """Subquery: latest value for metric_name per paged instrument.
 
-            Scoped to `instrument_id IN page_ids` so we hit
-            ix_fundamental_metrics_instrument_metric and read ~20 index pages
-            instead of scanning the full metric partition.
+            NEW-6 (2026-07-06): rewritten from a ``GROUP BY MAX(as_of_date)`` +
+            self-JOIN to a single ``DISTINCT ON (instrument_id)`` scan. Scoped to
+            ``instrument_id IN page_ids`` (≤ limit rows) it rides
+            ``ix_fundamental_metrics_metric_instr_date_val`` (metric, instrument_id,
+            as_of_date DESC) INCLUDE (value_numeric) as one bounded index pass —
+            one row per paged instrument, no whole-partition aggregate and no
+            second self-JOIN pass. Result is identical (latest value per instrument
+            for this metric) — see the metric-filter branch below for the live
+            result-equivalence proof of the same rewrite.
             """
-            latest_sq = (
-                select(
-                    m.instrument_id,
-                    func.max(m.as_of_date).label("max_date"),
-                )
-                .where(m.metric == metric_name, m.instrument_id.in_(page_ids))
-                .group_by(m.instrument_id)
-                .subquery(name=f"{alias}_latest")
-            )
             return (
                 select(
                     m.instrument_id.label("instrument_id"),
                     m.value_numeric.label("value_numeric"),
                 )
-                .join(
-                    latest_sq,
-                    and_(
-                        m.instrument_id == latest_sq.c.instrument_id,
-                        m.as_of_date == latest_sq.c.max_date,
-                        m.metric == metric_name,
-                    ),
-                )
-                .where(m.instrument_id.in_(page_ids))
+                .where(m.metric == metric_name, m.instrument_id.in_(page_ids))
+                .order_by(m.instrument_id, m.as_of_date.desc())
+                .distinct(m.instrument_id)
                 .subquery(name=alias)
             )
 
@@ -874,38 +925,55 @@ async def query_screen(
         assert f.metric is not None
         metric_name = f.metric
 
-        # Subquery: latest as_of_date per instrument for this metric
-        latest_date_sq = (
+        # ── NEW-6 (2026-07-06): latest value per instrument via DISTINCT ON ──────
+        # ROOT CAUSE of the ~114 s → statement-timeout screener (audit
+        # 2026-07-06-r1-final-exhaustive-qa.md): this per-filter subquery was a
+        # whole-partition ``GROUP BY instrument_id MAX(as_of_date)`` aggregate
+        # self-JOINed back to read the value at that date. ``EXPLAIN (ANALYZE)`` on
+        # the live DB showed the GroupAggregate scanning the entire ``metric = X``
+        # partition (~14,183 index rows) in 7,030 ms with 4,689 heap fetches, plus
+        # ~1,700 ms planning on stale stats — the whole screen blew the 8 s ceiling.
+        #
+        # DISTINCT ON (instrument_id) ORDER BY (instrument_id, as_of_date DESC) lets
+        # the planner use a SkipScan on the covering index
+        # ``ix_fundamental_metrics_metric_instr_date_val`` (metric, instrument_id,
+        # as_of_date DESC) INCLUDE (value_numeric): it seeks the SINGLE latest row
+        # per instrument (~615 rows) instead of aggregating all 14 k, dropping the
+        # branch to ~1.2 s and heap fetches to ~44. Result-equivalence was verified
+        # live: OLD vs NEW returned the identical instrument+value set for a
+        # ``market_capitalization >= 1e9`` screen (612 = 612, symmetric diff 0/0).
+        #
+        # SEMANTICS: predicates apply to each instrument's latest row.
+        #   • period_type filter: kept as an outer predicate against the latest
+        #     row's ``period_type`` — matching the old "latest date, then require
+        #     this period_type" behaviour (an instrument whose latest row is a
+        #     different period_type is still excluded). We carry ``period_type``
+        #     out of the DISTINCT ON so it can be filtered without a re-scan.
+        #   • min/max value: applied to the latest row's ``value_numeric``.
+        latest_sq = (
             select(
-                m.instrument_id,
-                func.max(m.as_of_date).label("max_date"),
+                m.instrument_id.label("instrument_id"),
+                m.value_numeric.label("value_numeric"),
+                m.period_type.label("period_type"),
             )
             .where(m.metric == metric_name)
-            .group_by(m.instrument_id)
+            .order_by(m.instrument_id, m.as_of_date.desc())
+            .distinct(m.instrument_id)
             .subquery(name=f"{alias}_latest")
         )
 
-        # Join back to get the actual value at the latest date
         value_sq = select(
-            m.instrument_id.label("instrument_id"),
-            m.value_numeric.label("value_numeric"),
-        ).join(
-            latest_date_sq,
-            and_(
-                m.instrument_id == latest_date_sq.c.instrument_id,
-                m.as_of_date == latest_date_sq.c.max_date,
-                m.metric == metric_name,
-            ),
+            latest_sq.c.instrument_id.label("instrument_id"),
+            latest_sq.c.value_numeric.label("value_numeric"),
         )
 
-        if f.period_type is not None:
-            value_sq = value_sq.where(m.period_type == f.period_type)
-
         conditions = []
+        if f.period_type is not None:
+            conditions.append(latest_sq.c.period_type == f.period_type)
         if f.min_value is not None:
-            conditions.append(m.value_numeric >= f.min_value)
+            conditions.append(latest_sq.c.value_numeric >= f.min_value)
         if f.max_value is not None:
-            conditions.append(m.value_numeric <= f.max_value)
+            conditions.append(latest_sq.c.value_numeric <= f.max_value)
         if conditions:
             value_sq = value_sq.where(and_(*conditions))
 

@@ -16,11 +16,13 @@ from __future__ import annotations
 import re
 import time
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
 
 from ml_clients.errors import FatalError
+from ml_clients.pricing import provider_cost_to_decimal
 
 if TYPE_CHECKING:
     import asyncio
@@ -265,7 +267,8 @@ class DeepInfraDescriptionAdapter:
         for model_id in (self._primary_model_id, self._fallback_model_id):
             result = await self._call_model(model_id, prompt, entity_id, entity_type)
             if result is not None:
-                await self._adjust_cost(estimated_cost, model_id, result[1], result[2])
+                # result = (text, tokens_in, tokens_out, provider_cost_usd)
+                await self._adjust_cost(estimated_cost, model_id, result[1], result[2], result[3])
                 return result[0]
 
         # Both models failed — undo reservation
@@ -282,12 +285,17 @@ class DeepInfraDescriptionAdapter:
         prompt: str,
         entity_id: str,
         entity_type: str,
-    ) -> tuple[str, int, int] | None:
-        """Call one model; return (description_text, tokens_in, tokens_out) or None on error."""
+    ) -> tuple[str, int, int, Decimal | None] | None:
+        """Call one model; return (text, tokens_in, tokens_out, provider_cost) or None.
+
+        PLAN-0117 FR-1: the 4th tuple element is the verbatim DeepInfra
+        ``usage.estimated_cost`` (``Decimal``) when reported, else ``None``.
+        """
         start = time.perf_counter()
         status = "success"
         tokens_in = 0
         tokens_out = 0
+        provider_cost_usd: Decimal | None = None
         try:
             async with self._semaphore:
                 response = await self._client.chat.completions.create(
@@ -308,6 +316,8 @@ class DeepInfraDescriptionAdapter:
                 if response.usage is not None:
                     tokens_in = response.usage.prompt_tokens or 0
                     tokens_out = response.usage.completion_tokens or 0
+                    # PLAN-0117 FR-1: capture provider cost verbatim (best-effort).
+                    provider_cost_usd = provider_cost_to_decimal(getattr(response.usage, "estimated_cost", None))
 
                 description = _strip_think_blocks(raw)
                 if not description:
@@ -324,7 +334,7 @@ class DeepInfraDescriptionAdapter:
                     entity_type=entity_type,
                     model_id=model_id,
                 )
-                return description, tokens_in, tokens_out
+                return description, tokens_in, tokens_out, provider_cost_usd
 
         except (self._openai.RateLimitError, self._openai.APIConnectionError, self._openai.APITimeoutError) as exc:
             status = "error"
@@ -385,8 +395,17 @@ class DeepInfraDescriptionAdapter:
         model_id: str,
         tokens_in: int,
         tokens_out: int,
+        provider_cost_usd: Decimal | None = None,
     ) -> None:
-        actual = _estimate_cost_local(model_id, tokens_in, tokens_out)
+        # PLAN-0117 FR-1/FR-2: prefer the provider-reported cost (authoritative)
+        # over the price-matrix estimate; stamp provenance so a paid model is never
+        # a silent $0. Matrix fallback only when DeepInfra omitted the cost.
+        if provider_cost_usd is not None:
+            actual = float(provider_cost_usd)
+            cost_source = "provider"
+        else:
+            actual = _estimate_cost_local(model_id, tokens_in, tokens_out)
+            cost_source = "pricematrix"
         if self._usage_logger is not None:
             import asyncio as _asyncio
 
@@ -400,6 +419,7 @@ class DeepInfraDescriptionAdapter:
                     latency_ms=0,
                     estimated_cost_usd=actual,
                     success=True,
+                    cost_source=cost_source,
                 ),
             )
         if self._cost_tracker is None or estimated == 0.0:

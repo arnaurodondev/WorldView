@@ -254,6 +254,250 @@ class TestToolUsePromptContract:
         _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
         assert _ver >= (1, 9)
 
+    def test_prompt_template_version_bumped_for_research_loop(self) -> None:
+        """v1.12 core RESEARCH LOOP + ANALYST REASONING sections bump the floor.
+
+        2026-07-03 broadened the parallel-batching rule from the
+        valuation-only VALUATION CONTEXT addendum to a core all-intent
+        RESEARCH LOOP section, and added the ANALYST REASONING section.
+        Both change the template body (flipping the content hash), so the
+        semver version MUST advance to >= 1.12. Pinning the floor catches an
+        accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 12), f"expected version >= 1.12 for RESEARCH LOOP bump, got {_ver}"
+
+    def test_prompt_template_version_bumped_for_whatif_narrowing(self) -> None:
+        """v1.13 narrows the SPECULATIVE FORECASTS rule — bump the floor.
+
+        2026-07-05 narrowed the blanket price-forecast refusal so grounded
+        CONDITIONAL what-if IMPACT analysis (a user-supplied hypothetical
+        move -> derived, hedged fundamental impact) is ALLOWED while
+        asset-price-direction forecasts remain refused. That edits the
+        template body (flipping the content hash), so the semver version MUST
+        advance to >= 1.13. Pinning the floor catches an accidental revert.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 13), f"expected version >= 1.13 for what-if narrowing, got {_ver}"
+
+    def test_prompt_template_version_bumped_for_synthesis_behavior_fixes(self) -> None:
+        """v1.14 adds C7 (valuation-not-a-forecast) + A5 (attempt-before-refuse)
+        + A4 (cover-every-entity) — all edit the template body (flipping the
+        content hash), so the semver version MUST advance to >= 1.14. Pinning the
+        floor catches an accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 14), f"expected version >= 1.14 for synthesis-behavior fixes, got {_ver}"
+
+    def test_valuation_analysis_excluded_from_forecast_refusal(self) -> None:
+        """C7 (fix-plan, 2026-07-06): the advice/price disclaimer MISFIRED on a
+        valuation question ("Is GOOGL's P/E expensive vs its history?") — refused
+        as a price forecast. Valuation-vs-history is retrospective / current
+        analysis of already-known multiples, NOT a forecast of the asset's future
+        price. The SPECULATIVE FORECASTS block must carry an explicit carve-out
+        that names the multiples, says it is NOT a forecast, and forbids the
+        misfired refusal.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "REASONING"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-06")
+            assert (
+                "NOT A FORECAST — VALUATION ANALYSIS IS ALWAYS ALLOWED" in prompt
+            ), f"intent={intent}: missing carve-out"
+            # Names the multiples.
+            assert "P/E" in prompt and "EV/EBITDA" in prompt
+            assert "expensive or cheap" in prompt
+            # Says it is not a forecast + forbids the misfired refusal.
+            assert "NOT a price forecast" in prompt
+            assert "Is GOOGL's P/E expensive vs its history?" in prompt
+            assert "NEVER refuse these with 'I cannot predict future price" in prompt.replace("\n", " ")
+            # GUARDRAIL: the hard-refuse asset-price-direction case is still present.
+            assert "HARD-REFUSE" in prompt
+
+    def test_attempt_before_refusing_rule_present(self) -> None:
+        """A5 (fix-plan, 2026-07-06): a well-scoped numeric lookup
+        (apple_revenue_precision) was REFUSED without the model calling ANY tool.
+        The STRICT RULES must add an ATTEMPT-BEFORE-REFUSING rule: for a
+        well-scoped financial/factual question the model MUST call the relevant
+        tool FIRST; "no data" is valid only AFTER a tool ran and came back
+        empty/errored.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "FACTUAL_LOOKUP"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-06")
+            assert "ATTEMPT BEFORE REFUSING" in prompt, f"intent={intent}: missing rule"
+            assert "must call the relevant tool" in prompt.lower()
+            assert "WITHOUT having run any tool is FORBIDDEN" in prompt
+            # "no data" is valid only after a tool actually ran.
+            assert "ONLY after a tool actually ran" in prompt
+            # GUARDRAIL: the hard-refuse asset-price forecast exception is named so
+            # the rule does not force a tool call on a forecast question.
+            assert "hard-refuse asset-price" in prompt.lower()
+
+    def test_mandatory_tool_call_for_entity_portfolio_data_rule_present(self) -> None:
+        """v1.17 (iter3_apple_competitors_spanish + port_semis_export_exposure,
+        2026-07-08): both questions were answered with ZERO tool calls (judge:
+        no_tools_called) — the model answered a competitors question and a
+        portfolio-export-exposure question from parametric memory rather than
+        calling any tool. This is distinct from A5 (refuse-without-trying): here
+        the model did not refuse, it simply skipped the tools. STRICT RULES must
+        add a rule making a tool call MANDATORY for any entity/portfolio DATA
+        question, in any language, with a zero-tool memory answer named a HARD
+        FAILURE.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "COMPARISON", "PORTFOLIO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            # Section anchor.
+            assert (
+                "TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA" in prompt
+            ), f"intent={intent}: missing mandatory-tool-call rule"
+            # The failure it names: zero-tool answer from memory is a HARD FAILURE.
+            assert "HARD FAILURE" in prompt
+            assert "ZERO tool calls" in prompt
+            assert "from your own memory / pretraining" in prompt
+            # The specific data shapes the two failing questions hit.
+            assert "competitors" in prompt.lower()
+            assert "exposure" in prompt.lower()
+            # Language-agnostic (the Apple-competitors question was in Spanish).
+            assert "in ANY language" in prompt
+            # It must be explicitly distinguished from a refusal (A5's domain).
+            assert "distinct from a refusal" in " ".join(prompt.split())
+            # The named routing targets for each failing question.
+            assert "compare_entities" in prompt
+            assert "get_portfolio_context" in prompt
+
+    def test_first_person_portfolio_exposure_routes_to_portfolio_context(self) -> None:
+        """v1.18 (port_semis_export_exposure re-fail under v1.17, 2026-07-08):
+        the v1.17 mandatory-tool rule did NOT stop the model refusing a
+        first-person portfolio-exposure question ("Which of MY holdings are most
+        exposed to the latest semiconductor export-control news?") with zero
+        tools. It self-justified with a FABRICATED gate — "I cannot call
+        get_portfolio_context unless you explicitly ask about your portfolio,
+        holdings, or watchlist". The prompt must add a FIRST-PERSON PORTFOLIO
+        clause killing that gate and a TOOL ROUTING entry so
+        get_portfolio_context is ALWAYS called first for such questions.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "COMPARISON", "PORTFOLIO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            flat = " ".join(prompt.split())
+            # The mandatory-rule clause anchor.
+            assert "FIRST-PERSON PORTFOLIO" in prompt, f"intent={intent}: missing first-person portfolio clause"
+            assert "get_portfolio_context IS MANDATORY" in prompt
+            # The first-person triggers that must be named.
+            assert "'my holdings'" in prompt
+            assert "'am I exposed'" in prompt
+            # The news/event/policy framing must NOT exempt it.
+            assert "does NOT turn it into a general-knowledge" in flat
+            # The fabricated gate must be explicitly rebutted.
+            assert "There is NO gate requiring the" in flat
+            # A zero-tool refusal/memory answer is a HARD FAILURE here too.
+            assert "portfolio-exposure question is a HARD FAILURE" in flat
+
+    def test_tool_routing_table_has_first_person_portfolio_entry(self) -> None:
+        """v1.18: TOOL ROUTING must map a first-person portfolio/exposure question
+        to get_portfolio_context FIRST (it had no routing entry, so the model fell
+        through to a general-knowledge answer and refused)."""
+        prompt = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
+        flat = " ".join(prompt.split())
+        assert "TOOL ROUTING" in prompt
+        assert "FIRST-PERSON portfolio / holdings / exposure" in prompt
+        assert "call `get_portfolio_context` FIRST to resolve" in flat
+        assert "A news/policy framing does NOT make it a general question" in flat
+
+    def test_prompt_template_version_bumped_for_first_person_portfolio(self) -> None:
+        """v1.18 edits the template body (flipping the content hash), so the semver
+        version MUST advance to >= 1.18. Pinning the floor catches an accidental
+        revert of the first-person portfolio-exposure routing fix."""
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 18), f"expected version >= 1.18 for first-person portfolio fix, got {_ver}"
+
+    def test_attempt_before_refusing_rule_still_present_r19(self) -> None:
+        """R19: the v1.17 mandatory-tool-call rule is ADDITIVE — the A5
+        ATTEMPT-BEFORE-REFUSING rule (refuse-without-trying) must remain intact so
+        both no-tool failure modes stay covered.
+        """
+        prompt = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
+        assert "ATTEMPT BEFORE REFUSING" in prompt
+        assert "WITHOUT having run any tool is FORBIDDEN" in prompt
+        # And the new rule sits alongside it, not in its place.
+        assert "TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA" in prompt
+
+    def test_comparison_addendum_covers_every_entity(self) -> None:
+        """A4 (fix-plan, 2026-07-06): a comparison DROPPED a requested entity
+        ("NVIDIA is not relevant here") and invented a scope narrowing. The
+        COMPARISON addendum must require covering EVERY named entity, forbid a
+        self-authored exclusion, and keep (not delete) an entity with thin data.
+        """
+        prompt = get_tool_use_system_prompt(intent="COMPARISON", today_iso="2026-07-06")
+        assert "COVER EVERY ENTITY (mandatory):" in prompt
+        assert "MUST address EVERY entity named in the question" in prompt
+        assert "NEVER invent a reason to exclude one" in prompt
+        assert "NVIDIA is not relevant" in prompt
+        assert "keep it in the comparison" in prompt
+        # The rule must NOT appear for a non-comparison intent (addendum-scoped).
+        other = get_tool_use_system_prompt(intent="FINANCIAL_DATA", today_iso="2026-07-06")
+        assert "COVER EVERY ENTITY (mandatory):" not in other
+
+    def test_core_contains_parallel_research_loop_directive(self) -> None:
+        """Point 1 — general parallel tool batching in ROUND 1.
+
+        The previously valuation-only "single parallel planning turn" rule is
+        now a CORE (all-intent) directive: round 1 must batch every
+        INDEPENDENT tool the question already determines (news + fundamentals
+        + events + graph), and later rounds are reserved for ADAPTIVE
+        follow-up whose args are only knowable from prior results. This test
+        pins the section so a future edit cannot silently re-narrow it or drop
+        the adaptive-loop preservation.
+        """
+        # The directive is CORE — it must appear on EVERY intent, not just
+        # FINANCIAL_DATA (that was the old narrow scope).
+        for intent in ("GENERAL", "COMPARISON", "MACRO", "REASONING", "PORTFOLIO", "SIGNAL_INTEL"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-03")
+            assert (
+                "RESEARCH LOOP — PLAN WIDE, THEN GO DEEP" in prompt
+            ), f"intent={intent}: missing RESEARCH LOOP section"
+            # ROUND 1 = parallel batch of independent tools.
+            assert "ROUND 1 — PLAN WIDE (parallel batch)" in prompt
+            assert "IN ONE\ntool_calls block, in parallel" in prompt
+            assert "INDEPENDENT" in prompt
+            # The general fan-out must name the four tool families so the model
+            # batches news + numbers + events + graph together, not one/round.
+            assert "get_entity_news" in prompt
+            assert "search_events" in prompt
+            assert "traverse_graph" in prompt or "search_entity_relations" in prompt
+            # ROUND 2+ preserves the ADAPTIVE loop — this is the critical
+            # constraint (do NOT force everything into round 1).
+            assert "ROUND 2+ — GO DEEP (adaptive follow-up)" in prompt
+            assert "newly-surfaced entity" in prompt
+            assert "STOP and\nsynthesise" in prompt or "STOP" in prompt
+
+    def test_core_contains_analyst_reasoning_directive(self) -> None:
+        """Point 2 — deeper senior-analyst reasoning, grounding preserved.
+
+        The ANALYST REASONING section elevates the loop from a lookup bot to
+        a senior analyst: explicit falsifiable hypotheses, second-order
+        implication chains, cross-tool entity linkage, adaptive depth, then
+        grounded synthesis. The final GROUNDING IS ABSOLUTE clause must
+        re-assert that deeper reasoning never licenses an ungrounded claim —
+        this test pins that so the reasoning uplift can never be read as a
+        grounding relaxation.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "REASONING", "MACRO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-03")
+            assert "ANALYST REASONING" in prompt, f"intent={intent}: missing ANALYST REASONING section"
+            # The five reasoning moves.
+            assert "HYPOTHESES:" in prompt
+            assert "SECOND-ORDER IMPLICATIONS:" in prompt
+            assert "CONNECT ENTITIES ACROSS TOOLS:" in prompt
+            assert "ADAPTIVE DEPTH:" in prompt
+            assert "SYNTHESISE, THEN STOP:" in prompt
+            # Second-order chain example must be present (the concrete
+            # supplier->customer->guidance chain the owner asked for).
+            assert "customer input cost" in prompt
+            # GROUNDING IS ABSOLUTE re-assertion — the anti-fabrication
+            # backstop must survive the reasoning uplift.
+            assert "GROUNDING IS ABSOLUTE" in prompt
+            assert "NEVER licenses an ungrounded or fabricated" in prompt
+            assert "open question the data could not answer" in prompt
+
     def test_prompt_contains_tool_routing_table(self) -> None:
         """FINAL-67 C4 — TOOL ROUTING table maps question shape to the right tool.
 
@@ -270,6 +514,26 @@ class TestToolUsePromptContract:
         assert "search_events" in prompt
         # search_documents must be explicitly demoted to a fallback.
         assert "FALLBACK" in prompt
+
+    def test_citations_section_requires_real_tool_name_labels(self) -> None:
+        """v1.11 (2026-07-01) — prediction-market citation-refusal root-cause.
+
+        The live model tagged its own interpretive prose with a NON-TOOL bracket
+        label ([commentary row N]) next to material odds numbers, tripping the
+        strict phantom-citation gate. The CITATIONS section must now forbid
+        non-tool labels and require every [<name> row N] tag to name a real tool,
+        and the COMPARISON commentary must carry no row-citation.
+        """
+        prompt = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-06-01")
+        # Real-tool-name-only rule + the exact non-tool label that caused the bug.
+        assert "MUST use the EXACT " in prompt
+        assert "[commentary row N]" in prompt
+        assert "fabricated" in prompt
+        assert "Interpretive commentary is unsourced prose" in prompt
+        # COMPARISON commentary is clarified to carry no bracketed row-citation.
+        comparison = get_tool_use_system_prompt(intent="COMPARISON", today_iso="2026-06-01")
+        assert "UNSOURCED synthesis prose" in comparison
+        assert "NO " in comparison and "bracketed row-citation" in comparison
 
     def test_financial_data_addendum_contains_partial_data_rule(self) -> None:
         """PLAN-0104 W47 regression — PARTIAL DATA RULE.
@@ -436,6 +700,53 @@ class TestToolUsePromptContract:
             for forbidden in ("will go up", "will go down", "will rise", "will fall"):
                 assert forbidden in prompt, f"intent={intent}: forbidden phrase '{forbidden}' missing from enumeration"
 
+    def test_speculative_forecast_rule_narrowed_for_conditional_whatif(self) -> None:
+        """v1.13 — the price-forecast refusal must distinguish two cases.
+
+        The original rule refused ALL forward-looking directional statements,
+        which also over-refused grounded CONDITIONAL what-if IMPACT analysis
+        where the price/cost move is the USER'S stated premise (e.g. "if wafer
+        prices rise 10%, what's the margin impact?"). v1.13 narrows it so:
+
+          (A) it STILL hard-refuses forecasting an ASSET's own price direction
+              ("will X go up", price targets, "should I buy/sell"); AND
+          (B) it NOW permits reasoning about the DOWNSTREAM fundamental impact
+              GIVEN a user-supplied hypothetical move (derived from cited
+              figures, hedged, and NOT ending in an asset-price-direction call).
+
+        This test pins BOTH sides so a future edit cannot either (a) drop the
+        asset-price-direction protection or (b) silently swing back to the
+        blanket refusal that killed the conditional what-if use case.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "REASONING"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-05")
+
+            # (A) The hard-refuse case is still present and still names the
+            # additional asset-price-direction shapes (price targets, buy/sell).
+            assert "HARD-REFUSE" in prompt, f"intent={intent}: missing HARD-REFUSE case (A) anchor"
+            assert "I cannot predict future price movements" in prompt
+            assert "price target" in prompt, f"intent={intent}: price-target refusal shape missing"
+            assert (
+                "buy/sell" in prompt or "should I buy" in prompt
+            ), f"intent={intent}: buy/sell recommendation refusal missing"
+
+            # (B) The newly-allowed conditional what-if impact case is present
+            # and framed as a user-supplied PREMISE producing a DOWNSTREAM
+            # fundamental impact (NOT an asset-price forecast).
+            assert "ALLOWED" in prompt, f"intent={intent}: missing ALLOWED case (B) anchor"
+            assert (
+                "premise" in prompt.lower()
+            ), f"intent={intent}: allowed case must frame the move as the user's premise"
+            assert "downstream" in prompt.lower(), f"intent={intent}: allowed case must reference downstream impact"
+            # The allowed case must still forbid then predicting the asset's
+            # own price direction — the boundary must be explicit.
+            assert (
+                "must NOT then predict the asset's stock-price" in prompt or "must NOT then predict the asset" in prompt
+            ), f"intent={intent}: allowed case must still forbid an asset-price-direction call"
+            # The wafer-price margin example (the owner's headline use case)
+            # must be present as a concrete ALLOWED exemplar.
+            assert "wafer prices rise 10%" in prompt, f"intent={intent}: conditional what-if margin example missing"
+
     def test_financial_data_addendum_contains_fiscal_period_label_rule(self) -> None:
         """NEW-018 (PLAN-0093 iter-14b): verbatim fiscal-period label rule.
 
@@ -458,3 +769,249 @@ class TestToolUsePromptContract:
         assert "Do NOT recompute the fiscal quarter" in prompt
         # Issuer-specific examples so the LLM recognises non-calendar FY-ends.
         assert "Apple" in prompt and "Microsoft" in prompt
+
+    def test_prompt_template_version_bumped_for_routing_fixes(self) -> None:
+        """v1.15 adds D3 (date-anchored args) + D5 (earnings routing + fallback),
+        both edit the template body (flipping the content hash), so the semver
+        version MUST advance to >= 1.15. Pinning the floor catches an accidental
+        revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 15), f"expected version >= 1.15 for routing fixes, got {_ver}"
+
+    def test_prompt_template_version_bumped_for_latest_earnings_periods(self) -> None:
+        """v1.16 adds the LATEST / MOST-RECENT EARNINGS rule (periods>=4, never
+        periods=1) to the FINANCIAL_DATA addendum — it edits the template body
+        (flipping the content hash), so the semver version MUST advance to >= 1.16.
+        Pinning the floor catches an accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 16), f"expected version >= 1.16 for latest-earnings fix, got {_ver}"
+
+    def test_prompt_template_version_bumped_for_mandatory_tool_call(self) -> None:
+        """v1.17 adds the TOOL CALL IS MANDATORY FOR ENTITY / PORTFOLIO DATA rule to
+        STRICT RULES — it edits the template body (flipping the content hash), so
+        the semver version MUST advance to >= 1.17. Pinning the floor catches an
+        accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 17), f"expected version >= 1.17 for mandatory-tool-call rule, got {_ver}"
+
+    def test_financial_data_addendum_latest_earnings_avoids_periods_1(self) -> None:
+        """v1.16 (iter3_msft_earnings_citations, 2026-07-07): a plain "most recent
+        earnings report" question (revenue/net_income/eps/gross_margin — not a
+        ratio, not a named past period) fell through to periods=1, which returns
+        ONLY the newest fiscal quarter. For a not-yet-reported quarter that row is
+        a future-dated placeholder with all-null metrics, so synthesis saw
+        status=ok / 1 item with no figures and blanket-refused "not available".
+        The FINANCIAL_DATA addendum must add a LATEST / MOST-RECENT EARNINGS rule
+        forcing periods>=4 (never periods=1) so the last REPORTED quarter is in the
+        payload.
+        """
+        prompt = get_tool_use_system_prompt(intent="FINANCIAL_DATA", today_iso="2026-07-07")
+        # Section anchor.
+        assert "LATEST / MOST-RECENT EARNINGS (mandatory):" in prompt
+        # The core directive: a small window, never the single newest quarter.
+        assert "periods >= 4" in prompt
+        assert "NEVER `periods=1`" in prompt
+        # The rationale must name the null-placeholder failure so it is not reverted.
+        assert "not-yet-reported placeholder row" in prompt
+        assert "most recent REPORTED quarter" in prompt
+        # The directive must NOT leak into intents where it would distort format.
+        for intent in ("MACRO", "GENERAL", "PORTFOLIO"):
+            other = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-07")
+            assert (
+                "LATEST / MOST-RECENT EARNINGS (mandatory):" not in other
+            ), f"LATEST-EARNINGS rule leaked into {intent} addendum"
+
+    def test_financial_data_addendum_contains_date_anchored_rule(self) -> None:
+        """D3 (fix-plan, 2026-07-06 — HIGHEST leverage): a question naming a
+        specific past quarter/year (da_tsla_revenue_2024_full_year) was answered
+        with periods=N — which returns the LATEST N quarters (2025-26) and misses
+        the 2024 target → fabricated 2024 labels or refusal. The FINANCIAL_DATA
+        addendum must add a DATE-ANCHORED ARGUMENTS rule: a named past period MUST
+        be bounded with from_date/to_date (or date_from/date_to), never periods=N,
+        with a worked TSLA FY2024-Q4 example.
+        """
+        prompt = get_tool_use_system_prompt(intent="FINANCIAL_DATA", today_iso="2026-07-06")
+        # Section anchor.
+        assert "DATE-ANCHORED ARGUMENTS (mandatory for named past periods):" in prompt
+        # The date-bound argument names (both spellings) must be named.
+        assert "from_date" in prompt and "to_date" in prompt
+        assert "date_from" in prompt and "date_to" in prompt
+        # The explicit anti-pattern: periods=N returns the most-recent N, misses target.
+        assert "NEVER rely on `periods=N` for a named past period" in prompt
+        assert "most-RECENT N quarters" in prompt
+        # The worked example must be present so the model has a concrete template.
+        assert "FY2024-Q4" in prompt
+        assert "from_date='2024-10-01'" in prompt and "to_date='2024-12-31'" in prompt
+        # The directive must NOT leak into intents where it would distort format.
+        for intent in ("MACRO", "GENERAL", "PORTFOLIO"):
+            other = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-06")
+            assert (
+                "DATE-ANCHORED ARGUMENTS (mandatory for named past periods):" not in other
+            ), f"DATE-ANCHORED rule leaked into {intent} addendum"
+
+    def test_core_routes_earnings_to_fundamentals_with_fallback(self) -> None:
+        """D5 (fix-plan, 2026-07-06): "what did MSFT report / earnings figures for
+        <period>" routed to get_filings / search_events (empty) then refused — the
+        reported NUMBERS live in the fundamentals tools. The core TOOL ROUTING
+        block must (a) route earnings-report / reported-numbers questions to
+        query_fundamentals / get_fundamentals_history first (filings/news add
+        citation/context only), and (b) add a FALLBACK-BEFORE-REFUSING rule so an
+        empty first tool triggers a fallback before any refusal. Being CORE, it
+        must appear across intents.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "FACTUAL_LOOKUP"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-06")
+            # (a) earnings-report questions route to the fundamentals tools first.
+            assert "what did X report" in prompt, f"intent={intent}: missing earnings routing"
+            assert "the REPORTED NUMBERS live in" in prompt
+            assert "query_fundamentals" in prompt and "get_fundamentals_history" in prompt
+            # filings/events are citation/context only, never the sole source / refusal reason.
+            assert "carry only the narrative" in prompt
+            # (b) the fallback-before-refuse rule.
+            assert "FALLBACK BEFORE REFUSING" in prompt
+            assert "try the next-best tool" in prompt
+            assert "Refuse only AFTER the fallback" in prompt
+
+    def test_prompt_template_version_bumped_for_track3_planning_fixes(self) -> None:
+        """v1.19 adds the COMPOUND / MULTI-HOP / RIPPLE routing entry + the NO
+        REDUNDANT TOOL CALLS rule — both edit the template body (flipping the
+        content hash), so the semver version MUST advance to >= 1.19. Pinning the
+        floor catches an accidental revert during a merge.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 19), f"expected version >= 1.19 for Track-3 planning fixes, got {_ver}"
+
+    def test_tool_routing_forces_multi_hop_traversal(self) -> None:
+        """v1.19 (Track-3 multi-hop): compound / supply-chain / ripple questions
+        ('X's suppliers and THEIR key customers', 'second-order exposure through
+        the supply chain') were answered ONE hop short — direct suppliers, never
+        the next link. The TOOL ROUTING block must add a COMPOUND / MULTI-HOP /
+        RIPPLE entry forcing traverse_graph to walk the full chain, not stop at
+        the first hop. Being CORE routing, it must appear across intents.
+        """
+        for intent in ("GENERAL", "REASONING", "COMPARISON", "PORTFOLIO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            flat = " ".join(prompt.split())
+            assert "COMPOUND / MULTI-HOP / RIPPLE" in prompt, f"intent={intent}: missing multi-hop routing entry"
+            assert "MUST use `traverse_graph`" in flat
+            # Must explicitly forbid stopping at the first hop.
+            assert "do NOT stop at the first hop" in flat
+            assert "walk the graph to the terminal" in flat
+            # The concrete second-order shapes.
+            assert "THEIR key customers" in flat or "THEIR key\ncustomers" in prompt
+            assert "second-order" in flat
+
+    def test_research_loop_forbids_redundant_tool_calls(self) -> None:
+        """v1.19 (Track-3 dedup): the loop called the SAME tool with the SAME args
+        up to 5x in one turn (chain_portfolio_upcoming, cmp_tsmc_intel). The
+        RESEARCH LOOP block must add a NO REDUNDANT TOOL CALLS rule forbidding an
+        identical repeat call, requiring a changed arg or a newly-surfaced entity
+        for any follow-up, and routing an empty/errored call to the fallback rule
+        rather than an identical retry. Being CORE, it must appear across intents.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "COMPARISON", "PORTFOLIO"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            flat = " ".join(prompt.split())
+            assert "NO REDUNDANT TOOL CALLS" in prompt, f"intent={intent}: missing dedup rule"
+            assert "never call the SAME tool with the SAME" in flat
+            # A follow-up needs a changed arg or a newly-surfaced entity.
+            assert "at\nleast one argument changes" in prompt or "at least one argument changes" in flat
+            # An empty/errored call uses the fallback, not an identical retry.
+            assert "do not re-issue the identical" in flat or "do not re-issue the identical\ncall" in prompt
+        # GUARDRAIL: the RESEARCH LOOP block it extends is still present.
+        core = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
+        assert "RESEARCH LOOP — PLAN WIDE, THEN GO DEEP" in core
+
+    def test_prompt_template_version_bumped_for_whatif_tool_mandate(self) -> None:
+        """v1.20 SOFTENING adds the WHAT-IF / PROJECTION mandatory-tool rule — it
+        edits the template body (flipping the content hash), so the semver version
+        MUST advance to >= 1.20. Pinning the floor catches an accidental revert of
+        the fx/asp 0-tool-call regression fix.
+        """
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 20), f"expected version >= 1.20 for what-if tool mandate, got {_ver}"
+
+    def test_whatif_projection_about_named_entity_mandates_tool_call(self) -> None:
+        """v1.20 SOFTENING (chat-quality two-track audit — fx/asp 0-tool-call
+        regression): run_20260708T211838Z showed the planner dropping to ZERO tool
+        calls on what-if-framed questions (fx / asp), answering a conditional
+        impact question about a named entity straight from parametric memory. The
+        v1.17 mandatory-tool rule did not fire because a "what if …" framing did not
+        read as a plain entity-DATA question. STRICT RULES must add a rule making a
+        tool call MANDATORY for a projection/what-if about a named entity — retrieve
+        its base figures FIRST — while NOT licensing an asset-price-direction
+        forecast (hard-refuse case (A) intact).
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "REASONING", "COMPARISON"):
+            prompt = get_tool_use_system_prompt(intent=intent, today_iso="2026-07-08")
+            flat = " ".join(prompt.split())
+            # Section anchor.
+            assert (
+                "WHAT-IF / PROJECTION ABOUT A NAMED ENTITY" in prompt
+            ), f"intent={intent}: missing what-if tool-mandate rule"
+            assert "CALL ITS TOOL FIRST" in prompt
+            # Must name the base-figure tools to retrieve first.
+            assert "query_fundamentals" in prompt
+            assert "get_entity_intelligence" in prompt
+            # A what-if framing does NOT exempt the mandatory-tool rule.
+            assert "does NOT\n  exempt" in prompt or "does NOT exempt" in flat
+            # Zero-tool memory projection is the SAME hard failure.
+            assert "ZERO tool calls" in prompt
+            assert "SAME HARD FAILURE" in prompt
+            # GUARDRAIL: it must NOT license an asset-price-direction forecast.
+            assert "NOT a licence to forecast the asset's own PRICE" in flat
+            assert "hard-refuse case (A) still applies" in flat
+        # GUARDRAIL: the v1.13 conditional-what-if ALLOWED case is still present.
+        core = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-08")
+        assert "wafer prices rise 10%" in core
+        assert "SPECULATIVE FORECASTS" in core
+
+    def test_prompt_template_version_bumped_for_projection_scaffold(self) -> None:
+        """v1.21 (Area-2 harder projections) edits the REASONING addendum body
+        (flipping its content hash) and is the planning-turn companion to
+        chat_synthesis_system v1.19, so the semver version MUST advance to >= 1.21.
+        Pinning the floor catches an accidental revert of the projection-scaffold
+        routing rule."""
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 21), f"expected version >= 1.21 for projection scaffold, got {_ver}"
+
+    def test_prompt_template_version_bumped_for_market_sizing_tool(self) -> None:
+        """v1.22 (Area-2 P3) routes the PROJECTION / WHAT-IF SCAFFOLD to the new
+        get_market_sizing reference tool — the scenario parameter is now retrievable
+        + citable — so the semver version MUST advance to >= 1.22. Pinning the floor
+        catches an accidental revert of the market-sizing routing rule."""
+        _ver = tuple(int(p) for p in TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version.split("."))
+        assert _ver >= (1, 22), f"expected version >= 1.22 for market-sizing tool, got {_ver}"
+
+    def test_reasoning_addendum_projection_scaffold_rule(self) -> None:
+        """v1.22 P3 (Area-2 — get_market_sizing routing): the REASONING addendum
+        PROJECTION / WHAT-IF SCAFFOLD block must instruct the planner to (a) retrieve
+        the base ANCHOR figures first, and (b) call get_market_sizing for the SCENARIO
+        PARAMETER (TAM / market size / share) — now a RETRIEVABLE + CITABLE curated
+        analyst estimate — keeping the labelled-assumption fallback ONLY for the
+        no-matching-row case. Addendum-scoped: it must appear for REASONING and NOT
+        for an unrelated intent.
+        """
+        prompt = get_tool_use_system_prompt(intent="REASONING", today_iso="2026-07-09")
+        flat = " ".join(prompt.split())
+        assert "PROJECTION / WHAT-IF SCAFFOLD" in prompt
+        # (a) retrieve the base ANCHOR figures first.
+        assert "RETRIEVE the base ANCHOR figures" in flat
+        # (b) scenario parameter is now retrievable via get_market_sizing + citable.
+        assert "SCENARIO PARAMETER" in prompt
+        assert "get_market_sizing" in flat
+        assert "[get_market_sizing row N]" in flat
+        # Fallback to a labelled assumption ONLY when no row matches.
+        assert "no matching row" in flat
+        assert "labelled low-high assumption" in flat
+        # Points back to the STRICT-RULES what-if mandate (retrieve base first).
+        assert "WHAT-IF / PROJECTION rule in STRICT RULES" in flat
+        # The original REASONING format directive is preserved (additive).
+        assert "REASONING FORMAT" in prompt
+        assert "A cause must precede its effect" in prompt
+        # Addendum-scoped: absent for an unrelated intent.
+        other = get_tool_use_system_prompt(intent="MACRO", today_iso="2026-07-09")
+        assert "PROJECTION / WHAT-IF SCAFFOLD" not in other

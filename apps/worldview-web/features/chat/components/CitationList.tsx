@@ -54,6 +54,33 @@ export function getCitationIcon(cite: Citation): string {
   return CITATION_ICONS.news;
 }
 
+/**
+ * formatCiteDate — turn an ISO-8601 `published_at` into a compact, locale-
+ * neutral "Mon D, YYYY" label (e.g. "Jun 30, 2026") for the citation chip.
+ *
+ * WHY a guarded helper (not inline `new Date(...).toLocaleDateString()`):
+ *   1. `published_at` is optional + nullable — KG/relation citations have no
+ *      date. We must return null (and render nothing) rather than print
+ *      "Invalid Date".
+ *   2. The backend already normalizes empty strings to null, but a defensive
+ *      `Number.isNaN(getTime())` check means a malformed string from any future
+ *      source can never leak a broken label into the UI.
+ *   3. `timeZone: "UTC"` keeps the day stable regardless of the viewer's
+ *      timezone — a market article's publish DATE should not shift by a day
+ *      for a user in Tokyo vs New York.
+ */
+function formatCiteDate(published_at: string | null | undefined): string | null {
+  if (!published_at) return null;
+  const d = new Date(published_at);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 export function CitationList({ citations }: { citations: Citation[] }) {
   if (citations.length === 0) return null;
 
@@ -69,13 +96,20 @@ export function CitationList({ citations }: { citations: Citation[] }) {
         // is null/undefined" but the component never implemented it.
         const hasUrl = !!cite.url && safeExternalUrl(cite.url) !== "#";
 
+        // Pre-format the publish date once. null = no date to show (KG items,
+        // or a source without a published_at) → the date span is omitted.
+        const citeDate = formatCiteDate(cite.published_at);
+
         // Tooltip leads with the SOURCE TITLE (what the analyst hovers to
         // learn: "which article is this?"), then source + relevance as
         // secondary context. Falls back to the source name for title-less
-        // KG citations so the tooltip is never empty.
-        const tooltip = cite.title
+        // KG citations so the tooltip is never empty. The publish date is
+        // appended when present so a hover reveals recency without cluttering
+        // the always-visible chip.
+        const tooltipHead = cite.title
           ? `${cite.title} — ${cite.source} (${(cite.relevance_score * 100).toFixed(0)}% relevance)`
           : `${cite.source} (${(cite.relevance_score * 100).toFixed(0)}% relevance)`;
+        const tooltip = citeDate ? `${tooltipHead} · ${citeDate}` : tooltipHead;
 
         // Shared badge chrome for both the <a> and the non-link <span> variant.
         // WHY muted bg (was primary/10): citations are REFERENCE metadata, not
@@ -98,6 +132,12 @@ export function CitationList({ citations }: { citations: Citation[] }) {
                 chrome-label density — no explicit size would let it fall back to
                 the parent bubble's 11px, creating an internal size mismatch. */}
             <span className="max-w-[140px] truncate text-[10px]">{cite.title}</span>
+            {/* Publish date — only rendered when the source actually has one.
+                Kept to the muted 9px chrome weight so it reads as metadata
+                next to the source, never competing with the title. */}
+            {citeDate ? (
+              <span className="font-mono text-[9px] text-muted-foreground">{citeDate}</span>
+            ) : null}
             <span className="font-mono text-[9px] text-muted-foreground">
               {(cite.relevance_score * 100).toFixed(0)}%
             </span>

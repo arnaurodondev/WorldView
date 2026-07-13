@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from nlp_pipeline.infrastructure.nlp_db.models import ChunkModel
@@ -60,6 +60,31 @@ class ChunkRepository:
     async def add_batch(self, chunks: list[Chunk]) -> None:
         for chunk in chunks:
             await self.add(chunk)
+
+    async def update_entity_mentions_batch(self, chunks: list[Chunk]) -> None:
+        """Refresh ONLY the ``entity_mentions`` JSONB for already-inserted chunks.
+
+        BP-719 Mode B: the searchable chunk row (chunk_text + all lexical/denorm
+        columns) is inserted EARLY, in its own committed transaction, BEFORE the
+        ML enrichment phase (see ``persist_searchable_artifacts``). At insert time
+        the ``entity_mentions`` JSONB carries the pre-resolution GLiNER mentions
+        (no ``resolved_entity_id``). Once entity resolution finishes, this method
+        UPDATES the JSONB in place with the resolved mentions so the happy-path
+        row is byte-identical to the pre-BP-719 single-write behaviour.
+
+        Why an explicit UPDATE (not a second ``add``): ``add`` uses
+        ``ON CONFLICT (chunk_id) DO NOTHING`` — a second insert of an existing
+        chunk is a no-op and would NOT refresh the JSONB. We therefore issue a
+        targeted UPDATE that touches only the enrichment column and never the
+        searchable ``chunk_text``. It is idempotent (same doc → same resolved
+        JSONB) and a UPDATE against a missing row simply affects zero rows.
+        """
+        for chunk in chunks:
+            await self._session.execute(
+                update(ChunkModel)
+                .where(ChunkModel.chunk_id == chunk.chunk_id)
+                .values(entity_mentions=chunk.entity_mentions),
+            )
 
     async def get_by_doc(self, doc_id: UUID) -> list[ChunkModel]:
         result = await self._session.execute(

@@ -312,6 +312,30 @@ class TestOrchestratorGroundingHook:
         assert "$10.253B" in assistant_response.content
         assert "$34.6B" not in assistant_response.content
 
+    def test_qualitative_answer_does_not_trigger_rewrite(self) -> None:
+        """BUG-2 mechanism 2: incidental numbers (counts/dates) → NO rewrite.
+
+        A qualitative events/claims answer whose only "unsupported" numbers are
+        a count ("3 partnerships") and a date ("in June") must NOT fire the
+        numeric-grounding rewrite (which replaces the answer with ``[row N]``
+        text and drops citations). We assert exactly ONE stream_chat call (no
+        rewrite) and that the streamed qualitative answer is what gets persisted
+        — unchanged. The tool item carries a real figure so the empty-pool gate
+        does not fire.
+        """
+        orch, captured, pipeline = self._build(
+            tool_item_text="Apple Q2 revenue was $10.253B in the latest filing.",
+            stream_chunks=["Apple announced 3 partnerships and expanded services in June."],
+        )
+        _, answer = asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # Exactly one stream_chat call → the numeric rewrite never fired.
+        assert len(captured) == 1, f"qualitative answer must not rewrite; got {len(captured)} calls"
+        # The qualitative answer is preserved (not replaced by a [row N] rewrite).
+        assert "3 partnerships" in answer
+        kwargs = pipeline.persist_chat.await_args.kwargs
+        assert "3 partnerships" in kwargs["assistant_response"].content
+        assert "⚠" not in kwargs["assistant_response"].content
+
     def test_second_failure_appends_banner(self) -> None:
         """Both initial draft AND rewrite invent numbers → banner appended."""
         orch, captured, pipeline = self._build(
@@ -614,6 +638,119 @@ class TestOrchestratorGroundingHook:
         asyncio.run(_collect(orch, _make_request(), MagicMock()))
         assert pipeline.persist_chat.await_count == 1
         assert pipeline.write_completion_cache.await_count == 1
+
+    # ── Point 2 Stage 2 — false-positive self-check sentinel ──────────────────
+    def test_rewrite_false_positive_sentinel_keeps_original(self) -> None:
+        """Rewrite emits the bare FALSE_POSITIVE sentinel → keep the ORIGINAL.
+
+        The initial draft carries a material unsupported number ($34.6B, not in
+        the tool item), so the numeric gate fires the rewrite. The rewrite model
+        judges the flag a false positive and returns EXACTLY the sentinel. The
+        orchestrator must DISCARD the (empty) rewrite, ship the original answer
+        unchanged with grounding_passed=True (no banner), and increment the
+        false-positive-skip counter.
+        """
+        from rag_chat.application.metrics.prometheus import (
+            rag_grounding_false_positive_skip_total,
+        )
+
+        before = rag_grounding_false_positive_skip_total._value.get()
+        orch, captured, pipeline = self._build(
+            stream_chunks=["Q2 revenue was $34.6B per the filing."],
+            rewrite_chunks=["FALSE_POSITIVE"],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # 2 stream_chat calls: initial draft + the self-check rewrite turn.
+        assert len(captured) == 2
+        # The ORIGINAL (not the sentinel) is persisted, grounding treated as passed.
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        assert "$34.6B" in content
+        assert "FALSE_POSITIVE" not in content
+        assert "⚠" not in content
+        assert "could not be matched" not in content
+        # Grounding passed → the completion cache write still fires.
+        assert pipeline.write_completion_cache.await_count == 1
+        # The false-positive-skip counter incremented by exactly one.
+        assert rag_grounding_false_positive_skip_total._value.get() == before + 1
+
+    def test_rewrite_real_body_is_applied_not_treated_as_sentinel(self) -> None:
+        """A genuine rewrite body (not the bare sentinel) is applied as before.
+
+        Guards against the sentinel handler misfiring on a real rewrite that
+        happens to be long/substantive — it must go through the normal apply path.
+        """
+        orch, captured, pipeline = self._build(
+            stream_chunks=["Q2 revenue was $34.6B per the filing."],
+            rewrite_chunks=["Q2 revenue was $10.253B [N1]."],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The rewrite body replaced the fabricated figure.
+        assert "$10.253B" in content
+        assert "$34.6B" not in content
+
+    # ── Point 2 Stage 2 — analytical_intent gate relaxation wiring ────────────
+    def _run_intent_case(self, *, message: str, draft: str) -> int:
+        """Run the full turn for ``message``/``draft``; return stream_chat call count."""
+        from uuid import UUID
+
+        from rag_chat.domain.entities.chat import ChatContext, ChatRequest
+
+        orch, captured, _ = self._build(
+            stream_chunks=[draft],
+            rewrite_chunks=["Q2 revenue was $10.253B [N1]."],
+        )
+        request = ChatRequest(
+            message=message,
+            context=ChatContext(),
+            tenant_id=UUID(_FAKE_UUID),
+            user_id=UUID(_FAKE_UUID),
+            thread_id=None,
+        )
+        asyncio.run(_collect(orch, request, MagicMock()))
+        return len(captured)
+
+    def test_analytical_intent_relaxes_hedged_sentence(self) -> None:
+        """On an analytical (CONTRADICTION) turn a hedged-sentence figure is relaxed.
+
+        The unsupported $34.6B sits in a sentence whose HEDGE ("if …") follows the
+        number — so ``hedged_or_derived`` (pre-window only) is False and the
+        relaxation depends ENTIRELY on ``analytical_intent`` being wired through.
+        A "bear case" question is classified CONTRADICTION → analytical → the full
+        sentence hedge relaxes the gate → NO rewrite (one stream_chat call).
+        """
+        calls = self._run_intent_case(
+            message="What is the bear case against Apple?",
+            draft="The bear case: revenue drops to $34.6B if the lawsuit succeeds.",
+        )
+        assert calls == 1, "analytical intent must relax the hedged-sentence figure (no rewrite)"
+
+    def test_non_analytical_intent_does_not_relax_hedged_sentence(self) -> None:
+        """The SAME hedged-after-number draft on a GENERAL turn is NOT relaxed.
+
+        Proves the relaxation is driven by the intent wiring: without analytical
+        intent the full-sentence hedge is ignored and the material figure still
+        triggers the rewrite (two stream_chat calls).
+        """
+        calls = self._run_intent_case(
+            message="What was Apple's Q2 revenue?",
+            draft="The bear case: revenue drops to $34.6B if the lawsuit succeeds.",
+        )
+        assert calls == 2, "non-analytical turn must NOT relax the hedged sentence (rewrite fires)"
+
+    def test_analytical_intent_still_refuses_bare_fact(self) -> None:
+        """Even on an analytical turn a BARE factual assertion is never relaxed.
+
+        The fabrication guarantee: a material unsupported number stated as a plain
+        fact (no hedge anywhere in the sentence) still fires the rewrite even when
+        the turn is analytical.
+        """
+        calls = self._run_intent_case(
+            message="What is the bear case against Apple?",
+            draft="The bear case is simple: revenue is $34.6B.",
+        )
+        assert calls == 2, "a bare unsupported fact must still trigger a rewrite on analytical turns"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1748,6 +1885,70 @@ class TestPhantomCitationGate:
         assert text != _PHANTOM_CITATION_REFUSAL
         assert text == response
 
+    def test_benign_commentary_label_not_refused(self) -> None:
+        """P0 (2026-07-01): a benign ``[commentary row N]`` prose label must NOT refuse.
+
+        Regression: the live model tags its own editorial prose on a news answer
+        as ``[commentary row 1]``. With no material figure near the tag it is
+        benign — the answer must survive (tag stripped), NOT be nuked.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        response = (
+            "NVIDIA continues to dominate the AI accelerator market and analysts "
+            "remain broadly positive. [commentary row 1] Recent headlines focus on "
+            "new data-center partnerships."
+        )
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        # No numeric claim → no rewrite; the stream must never be reached.
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[],
+                messages=[{"role": "user", "content": "latest news on NVIDIA?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_entity_news"],
+            )
+        )
+        assert passed is True, "benign prose label must not refuse the whole answer"
+        assert text != _PHANTOM_CITATION_REFUSAL
+        assert "[commentary row 1]" not in text, "the benign tag should be stripped from the answer"
+        assert "NVIDIA continues to dominate" in text
+
+    def test_benign_and_material_phantom_still_refuses(self) -> None:
+        """When a benign label co-occurs with a fabricated MATERIAL citation, still refuse."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        response = (
+            "NVIDIA leads the market. [commentary row 1] " "AMD reported revenue of $34.6B [query_fundamentals row 4]."
+        )
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[self._row_with_value(10.0)],
+                messages=[{"role": "user", "content": "AMD revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_entity_news"],
+            )
+        )
+        assert passed is False
+        assert text == _PHANTOM_CITATION_REFUSAL
+
 
 class TestEmptyPoolRefusal:
     @staticmethod
@@ -2079,3 +2280,180 @@ class TestCombinedGroundingValidation:
         assert capture["n"] == 0, "phantom gate must refuse with no LLM call"
         assert passed is False
         assert text == _PHANTOM_CITATION_REFUSAL
+
+
+class TestStripTrailingFalsePositiveSentinel:
+    """The rewrite-model sentinel-strip guard (Qwen3-Next stray-token leak)."""
+
+    def test_strips_trailing_sentinel_from_real_rewrite(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _strip_trailing_false_positive_sentinel,
+        )
+
+        body = "NVIDIA revenue was $81.6B [1], up 48% YoY.\n\nFALSE_POSITIVE"
+        out = _strip_trailing_false_positive_sentinel(body)
+        assert out == "NVIDIA revenue was $81.6B [1], up 48% YoY."
+        assert "FALSE_POSITIVE" not in out
+
+    def test_bare_sentinel_left_intact_for_the_check(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _is_false_positive_sentinel,
+            _strip_trailing_false_positive_sentinel,
+        )
+
+        # A bare/near-bare sentinel must NOT be collapsed to empty here — it is
+        # still recognised downstream so the ORIGINAL answer is returned.
+        for bare in ("FALSE_POSITIVE", "  FALSE_POSITIVE.  ", "`FALSE_POSITIVE`"):
+            out = _strip_trailing_false_positive_sentinel(bare)
+            assert _is_false_positive_sentinel(out)
+
+    def test_body_without_sentinel_unchanged(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _strip_trailing_false_positive_sentinel,
+        )
+
+        body = "NVIDIA revenue was $81.6B [1]."
+        assert _strip_trailing_false_positive_sentinel(body) == body
+
+    def test_mid_body_mention_not_stripped(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _strip_trailing_false_positive_sentinel,
+        )
+
+        # Only a TRAILING token is removed; a mention mid-body is preserved.
+        body = "The check returned FALSE_POSITIVE, so the figures are fine [1]."
+        assert _strip_trailing_false_positive_sentinel(body) == body
+
+
+# ── 2026-07-05 — Qwen3-Next defeatist-guard / patch-not-refuse regression ─────
+
+
+class TestDefeatistGuardAcceptsLegitimateCorrection:
+    """2026-07-05 — the combined-grounding defeatist guard must distinguish a
+    legitimate CORRECTION (Qwen3-Next drops/flags a couple of ungrounded numbers
+    while retaining the grounded body) from a true defeatist refusal.
+
+    Root cause: on a thin-data projection the Qwen3-Next rewrite model returned a
+    short, refusal-style rewrite ("I cannot calculate this from the retrieved
+    data…"). The old guard (``refusal-prefixed AND shorter than original``)
+    discarded even a SUBSTANTIVE correction, then served the UNGROUNDED original
+    with a blanket caveat. The refined guard only rejects when the rewrite is
+    refusal-prefixed AND below a substantive-content floor.
+
+    These reuse the streaming ``_build`` harness so the REAL
+    ``_run_combined_grounding_validation`` (not a mock) exercises the guard.
+    """
+
+    def _build(self, *, tool_item_text: str | None = None, **kwargs: Any) -> tuple[Any, list, MagicMock]:
+        # Mirror of ``TestOrchestratorGroundingHook._build`` — a full tool
+        # round-trip so the streaming final turn + combined grounding pass run.
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        pipeline, captured = _make_pipeline(**kwargs)
+        block = _make_tool_use_block()
+        item = _make_retrieved_item(tool_item_text) if tool_item_text else _make_retrieved_item()
+        executor = _make_executor([item])
+        factory = _make_factory(executor)
+
+        ct = {"i": 0}
+
+        async def _two_call(messages, tools=None, **_):
+            ct["i"] += 1
+            if ct["i"] == 1:
+                return _make_llm_tool_response(tool_calls=[block])
+            return _make_llm_tool_response(text="", tool_calls=[])
+
+        pipeline.llm_chain.chat_with_tools = _two_call
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        return orch, captured, pipeline
+
+    def test_substantive_refusal_prefixed_correction_is_accepted(self) -> None:
+        """A rewrite that OPENS with 'I cannot' but keeps the grounded body
+        (only the ungrounded number removed) is refusal-prefixed AND shorter than
+        the original YET substantive → it must NOT be rejected as defeatist, and
+        the corrected, grounded rewrite is what gets served (no blanket caveat)."""
+        # Long draft carrying ONE ungrounded number ($34.6B — tool data has
+        # $10.253B), so the numeric pass fails and a rewrite fires.
+        ungrounded_draft = (
+            "Apple's Q2 revenue was $34.6B according to the latest filing, and "
+            "management pointed to continued strength across services, wearables, "
+            "and the broader installed base, with commentary suggesting momentum "
+            "should persist through the remainder of the fiscal year as the newest "
+            "product cycle ramps and channel inventory normalizes across regions."
+        )
+        # A LEGITIMATE correction: opens with a hedge, removes the ungrounded
+        # figure, keeps the grounded $10.253B. Substantive (>=200 chars) but
+        # SHORTER than the draft, and <600 chars so the divergence guard is exempt.
+        correction = (
+            "I cannot provide the projected figure you asked about because it does "
+            "not appear in the retrieved tool data, so I have removed it. Based on "
+            "the fundamentals that are available, Apple's revenue was $10.253B, "
+            "which is the grounded figure I can confirm from the tool results."
+        )
+        # Preconditions that make this the exact branch under test.
+        assert correction.startswith("I cannot")
+        assert len(correction) >= 200
+        assert len(correction) < len(ungrounded_draft)
+
+        orch, captured, pipeline = self._build(
+            stream_chunks=[ungrounded_draft],
+            rewrite_chunks=[correction],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # Initial draft + one rewrite.
+        assert len(captured) == 2
+        persisted = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The corrected rewrite is served — NOT discarded for the ungrounded original.
+        assert "$10.253B" in persisted
+        assert "$34.6B" not in persisted
+        # And no blanket "could not be verified/matched" caveat (grounded rewrite).
+        assert "could not be verified" not in persisted
+        assert "could not be matched" not in persisted
+
+    def test_bare_defeatist_refusal_still_rejected_bp648(self) -> None:
+        """BP-648 preserved: a bare 'I cannot answer that.' rewrite (refusal
+        prefixed, below the substantive floor, shorter than the original) is STILL
+        rejected → the grounded original is kept with the caveat banner."""
+        ungrounded_draft = (
+            "Apple's Q2 revenue was $34.6B according to the latest filing, showing "
+            "strong year-over-year growth across all reporting segments this period."
+        )
+        bare_refusal = "I cannot answer that."
+        # Preconditions for the defeatist branch.
+        assert bare_refusal.startswith("I cannot")
+        assert len(bare_refusal) < 200
+        assert len(bare_refusal) < len(ungrounded_draft)
+
+        orch, captured, pipeline = self._build(
+            stream_chunks=[ungrounded_draft],
+            rewrite_chunks=[bare_refusal],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2
+        persisted = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The defeatist text must NOT replace the answer …
+        assert "I cannot answer that" not in persisted
+        # … the grounded original is kept with the caveat (C2 canonical wording).
+        assert "$34.6B" in persisted
+        assert "could not be matched to a retrieved source" in persisted or "could not be verified" in persisted
+
+    def test_rewrite_prompt_instructs_patch_not_refuse(self) -> None:
+        """Prompt test: the combined-grounding rewrite user-turn must instruct the
+        model to PATCH (keep grounded content, drop/mark unsupported items) and to
+        NEVER return a bare refusal — the fix that stops Qwen3-Next going
+        defeatist. We capture the rewrite call's message payload."""
+        orch, captured, _pipeline = self._build(
+            stream_chunks=["Apple's Q2 revenue was $34.6B per the filing, up sharply this period."],
+            rewrite_chunks=["Apple's revenue was $10.253B based on the tool results."],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2, "expected an initial draft + one rewrite call"
+        rewrite_user_turn = captured[1][-1]
+        assert rewrite_user_turn.get("role") == "user"
+        content = rewrite_user_turn["content"]
+        # Patch-not-refuse contract.
+        assert "CORRECTED version" in content
+        assert "NEVER replace the answer with a bare refusal" in content
+        assert "[unverified]" in content
+        # The old re-answer-from-scratch wording must be gone.
+        assert "Provide a fresh response that answers the question directly" not in content

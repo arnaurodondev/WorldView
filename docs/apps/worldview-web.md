@@ -141,22 +141,39 @@ Copy `apps/worldview-web/.env.example` to `apps/worldview-web/.env.local`:
 | `NEXT_PUBLIC_SENTRY_DSN` | *(empty)* | Client | Sentry DSN — empty = disabled (no-op in dev) |
 | `SENTRY_AUTH_TOKEN` | *(CI only)* | Build | Sentry sourcemap upload; never put in `.env.local` |
 
-> `NEXT_PUBLIC_ZITADEL_URL` is intentionally left without a default. If it is empty,
-> the login page detects this and shows the "Dev Login" button instead of the Zitadel OIDC flow.
-> Adding a `??` fallback would suppress the dev button even when Zitadel isn't running.
+> `NEXT_PUBLIC_ZITADEL_URL` is intentionally left without a default. The login page decides
+> between the Zitadel OIDC flow and the "Dev Login" button primarily by **probing the gateway's
+> OIDC-init route** (see §4.4); this env var is only a tie-breaker used when the gateway is
+> unreachable. Adding a `??` fallback here would still be wrong, but the probe-first logic means
+> Dev Login now appears whenever OIDC genuinely 502s even if this var is accidentally set.
 
 ### 4.4 Dev Login Mode
 
-When `NEXT_PUBLIC_ZITADEL_URL` is not set, the platform's dev-login shortcut activates:
+When Zitadel OIDC is not configured, the platform's dev-login shortcut activates:
 
 1. Navigate to `http://localhost:3001` — you are redirected to `/login`.
-2. The login page detects that Zitadel is not configured and renders a **"Dev Login"** button.
+2. On mount, the login page **probes the gateway's OIDC-init route** (`GET /api/v1/auth/login`).
+   This probe is the authoritative signal for whether real OIDC login works:
+   - `502` (`oidc_discovery_failed`) → OIDC is unconfigured → the **"Dev Login"** button is shown
+     and the Zitadel button is hidden.
+   - `302` (redirect to Zitadel) → OIDC works → the Zitadel button is shown and Dev Login is hidden.
+   - network error / timeout → gateway unreachable (ambiguous) → falls back to the
+     `NEXT_PUBLIC_ZITADEL_URL` hint (offer Dev Login only when the issuer env var is also unset).
 3. Clicking "Dev Login" calls `POST /api/v1/auth/dev-login` on S9, which returns an internal JWT
    for the seed demo user.
-4. The frontend stores the token in React state and redirects to `/dashboard`.
+4. The frontend stores the token in React state (`AuthContext.setTokens`) and redirects to `/dashboard`.
+
+> **Why the probe is authoritative (not just the env var):** an earlier build gated Dev Login on
+> `NEXT_PUBLIC_ZITADEL_URL` being unset *and* a 502 probe (logical AND), skipping the probe entirely
+> whenever the env var was set. That hid the Dev Login button for the common local setup where a
+> developer sets `NEXT_PUBLIC_ZITADEL_URL` (per `.env.example`, for PKCE testing) but does not have
+> Zitadel actually running — the OIDC route 502s, real login is impossible, and Dev Login was hidden,
+> leaving no way to log in through the UI. The probe-first logic keeps production safe (a configured
+> Zitadel returns 302 → Dev Login hidden) while always offering the shortcut when OIDC genuinely 502s.
 
 **Security**: The dev-login endpoint returns `403 Forbidden` when `OIDC_DISCOVERY_OPTIONAL=false`
-(i.e., in production). It is never accessible in a properly configured deployment.
+(i.e., in production). It is never accessible in a properly configured deployment — and even if the
+button were shown during a transient production 502, clicking it 403s and the page re-hides it.
 
 **Prerequisite**: Run `make seed` to ensure the demo user and sample data exist in the database.
 
@@ -311,10 +328,10 @@ apps/worldview-web/
 | `/news` | News feed | Top today + full feed tabs |
 | `/chat` | RAG chat | Thread list with rename/search; slash commands (`/quote`, `/portfolio`, `/news`, etc.); citation confidence bar; context-aware starters |
 | `/watchlists/[id]` | Watchlist detail | Members, price summary |
-| `/prediction-markets` | Prediction markets | Polymarket data via S9 |
+| `/prediction-markets` | Prediction markets | Polymarket data via S9. PLAN-0056 Wave E2 analytical enrichment: collapsible `EventGroupings` (`/events`), per-row honest `SignalBadge` (resolved/closed from status), and a click-to-open right-side **`MarketDetailSheet`** (NOT a route — preserves the infinite-scroll list's scroll+filter state) containing `ProbabilityChart` (recharts LineChart, 1h/1d/1w toggle, HEX palette), current YES/NO odds, liquidity/OI/24h-volume stats (OI honestly "n/a" — not in S3 payload), a recent-flow strip (`/trades`), a history-derived "moving" signal badge (measured YES Δpp ≥ 8pp), and the external Polymarket link (`buildPolymarketUrl`). |
 | `/search` | Search results | Full-text entity + instrument search |
 | `/settings` | User settings | Profile, notifications, appearance, data, integrations, security, beta program |
-| `/intelligence/[entity_id]` | Entity intelligence | 3-column: sigma.js graph, relations/evidence/paths, entity sidebar; full-width RAG chat panel |
+| `/intelligence/[entity_id]` | Entity intelligence | 3-column: sigma.js graph, relations/evidence/paths, entity sidebar; full-width RAG chat panel. Sidebar includes `EntityPredictionsSection` (PLAN-0056 Wave E2) — prediction markets referencing the entity via `/entities/{id}/predictions`, with bullish-green/bearish-red/neutral-muted polarity + market link; renders nothing (no header) when the entity has no linked markets. |
 | `/connections` | Weird Connections feed | Global graph-wide "weird connections" feed (PLAN-0112 W5). `WeirdConnectionsFeed` consumes `GET /v1/connections/weird` via `useWeirdConnections` (TanStack Query, 5-min staleTime); ranked connections with the reliability/unexpectedness/semantic-distance/novelty sub-score breakdown + a pairwise "how are these related?" picker (`usePathBetween` → `GET /v1/paths/between`). PathsTab/PathInsightsBlock re-labelled from harmonic/diversity/surprise → weirdness. |
 | `/status` | Platform status | Service health |
 | `/dev-tools/sentry-test` | Dev only | Throws synthetic Sentry error; `notFound()` in production |
@@ -382,10 +399,35 @@ apps/worldview-web/
 
 | Component | Purpose |
 |-----------|---------|
-| `SemanticHoldingsTable` | Holdings with P&L, heat cells, sparklines |
+| `SemanticHoldingsTable` | Holdings with P&L, heat cells, sparklines; pinned-right ACTIONS kebab (Edit/Close + view) that reuses the right-click floating menu (PLAN-0122 W-D); mode/column-group aware |
 | `ExposureBreakdown` | Cash vs Invested visual (colour-blind safe: pattern + label) |
 | `SectorAllocationPanel` | Sector bars with `aria-label` + diagonal-stripe pattern |
 | `TransactionsTable` | Paginated transactions with filter bar (date, type, ticker, amount range) |
+| `PortfolioModeToggle` | Simple \| Advanced segmented control (`role="radiogroup"`, `data-tour-target="mode-toggle"`) driving the dual-mode render gate (PLAN-0122 W-A) |
+| `HoldingsColumnGroupToggle` | ⚙ Popover to show/hide the Core/Portfolio/Advanced column groups (Advanced only; PLAN-0122 W-E) |
+| `EditPositionDialog` | Honest **adjusting-trade** edit — records a BUY/SELL of the delta via `POST /v1/transactions`; never mutates a holding or rewrites history (PLAN-0122 W-D) |
+| `ClosePositionDialog` | Full **or partial** close — editable quantity (default full), "Sell all" reset, validated `0 < qty ≤ holding` (PLAN-0122 W-D) |
+| `PortfolioTour` | Dismissible, non-blocking onboarding tour — custom shadcn `Popover` state machine (no new dependency) anchored to `data-tour-target` attrs; auto-starts once after first portfolio create (PLAN-0122 W-F) |
+
+> **Dual-mode portfolio page (PLAN-0122, PRD-0122).** `/portfolio` renders in two
+> detail levels driven by a single value from `hooks/usePortfolioMode.ts` — a
+> **rendering gate, never a fork** (one `page.tsx` / `HoldingsTab` /
+> `SemanticHoldingsTable`; each surface conditionally renders its power-user chrome).
+> - **Simple** (public default): 4 KPI tiles (Total Value / Day P&L / Unrealised P&L / Cash),
+>   no tab bar (Holdings body rendered directly), no donut/overview/concentration/
+>   perf-chart/sector-bar/bottom-cluster/detail-pills, Core-only holdings columns.
+>   Brokerage sync strips + `PerformanceStrip` stay shown.
+> - **Advanced** (opt-in, byte-for-byte today's layout; guarded by the
+>   `test_advanced_mode_is_todays_layout` snapshot): 8 tiles + donut + all strips +
+>   4 tabs + column-group toggle.
+> - **State**: `usePortfolioMode` resolves URL `?mode=` → localStorage
+>   `worldview:portfolioMode:v1` → the `PORTFOLIO_SIMPLE_DEFAULT` flag default
+>   (`lib/portfolio/mode-flag.ts`, now `true`). Selecting a mode writes both sinks
+>   (sticky + shareable). Rollback = flip the flag back to `false`.
+> - **Onboarding tour**: `CreatePortfolioDialog.onSuccess` arms
+>   `worldview:portfolioTourSeen:v1="pending"` on a first-ever create;
+>   `PortfolioTour` auto-starts once and immediately writes `"done"` (never re-shows);
+>   existing users are backfilled to `"done"`. ×/Skip/Escape/outside-click dismiss.
 
 ### Alert Components (`components/alerts/`)
 
@@ -500,7 +542,7 @@ pattern ensures the latest token is always used on every refetch.
 | `intelligence.ts` | entity intelligence page data |
 | `search.ts` | entity + instrument search |
 | `brokerage.ts` | brokerage connections |
-| `prediction-markets.ts` | Polymarket signals, categories, history |
+| `prediction-markets.ts` | Polymarket signals, categories, history. Wave E2 added `getPredictionMarketPriceHistory(conditionId, interval)` (interval bars, distinct from the legacy days-based `getPredictionMarketHistory` snapshots), `getPredictionMarketTrades`, `getPredictionEvents`, `getEntityPredictions`. TanStack hooks in `prediction-markets-hooks.ts`: `usePredictionMarketPriceHistory` / `usePredictionMarketTrades` / `usePredictionEvents` / `useEntityPredictions` (useAuth token-gated, staleTime 60s/60s/5m/2m). |
 | `feedback.ts` | feedback submissions, feature votes, NPS, micro-survey, beta-program |
 | `notification-preferences.ts` | per-user notification preferences (`/v1/users/me/notification-preferences`) |
 
@@ -646,6 +688,10 @@ All colors use CSS custom properties. Never use hardcoded hex in components.
 | Screener columns | `localStorage` | key `worldview:screenerColumns:v1` |
 | Saved screens | `localStorage` | key `worldview:savedScreens:v1` |
 | Symbol linking | `localStorage` | key `worldview:symbolLinks:v1` |
+| Portfolio detail level | `localStorage` + `nuqs` `?mode=` | key `worldview:portfolioMode:v1` (Simple\|Advanced; `hooks/usePortfolioMode.ts`) |
+| Holdings column widths/order | `localStorage` | key `worldview-holdings-cols` (AG-Grid column state) |
+| Holdings column groups | `localStorage` | key `worldview:holdingsColGroups:v1` (Core/Portfolio/Advanced visibility; `lib/portfolio/holdings-column-groups.ts`) |
+| Onboarding tour seen | `localStorage` | key `worldview:portfolioTourSeen:v1` (`pending`\|`done`; `components/portfolio/PortfolioTour.tsx`) |
 | Notification prefs | `localStorage` | Managed by `lib/notification-prefs.ts` |
 | Local UI state | `useState` / `useReducer` | Filters, modals, selections |
 

@@ -1,0 +1,480 @@
+/* @theme worldview-academic */
+/* ================================================================== *
+ * Worldview — academic defense theme (sharp & restrained, serif).
+ *
+ * Replaces worldview-light.css (kept as backup). Direction chosen from
+ * the style lab (deck_styles.pdf), "Direction C":
+ *   - SERIF headings (Source Serif 4) to echo the printed thesis cover;
+ *     body stays sans (Inter) for on-screen legibility.
+ *   - SHARP & RESTRAINED: square corners (3px, no 999px pills), 1px
+ *     hairline borders instead of soft drop-shadows, flat fills (no
+ *     gradients), thin straight-rule connectors (no chunky ▶ triangles).
+ *   - RESTRAINED COLOUR: navy ink + ONE blue accent + gold reserved for
+ *     hero numbers only (not every bold word) + status green/red.
+ *   - Running head per slide (Act · title, small-caps + thin rule) and a
+ *     short footer + page number.
+ *   - Content slides TOP-ALIGN their title for consistent vertical rhythm.
+ * ================================================================== */
+
+@import 'default';
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap');
+
+:root {
+  --bg:        #FFFFFF;
+  --card:      #FFFFFF;
+  --ink:       #16233D;   /* primary navy text                        */
+  --slate:     #5A6677;   /* secondary text                           */
+  --blue:      #2C6AA8;   /* the ONE accent                           */
+  --blue-soft: #EEF3F9;   /* faint fill for highlighted regions       */
+  --gold:      #9A6B0A;   /* gold = the "answer / output" accent      */
+  --gold-soft: #FAF5EA;   /* very faint warm tint (kept subtle)       */
+  --green:     #2E8B57;
+  --green-soft:#E7F2EC;
+  --amber:     #9A6B0A;
+  --red:       #C0504D;
+  --red-soft:  #FBECEB;
+  --line:      #D7DDE7;   /* hairlines / borders                      */
+  --line-2:    #B9C2D1;   /* slightly stronger rule for accents       */
+  --serif:     "Source Serif 4", Georgia, "Times New Roman", serif;
+  --sans:      "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono:      "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  --fz:        24px;
+  --radius:    3px;
+}
+
+/* ------------------------------ base ------------------------------ */
+section {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);            /* body = sans                 */
+  font-size: var(--fz);
+  line-height: 1.45;
+  padding: 76px 72px 58px;             /* top padding clears the head  */
+  letter-spacing: 0.1px;
+  display: flex;                        /* explicit flex container ...  */
+  flex-direction: column;
+  justify-content: flex-start;          /* ... so content TOP-aligns    */
+}
+/* Force top-alignment on every content slide (marp centres otherwise),
+   while leaving the full-bleed title/divider layouts centred. */
+section:not(.title):not(.divider) { justify-content: flex-start !important; }
+/* Opt-in: vertically centre sparse slides (add `_class: vcenter`).
+   Named distinctly so it never collides with the `.center` text utility. */
+section.vcenter:not(.title):not(.divider) { justify-content: center !important; }
+
+/* headings = SERIF */
+h1, h2, h3 { font-family: var(--serif); color: var(--ink); }
+h1 { font-size: 44px; font-weight: 600; margin: 0 0 14px; letter-spacing: 0; }
+h2 { font-size: 34px; font-weight: 600; margin: 0 0 22px; letter-spacing: 0; }
+h3 { font-size: 21px; font-weight: 600; margin: 0 0 8px; }
+
+p  { margin: 10px 0; }
+strong { color: var(--ink); font-weight: 700; }   /* emphasis = weight, not colour */
+em     { color: var(--blue); font-style: normal; font-weight: 600; }
+a  { color: var(--blue); text-decoration: none; }
+ul, ol { margin: 8px 0; padding-left: 1.05em; }
+li { margin: 7px 0; }
+li::marker { color: var(--slate); }
+img { display: block; margin: 0 auto; border-radius: 0; }
+
+.lead  { font-family: var(--serif); font-size: 28px; line-height: 1.32; color: var(--ink); font-weight: 400; }
+.sub   { color: var(--slate); font-size: 22px; }
+.muted { color: var(--slate); }
+.small { font-size: 0.82em; }
+.center{ text-align: center; }
+.gold  { color: var(--gold); font-weight: 700; }
+.hl    { background: none; border-bottom: 2px solid var(--gold); border-radius: 0; padding: 0 1px; color: var(--gold); font-weight: 700; }
+
+/* ============================ header / footer ===================== */
+header {
+  font-family: var(--sans);
+  color: var(--slate);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  left: 72px; right: 72px; top: 30px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+footer { font-family: var(--sans); color: #9AA6BC; font-size: 12px; left: 72px; bottom: 26px; }
+section::after { color: #9AA6BC; font-size: 12px; font-weight: 500; right: 72px; bottom: 26px; }
+
+/* =============================== cards ============================ */
+.cards { display: flex; gap: 16px; align-items: stretch; margin: 16px 0; }
+.cards.cols-4 .card { flex: 1 1 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  flex: 1;
+}
+.card h3 { margin: 2px 0 6px; }
+.card p  { margin: 0; color: var(--slate); font-size: 18px; }
+.card .tag {
+  display: inline-block; font-family: var(--sans); font-size: 13px; font-weight: 600; color: var(--blue);
+  border: 1px solid var(--line-2); border-radius: var(--radius);
+  padding: 1px 8px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.card.gold-top { border-top: 2px solid var(--gold); }
+.card.blue-top { border-top: 2px solid var(--blue); }
+
+.numbadge {
+  width: 30px; height: 30px; border-radius: var(--radius);
+  border: 1px solid var(--line-2); background: #fff; color: var(--blue);
+  font-family: var(--sans); font-weight: 700; font-size: 17px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* ============================ metric cards ======================= */
+.metrics { display: flex; gap: 16px; margin: 18px 0; justify-content: center; }
+.metric {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 20px 24px; text-align: center; flex: 1;
+}
+.metric .num { font-family: var(--serif); font-size: 50px; font-weight: 600; color: var(--gold); line-height: 1; letter-spacing: -1px; }
+.metric .lbl { font-family: var(--sans); color: var(--slate); font-size: 16px; margin-top: 8px; line-height: 1.25; }
+.metric.blue .num  { color: var(--blue); }
+.metric.green .num { color: var(--green); }
+
+.hero-num { font-family: var(--serif); font-size: 104px; font-weight: 600; color: var(--gold); line-height: 1; letter-spacing: -2px; text-align: center; }
+.hero-lbl { font-family: var(--sans); color: var(--slate); font-size: 19px; text-align: center; margin-top: 6px; }
+
+/* ============================ pills / badges ===================== */
+.pill {
+  font-family: var(--mono);
+  background: #fff; color: var(--ink); border: 1px solid var(--line-2);
+  border-radius: var(--radius); padding: 2px 9px; font-size: 0.74em; font-weight: 500;
+  white-space: nowrap;
+}
+.badge { display: inline-block; font-family: var(--sans); border-radius: var(--radius); padding: 2px 11px; font-weight: 700; font-size: 0.78em; border: 1px solid; }
+.badge.pass    { color: var(--green); border-color: var(--green); background: #fff; }
+.badge.partial { color: var(--gold);  border-color: var(--gold);  background: #fff; }
+
+/* =============================== flows =========================== */
+.flow { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0; margin: 26px 0; }
+.flow .step {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 18px; text-align: center;
+  font-family: var(--sans); font-weight: 600; font-size: 19px; min-width: 118px;
+}
+.s, .flow .step .s { display: block; font-size: 13px; color: var(--slate); font-weight: 500; margin-top: 4px; }
+.flow .step.blue { border-color: var(--line-2); background: var(--blue-soft); }
+.flow .step.gold { border-color: var(--gold); }
+.flow .step.bad  { border-color: var(--red); }
+/* thin straight connector: 1px rule + small flat arrowhead.
+   Generalised to any `.arr` (some live outside a `.flow`). */
+.arr {
+  width: 46px; height: 1px; background: var(--line-2); position: relative;
+  margin: 0 6px; font-size: 0; padding: 0; align-self: center; flex: none;
+}
+.arr::after {
+  content: ''; position: absolute; right: -1px; top: -4px;
+  border-left: 7px solid var(--slate); border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+}
+/* optional caption under an arrow, e.g. "first time" / "re-delivered" */
+.arr small {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; font-weight: 600; color: var(--slate); white-space: nowrap;
+}
+
+/* mini flow used on dividers / inline */
+.miniflow { display: flex; align-items: center; gap: 10px; color: var(--slate); font-size: 18px; margin-top: 18px; }
+.miniflow .m { font-family: var(--sans); background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 12px; font-weight: 600; color: var(--ink); }
+.miniflow .a { color: var(--line-2); font-weight: 700; }
+
+/* ===================== two-column problem/solution =============== */
+.twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 14px; }
+.panel { border-radius: var(--radius); padding: 20px 22px; border: 1px solid var(--line); }
+.panel h3 { margin-top: 0; }
+.panel.bad  { border-left: 3px solid var(--red); }
+.panel.bad h3  { color: var(--red); }
+.panel.good { border-left: 3px solid var(--blue); }
+.panel.good h3 { color: var(--blue); }
+.panel .row { display: flex; align-items: center; gap: 10px; margin: 9px 0; font-size: 19px; }
+.panel .ok  { color: var(--green); font-weight: 800; }
+.panel .no  { color: var(--red);   font-weight: 800; }
+.result { margin-top: 13px; font-weight: 700; }
+.panel.bad .result  { color: var(--red); }
+.panel.good .result { color: var(--blue); }
+
+/* ------------------------------ ladder --------------------------- */
+.ladder { margin: 6px 0; }
+.rung {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 18px; border-radius: var(--radius); margin: 9px 0;
+  background: var(--card); border: 1px solid var(--line);
+}
+.rung .name { font-weight: 700; }
+.rung .tag  { font-family: var(--mono); font-size: 15px; color: var(--slate); }
+.rung.l1 { border-left: 3px solid #2C6AA8; }
+.rung.l2 { border-left: 3px solid #5C93C9; }
+.rung.l3 { border-left: 3px solid var(--gold); }
+.rung.l4 { border-left: 3px solid var(--red); }
+
+/* =============================== bars =========================== */
+.bars { margin: 16px 0; }
+.bar-row { margin: 16px 0; }
+.bar-head { display: flex; justify-content: space-between; font-size: 18px; margin-bottom: 6px; }
+.bar-head .v { font-weight: 700; color: var(--blue); }
+.bar-head .v.gold { color: var(--gold); }
+.bar-track { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); height: 22px; position: relative; overflow: hidden; }
+.bar-fill  { background: var(--blue); height: 100%; border-radius: 0; }
+.bar-fill.gold { background: var(--gold); }
+.bar-budget { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--slate); }
+.bar-budget span { position: absolute; top: -20px; left: 6px; font-size: 12px; color: var(--slate); white-space: nowrap; }
+
+/* ============================ callouts ========================== */
+.callout { border-radius: var(--radius); padding: 13px 18px; font-size: 18px; border: 1px solid var(--line); }
+.callout.amber { border-left: 3px solid var(--gold); color: var(--ink); }
+.callout.blue  { border-left: 3px solid var(--blue); color: var(--ink); background: var(--blue-soft); }
+
+/* ========================= graph node / edge ==================== */
+.graph { display: flex; align-items: center; justify-content: center; gap: 0; margin: 20px 0; }
+.gnode {
+  display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 14px 24px; border-radius: var(--radius); background: var(--card);
+  border: 1px solid var(--blue); font-family: var(--sans); font-weight: 700; font-size: 23px; color: var(--ink);
+  text-align: center; line-height: 1.2;
+}
+.gnode.gold { border-color: var(--gold); }
+.gedge { display: flex; flex-direction: column; align-items: center; padding: 0 6px; min-width: 150px; }
+.gedge .line { width: 100%; height: 1px; background: var(--line-2); position: relative; }
+.gedge .pred { font-family: var(--mono); color: var(--slate); font-weight: 600; font-size: 16px; margin-bottom: 5px; }
+.gedge .arrowhead { color: var(--slate); font-size: 15px; margin-top: -4px; }
+
+/* stacked "evidence" cards — faked with offset outlines, no shadow */
+.evstack {
+  position: relative; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 18px 22px; width: fit-content;
+}
+.evstack::before, .evstack::after {
+  content: ''; position: absolute; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--card); z-index: -1;
+}
+.evstack::before { top: 7px; left: 7px; right: -7px; bottom: -7px; }
+.evstack::after  { top: 14px; left: 14px; right: -14px; bottom: -14px; }
+
+/* ============================ tables =========================== */
+table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 20px; background: transparent; }
+th { font-family: var(--sans); background: #fff !important; color: var(--ink); font-weight: 700; text-align: left;
+     padding: 11px 14px; border-bottom: 2px solid var(--ink); }
+td { background: #fff !important; color: var(--ink); padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr.hl td { background: var(--blue-soft) !important; }
+tr:last-child td { border-bottom: none; }
+
+/* faint contextual screenshot helpers */
+.ghost { opacity: 0.16; filter: grayscale(0.2); }
+.thumb { border: 1px solid var(--line); }
+
+/* ===================== Part-1 motivation visuals ================ */
+/* Slide "two data tracks" — a typed mini-table vs a free-text snippet. */
+.mini { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 15px; margin-top: 8px; }
+.mini th { background: #fff !important; color: var(--slate); font-weight: 600; text-align: left;
+           padding: 5px 9px; border-bottom: 1px solid var(--line); text-transform: none; letter-spacing: 0; }
+.mini td { background: #fff !important; padding: 5px 9px; border-bottom: 1px solid var(--line); color: var(--ink); }
+.mini tr.hl-row td { background: var(--blue-soft) !important; font-weight: 600; }
+.mini tr:last-child td { border-bottom: none; }
+mark { background: var(--gold-soft); color: #6f4d08; padding: 0 4px; border-radius: 2px; font-weight: 600; }
+.news { font-size: 19px; line-height: 1.42; color: var(--ink); margin: 8px 0 4px; }
+
+/* varied unstructured document types (news / filing / transcript) */
+.doc { font-size: 15px; line-height: 1.35; color: var(--ink); padding: 9px 0; border-bottom: 1px solid var(--line); }
+.doc:last-child { border-bottom: none; }
+.doctype { display: inline-block; font-family: var(--sans); font-size: 11px; font-weight: 700; text-transform: uppercase;
+           letter-spacing: 0.5px; color: var(--gold); border: 1px solid var(--gold); border-radius: var(--radius);
+           padding: 1px 7px; margin-right: 6px; }
+
+/* colored comparison-table marks (✓ green / ✗ red / partial amber) */
+.y { color: var(--green); font-weight: 700; }
+.n { color: var(--red); font-weight: 700; }
+.p { color: var(--amber); font-weight: 600; font-size: 0.9em; }
+.cost-bad  { color: var(--red); font-weight: 700; }
+.cost-good { color: var(--green); font-weight: 700; }
+
+/* the "?" gap between the two data shapes — a dashed line they don't cross */
+.gap-q { position: relative; display: flex; flex-direction: column; align-items: center;
+         justify-content: center; min-width: 96px; color: var(--slate); }
+.gap-q::before { content: ''; position: absolute; top: 46%; left: 0; right: 0; border-top: 2px dashed var(--line-2); }
+.gap-q .qmark { font-size: 32px; font-weight: 700; background: var(--bg); padding: 0 9px; z-index: 1; line-height: 1; }
+.gap-q .s { font-size: 12px; font-weight: 500; margin-top: 6px; background: var(--bg); padding: 0 6px; z-index: 1; }
+
+/* Slide "the risk you can't see" — visible vs hidden dependency layer. */
+.hold-region { border: 1px solid var(--blue); border-radius: var(--radius); background: var(--blue-soft); padding: 16px 22px; }
+.dep-region  { border: 1px dashed var(--red); border-radius: var(--radius); background: var(--red-soft); padding: 16px 22px; }
+.region-label { font-family: var(--sans); font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; }
+.hold-region .region-label { color: var(--blue); }
+.dep-region  .region-label { color: var(--red); }
+.noderow { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.gnode-sm { display: inline-flex; align-items: center; padding: 10px 20px; border: 1px solid var(--line-2);
+            border-radius: var(--radius); background: #fff; font-family: var(--sans); font-weight: 700; font-size: 19px; color: var(--ink); }
+.gnode-sm.held   { border-color: var(--blue); }
+.gnode-sm.hidden { border: 1px dashed var(--red); color: var(--red); }
+.shock { text-align: center; color: var(--red); font-weight: 700; font-size: 18px; margin: 12px 0; font-family: var(--sans); }
+.dep-edge { font-family: var(--mono); color: var(--slate); font-size: 15px; }
+
+/* slide-4: knowledge-layer link between the two risk zones */
+.risk-link { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 134px; padding: 0 10px; gap: 3px; }
+.risk-link .pred { font-family: var(--mono); font-size: 12px; color: var(--gold); line-height: 1.4; }
+.risk-link .lk-arrow { font-size: 22px; color: var(--line-2); line-height: 1; margin: 2px 0; }
+
+/* ===================== Part-2 architecture diagrams ============= */
+/* Idea-grade system map (replaces the dense thesis topology PNG). */
+.arch { display: flex; flex-direction: column; gap: 12px; margin: 14px 0; }
+.arch-row { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.arch-sources { justify-content: flex-start; color: var(--slate); font-size: 16px; flex-wrap: wrap; }
+.arch-sources .lbl { font-family: var(--sans); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; font-size: 13px; margin-right: 6px; }
+.arch-access { border: 1px solid var(--line-2); border-radius: var(--radius); padding: 7px 14px; font-family: var(--sans); font-weight: 600; font-size: 15px; color: var(--ink); }
+.agroup { flex: 1; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; padding: 14px 18px; text-align: center; }
+.agroup b { font-family: var(--serif); font-weight: 600; font-size: 21px; display: block; }
+.agroup .s { color: var(--slate); font-size: 14px; margin-top: 4px; display: block; }
+.agroup.hot { border-color: var(--blue); background: var(--blue-soft); }
+.arch-bus { background: var(--ink); color: #fff; border-radius: var(--radius); padding: 12px 18px; text-align: center;
+            font-family: var(--sans); font-weight: 700; letter-spacing: 0.3px; }
+.arch-bus .s { display: block; color: #AEBBD0; font-weight: 500; font-size: 13px; margin-top: 3px; }
+.arch-store { border: 1px solid var(--gold); border-radius: var(--radius); background: var(--gold-soft); padding: 12px 18px;
+              text-align: center; font-weight: 600; color: #6f4d08; font-family: var(--mono); font-size: 17px; }
+
+/* Inward-dependency layering glyph (replaces the dense hexagonal PNG). */
+.layer-flow { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 20px;
+              font-family: var(--mono); font-size: 16px; color: var(--slate); flex-wrap: wrap; }
+.layer-flow .ll { border: 1px solid var(--line-2); border-radius: var(--radius); padding: 7px 16px; color: var(--ink); font-weight: 600; background: #fff; }
+.layer-flow .ll.dom { border-color: var(--blue); color: var(--blue); }
+.layer-flow .ar { color: var(--line-2); font-weight: 700; }
+
+/* Two-lane journeys (replaces the dense intelligence PNG). */
+.lane { display: flex; align-items: center; gap: 18px; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 20px; margin: 12px 0; }
+.lane.gen { border-left: 3px solid var(--blue); }
+.lane.acc { border-left: 3px solid var(--gold); }
+.lane-tag { font-family: var(--sans); font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; min-width: 110px; }
+.lane.gen .lane-tag { color: var(--blue); }
+.lane.acc .lane-tag { color: var(--gold); }
+.shared-store { text-align: center; border: 1px dashed var(--line-2); border-radius: var(--radius); padding: 10px;
+                margin-top: 6px; color: var(--slate); font-family: var(--mono); font-size: 15px; }
+
+/* slide-4: iceberg (above / below the waterline) */
+.berg { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.berg-top { background: #fff; padding: 18px 22px; }
+.berg-line { height: 0; border-top: 2px dashed var(--blue); position: relative; }
+.berg-line span { position: absolute; right: 10px; top: -10px; background: #fff; padding: 0 8px; font-size: 12px;
+                  font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--blue); }
+.berg-bot { background: var(--blue-soft); padding: 22px; }
+.berg-lbl { font-family: var(--sans); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+.berg-top .berg-lbl { color: var(--ink); }
+.berg-bot .berg-lbl { color: var(--slate); }
+
+/* slide-9: individual service boxes (decluttered topology) */
+.ga { color: var(--line-2); font-weight: 700; }
+.topo { display: flex; flex-direction: column; gap: 10px; }
+.topo-layer { display: flex; align-items: center; gap: 10px; justify-content: center; }
+.topo-tag { font-family: var(--sans); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--slate); width: 92px; text-align: right; }
+.svc { border: 1px solid var(--line-2); border-radius: var(--radius); background: #fff; padding: 8px 12px;
+       font-family: var(--sans); font-size: 14px; font-weight: 600; color: var(--ink); text-align: center; min-width: 96px; }
+.svc b { display: block; font-size: 15px; }
+.svc .r { display: block; font-size: 11px; color: var(--slate); font-weight: 500; }
+.svc.intel { border-color: var(--blue); background: var(--blue-soft); }
+.svc.gw { border-color: var(--red); }
+.topo-bus { background: var(--ink); color: #fff; border-radius: var(--radius); padding: 8px; text-align: center;
+            font-family: var(--sans); font-weight: 700; font-size: 14px; letter-spacing: 0.3px; }
+
+/* slide-10: a tiny glyph per foundation */
+.found3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; }
+.found3 .fcard { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.found3 .fcard.blue-top { border-top: 2px solid var(--blue); }
+.found3 .fcard h3 { margin: 2px 0 8px; }
+.found3 .fcard p { color: var(--slate); font-size: 16px; margin: 0 0 14px; }
+.glyph { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;
+         font-family: var(--mono); font-size: 13px; color: var(--slate); border-top: 1px solid var(--line); padding-top: 12px; }
+.glyph .gb { border: 1px solid var(--line-2); border-radius: var(--radius); padding: 4px 9px; color: var(--ink); font-weight: 600; background: #fff; }
+.glyph .gb.hot { border-color: var(--blue); color: var(--blue); }
+
+/* slide-17: simplified enrichment pipeline (replaces nlp-pipeline.png) */
+.pipe { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.pstep { border: 1px solid var(--line); border-radius: var(--radius); background: #fff; padding: 6px 16px;
+         font-family: var(--sans); font-weight: 600; font-size: 14px; text-align: center; min-width: 220px; color: var(--ink); line-height: 1.2; }
+.pstep .s { display: block; font-size: 11px; color: var(--slate); font-weight: 500; }
+.pstep.gate { border-color: var(--red); background: var(--red-soft); color: var(--red); }
+.pdrop { color: var(--line-2); font-weight: 700; font-size: 11px; line-height: 1; }
+
+/* slide-22: retrieval fan-out / fan-in (replaces tool-chain.png) */
+.fan { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.fan-q { border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--blue-soft);
+         padding: 10px 18px; font-family: var(--sans); font-weight: 600; font-size: 17px; }
+.fan-row { display: flex; gap: 14px; justify-content: center; }
+.fan-mod { border: 1px solid var(--blue); border-radius: var(--radius); background: #fff; padding: 12px 14px; text-align: center; min-width: 158px; }
+.fan-mod b { display: block; font-family: var(--sans); font-weight: 700; font-size: 16px; color: var(--ink); }
+.fan-mod .s { display: block; font-size: 12px; color: var(--slate); margin: 3px 0 7px; }
+.fan-fuse { background: var(--ink); color: #fff; border-radius: var(--radius); padding: 10px 20px;
+            font-family: var(--sans); font-weight: 700; font-size: 16px; }
+
+/* slide-23: worked example (question → retrieved → cited answer) */
+.ex { display: flex; flex-direction: column; gap: 12px; }
+.ex-q { font-family: var(--serif); font-size: 22px; font-weight: 600; color: var(--ink); }
+.ex-block { display: flex; gap: 14px; align-items: flex-start; }
+.ex-label { font-family: var(--sans); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--slate); width: 86px; padding-top: 5px; flex: none; }
+.ex-rows { flex: 1; }
+.ex-row { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 16px; color: var(--ink); }
+.ex-row:last-child { border-bottom: none; }
+.ex-tag { font-family: var(--mono); font-size: 12px; color: var(--blue); background: var(--blue-soft);
+          border-radius: var(--radius); padding: 1px 7px; margin-right: 8px; }
+.ex-answer { border: 1px solid var(--gold); border-radius: var(--radius); background: var(--gold-soft);
+             padding: 13px 18px; font-size: 17px; line-height: 1.45; color: var(--ink); }
+.ex-cite { font-family: var(--mono); font-size: 12px; color: var(--slate); margin-top: 8px; }
+
+/* slide-27: evaluation pipeline (LLM-as-judge flow) */
+.jbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid var(--line);
+        border-radius: var(--radius); padding: 10px 16px; margin: 7px 0; }
+.jbar.gates  { border-left: 3px solid var(--red); }
+.jbar.rubric { border-left: 3px solid var(--blue); }
+.jlbl { font-family: var(--sans); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+.jbar.gates .jlbl  { color: var(--red); }
+.jbar.rubric .jlbl { color: var(--blue); }
+.score-box { display: inline-block; background: var(--gold-soft); border: 1px solid var(--gold); border-radius: var(--radius);
+             padding: 10px 24px; font-family: var(--sans); font-weight: 700; color: #6f4d08; font-size: 18px; }
+
+/* ============================ figures =========================== */
+/* A centred figure with an optional caption beneath it. Used to drop the
+   real thesis diagrams (topology, intelligence, nlp-pipeline, …) onto a slide. */
+.fig { display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 4px 0; }
+.fig img { max-width: 100%; max-height: 470px; object-fit: contain;
+           border: 1px solid var(--line); border-radius: var(--radius); }
+.fig.plain img { border: none; }              /* for diagrams already on white */
+.figcap { color: var(--slate); font-size: 15px; margin-top: 10px; text-align: center; }
+
+/* Figure beside a column of talking points (image left/right + bullets). */
+.figrow { display: flex; gap: 30px; align-items: center; margin: 8px 0; }
+.figrow .fcol-img { flex: 1 1 54%; display: flex; justify-content: center; }
+.figrow .fcol-img img { max-width: 100%; max-height: 450px; object-fit: contain;
+                        border: 1px solid var(--line); border-radius: var(--radius); }
+.figrow .fcol-img.plain img { border: none; }
+.figrow .fcol-txt { flex: 1 1 46%; }
+.figrow .fcol-txt.narrow { flex: 1 1 40%; }
+.figrow .fcol-img.wide { flex: 1 1 60%; }
+
+/* Product screenshots (dark UI) — frame with a slightly stronger border. */
+.shot img { border: 1px solid var(--line-2); border-radius: var(--radius); }
+
+/* ====================== full-slide layouts ===================== */
+/* TITLE */
+section.title { background: var(--bg); justify-content: center; }
+section.title h1 { font-family: var(--serif); font-size: 90px; letter-spacing: -1px; margin-bottom: 8px; font-weight: 600; }
+section.title .accent-line { width: 56px; height: 3px; background: var(--gold); border-radius: 0; margin: 20px 0 22px; }
+section.title .subtitle { font-family: var(--serif); font-style: italic; font-size: 30px; color: var(--blue); font-weight: 400; }
+section.title .meta { font-family: var(--sans); color: var(--slate); font-size: 20px; margin-top: 34px; line-height: 1.5; }
+section.title .meta b, section.title .meta strong { color: var(--ink); font-weight: 700; }
+
+/* ACT DIVIDER */
+section.divider { justify-content: center; background: var(--bg); }
+section.divider .kicker {
+  font-family: var(--sans); color: var(--blue); font-size: 16px; font-weight: 700; letter-spacing: 3px;
+  text-transform: uppercase; margin-bottom: 10px;
+}
+section.divider h1 { font-family: var(--serif); font-size: 60px; font-weight: 600; }
+section.divider h1::after {
+  content: ''; display: block; width: 64px; height: 2px; background: var(--gold); margin-top: 18px;
+}
+section.divider .sub { font-size: 23px; margin-top: 20px; }

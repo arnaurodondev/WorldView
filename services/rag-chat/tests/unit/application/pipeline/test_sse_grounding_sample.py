@@ -61,6 +61,190 @@ def _fundamentals_item(ticker: str) -> RetrievedItem:
     )
 
 
+def _batch_item(ticker: str, grounding: tuple[tuple[str, str], ...]) -> RetrievedItem:
+    """A batch fundamentals item carrying a per-ticker grounding_fields bag.
+
+    Mirrors ``MarketHandler._handle_get_fundamentals_history_batch`` output: one
+    item per ticker, each packing its own periods under bare + ``_N`` suffixed
+    keys, with the ticker surfaced via ``citation_meta.entity_name``.
+    """
+    return RetrievedItem.create(
+        item_id=f"tool:fundamentals_batch:{ticker}",
+        item_type=ItemType.financial,
+        text=f"{ticker} fundamentals",
+        score=0.88,
+        trust_weight=0.90,
+        grounding_fields=grounding,
+        citation_meta=CitationMeta(
+            title=f"Fundamentals: {ticker}",
+            url=None,
+            source_name="fundamentals",
+            published_at=None,
+            entity_name=ticker,
+        ),
+    )
+
+
+class TestBatchNoCrossAttribution:
+    """C6 (2026-07-06): a multi-ticker batch must key every value to the correct
+    entity — a later ticker's bare field must NEVER overwrite an earlier ticker's
+    suffixed period value (the ru_nvda_amd_revenue_4q silent clobber)."""
+
+    def test_two_ticker_batch_keeps_every_value_distinct(self) -> None:
+        # NVDA packs Q1(44.1B) bare + Q4(35B) as revenue_2. AMD packs Q1(9.246B)
+        # bare + Q4(7.44B) as revenue_2. The naive suffixer routed AMD's bare
+        # revenue to ``revenue_2`` — overwriting NVDA's 35B and cross-attributing.
+        nvda = _batch_item(
+            "NVDA",
+            (("ticker", "NVDA"), ("revenue", "44100000000"), ("revenue_2", "35000000000")),
+        )
+        amd = _batch_item(
+            "AMD",
+            (("ticker", "AMD"), ("revenue", "9246000000"), ("revenue_2", "7440000000")),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history_batch", [nvda, amd])
+        assert sample is not None
+        values = set(sample["fields"].values())
+        # Both tickers are present as identifiers.
+        assert "NVDA" in values
+        assert "AMD" in values
+        # No value was overwritten: NVDA's 44.1B AND 35B survive, and AMD's
+        # 9.246B is present under its OWN slot — never clobbering NVDA's row.
+        assert "44100000000" in values  # NVDA latest
+        assert "35000000000" in values  # NVDA prior — NOT clobbered by AMD
+        assert "9246000000" in values  # AMD latest — attributed to its own slot
+        # Sanity: no field key maps to two different entities' figures (the
+        # clobber symptom) — every distinct revenue value occupies a unique key.
+        revenue_vals = [v for k, v in sample["fields"].items() if k == "revenue" or k.startswith("revenue_")]
+        assert len(revenue_vals) == len(set(revenue_vals))
+
+
+class TestD2EntityPeriodView:
+    """D2 (2026-07-06): a multi-entity result must surface an UNAMBIGUOUS
+    ``by_entity = {entity: {period: {metric: value}}}`` view so the LLM can map
+    every value to its (ticker, period) — the flat ``_N`` bag alone loses that
+    mapping and drove fabrication / cross-attribution (tc_batch_fundamentals_mag5,
+    chain_nvda_competitor_growth_rank). The flat ``fields`` matcher view must be
+    preserved (the W1/W3 judge strips ``_\\d+$`` and matches the value SET)."""
+
+    @staticmethod
+    def _re_strip(key: str) -> str:
+        import re
+
+        return re.sub(r"_\d+$", "", key)
+
+    def test_two_ticker_two_period_batch_is_entity_period_keyed(self) -> None:
+        # NVDA: latest Q1 (rev 44.1B / ni 22B / eps 5.16), prior Q4 (rev 35B ...).
+        nvda = _batch_item(
+            "NVDA",
+            (
+                ("ticker", "NVDA"),
+                ("revenue", "44100000000"),
+                ("net_income", "22000000000"),
+                ("eps", "5.16"),
+                ("revenue_2", "35000000000"),
+                ("net_income_2", "17000000000"),
+                ("eps_2", "4.0"),
+            ),
+        )
+        # AMD: latest Q1 (rev 9.246B), prior Q4 (rev 7.44B).
+        amd = _batch_item(
+            "AMD",
+            (
+                ("ticker", "AMD"),
+                ("revenue", "9246000000"),
+                ("net_income", "1200000000"),
+                ("eps", "0.78"),
+                ("revenue_2", "7440000000"),
+                ("net_income_2", "900000000"),
+                ("eps_2", "0.62"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history_batch", [nvda, amd])
+        assert sample is not None
+        # (a) Unambiguous per-entity / per-period nesting.
+        view = sample["by_entity"]
+        assert set(view.keys()) == {"NVDA", "AMD"}
+        # entity-1 (NVDA) core metrics are NOT dropped.
+        assert view["NVDA"]["latest"]["revenue"] == "44100000000"
+        assert view["NVDA"]["latest"]["net_income"] == "22000000000"
+        assert view["NVDA"]["latest"]["eps"] == "5.16"
+        # older period keyed distinctly under the same entity.
+        assert view["NVDA"]["p2"]["revenue"] == "35000000000"
+        # AMD's latest revenue is attributed to AMD — never cross-attributed.
+        assert view["AMD"]["latest"]["revenue"] == "9246000000"
+        assert view["AMD"]["p2"]["revenue"] == "7440000000"
+        # No value bleeds across entities.
+        assert "9246000000" not in {m for periods in view["NVDA"].values() for m in periods.values()}
+
+    def test_flat_matcher_view_still_intact(self) -> None:
+        """(b) The judge's flat strip-``_\\d+$`` matcher view is preserved and
+        UNCHANGED by D2 — every key still normalises to its base metric and the
+        C6 no-cross-attribution guarantee holds. (The flat bag remains lossy for a
+        colliding multi-entity suffixed period — that lossiness is precisely what
+        the additive ``by_entity`` view above resolves; D2 must not *break* the
+        flat matcher, not make it exhaustive.)"""
+        nvda = _batch_item(
+            "NVDA",
+            (("ticker", "NVDA"), ("revenue", "44100000000"), ("revenue_2", "35000000000")),
+        )
+        amd = _batch_item(
+            "AMD",
+            (("ticker", "AMD"), ("revenue", "9246000000"), ("revenue_2", "7440000000")),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history_batch", [nvda, amd])
+        assert sample is not None
+        fields = sample["fields"]
+        # Matcher normalises every key to its base metric and unions the values.
+        revenue_values = {v for k, v in fields.items() if self._re_strip(k) == "revenue"}
+        # NVDA's two periods + AMD's latest survive (C6 no-clobber guarantee).
+        assert {"44100000000", "35000000000", "9246000000"} <= revenue_values
+        # No value maps to two different keys (the clobber symptom).
+        rev_keys = [k for k in fields if self._re_strip(k) == "revenue"]
+        assert len(rev_keys) == len({fields[k] for k in rev_keys})
+        # Both tickers still present in the flat identifier slots.
+        ticker_values = {v for k, v in fields.items() if self._re_strip(k) == "ticker"}
+        assert {"NVDA", "AMD"} <= ticker_values
+
+    def test_single_entity_keeps_legacy_four_key_shape(self) -> None:
+        """A single-entity result adds NO by_entity key (legacy 4-key sample, AD-4)."""
+        item = _batch_item("AAPL", (("ticker", "AAPL"), ("revenue", "94000000000")))
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history_batch", [item])
+        assert sample is not None
+        assert "by_entity" not in sample
+        assert set(sample.keys()) == {"fields", "sampled_rows", "total_rows", "truncated"}
+
+    def test_compare_entities_packed_item_splits_by_entity(self) -> None:
+        """compare_entities packs both tickers in ONE item via ``_2`` (entity)
+        suffixes; the view must still split them into distinct entities."""
+        item = RetrievedItem.create(
+            item_id="tool:compare:NVDA-AMD",
+            item_type=ItemType.financial,
+            text="Comparison (structured fields).",
+            score=0.88,
+            trust_weight=0.85,
+            citation_meta=CitationMeta(
+                title="Comparison: NVDA, AMD",
+                url=None,
+                source_name="fundamentals",
+                published_at=None,
+                entity_name=None,
+            ),
+            grounding_fields=(
+                ("ticker", "NVDA"),
+                ("revenue", "44100000000"),
+                ("ticker_2", "AMD"),
+                ("revenue_2", "7440000000"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("compare_entities", [item])
+        assert sample is not None
+        view = sample["by_entity"]
+        assert set(view.keys()) == {"NVDA", "AMD"}
+        assert view["NVDA"]["latest"]["revenue"] == "44100000000"
+        assert view["AMD"]["latest"]["revenue"] == "7440000000"
+
+
 # ---------------------------------------------------------------------------
 # build_grounding_sample — shape, caps, redaction, unknown tool.
 # ---------------------------------------------------------------------------
@@ -529,3 +713,84 @@ class TestBuildGroundingSampleReadsGroundingFields:
         payload = json.loads(frame["data"])
         assert "grounding_sample" not in payload
         assert set(payload.keys()) == {"type", "tool", "status", "item_count"}
+
+
+# ---------------------------------------------------------------------------
+# H-1 (2026-07-08): per-row / per-entity capture for multi-row table tools.
+# A single item packing N period/bar rows must report a truthful value_rows
+# count AND get a structured by_entity per-period view so the judge stops
+# reading total_rows:1 as "one data point" and false-flagging real table data.
+# ---------------------------------------------------------------------------
+
+
+class TestH1MultiRowCapture:
+    def _price_item(self) -> RetrievedItem:
+        """A price-history item packing 3 bar-slots (bare + _2 + _3), one entity."""
+        return RetrievedItem.create(
+            item_id="tool:price_history:NVDA",
+            item_type=ItemType.financial,
+            text="NVDA price table (see structured fields).",
+            score=0.88,
+            trust_weight=0.90,
+            citation_meta=CitationMeta(
+                title="NVDA price history (day)",
+                url=None,
+                source_name="market_data",
+                published_at=None,
+                entity_name="NVDA",
+            ),
+            grounding_fields=(
+                ("ticker", "NVDA"),
+                ("high", "1005.0"),
+                ("low", "800.0"),
+                ("close", "980.0"),
+                ("close_2", "870.0"),
+                ("period_2", "2026-05-01"),
+                ("close_3", "820.0"),
+                ("period_3", "2026-04-01"),
+            ),
+        )
+
+    def test_price_history_reports_value_rows_over_total_rows(self) -> None:
+        """A single 3-bar item reports value_rows=3 even though total_rows=1."""
+        sample = SSEEmitter.build_grounding_sample("get_price_history", [self._price_item()])
+        assert sample is not None
+        assert sample["total_rows"] == 1  # one RetrievedItem
+        assert sample["value_rows"] == 3  # ...but it packs 3 bar-rows
+
+    def test_single_entity_multi_period_gets_by_entity_view(self) -> None:
+        """A multi-bar single-entity result now gets the structured by_entity view."""
+        sample = SSEEmitter.build_grounding_sample("get_price_history", [self._price_item()])
+        assert sample is not None
+        assert "by_entity" in sample
+        view = sample["by_entity"]
+        assert set(view.keys()) == {"NVDA"}
+        # >= 2 period slots present (latest + older bars).
+        assert len(view["NVDA"]) >= 2
+        assert view["NVDA"]["latest"]["close"] == "980.0"
+
+    def test_single_period_single_entity_keeps_legacy_shape(self) -> None:
+        """A genuinely single-period single-entity result stays on the 4-key bag."""
+        item = _fundamentals_item_with_grounding("AAPL", (("ticker", "AAPL"), ("revenue", "94000000000")))
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", [item])
+        assert sample is not None
+        assert "by_entity" not in sample
+        assert "value_rows" not in sample
+        assert set(sample.keys()) == {"fields", "sampled_rows", "total_rows", "truncated"}
+
+    def test_multi_period_single_fundamentals_gets_view_and_value_rows(self) -> None:
+        """A single fundamentals item with 3 periods → by_entity + value_rows=3."""
+        item = _fundamentals_item_with_grounding(
+            "TSLA",
+            (
+                ("ticker", "TSLA"),
+                ("revenue", "25500000000"),
+                ("revenue_2", "24000000000"),
+                ("revenue_3", "21000000000"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("query_fundamentals", [item])
+        assert sample is not None
+        assert sample["value_rows"] == 3
+        assert "by_entity" in sample
+        assert len(sample["by_entity"]["TSLA"]) >= 2

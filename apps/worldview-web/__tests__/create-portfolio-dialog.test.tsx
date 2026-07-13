@@ -57,6 +57,8 @@ function renderDialog(overrides: Partial<Parameters<typeof CreatePortfolioDialog
 
 beforeEach(() => {
   mockCreatePortfolio.mockReset();
+  // PLAN-0122 W-F: the tour flag lives in localStorage; isolate each test.
+  window.localStorage.clear();
 });
 
 // ── Currency field type ────────────────────────────────────────────────────
@@ -148,6 +150,45 @@ describe("CreatePortfolioDialog — success path", () => {
     await waitFor(() => {
       expect(screen.getByText("Portfolio limit reached")).toBeInTheDocument();
     });
+  });
+});
+
+// ── PLAN-0122 W-F: onboarding-tour trigger (T-A-F-02, R-28) ─────────────────
+
+import { PORTFOLIO_TOUR_SEEN_KEY } from "@/components/portfolio/PortfolioTour";
+
+describe("CreatePortfolioDialog — onboarding-tour trigger (PLAN-0122 W-F)", () => {
+  it("test_create_sets_pending_when_unset: first-ever create arms the tour", async () => {
+    const user = userEvent.setup();
+    mockCreatePortfolio.mockResolvedValueOnce(SAMPLE_PORTFOLIO);
+    renderDialog();
+    // Precondition: no flag yet (a brand-new user's first portfolio).
+    expect(window.localStorage.getItem(PORTFOLIO_TOUR_SEEN_KEY)).toBeNull();
+
+    await user.type(screen.getByPlaceholderText(/main portfolio/i), "My Fund");
+    await user.click(screen.getByRole("button", { name: /create portfolio/i }));
+
+    await waitFor(() => {
+      // The flag is armed to "pending" so /portfolio auto-starts the tour once.
+      expect(window.localStorage.getItem(PORTFOLIO_TOUR_SEEN_KEY)).toBe("pending");
+    });
+  });
+
+  it("test_create_sets_pending_only_if_unset: a later create does not re-arm", async () => {
+    const user = userEvent.setup();
+    mockCreatePortfolio.mockResolvedValueOnce(SAMPLE_PORTFOLIO);
+    // Simulate a user who has already seen (or been backfilled past) the tour.
+    window.localStorage.setItem(PORTFOLIO_TOUR_SEEN_KEY, "done");
+    renderDialog();
+
+    await user.type(screen.getByPlaceholderText(/main portfolio/i), "Second Fund");
+    await user.click(screen.getByRole("button", { name: /create portfolio/i }));
+
+    await waitFor(() => {
+      expect(mockCreatePortfolio).toHaveBeenCalled();
+    });
+    // markTourPending is only-if-unset → the "done" flag is untouched (no re-show).
+    expect(window.localStorage.getItem(PORTFOLIO_TOUR_SEEN_KEY)).toBe("done");
   });
 });
 

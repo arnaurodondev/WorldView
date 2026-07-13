@@ -128,19 +128,29 @@ def test_judge_appropriate_refusal_scores_high_when_rubric_permits():
 
     result = judge_answer(inp, llm=mock_llm)
     assert result["dimensions"]["refusal_judgment"]["score"] == 25
-    assert result["verdict"] == "PASS"  # 95
+    # Benchmark-validity fix (2026-07-06): a faithful "data not available"
+    # non-answer (empty tool result) is now bucketed as DATA_GAP — neither a
+    # great answer nor a failure — so it does not inflate the quality average.
+    # The refusal is still NOT penalised (dimension scores preserved above).
+    assert result["verdict"] == "DATA_GAP"
 
 
 def test_judge_tolerates_malformed_llm_output():
-    """If the LLM returns junk, we fall back to all-zero dimensions + FAIL."""
+    """B1 (2026-07-06): genuinely unparseable judge output → a DISTINCT
+    JUDGE_PARSE_ERROR outcome, NOT an all-zero FAIL. Silently zeroing every
+    dimension fabricated a grounding veto and force-failed answers whose raw
+    response actually carried valid grades. A parse failure is non-graded
+    (score None) so it is excluded from the quality average, and the raw text
+    is preserved for a regrade."""
 
     def junk_llm(*, system, user):
         return "this is not json"
 
     result = judge_answer(_make_input(), llm=junk_llm)
-    assert result["verdict"] == "FAIL"
-    assert result["score"] == 0
-    assert all(result["dimensions"][k]["score"] == 0 for k in DIMENSION_KEYS)
+    assert result["verdict"] == "JUDGE_PARSE_ERROR"
+    assert result["score"] is None
+    assert result["raw_response"] == "this is not json"
+    assert result["verdict_decision"] is None
 
 
 def test_judge_skipped_when_no_llm_and_no_api_key(monkeypatch):
@@ -382,7 +392,10 @@ def test_judge_appropriate_refusal_does_not_penalise_tool_use():
 
     result = judge_answer(inp, llm=mock_llm)
     assert result["dimensions"]["tool_use"]["score"] == 25
-    assert result["verdict"] == "PASS"
+    # Benchmark-validity fix (2026-07-06): the honest empty-tool decline is bucketed
+    # as DATA_GAP. tool_use is still preserved at 25 — the routing was correct and
+    # the refusal is not penalised; DATA_GAP is a neutral bucket, not a FAIL.
+    assert result["verdict"] == "DATA_GAP"
 
 
 def test_rubric_from_question_handles_missing_block():

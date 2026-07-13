@@ -44,6 +44,7 @@ knowledge_graph/
 │   ├── connections.py      # /connections/weird
 │   ├── search.py           # /search/relations
 │   ├── temporal_events.py  # /temporal-events
+│   ├── entity_predictions.py # /entities/{id}/predictions (PLAN-0056 C4)
 │   ├── dlq.py              # /admin/dlq/*
 │   ├── health.py           # /healthz, /readyz, /metrics
 │   ├── internal_costs.py   # /internal/v1/llm-costs
@@ -94,6 +95,8 @@ knowledge_graph/
 | `knowledge-graph-provisional-queued-consumer` | `consumers/provisional_queued_consumer_main.py` | Consumes `entity.provisional.queued.v1` (hot-path 13E) |
 | `knowledge-graph-structured-enrichment-consumer` | `consumers/structured_enrichment_consumer_main.py` | Consumes `nlp.article.enriched.v1` for structured enrichment |
 | `knowledge-graph-{economic-events,macro-indicator,insider-transactions,earnings-calendar}-dataset-consumer` | `consumers/*_dataset_consumer_main.py` | Consume `market.dataset.fetched` (one consumer group per dataset type) |
+| `knowledge-graph-prediction-enriched-consumer` | `consumers/prediction_enriched_consumer_main.py` | Consumes `nlp.article.enriched.v1` (own group `kg-prediction-enriched-group`), filters `source_type=='polymarket'` → writes `temporal_events(prediction)` + `entity_event_exposures` (PLAN-0056 C2). **C2b**: parses the market `condition_id` from the event's `external_id` (`"polymarket:<condition_id>"`) and stores it as `temporal_events.region` + `title="Prediction market {condition_id}"`, so the natural key is unique per market (first-sight + resolution docs collapse to ONE idempotent row and C4/D2 can join on condition_id). Falls back to `region='prediction'` + doc_id title when `external_id` is absent/malformed. **C3**: when the event carries `source_title` (the market question, S6 passthrough) it becomes the temporal-event `title`, and — when a DeepInfra key is configured — the `MarketPolarityClassifier` classifies each exposure's polarity (`bullish`/`bearish`/`neutral`, the direction of a YES resolution FOR that entity) and writes it to `entity_event_exposures.polarity`/`polarity_confidence`. The classifier caches per `(condition_id, entity_id)`, logs every LLM call to `llm_usage_log` with a NON-ZERO cost, and defaults to `("neutral", 0.0)` on any failure so ingestion is never blocked. **D2**: after writing exposures the consumer invokes the `PredictionSignalEmitter` — a `new_market` signal on a first-sight doc (gated by `KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_EMIT_NEW_MARKET`) and a `resolution` signal on a `:resolved` doc (external_id ends `:resolved`) — one `market.prediction.signal.v1` per exposure via the outbox. **QA (PLAN-0056, 2026-07-10)**: (FIX 1) prediction temporal-events now dedup on `(event_type, region)` alone via `upsert_by_natural_key(dedup_by_region_only=True)` — the `active_from::day` component of the default natural key was splitting a market with NO `close_time` into TWO rows (each synthetic doc fell back to its own `occurred_at` day), doubling exposures and showing the market twice; `region==condition_id` is globally unique so the date is redundant. The legacy anonymous path (`region='prediction'`) keeps the date-based key. (FIX 3) the exposure upsert changed from `ON CONFLICT DO NOTHING` to `DO UPDATE … WHERE polarity IS NULL AND EXCLUDED.polarity IS NOT NULL` so a later doc carrying the question can fill a NULL polarity left by an earlier doc, without ever overwriting an already-classified polarity (non-directional earnings/corporate exposures pass `polarity=None` → no-op). (FIX 4) the plain-JSON deserialize fallback now logs `..._json_fallback` (R28). |
+| `knowledge-graph-prediction-move-consumer` | `consumers/prediction_move_consumer_main.py` | **PLAN-0056 D2**: consumes `market.prediction.move.v1` (own group `kg-prediction-move-group`) from the S3 move detector; joins the market's entity exposures via `temporal_events.region==condition_id` and emits one `material_move` `market.prediction.signal.v1` per linked entity (via `PredictionSignalEmitter` + outbox). Skips `is_backfill` moves; no-op when the market is not linked to any entity. |
 | `knowledge-graph-path-insight-worker` | `workers/path_insight_worker_main.py` | Pre-computes multi-hop paths |
 
 ---
@@ -250,6 +253,7 @@ auto-flagged; `docs/audits/2026-06-13-weird-path-quality-sample.md`). Read-only 
 | GET | `/api/v1/relations/{relation_id}` | — | Full relation (edge) detail (PLAN-0099). Returns relation metadata (type, semantic_mode, decay_class, confidence, temporal validity, contra stats, created/updated_at), the current LLM summary (+ `summary_model_id`, `summary_generated_at`), subject/object `EntitySummary`, and up to `evidence_limit` (1–100, default 25) evidence items from `relation_evidence_raw` (newest first) with `evidence_text`, `document_id`, `source_name`, `source_type`, `polarity`. Article title/url/published_at are NOT available (no article metadata in `intelligence_db` — R9; resolve `document_id` via S5/S6 through the gateway). 404 if relation missing. |
 | GET | `/api/v1/graph/stats` | — | Aggregate counts: entities, relations, evidence, stale confidence, contradictions, semantic_mode breakdown |
 | GET | `/api/v1/temporal-events` | — | Active/historical temporal events. Params: `scope`, `entity_id`, `active_only`, `event_type`, `region`, `from_date`, `to_date`, `limit` (1–200), `offset`. `lifecycle_phase` computed at query time. |
+| GET | `/api/v1/entities/{entity_id}/predictions` | — | **PLAN-0056 Wave C4** — prediction markets referencing an entity, WITH polarity. Joins `entity_event_exposures`→`temporal_events` filtered to `event_type='prediction'` for the entity. Returns `items: [{condition_id, question, polarity, polarity_confidence, close_time, confidence}]`, `total`, `limit`, `offset`. `condition_id` (from `temporal_events.region`) is the Polymarket conditionId — the join key the S9 gateway (Wave E1) uses to hydrate current odds/liquidity from S3 (this endpoint does NOT return live prices). `question`=`title`, `close_time`=`active_until`. Ordered by `active_until DESC NULLS LAST, created_at DESC`. Params: `limit` (1–200, default 50), `offset` (≥0). An entity with no linked prediction markets returns a 200 empty list (never 404). Read-only (R27). |
 
 ### Search and Discovery
 
@@ -302,7 +306,7 @@ Returns 0.0 when confidence is null.
 
 | Topic | Consumer Group | Purpose |
 |-------|----------------|---------|
-| `nlp.article.enriched.v1` | `kg-service-group-enriched` + `kg-structured-enrichment-group` | Hot-path Block 11→12 pipeline (enriched consumer) and structured-enrichment consumer; at-least-once with Valkey dedup (24h TTL) |
+| `nlp.article.enriched.v1` | `kg-service-group-enriched` + `kg-structured-enrichment-group` + `kg-prediction-enriched-group` | Hot-path Block 11→12 pipeline (enriched consumer), structured-enrichment consumer, and the PredictionEnrichedConsumer (filters `source_type=='polymarket'` → prediction temporal events + exposures, PLAN-0056 C2); at-least-once with Valkey dedup |
 | `entity.canonical.created.v1` | `kg-service-group-entity` | Unblock `relation_evidence_raw` rows with `entity_provisional=true` |
 | `market.instrument.created` | `kg-service-group-instrument` | Worker 13D-4: create canonical entity + full alias suite |
 | `market.instrument.discovered.v1` | `kg-service-group-instrument-discovered` | Lightweight placeholder canonical seeder (13D-4b) |
@@ -310,6 +314,7 @@ Returns 0.0 when confidence is null.
 | `intelligence.temporal_event.v1` | `kg-service-group-temporal-event` | Upserts temporal events and entity exposures |
 | `entity.provisional.queued.v1` | `kg-provisional-queued-group` | Hot-path provisional entity enrichment (Worker 13E consumer path) |
 | `entity.narrative.generated.v1` | `kg-narrative-refresh-group` | Triggers immediate narrative embedding update |
+| `market.prediction.move.v1` | `kg-prediction-move-group` | **PLAN-0056 D2**: PredictionMoveConsumer — join a material move to the market's entity exposures → per-entity `material_move` signals |
 
 ### Produced
 
@@ -320,6 +325,9 @@ Returns 0.0 when confidence is null.
 | `relation.type.proposed.v1` | `RelationTypeProposed` | `proposed_type` | Outbox | `relation.type.proposed.v1.avsc` |
 | `entity.dirtied.v1` | `EntityDirtied` | `entity_id` | **Direct produce** (NOT via outbox) | `entity.dirtied.v1.avsc` |
 | `entity.narrative.generated.v1` | `EntityNarrativeGenerated` | `entity_id` | Outbox | `entity.narrative.generated.v1.avsc` |
+| `market.prediction.signal.v1` | `PredictionMarketSignal` | `subject_entity_id` | Outbox | `market.prediction.signal.v1.avsc` |
+
+**PLAN-0056 Wave D2**: `market.prediction.signal.v1` is emitted by the `PredictionSignalEmitter` — one per (entity exposure, trigger) with a `market_impact_score` ∈ [0,1] (material_move = clamp(\|Δ\|) with an adverse boost; new_market = base×confidence; resolution = fixed base — all `KNOWLEDGE_GRAPH_PREDICTION_SIGNAL_*` config). Idempotency uses a deterministic `uuid5` outbox event_id keyed on `(condition_id, entity_id, trigger, window)`. The topic MUST be in the dispatcher `_ALLOWED_TOPICS` allowlist (BP-147). Consumed by the alert service (Wave D3), whose watchlist fanout is the "tracked entity" gate.
 
 **Critical**: `entity.dirtied.v1` is a **compacted** topic. It must be produced directly (bypass outbox)
 with the entity UUID as the Kafka key. If it appears in the outbox, the dispatcher logs a warning and
@@ -350,7 +358,7 @@ marks it dispatched without re-delivering.
 | `SemanticMode` | `RELATION_STATE` (active state, e.g. employs) \| `TEMPORAL_CLAIM` (historical record) |
 | `DecayClass` | `STANDARD` \| `TEMPORAL` |
 | `RelationType` | 16 code-level values; more total in `relation_type_registry` DB seeds |
-| `EventType` | `geopolitical`, `regulatory`, `macro`, `sanctions`, `natural_disaster`, `corporate`, `other` |
+| `EventType` | `geopolitical`, `regulatory`, `macro`, `sanctions`, `natural_disaster`, `corporate`, `other`, `prediction` (added PLAN-0056 Wave C2; DB CHECK widened in migration 0066 — written by the PredictionEnrichedConsumer for Polymarket synthetic docs) |
 | `EventScope` | `LOCAL`, `REGIONAL`, `NATIONAL`, `GLOBAL` |
 | `ExposureType` | `directly_affected`, `operationally_impacted`, `supply_chain`, `revenue_geography`, `sector_exposure` |
 
@@ -409,7 +417,7 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
 | `events` | RANGE monthly (36 months) | Extracted events with `structured_data` JSONB |
 | `event_entities` | — | Entity-to-event linkage |
 | `temporal_events` | — | Geopolitical/macro events (from S2 and S7 workers) |
-| `entity_event_exposures` | — | Entity exposure to temporal events |
+| `entity_event_exposures` | — | Entity exposure to temporal events. As of migration 0066 also carries `polarity` (`bullish`/`bearish`/`neutral`, VARCHAR+CHECK, nullable) and `polarity_confidence` (double, nullable) — populated for prediction-market exposures by the `MarketPolarityClassifier` (PLAN-0056 Wave C3, an env-driven DeepInfra small model whose every call is cost-logged to `llm_usage_log`); NULL for non-directional earnings/corporate exposures and when no LLM key is configured. **QA (2026-07-10, FIX 2)**: the market question/entity/outcomes are attacker-controlled (anyone can create a Polymarket market), so the classifier now sends the static instructions as a `role:system` message and the untrusted data as a SEPARATE `role:user` message wrapped in a `<market_data>` delimiter block, length-caps the fields (question ≤500, entity ≤120, ≤12 outcomes), and keeps the strict output-enum validation — hardening against prompt injection that could plant a false directional signal (prompt bumped to `market_polarity_classifier@1.1`). |
 | `provisional_entity_queue` | — | Unresolved entities awaiting Worker 13E enrichment; `next_retry_at` for exponential backoff |
 | `path_insights` | — | Pre-computed multi-hop paths scored by `PathInsightWorker`. PLAN-0112 (migration 0052) added `dst_entity_id` (far endpoint, FK CASCADE, nullable for old rows), `reliability`/`unexpectedness`/`semantic_distance`/`novelty`/`weirdness` (FLOAT, the WeirdnessScorer sub-scores), `scorer_version` (e.g. `weirdness-1.0`). `composite_score` now mirrors `weirdness` (ranking column). Indexes: `idx_path_insights_global_weird (weirdness DESC) WHERE weirdness IS NOT NULL` (global feed), `idx_path_insights_dst (dst_entity_id, weirdness DESC)` (endpoint filter). |
 | `node_degree` | — | PLAN-0112 (migration 0052). Precomputed undirected degree per graph vertex (`degree`, `degree_meaningful` excluding membership edges, `refreshed_at`); PK `entity_id` FK→`canonical_entities` CASCADE. Powers the WeirdnessScorer's configuration-model unexpectedness without per-query recompute. Refreshed each AGE-sync cycle via a fast `_ag_label_edge` SQL aggregation (~sub-second / ~2.7k entities). |
@@ -893,3 +901,18 @@ The `ConfidenceWorker` runs every 15 minutes. Check:
 3. Use `SELECT status, count(*) FROM provisional_entity_queue GROUP BY 1` to assess queue state.
 4. Check noise classification rate — if Layer 2 is classifying too aggressively,
    verify the DeepInfra model is available (`meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo`).
+
+## LLM Cost Metering & Guardrails (PLAN-0117)
+
+Every `llm_usage_log` row written to `intelligence_db` now stamps `cost_source` and
+`user_id`, and the per-call cost is resolved via the unified `resolve_cost` (delegating
+to `ml_clients.pricing`) — never hardcoded to `$0`.
+
+- **Silent-zero metric**: the write choke-point `LlmUsageLogRepository.log` emits the
+  cross-service counter `llm_usage_silent_zero_cost_total{service, model_id}` whenever a
+  row has `tokens_in + tokens_out > 0` AND `estimated_cost_usd == 0` AND
+  `cost_source NOT IN ('local','aggregate')` — i.e. a paid provider call that priced to
+  zero. Steady-state expectation is 0 (Prometheus alert `LlmUsageSilentZeroCost`).
+- **Boot-time priceability warning**: the S7 scheduler entrypoint calls
+  `warn_unpriceable_models(...)` at startup, logging a structured WARNING for any configured
+  model that has no pricing path. See `docs/BUG_PATTERNS.md` BP-715.

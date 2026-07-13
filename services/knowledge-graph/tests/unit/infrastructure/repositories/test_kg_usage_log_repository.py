@@ -93,3 +93,45 @@ class TestKgUsageLogRepository:
         )
 
         session.execute.assert_awaited_once()
+
+    async def test_log_persists_cost_source_and_user_id(self) -> None:
+        """PLAN-0117 W3 (FR-2/FR-3): cost_source + user_id are bound into the INSERT."""
+        session = _make_session()
+        repo = LlmUsageLogRepository(session)
+        user_id = uuid.uuid4()
+
+        await repo.log(
+            model_id="Qwen/Qwen3-235B-A22B-Instruct-2507",
+            provider="deepinfra",
+            capability="extraction",
+            tokens_in=500,
+            tokens_out=80,
+            latency_ms=1200,
+            estimated_cost_usd=0.00031,
+            cost_source="provider",
+            user_id=user_id,
+        )
+
+        params = session.execute.await_args.args[1]
+        assert params["cost_source"] == "provider"
+        assert params["user_id"] == str(user_id)
+
+    async def test_log_cost_source_defaults_null_and_local_stamp(self) -> None:
+        """Omitted → NULL; an Ollama write can stamp cost_source='local'."""
+        session = _make_session()
+        repo = LlmUsageLogRepository(session)
+
+        await repo.log(
+            model_id="qwen3:0.6b",
+            provider="ollama",
+            capability="extraction",
+            tokens_in=10,
+            tokens_out=0,
+            latency_ms=5,
+            estimated_cost_usd=0.0,
+            cost_source="local",
+        )
+
+        params = session.execute.await_args.args[1]
+        assert params["cost_source"] == "local"
+        assert params["user_id"] is None

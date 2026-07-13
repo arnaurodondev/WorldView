@@ -113,15 +113,110 @@ _PII_PATTERNS = [
     re.compile(r"\b(?:\d[ -]?){13,16}\b"),  # credit card (rough)
 ]
 
+# URL spans are EXEMPT from PII redaction (R3, 2026-07-03 root-cause).
+# WHY: the phone pattern matches any bare 10-digit run, and a SEC EDGAR
+# accession number embedded in a filing index URL — e.g.
+# ``…/000119312526286851/0001193125-26-286851-index.htm`` — contains exactly
+# such a run (``0001193125`` → ``000-119-3125``). Redacting it rewrites the URL
+# to ``…/[REDACTED]-26-286851-index.htm``, silently breaking every clickable
+# EDGAR link the model writes inline. A URL is machine-generated structure, not
+# user-entered PII, so we exempt whole ``http(s)://…`` spans rather than
+# weakening the phone/SSN/card patterns globally (which would let real PII
+# through elsewhere). ``\S+`` greedily consumes the URL up to the next
+# whitespace; trailing punctuation kept inside the span is harmless because the
+# span is preserved verbatim.
+_URL_SPAN_RE = re.compile(r"https?://\S+")
+
+# Financial numeric values are EXEMPT from PII redaction (NEW-4, 2026-07-06
+# root-cause; docs/audits/2026-07-06-r1-final-exhaustive-qa.md).
+# WHY: the phone pattern matches any 10-/11-digit run (incl. a leading ``1``
+# country code) and the credit-card pattern matches any 13-16 digit run. A
+# screener market-cap value therefore trips them: the float ``10440000000.0``
+# was rewritten to ``[REDACTED].0`` (``1``+``044``+``000``+``0000`` = an 11-digit
+# "phone"), and a $3.01T cap ``3010000000000`` matches the 13-digit card range.
+# These are machine-emitted financial magnitudes, not user PII, so — exactly as
+# with URL spans — we exempt whole financial-number spans instead of weakening
+# the phone/SSN/card patterns (which must still catch real PII elsewhere).
+# Branches (longest-match-first): ``$``-prefixed money (with optional
+# comma-groups / decimal), comma-grouped large integers, unit-suffixed values
+# (``$3.01T`` / ``10.44 billion``), and bare decimals (``10440000000.0``).
+# The bare-decimal branch is boundary-guarded — ``(?<![.\d]) … (?!\.\d)\b`` — so
+# it can NEVER start or stop inside a dot-separated phone (``212.555.0147``),
+# leaving that run intact for the phone pattern to redact. Genuine phones / SSNs
+# / cards carry no ``$``, comma-thousands, unit suffix, or lone decimal, so no
+# exempt branch shields them.
+_FINANCIAL_NUM_RE = re.compile(
+    r"\$\s?\d[\d,]*(?:\.\d+)?"  # $-prefixed money: $10,440,000,000 / $10.44
+    r"|\d{1,3}(?:,\d{3})+(?:\.\d+)?"  # comma-grouped: 3,010,000,000,000
+    r"|\d+(?:\.\d+)?\s?(?:trillion|billion|million|thousand|[TBMK])\b"  # unit-suffixed
+    r"|(?<![.\d])\d+\.\d+(?!\.\d)\b",  # bare decimal: 10440000000.0 (not a dotted phone)
+    re.IGNORECASE,
+)
+
+# Combined exempt-span matcher: any URL OR any financial number is preserved
+# verbatim; PII redaction is applied only to the text BETWEEN these spans.
+_EXEMPT_SPAN_RE = re.compile(
+    _URL_SPAN_RE.pattern + "|" + _FINANCIAL_NUM_RE.pattern,
+    re.IGNORECASE,
+)
+
+
+def _clean_optional_str(value: str | None) -> str | None:
+    """Collapse empty / whitespace-only strings to ``None``.
+
+    WHY: upstream feeds are inconsistent about "no value". The S6 chunk-search
+    adapter maps a missing url/source_name to ``None`` (``meta.get("url")``),
+    but the NLP-pipeline ``/briefing-articles`` endpoint coerces them to the
+    empty string (``url=row["url"] or ""``). The latter flows verbatim through
+    ``get_entity_news`` -> ``CitationMeta(url="")`` -> ``Citation(url="")`` and
+    out over SSE. On the frontend an empty-string url is falsy, so the chip
+    falls back to a non-link badge — but ``source_name=""`` would still render
+    a blank source label, and a stray ``"   "`` url would slip past the JS
+    truthiness guard. Normalising here, at the single citation-building choke
+    point, guarantees every news/doc citation carries either a real value or a
+    clean ``None`` regardless of which upstream produced it.
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _redact_pii_outside_exempt_spans(text: str) -> str:
+    """Apply the PII patterns to ``text`` but keep any exempt span verbatim.
+
+    Exempt spans are URLs (EDGAR accession numbers look like phone numbers,
+    ``_URL_SPAN_RE``) and financial numbers (market caps / prices look like
+    phone/card numbers, ``_FINANCIAL_NUM_RE`` — NEW-4). We redact only the gaps
+    BETWEEN exempt spans and stitch each original span back in untouched.
+    """
+    out: list[str] = []
+    last = 0
+    for m in _EXEMPT_SPAN_RE.finditer(text):
+        gap = text[last : m.start()]
+        for pattern in _PII_PATTERNS:
+            gap = pattern.sub("[REDACTED]", gap)
+        out.append(gap)
+        out.append(m.group(0))  # URL / financial value kept verbatim
+        last = m.end()
+    tail = text[last:]
+    for pattern in _PII_PATTERNS:
+        tail = pattern.sub("[REDACTED]", tail)
+    out.append(tail)
+    return "".join(out)
+
 
 def _contains_pii(text: str) -> bool:
-    return any(p.search(text) for p in _PII_PATTERNS)
+    # Scan with exempt spans blanked so a URL-embedded digit run (EDGAR
+    # accession) or a financial magnitude (market cap / price — NEW-4) does not
+    # trigger a spurious PII warning + redaction pass on every filings/screener
+    # answer. Real PII outside exempt spans is still detected.
+    scan = _EXEMPT_SPAN_RE.sub(" ", text)
+    return any(p.search(scan) for p in _PII_PATTERNS)
 
 
 def _redact_pii(text: str) -> str:
-    for pattern in _PII_PATTERNS:
-        text = pattern.sub("[REDACTED]", text)
-    return text
+    return _redact_pii_outside_exempt_spans(text)
 
 
 class OutputProcessor:
@@ -194,11 +289,16 @@ class OutputProcessor:
                     ref=ref,
                     item_type=item.item_type.value,
                     id=item.item_id,
-                    title=item.citation_meta.title,
-                    url=item.citation_meta.url,
-                    source_name=item.citation_meta.source_name,
+                    title=_clean_optional_str(item.citation_meta.title),
+                    # Normalise url/source_name/entity_name so an empty-string
+                    # value from an upstream that coerces "missing" to "" (e.g.
+                    # the /briefing-articles feed behind get_entity_news) never
+                    # reaches the SSE wire as url="" — which the frontend would
+                    # have to special-case as a broken "Read ↗" link.
+                    url=_clean_optional_str(item.citation_meta.url),
+                    source_name=_clean_optional_str(item.citation_meta.source_name),
                     published_at=item.citation_meta.published_at,
-                    entity_name=item.citation_meta.entity_name,
+                    entity_name=_clean_optional_str(item.citation_meta.entity_name),
                     confidence=item.score,
                     # Persist the full retrieved-chunk text into the Citation
                     # so the citation-judge cron can score grounding against the

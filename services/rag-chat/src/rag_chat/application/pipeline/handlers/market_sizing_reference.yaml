@@ -1,0 +1,318 @@
+# Curated TAM / market-size reference table for chat projection grounding.
+#
+# PURPOSE (Area-2 P3, chat-enhancement-roadmap): projection / what-if questions
+# ("if AMD captures X% of the AI accelerator TAM, what is the revenue impact?")
+# need a SCENARIO PARAMETER — a total addressable market, served-market size, or
+# segment share — that the live platform does NOT ingest. This file makes that
+# number RETRIEVABLE + CITABLE so the synthesis turn can GROUND its scenario on a
+# sourced analyst estimate instead of a bare parametric assumption.
+#
+# NOT A LIVE FEED. Every row is a hand-curated, DATED analyst estimate. It is
+# reference data, not real-time market data. The `get_market_sizing` tool and its
+# description state this explicitly so the chat frames each figure as an estimate
+# with an as-of date, never as a current spot figure.
+#
+# Row schema:
+#   id            stable slug (never reused; append-only)
+#   segment       human-readable market/segment name
+#   category      one of: semiconductor | smartphone | cloud
+#   aliases       extra keywords used for free-text matching (lowercase)
+#   market_size_usd  headline size string WITH its measurement year baked in
+#   size_year     the year the market_size_usd figure refers to
+#   cagr          forward compound annual growth rate (analyst consensus range)
+#   forecast      optional forward size point ("$X by YEAR")
+#   vendor_shares list of "Vendor ~NN%" approximate revenue/volume shares
+#   source        analyst house / report the estimate is paraphrased from
+#   as_of_date    when this row was curated / the estimate was published
+#
+# Figures are ROUNDED consensus midpoints across public analyst commentary
+# (Gartner, IDC, TrendForce, Grand View, Precedence, Mordor, company disclosures).
+# They are intended as order-of-magnitude scenario anchors, not precise quotes.
+
+version: "1"
+as_of: "2026-07-09"
+disclaimer: >
+  Analyst-estimate reference data — NOT real-time. Each figure is a rounded
+  consensus market-size / TAM estimate with an explicit measurement year and
+  source. Use only as a labelled scenario assumption for projections; do not
+  present as a current spot figure.
+
+rows:
+  # ── Semiconductor: compute ────────────────────────────────────────────────
+  - id: ms-ai-accelerator-2024
+    segment: AI accelerator / data-center GPU (AI training + inference silicon)
+    category: semiconductor
+    aliases: [ai accelerator, ai chip, data center gpu, datacenter gpu, gpu tam,
+              ai gpu, accelerator tam, mi300, mi accelerator, h100, training chip,
+              inference chip, deep learning accelerator]
+    market_size_usd: "~$47B (2024)"
+    size_year: 2024
+    cagr: "~35-40% (2024-2030)"
+    forecast: "~$400B by 2030"
+    vendor_shares:
+      - "Nvidia ~85-90%"
+      - "AMD ~5-8%"
+      - "Cloud custom ASIC (Google TPU, AWS Trainium/Inferentia) ~5%"
+    source: "Consensus of Gartner / TrendForge / analyst commentary on AI silicon"
+    as_of_date: "2026-07-09"
+
+  - id: ms-datacenter-cpu-2024
+    segment: Data-center / server CPU (x86 + Arm server processors)
+    category: semiconductor
+    aliases: [data center cpu, datacenter cpu, server cpu, server processor,
+              server chip, epyc, xeon, cpu market, x86 server, arm server]
+    market_size_usd: "~$32B (2024)"
+    size_year: 2024
+    cagr: "~8-10% (2024-2030)"
+    forecast: "~$55B by 2030"
+    vendor_shares:
+      - "Intel ~65% (revenue), declining"
+      - "AMD ~30% (revenue), rising"
+      - "Arm-based (Ampere, cloud custom) ~5%"
+    source: "Consensus of Mercury Research / analyst server-CPU share tracking"
+    as_of_date: "2026-07-09"
+
+  - id: ms-hbm-2024
+    segment: High-bandwidth memory (HBM) for AI accelerators
+    category: semiconductor
+    aliases: [hbm, high bandwidth memory, hbm3, hbm3e, ai memory, stacked dram,
+              memory for gpu]
+    market_size_usd: "~$18B (2024)"
+    size_year: 2024
+    cagr: "~40-45% (2024-2030)"
+    forecast: "~$130B by 2030"
+    vendor_shares:
+      - "SK Hynix ~50%"
+      - "Samsung ~35%"
+      - "Micron ~15%"
+    source: "Consensus of TrendForce / analyst HBM supply commentary"
+    as_of_date: "2026-07-09"
+
+  - id: ms-foundry-2024
+    segment: Semiconductor foundry (contract chip manufacturing)
+    category: semiconductor
+    aliases: [foundry, contract manufacturing, wafer foundry, chip fab, tsmc,
+              foundry market, leading edge foundry, 3nm, 5nm]
+    market_size_usd: "~$115B (2024)"
+    size_year: 2024
+    cagr: "~10-12% (2024-2030)"
+    forecast: "~$250B by 2030"
+    vendor_shares:
+      - "TSMC ~60-62%"
+      - "Samsung Foundry ~11%"
+      - "SMIC ~6%"
+      - "GlobalFoundries / UMC ~5% each"
+    source: "Consensus of TrendForce foundry-revenue ranking"
+    as_of_date: "2026-07-09"
+
+  - id: ms-dram-2024
+    segment: DRAM memory (all end markets)
+    category: semiconductor
+    aliases: [dram, memory chip, dram market, ddr5, memory semiconductor]
+    market_size_usd: "~$90B (2024)"
+    size_year: 2024
+    cagr: "~8-10% (2024-2030)"
+    vendor_shares:
+      - "Samsung ~42%"
+      - "SK Hynix ~33%"
+      - "Micron ~22%"
+    source: "Consensus of TrendForce / IDC DRAM share tracking"
+    as_of_date: "2026-07-09"
+
+  - id: ms-nand-2024
+    segment: NAND flash memory
+    category: semiconductor
+    aliases: [nand, flash memory, nand flash, ssd chip, storage memory]
+    market_size_usd: "~$65B (2024)"
+    size_year: 2024
+    cagr: "~7-9% (2024-2030)"
+    vendor_shares:
+      - "Samsung ~35%"
+      - "SK Hynix + Solidigm ~20%"
+      - "Kioxia ~19%"
+      - "Micron ~13%"
+      - "Western Digital ~13%"
+    source: "Consensus of TrendForce NAND share tracking"
+    as_of_date: "2026-07-09"
+
+  - id: ms-semiconductor-total-2024
+    segment: Total semiconductor industry (all device categories)
+    category: semiconductor
+    aliases: [total semiconductor, chip market, semiconductor industry, semis tam,
+              overall semiconductor, global chip market]
+    market_size_usd: "~$620B (2024)"
+    size_year: 2024
+    cagr: "~8% (2024-2030)"
+    forecast: "~$1T by 2030"
+    vendor_shares:
+      - "Nvidia, Samsung, Intel top-3 by revenue (rank varies by year)"
+    source: "Consensus of WSTS / Gartner total-semiconductor revenue"
+    as_of_date: "2026-07-09"
+
+  - id: ms-eda-2024
+    segment: Electronic design automation (EDA) software + IP
+    category: semiconductor
+    aliases: [eda, chip design software, electronic design automation, design ip,
+              semiconductor ip]
+    market_size_usd: "~$15B (2024)"
+    size_year: 2024
+    cagr: "~10-12% (2024-2030)"
+    vendor_shares:
+      - "Synopsys ~32%"
+      - "Cadence ~30%"
+      - "Siemens EDA ~13%"
+      - "Arm / other IP ~remainder"
+    source: "Consensus of ESD Alliance / analyst EDA revenue"
+    as_of_date: "2026-07-09"
+
+  - id: ms-analog-2024
+    segment: Analog semiconductors (power, signal-chain, discrete)
+    category: semiconductor
+    aliases: [analog, analog chip, power management, signal chain, discrete,
+              analog semiconductor]
+    market_size_usd: "~$80B (2024)"
+    size_year: 2024
+    cagr: "~6-8% (2024-2030)"
+    vendor_shares:
+      - "Texas Instruments ~19%"
+      - "Analog Devices ~12%"
+      - "Infineon / STMicro / NXP mid-single-digit each"
+    source: "Consensus of IC Insights / analyst analog share tracking"
+    as_of_date: "2026-07-09"
+
+  - id: ms-automotive-semi-2024
+    segment: Automotive semiconductors
+    category: semiconductor
+    aliases: [automotive semiconductor, car chip, auto chip, automotive silicon,
+              ev semiconductor, adas chip]
+    market_size_usd: "~$70B (2024)"
+    size_year: 2024
+    cagr: "~9-11% (2024-2030)"
+    vendor_shares:
+      - "Infineon ~14%"
+      - "NXP ~11%"
+      - "STMicro ~10%"
+      - "Renesas ~9%"
+      - "Texas Instruments ~8%"
+    source: "Consensus of Strategy Analytics automotive-semi share"
+    as_of_date: "2026-07-09"
+
+  # ── Smartphone ────────────────────────────────────────────────────────────
+  - id: ms-smartphone-revenue-2024
+    segment: Smartphone hardware (global handset revenue)
+    category: smartphone
+    aliases: [smartphone, smartphone market, handset, phone market,
+              smartphone revenue, mobile phone]
+    market_size_usd: "~$500B (2024)"
+    size_year: 2024
+    cagr: "~3-5% (2024-2030)"
+    vendor_shares:
+      - "Apple ~19% units / ~40%+ revenue"
+      - "Samsung ~19% units"
+      - "Xiaomi ~14% units"
+      - "Oppo / vivo / Transsion mid-teens combined"
+    source: "Consensus of IDC / Counterpoint smartphone shipment + ASP"
+    as_of_date: "2026-07-09"
+
+  - id: ms-smartphone-units-2024
+    segment: Smartphone unit shipments (global volume)
+    category: smartphone
+    aliases: [smartphone units, phone shipments, handset volume, smartphone volume,
+              units shipped]
+    market_size_usd: "~1.22B units (2024)"
+    size_year: 2024
+    cagr: "~1-2% (2024-2030), volume near saturation"
+    vendor_shares:
+      - "Samsung + Apple top-2 (~19% each)"
+      - "Xiaomi ~14%"
+    source: "Consensus of IDC / Canalys shipment trackers"
+    as_of_date: "2026-07-09"
+
+  - id: ms-mobile-ap-soc-2024
+    segment: Smartphone application processor / mobile SoC
+    category: smartphone
+    aliases: [mobile soc, application processor, mobile ap, smartphone chip,
+              mobile processor, snapdragon, mediatek, phone chip]
+    market_size_usd: "~$35B (2024)"
+    size_year: 2024
+    cagr: "~6-8% (2024-2030)"
+    vendor_shares:
+      - "MediaTek ~35% units"
+      - "Qualcomm ~30% units / higher revenue (premium)"
+      - "Apple ~15% (captive)"
+      - "UNISOC / Samsung LSI ~remainder"
+    source: "Consensus of Counterpoint mobile-AP share tracking"
+    as_of_date: "2026-07-09"
+
+  # ── Cloud ─────────────────────────────────────────────────────────────────
+  - id: ms-cloud-infra-2024
+    segment: Cloud infrastructure services (IaaS + PaaS)
+    category: cloud
+    aliases: [cloud infrastructure, iaas, paas, cloud services, cloud market,
+              public cloud, cloud spend, cloud infra]
+    market_size_usd: "~$330B (2024, annualized run-rate)"
+    size_year: 2024
+    cagr: "~19-21% (2024-2030)"
+    forecast: "~$850B by 2030"
+    vendor_shares:
+      - "AWS ~31%"
+      - "Microsoft Azure ~24%"
+      - "Google Cloud ~11%"
+      - "Alibaba / others ~remainder"
+    source: "Consensus of Synergy Research / Canalys cloud-share tracking"
+    as_of_date: "2026-07-09"
+
+  - id: ms-saas-2024
+    segment: Software-as-a-Service (SaaS applications)
+    category: cloud
+    aliases: [saas, software as a service, cloud software, saas market,
+              application software cloud]
+    market_size_usd: "~$300B (2024)"
+    size_year: 2024
+    cagr: "~13-16% (2024-2030)"
+    forecast: "~$700B by 2030"
+    vendor_shares:
+      - "Microsoft, Salesforce, Adobe, SAP, Oracle lead; long tail is fragmented"
+    source: "Consensus of Gartner SaaS end-user spending"
+    as_of_date: "2026-07-09"
+
+  - id: ms-genai-platform-2024
+    segment: Generative-AI platform + model services (LLM APIs, AI cloud)
+    category: cloud
+    aliases: [generative ai, genai, ai platform, llm api, ai cloud, ai software,
+              foundation model, ai model service, ai services]
+    market_size_usd: "~$40B (2024)"
+    size_year: 2024
+    cagr: "~40-50% (2024-2030), high uncertainty"
+    forecast: "~$350-400B by 2030 (wide analyst dispersion)"
+    vendor_shares:
+      - "OpenAI / Microsoft, Google, Anthropic, AWS Bedrock lead; early + fluid"
+    source: "Consensus of Bloomberg Intelligence / analyst genAI TAM (wide range)"
+    as_of_date: "2026-07-09"
+
+  - id: ms-cybersecurity-2024
+    segment: Cybersecurity software + services
+    category: cloud
+    aliases: [cybersecurity, security software, infosec, security market,
+              cyber security, endpoint security, cloud security]
+    market_size_usd: "~$190B (2024)"
+    size_year: 2024
+    cagr: "~11-13% (2024-2030)"
+    forecast: "~$375B by 2030"
+    vendor_shares:
+      - "Highly fragmented; Palo Alto, Microsoft, CrowdStrike, Cisco lead segments"
+    source: "Consensus of Gartner security + risk-management spending"
+    as_of_date: "2026-07-09"
+
+  - id: ms-data-center-capex-2024
+    segment: Global data-center capital expenditure (hyperscaler + colo build-out)
+    category: cloud
+    aliases: [data center capex, datacenter capex, hyperscaler capex,
+              data center spending, ai infrastructure spend, server capex]
+    market_size_usd: "~$400B (2024, annual capex)"
+    size_year: 2024
+    cagr: "~20-25% (2024-2027), AI-driven"
+    vendor_shares:
+      - "Microsoft, Amazon, Google, Meta are the four largest spenders"
+    source: "Consensus of hyperscaler disclosures + analyst capex aggregation"
+    as_of_date: "2026-07-09"

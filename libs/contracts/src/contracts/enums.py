@@ -25,6 +25,13 @@ class ContentSourceType(StrEnum):
     NEWSAPI = "newsapi"
     MANUAL = "manual"
     POLYMARKET = "polymarket"
+    # PLAN-0056 Wave Z1 — deeper Polymarket streams (Gamma /events, CLOB /prices-history,
+    # Data /trades, Data /oi). Routed directly in the S4 worker (not via ADAPTER_REGISTRY),
+    # same as POLYMARKET.
+    POLYMARKET_GAMMA_EVENTS = "polymarket_gamma_events"
+    POLYMARKET_CLOB = "polymarket_clob"
+    POLYMARKET_DATA_TRADES = "polymarket_data_trades"
+    POLYMARKET_DATA_OI = "polymarket_data_oi"
     TENANT_UPLOAD = "tenant_upload"
 
 

@@ -20,13 +20,31 @@ from ml_clients.fallback import (
     FallbackExtractionClient,
     FallbackNERClient,
 )
-from ml_clients.pricing import MODEL_PRICING, ModelPricing, compute_cost
+from ml_clients.model_registry import (
+    PLATFORM_MODEL_REGISTRY,
+    ConfiguredModel,
+    registry_model_pairs,
+    unpriceable_models,
+    warn_unpriceable_models,
+)
+from ml_clients.pricing import (
+    LOCAL_FREE_MODELS,
+    MODEL_PRICING,
+    ModelPricing,
+    compute_cost,
+    is_priceable,
+    provider_cost_to_decimal,
+    resolve_cost,
+)
 from ml_clients.protocols import EmbeddingClient, ExtractionClient, NERClient
 from ml_clients.text_budget import estimate_bert_tokens, truncate_for_bge
 from ml_clients.usage_log import LlmCallUsage, LlmUsageLogProtocol
 
 __all__ = [
+    "LOCAL_FREE_MODELS",
     "MODEL_PRICING",
+    "PLATFORM_MODEL_REGISTRY",
+    "ConfiguredModel",
     "EmbeddingClient",
     "EmbeddingGemmaRouterAdapter",
     "EmbeddingInput",
@@ -55,5 +73,11 @@ __all__ = [
     "estimate_bert_tokens",
     "estimate_cost",
     "estimate_tokens_from_text",
+    "is_priceable",
+    "provider_cost_to_decimal",
+    "registry_model_pairs",
+    "resolve_cost",
     "truncate_for_bge",
+    "unpriceable_models",
+    "warn_unpriceable_models",
 ]

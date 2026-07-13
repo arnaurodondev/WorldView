@@ -1,6 +1,6 @@
 # Chat-Quality Judge — Calibration Report
 
-_computed_at_: `2026-06-25T22:51:47.605621+00:00`
+_computed_at_: `2026-06-25T21:32:48.206586+00:00`
 _labels_: **39/39 labelled**
 
 ## ⛔ REJECT (bar: κ ≥ 0.7 AND zero false-PASS-on-fabrication)

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 import httpx
+from ml_clients.pricing import resolve_cost  # type: ignore[import-untyped]
 from prompts.extraction.entity_mention_classification import (  # type: ignore[import-untyped]
     ENTITY_MENTION_CLASSIFIER_SYSTEM,
     ENTITY_MENTION_CLASSIFIER_USER,
@@ -692,7 +693,11 @@ class UnresolvedResolutionWorker:
                             tokens_in=0,
                             tokens_out=0,
                             latency_ms=0,
+                            # PLAN-0117 W3: Ollama is locally-hosted → $0 is
+                            # legitimate; stamp cost_source="local" so FR-7's
+                            # silent-zero alarm ignores this row.
                             estimated_cost_usd=0.0,
+                            cost_source="local",
                             success=False,
                         )
                     )
@@ -715,7 +720,9 @@ class UnresolvedResolutionWorker:
                     tokens_in=0,
                     tokens_out=0,
                     latency_ms=0,
+                    # PLAN-0117 W3: Ollama local → $0 legitimate, cost_source="local".
                     estimated_cost_usd=0.0,
+                    cost_source="local",
                     success=True,
                 )
             )
@@ -775,7 +782,11 @@ class UnresolvedResolutionWorker:
                 timeout=timeout_s,
             )
             response.raise_for_status()
-            msg = response.json()["choices"][0]["message"]
+            _body = response.json()
+            # PLAN-0117 FR-1: capture DeepInfra's verbatim per-call cost so the
+            # success row is cost_source="provider" (not a matrix estimate).
+            _provider_cost = (_body.get("usage") or {}).get("estimated_cost")
+            msg = _body["choices"][0]["message"]
             # With reasoning_effort=none the answer is in content (reasoning_content=null).
             # Fallback to reasoning_content for models that don't honour reasoning_effort.
             raw = msg.get("content") or msg.get("reasoning_content") or ""
@@ -800,6 +811,11 @@ class UnresolvedResolutionWorker:
                 provider="deepinfra",
             )
             if self._usage_logger is not None:
+                # PLAN-0117 W3: failure path has no token/cost data — resolve to
+                # $0 via the matrix (cost_source="pricematrix"; 0 tokens → $0, no
+                # spurious warning since the model is priced). Never local for a
+                # paid DeepInfra model.
+                _cost, _cost_source = resolve_cost(api_model_id, provider="deepinfra", tokens_in=0, tokens_out=0)
                 asyncio.create_task(  # fire-and-forget  # noqa: RUF006
                     self._usage_logger.log(
                         model_id=api_model_id,
@@ -808,7 +824,8 @@ class UnresolvedResolutionWorker:
                         tokens_in=0,
                         tokens_out=0,
                         latency_ms=0,
-                        estimated_cost_usd=0.0,
+                        estimated_cost_usd=float(_cost),
+                        cost_source=_cost_source,
                         success=False,
                     )
                 )
@@ -823,6 +840,16 @@ class UnresolvedResolutionWorker:
 
         # Log usage (success)
         if self._usage_logger is not None:
+            # PLAN-0117 W3 (FR-4b): prefer DeepInfra's verbatim cost
+            # (cost_source="provider"); fall back to the matrix if the response
+            # omitted it. Never a hardcoded $0 for this paid model.
+            _cost, _cost_source = resolve_cost(
+                api_model_id,
+                provider="deepinfra",
+                tokens_in=0,
+                tokens_out=0,
+                provider_estimated_cost=_provider_cost,
+            )
             asyncio.create_task(  # fire-and-forget  # noqa: RUF006
                 self._usage_logger.log(
                     model_id=api_model_id,
@@ -831,7 +858,8 @@ class UnresolvedResolutionWorker:
                     tokens_in=0,
                     tokens_out=0,
                     latency_ms=0,
-                    estimated_cost_usd=0.0,
+                    estimated_cost_usd=float(_cost),
+                    cost_source=_cost_source,
                     success=True,
                 )
             )

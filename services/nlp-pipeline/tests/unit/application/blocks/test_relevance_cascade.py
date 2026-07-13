@@ -90,3 +90,56 @@ async def test_score_relevance_strips_think_block(monkeypatch: pytest.MonkeyPatc
     scorer = _scorer(transport)
     score = await scorer.score_relevance(title="t", subtitle="s")
     assert score == pytest.approx(0.42)
+
+
+def _scorer_with_logger(logger: object) -> RelevanceCascadeScorer:
+    return RelevanceCascadeScorer(
+        api_key="test-key",
+        base_url="https://api.deepinfra.com/v1/openai",
+        model_id="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        timeout_seconds=5.0,
+        usage_logger=logger,  # type: ignore[arg-type]
+    )
+
+
+def _chat_response_with_usage(content: str, estimated_cost: float | None) -> httpx.Response:
+    usage: dict[str, object] = {"prompt_tokens": 16, "completion_tokens": 3}
+    if estimated_cost is not None:
+        usage["estimated_cost"] = estimated_cost
+    return httpx.Response(200, json={"choices": [{"message": {"content": content}}], "usage": usage})
+
+
+@pytest.mark.asyncio
+async def test_cascade_logs_provider_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PLAN-0117 W3: DeepInfra usage.estimated_cost → cost_source='provider', verbatim cost."""
+    from unittest.mock import AsyncMock
+
+    logger = AsyncMock()
+    transport = httpx.MockTransport(lambda _req: _chat_response_with_usage('{"score": 0.5}', 4.1e-07))
+    _patch_client(monkeypatch, transport)
+    scorer = _scorer_with_logger(logger)
+    await scorer.score_relevance(title="t", subtitle="s")
+
+    logger.log.assert_awaited_once()
+    kwargs = logger.log.await_args.kwargs
+    assert kwargs["cost_source"] == "provider"
+    # Verbatim provider cost, not the price-matrix estimate.
+    assert kwargs["estimated_cost_usd"] == pytest.approx(4.1e-07)
+    assert kwargs["estimated_cost_usd"] != 0.0
+
+
+@pytest.mark.asyncio
+async def test_cascade_falls_back_to_pricematrix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No provider cost → matrix path (cost_source='pricematrix'), never a hardcoded $0."""
+    from unittest.mock import AsyncMock
+
+    logger = AsyncMock()
+    transport = httpx.MockTransport(lambda _req: _chat_response_with_usage('{"score": 0.5}', None))
+    _patch_client(monkeypatch, transport)
+    scorer = _scorer_with_logger(logger)
+    await scorer.score_relevance(title="Apple beats", subtitle="strong quarter")
+
+    kwargs = logger.log.await_args.kwargs
+    assert kwargs["cost_source"] == "pricematrix"
+    # Turbo 8B is priced → non-zero cost for non-zero tokens.
+    assert kwargs["estimated_cost_usd"] > 0.0

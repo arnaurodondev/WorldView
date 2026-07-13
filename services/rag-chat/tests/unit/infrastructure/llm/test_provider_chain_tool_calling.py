@@ -170,6 +170,39 @@ async def test_llm_provider_chain_chat_with_tools_logs_usage() -> None:
     usage_logger.log.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_llm_provider_chain_chat_with_tools_aggregate_wrapper_is_zero() -> None:
+    """PLAN-0117 W4 / OQ-3: the chat_with_tools wrapper row is a $0 aggregate.
+
+    The provider adapter records the SAME round-trip as the ``tool_loop_iter``
+    leaf (with the real provider cost). The provider-chain wrapper must stay at
+    ``estimated_cost_usd=0.0`` (no double count) and stamp
+    ``cost_source='aggregate'`` so the FR-7 silent-zero guard can exempt it.
+    """
+    usage_logger = AsyncMock()
+    usage_logger.log = AsyncMock()
+
+    provider = _make_capable_provider(
+        "deepinfra",
+        LLMToolResponse(
+            text="ok",
+            tool_calls=[],
+            finish_reason="stop",
+            usage={"prompt_tokens": 20, "completion_tokens": 8},
+        ),
+    )
+    valkey = _make_valkey()
+    chain = LLMProviderChain(providers=[provider], valkey=valkey, usage_logger=usage_logger)
+
+    await chain.chat_with_tools([{"role": "user", "content": "hi"}])
+    await asyncio.sleep(0)
+
+    kwargs = usage_logger.log.await_args.kwargs
+    assert kwargs["capability"] == "chat_with_tools"
+    assert kwargs["estimated_cost_usd"] == 0.0
+    assert kwargs["cost_source"] == "aggregate"
+
+
 # ---------------------------------------------------------------------------
 # stream_chat
 # ---------------------------------------------------------------------------

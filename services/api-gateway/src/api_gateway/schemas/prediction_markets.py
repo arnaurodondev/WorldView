@@ -62,6 +62,45 @@ class PredictionMarket(BaseModel):
     updated_at: str | None = None  # ISO 8601 datetime
     market_slug: str | None = None  # Polymarket slug for canonical URL
     category: str | None = None  # e.g. "politics", "crypto"
+    # PLAN-0056 Wave E1: S3 now carries CLOB liquidity + open interest on the
+    # detail/history snapshots. extra="allow" already lets these flow through
+    # verbatim; declaring them explicitly makes the OpenAPI schema advertise them
+    # to frontend type-generators (the source of truth for what the wire carries).
+    liquidity: float | None = None  # CLOB order-book depth (USD)
+    open_interest: float | None = None  # Total outstanding notional (USD)
+
+
+class PredictionMarketTrade(BaseModel):
+    """One executed fill on a market token (PLAN-0056 Wave E1).
+
+    Passthrough mirror of S3 ``PredictionMarketTradeResponse``. ``size_usd`` may
+    be null (some feeds omit notional). extra="allow" keeps forward-compat.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    ts: str | None = None  # ISO 8601 datetime
+    price: float | None = None
+    size_usd: float | None = None
+    side: str | None = None  # free-form: "buy" | "sell"
+    token_id: str | None = None
+
+
+class PredictionEvent(BaseModel):
+    """A Polymarket "event" group — a set of related markets (PLAN-0056 Wave E1).
+
+    Passthrough mirror of S3 ``PredictionEventResponse``. extra="allow" so any
+    additional S3 field flows through without a gateway schema change.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    event_id: str
+    name: str | None = None
+    category: str | None = None
+    start_date: str | None = None  # ISO 8601 datetime
+    end_date: str | None = None  # ISO 8601 datetime
+    market_count: int = 0
 
 
 class PredictionMarketsListResponse(BaseModel):

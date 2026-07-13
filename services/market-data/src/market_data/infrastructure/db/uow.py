@@ -35,8 +35,12 @@ from market_data.infrastructure.db.repositories.instrument_repo import PgInstrum
 from market_data.infrastructure.db.repositories.ohlcv_repo import PgOHLCVRepository
 from market_data.infrastructure.db.repositories.outbox_event_repo import PgOutboxEventRepository
 from market_data.infrastructure.db.repositories.prediction_market_repo import (
+    PgPredictionMarketEventsRepository,
+    PgPredictionMarketOIRepository,
+    PgPredictionMarketPricesRepository,
     PgPredictionMarketRepository,
     PgPredictionMarketSnapshotRepository,
+    PgPredictionMarketTradesRepository,
 )
 from market_data.infrastructure.db.repositories.quote_repo import PgQuoteRepository
 from market_data.infrastructure.db.repositories.security_repo import PgSecurityRepository
@@ -58,8 +62,12 @@ if TYPE_CHECKING:
         InstrumentRepository,
         OHLCVRepository,
         OutboxEventRepository,
+        PredictionMarketEventsRepository,
+        PredictionMarketOIRepository,
+        PredictionMarketPricesRepository,
         PredictionMarketRepository,
         PredictionMarketSnapshotRepository,
+        PredictionMarketTradesRepository,
         QuoteRepository,
         SecurityRepository,
     )
@@ -105,6 +113,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._outbox_events_repo: PgOutboxEventRepository | None = None
         self._prediction_markets_repo: PgPredictionMarketRepository | None = None
         self._prediction_market_snapshots_repo: PgPredictionMarketSnapshotRepository | None = None
+        # PLAN-0056 A2: deeper prediction-market streams (prices/trades/oi/events).
+        self._prediction_market_prices_repo: PgPredictionMarketPricesRepository | None = None
+        self._prediction_market_trades_repo: PgPredictionMarketTradesRepository | None = None
+        self._prediction_market_oi_repo: PgPredictionMarketOIRepository | None = None
+        self._prediction_events_repo: PgPredictionMarketEventsRepository | None = None
         # PLAN-0089 Wave L-4b: per-transaction insider feed (separate from the
         # fundamentals-embedded snapshot, see insider_transactions table).
         self._insider_transactions_repo: PgInsiderTransactionsRepository | None = None
@@ -305,6 +318,30 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             self._prediction_market_snapshots_repo = PgPredictionMarketSnapshotRepository(self._write())
         return self._prediction_market_snapshots_repo
 
+    @property
+    def prediction_market_prices(self) -> PredictionMarketPricesRepository:
+        if self._prediction_market_prices_repo is None:
+            self._prediction_market_prices_repo = PgPredictionMarketPricesRepository(self._write())
+        return self._prediction_market_prices_repo
+
+    @property
+    def prediction_market_trades(self) -> PredictionMarketTradesRepository:
+        if self._prediction_market_trades_repo is None:
+            self._prediction_market_trades_repo = PgPredictionMarketTradesRepository(self._write())
+        return self._prediction_market_trades_repo
+
+    @property
+    def prediction_market_oi(self) -> PredictionMarketOIRepository:
+        if self._prediction_market_oi_repo is None:
+            self._prediction_market_oi_repo = PgPredictionMarketOIRepository(self._write())
+        return self._prediction_market_oi_repo
+
+    @property
+    def prediction_events(self) -> PredictionMarketEventsRepository:
+        if self._prediction_events_repo is None:
+            self._prediction_events_repo = PgPredictionMarketEventsRepository(self._write())
+        return self._prediction_events_repo
+
     # ── read-side repository accessors (use read/replica session) ─────────────
 
     @property
@@ -346,6 +383,26 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def prediction_market_snapshots_read(self) -> PredictionMarketSnapshotRepository:
         """Prediction market snapshot repository bound to the read (replica) session."""
         return PgPredictionMarketSnapshotRepository(self._read())
+
+    @property
+    def prediction_market_prices_read(self) -> PredictionMarketPricesRepository:
+        """Prediction market price-history repository bound to the read (replica) session."""
+        return PgPredictionMarketPricesRepository(self._read())
+
+    @property
+    def prediction_market_trades_read(self) -> PredictionMarketTradesRepository:
+        """Prediction market trade repository bound to the read (replica) session."""
+        return PgPredictionMarketTradesRepository(self._read())
+
+    @property
+    def prediction_market_oi_read(self) -> PredictionMarketOIRepository:
+        """Prediction market open-interest repository bound to the read (replica) session."""
+        return PgPredictionMarketOIRepository(self._read())
+
+    @property
+    def prediction_events_read(self) -> PredictionMarketEventsRepository:
+        """Prediction "event" group repository bound to the read (replica) session."""
+        return PgPredictionMarketEventsRepository(self._read())
 
 
 class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
@@ -425,3 +482,23 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
     def prediction_market_snapshots_read(self) -> PredictionMarketSnapshotRepository:
         """Prediction market snapshot repository bound to the read (replica) session."""
         return PgPredictionMarketSnapshotRepository(self._read())
+
+    @property
+    def prediction_market_prices_read(self) -> PredictionMarketPricesRepository:
+        """Prediction market price-history repository bound to the read (replica) session."""
+        return PgPredictionMarketPricesRepository(self._read())
+
+    @property
+    def prediction_market_trades_read(self) -> PredictionMarketTradesRepository:
+        """Prediction market trade repository bound to the read (replica) session."""
+        return PgPredictionMarketTradesRepository(self._read())
+
+    @property
+    def prediction_market_oi_read(self) -> PredictionMarketOIRepository:
+        """Prediction market open-interest repository bound to the read (replica) session."""
+        return PgPredictionMarketOIRepository(self._read())
+
+    @property
+    def prediction_events_read(self) -> PredictionMarketEventsRepository:
+        """Prediction "event" group repository bound to the read (replica) session."""
+        return PgPredictionMarketEventsRepository(self._read())

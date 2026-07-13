@@ -28,8 +28,12 @@ if TYPE_CHECKING:
         InstrumentRepository,
         OHLCVRepository,
         OutboxEventRepository,
+        PredictionMarketEventsRepository,
+        PredictionMarketOIRepository,
+        PredictionMarketPricesRepository,
         PredictionMarketRepository,
         PredictionMarketSnapshotRepository,
+        PredictionMarketTradesRepository,
         QuoteRepository,
         SecurityRepository,
     )
@@ -103,6 +107,26 @@ class UnitOfWork(ABC):
     def prediction_market_snapshots(self) -> PredictionMarketSnapshotRepository:
         """Prediction market snapshot repository (write session)."""
 
+    @property
+    @abstractmethod
+    def prediction_market_prices(self) -> PredictionMarketPricesRepository:
+        """Prediction market per-token price history repository (write session, PLAN-0056)."""
+
+    @property
+    @abstractmethod
+    def prediction_market_trades(self) -> PredictionMarketTradesRepository:
+        """Prediction market trade repository (write session, PLAN-0056)."""
+
+    @property
+    @abstractmethod
+    def prediction_market_oi(self) -> PredictionMarketOIRepository:
+        """Prediction market open-interest roll-up repository (write session, PLAN-0056)."""
+
+    @property
+    @abstractmethod
+    def prediction_events(self) -> PredictionMarketEventsRepository:
+        """Prediction "event" group repository (write session, PLAN-0056)."""
+
     # ── event accumulation ────────────────────────────────────────────────────
 
     @abstractmethod
@@ -155,6 +179,26 @@ class UnitOfWork(ABC):
     @abstractmethod
     def prediction_market_snapshots_read(self) -> PredictionMarketSnapshotRepository:
         """Prediction market snapshot repository bound to the read (replica) session."""
+
+    @property
+    @abstractmethod
+    def prediction_market_prices_read(self) -> PredictionMarketPricesRepository:
+        """Prediction market price-history repository bound to the read (replica) session."""
+
+    @property
+    @abstractmethod
+    def prediction_market_trades_read(self) -> PredictionMarketTradesRepository:
+        """Prediction market trade repository bound to the read (replica) session."""
+
+    @property
+    @abstractmethod
+    def prediction_market_oi_read(self) -> PredictionMarketOIRepository:
+        """Prediction market open-interest repository bound to the read (replica) session."""
+
+    @property
+    @abstractmethod
+    def prediction_events_read(self) -> PredictionMarketEventsRepository:
+        """Prediction "event" group repository bound to the read (replica) session."""
 
     # ── read session ─────────────────────────────────────────────────────────
 
@@ -263,6 +307,26 @@ class ReadOnlyUnitOfWork(abc.ABC):
     @abc.abstractmethod
     def prediction_market_snapshots_read(self) -> PredictionMarketSnapshotRepository:
         """Prediction market snapshot repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def prediction_market_prices_read(self) -> PredictionMarketPricesRepository:
+        """Prediction market price-history repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def prediction_market_trades_read(self) -> PredictionMarketTradesRepository:
+        """Prediction market trade repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def prediction_market_oi_read(self) -> PredictionMarketOIRepository:
+        """Prediction market open-interest repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def prediction_events_read(self) -> PredictionMarketEventsRepository:
+        """Prediction "event" group repository bound to the read (replica) session."""
 
     # ── context manager ───────────────────────────────────────────────────────
 

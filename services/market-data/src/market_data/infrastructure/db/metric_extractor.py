@@ -88,6 +88,78 @@ _METRIC_CATALOG: dict[FundamentalsSection, list[_MetricDef]] = {
         # in the Technicals.AverageVolume field (varies by API version).
         # All alias forms are tried in order; first match wins.
         _MetricDef("avg_volume_30d", ("AverageVolume", "averageVolume", "AvgVolume", "avg_volume")),
+        # WHY (2026-07-05): the EODHD "Technicals" section carries price levels,
+        # moving averages, and short-interest fields that were parsed + stored in
+        # the technicals_snapshot JSONB but never promoted to the queryable
+        # fundamental_metrics tier — so the screener + chat could not filter on
+        # them.  Promoting them unlocks "near 52-week low", golden-cross
+        # (50DMA vs 200DMA), and short-squeeze screens.  No schema change:
+        # fundamental_metrics is a generic (instrument, date, metric) key-value
+        # store.  Values are passthrough (currency levels for prices/MAs;
+        # ShortPercent is a decimal fraction, ShortRatio is days-to-cover).
+        _MetricDef("week_52_high", ("52WeekHigh", "52_week_high", "week_52_high")),
+        _MetricDef("week_52_low", ("52WeekLow", "52_week_low", "week_52_low")),
+        _MetricDef("moving_avg_50d", ("50DayMA", "50_day_ma", "moving_avg_50d")),
+        _MetricDef("moving_avg_200d", ("200DayMA", "200_day_ma", "moving_avg_200d")),
+        # Short-interest fields.  These are the CANONICAL source for shares_short /
+        # short_ratio / short_percent_of_float — the SHARE_STATISTICS section
+        # repeats them (SharesShort / ShortRatio / ShortPercentOfFloat) but the
+        # fundamental_metrics unique key is (instrument_id, as_of_date, metric,
+        # period_type) WITHOUT section, so mapping them in both sections would
+        # collide on upsert.  We therefore map them here and deliberately ignore
+        # the SHARE_STATISTICS duplicates (see _IGNORED_KEYS) to keep metric keys
+        # unique.  EODHD's Technicals uses "ShortPercent"; SharesStats uses
+        # "ShortPercentOfFloat" — both are aliased to short_percent_of_float.
+        _MetricDef("shares_short", ("SharesShort", "shares_short")),
+        _MetricDef(
+            "shares_short_prior_month",
+            ("SharesShortPriorMonth", "shares_short_prior_month"),
+        ),
+        _MetricDef("short_ratio", ("ShortRatio", "short_ratio")),
+        _MetricDef(
+            "short_percent_of_float",
+            ("ShortPercent", "ShortPercentOfFloat", "ShortPercentFloat", "short_percent_of_float"),
+        ),
+    ],
+    # WHY (2026-07-05): the EODHD "SharesStats" section (share_statistics JSONB)
+    # carries float / ownership composition that was stored but never promoted to
+    # fundamental_metrics.  Promoting shares_outstanding / shares_float /
+    # percent_insiders / percent_institutions unlocks float-size and ownership
+    # screens.  Short-interest fields in this section are DELIBERATELY not mapped
+    # here (they are canonical under TECHNICALS_SNAPSHOT — see _IGNORED_KEYS) to
+    # keep metric keys unique under the section-less upsert constraint.  Values
+    # are passthrough: EODHD returns PercentInsiders/PercentInstitutions with
+    # mixed conventions (fraction vs whole-percent) depending on the field/feed,
+    # so we store the raw provider value and leave normalisation to consumers
+    # (the L-4a snapshot writer applies its own ÷100 for a different table).
+    FundamentalsSection.SHARE_STATISTICS: [
+        _MetricDef("shares_outstanding", ("SharesOutstanding", "shares_outstanding")),
+        _MetricDef("shares_float", ("SharesFloat", "shares_float")),
+        _MetricDef("percent_insiders", ("PercentInsiders", "percent_insiders")),
+        _MetricDef("percent_institutions", ("PercentInstitutions", "percent_institutions")),
+    ],
+    # WHY (2026-07-05): the EODHD "SplitsDividends" section (splits_dividends
+    # JSONB) carries FORWARD-looking dividend fields + payout ratio + the next
+    # dividend / ex-dividend dates.  These were stored but never promoted to
+    # fundamental_metrics, so dividend screens (forward yield, payout, upcoming
+    # ex-date) could not filter on them.  We add ONLY the forward + payout + date
+    # fields — the trailing DividendShare / DividendYield already live in the
+    # HIGHLIGHTS section and are NOT duplicated here.  forward_annual_dividend_rate
+    # is a per-share currency amount; forward_annual_dividend_yield and
+    # payout_ratio are decimal fractions (passthrough).  dividend_date and
+    # ex_dividend_date are ISO date strings, stored as value_text (text_only).
+    FundamentalsSection.SPLITS_DIVIDENDS: [
+        _MetricDef(
+            "forward_annual_dividend_rate",
+            ("ForwardAnnualDividendRate", "forward_annual_dividend_rate"),
+        ),
+        _MetricDef(
+            "forward_annual_dividend_yield",
+            ("ForwardAnnualDividendYield", "forward_annual_dividend_yield"),
+        ),
+        _MetricDef("payout_ratio", ("PayoutRatio", "payout_ratio")),
+        _MetricDef("dividend_date", ("DividendDate", "dividend_date"), text_only=True),
+        _MetricDef("ex_dividend_date", ("ExDividendDate", "ex_dividend_date"), text_only=True),
     ],
     FundamentalsSection.ANALYST_CONSENSUS: [
         _MetricDef("target_price", ("TargetPrice", "targetPrice", "target_price")),
@@ -463,6 +535,35 @@ _IGNORED_KEYS: dict[FundamentalsSection, frozenset[str]] = {
             "temporaryEquityRedeemableNoncontrollingInterests",
             "totalPermanentEquity",
             "warrants",
+        }
+    ),
+    # WHY (2026-07-05): SharesStats repeats the short-interest trio that we map
+    # canonically under TECHNICALS_SNAPSHOT.  Because the fundamental_metrics
+    # unique key excludes ``section``, mapping them here too would collide on
+    # upsert — so they are intentionally NOT promoted from this section and are
+    # listed here so they do not inflate the unmapped_keys warning every cycle.
+    FundamentalsSection.SHARE_STATISTICS: frozenset(
+        {
+            "SharesShort",
+            "ShortRatio",
+            "ShortPercent",
+            "ShortPercentOfFloat",
+            "ShortPercentOutstanding",
+            "SharesShortPriorMonth",
+        }
+    ),
+    # WHY (2026-07-05): SplitsDividends carries split-history minutiae with no
+    # screener value (last split factor / date) plus trailing dividend fields
+    # that are already promoted from HIGHLIGHTS (DividendShare / DividendYield).
+    # Listed here so the unmapped_keys warning only fires for genuinely new
+    # EODHD fields in this section.
+    FundamentalsSection.SPLITS_DIVIDENDS: frozenset(
+        {
+            "LastSplitFactor",
+            "LastSplitDate",
+            "DividendShare",
+            "DividendYield",
+            "NumberDividendsByYear",
         }
     ),
 }

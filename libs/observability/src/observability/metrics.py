@@ -44,6 +44,52 @@ except ValueError:
         raise
     KAFKA_CONSUMER_MESSAGES = _existing  # type: ignore[assignment]
 
+# ── PLAN-0117 Wave 5 (FR-7b): silent-zero LLM cost tripwire ──────────────────
+#
+# A SINGLE global counter (not per-service-namespaced, mirroring
+# ``KAFKA_CONSUMER_MESSAGES`` above) so ONE Prometheus alert can pivot across
+# every LLM-emitting service in a single expression:
+#
+#   sum by (service, model_id) (increase(llm_usage_silent_zero_cost_total[1h])) > 0
+#
+# It increments whenever a ``llm_usage_log`` row is written with a non-zero
+# token count but ``estimated_cost_usd == 0`` on a PAID cost source — i.e.
+# ``cost_source NOT IN ('local', 'aggregate', 'provider')``.  ``local`` (Ollama/
+# GLiNER), ``aggregate`` (the S8 ``chat_with_tools`` wrapper that duplicates a
+# leaf's tokens at $0 to avoid double-counting), and ``provider`` (the provider's
+# OWN authoritative $0 — DeepInfra self-reports it) are ALL legitimately $0 and
+# MUST be exempt — otherwise the tripwire would fire on correct rows.  This counter is
+# the permanent regression guard for the RC-1/RC-2/RC-3 silent-zero family that
+# left ~315k calls logged at ~$0 (see docs/BUG_PATTERNS.md BP-715).
+try:
+    LLM_USAGE_SILENT_ZERO_COST = Counter(
+        "llm_usage_silent_zero_cost_total",
+        "LLM usage rows written with tokens>0 but $0 cost on a paid source "
+        "(cost_source NOT IN local|aggregate|provider) — PLAN-0117 FR-7b silent-zero tripwire.",
+        labelnames=("service", "model_id"),
+    )
+except ValueError:
+    _existing_sz = REGISTRY._names_to_collectors.get("llm_usage_silent_zero_cost_total")
+    if _existing_sz is None:
+        raise
+    LLM_USAGE_SILENT_ZERO_COST = _existing_sz  # type: ignore[assignment]
+
+# Cost sources that legitimately carry ``estimated_cost_usd == 0`` and therefore
+# must NEVER trip the silent-zero guard (PLAN-0117 §2.2 + OQ-3):
+#   * ``local``     — Ollama / GLiNER, genuinely free.
+#   * ``aggregate`` — S8 ``chat_with_tools`` wrapper row that duplicates a leaf's
+#                     tokens at $0 so each real round-trip is costed exactly once.
+#   * ``provider``  — the provider's OWN authoritative $0 (DeepInfra returns
+#                     ``usage.estimated_cost``; a free-tier / promo / genuinely-$0
+#                     call reports 0.0). ``cost_source='provider'`` is stamped ONLY
+#                     when ``resolve_cost`` received a real numeric provider cost,
+#                     so a provider-$0 is an accurate figure, not a pricing failure.
+#                     (Post-QA M-1 fix: otherwise the flagship alert cries wolf on
+#                     the provider's own number, eroding the trust it exists to give.)
+# The RC-1/RC-2/RC-3 regression this guard targets always surfaces as a
+# ``pricematrix``/``None`` + $0 row (we failed to price a paid call) — still caught.
+_SILENT_ZERO_EXEMPT_COST_SOURCES: frozenset[str] = frozenset({"local", "aggregate", "provider"})
+
 # Cache for ServiceMetrics registered in the global REGISTRY, keyed by service_name.
 # Prevents duplicate-registration errors when the same service name is used more than
 # once in the same process (common in test suites that instantiate consumers repeatedly).
@@ -278,6 +324,97 @@ def create_ml_metrics(
     if reg is REGISTRY:
         _global_ml_metrics_cache[service_name] = ml
     return ml
+
+
+def is_silent_zero_cost(
+    *,
+    tokens_in: int,
+    tokens_out: int,
+    estimated_cost_usd: object,
+    cost_source: str | None,
+) -> bool:
+    """Return True when a usage-log row is a *paid silent-zero* (PLAN-0117 FR-7b).
+
+    A row is a silent-zero regression when ALL three hold:
+      1. ``tokens_in + tokens_out > 0`` — a real, non-empty call happened, AND
+      2. ``estimated_cost_usd == 0`` — yet zero cost was persisted, AND
+      3. ``cost_source`` is NOT one of the legitimately-$0 sources
+         (:data:`_SILENT_ZERO_EXEMPT_COST_SOURCES` = ``{"local", "aggregate"}``).
+
+    The ``local`` and ``aggregate`` exemptions are REQUIRED — both are correct at
+    $0 (see the constant's docstring). A ``cost_source`` of ``None`` (a legacy /
+    un-migrated caller) is intentionally NOT exempt: such a row on a paid model
+    is exactly the regression this guard exists to surface.
+
+    This predicate is pure (no metric side-effect) so it can be unit-tested and
+    reused; :func:`record_silent_zero_cost` wraps it with the counter increment.
+
+    Args:
+        tokens_in: Prompt/input token count on the row.
+        tokens_out: Completion/output token count on the row.
+        estimated_cost_usd: The persisted cost (``Decimal`` | ``float`` | ``int``);
+            compared to zero after a defensive ``float(...)`` cast.
+        cost_source: The row's provenance tag ("provider" | "pricematrix" |
+            "local" | "aggregate" | ``None``).
+
+    Returns:
+        True if the row is a paid silent-zero that should trip the counter.
+    """
+    if (tokens_in or 0) + (tokens_out or 0) <= 0:
+        return False
+    try:
+        # ``estimated_cost_usd`` is intentionally ``object`` (Decimal | float |
+        # int arrive from three different write paths); the float() cast is
+        # guarded so a non-numeric value falls through to "not provably zero".
+        cost_is_zero = float(estimated_cost_usd or 0) == 0.0  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        # A non-numeric cost is treated as "unknown, not provably zero" — do not
+        # trip (best-effort; NFR-1). The DB write itself would have failed first.
+        return False
+    if not cost_is_zero:
+        return False
+    return cost_source not in _SILENT_ZERO_EXEMPT_COST_SOURCES
+
+
+def record_silent_zero_cost(
+    service: str,
+    *,
+    model_id: str,
+    tokens_in: int,
+    tokens_out: int,
+    estimated_cost_usd: object,
+    cost_source: str | None,
+) -> None:
+    """Increment the silent-zero tripwire iff the row is a paid silent-zero.
+
+    Wire this at every ``llm_usage_log`` write choke-point (S6/S7/S8 repositories
+    + the S8 internal-usage use case). It is **best-effort**: any failure to
+    evaluate the predicate or touch the counter is swallowed with a structlog
+    warning so cost-metering observability can never break the write path
+    (PLAN-0117 NFR-1).
+
+    Args:
+        service: Emitting service name (the ``service`` metric label), e.g.
+            "nlp-pipeline" | "knowledge-graph" | "rag-chat".
+        model_id: The model the row is for (the ``model_id`` metric label).
+        tokens_in / tokens_out / estimated_cost_usd / cost_source: The row's
+            values, forwarded to :func:`is_silent_zero_cost`.
+    """
+    try:
+        if is_silent_zero_cost(
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            estimated_cost_usd=estimated_cost_usd,
+            cost_source=cost_source,
+        ):
+            LLM_USAGE_SILENT_ZERO_COST.labels(service=service, model_id=model_id).inc()
+    except Exception as exc:  # — observability must never break the write path
+        logger.warning(
+            "silent_zero_metric_failed",
+            service=service,
+            model_id=model_id,
+            error=str(exc),
+        )
 
 
 def add_prometheus_middleware(app: object, metrics: ServiceMetrics) -> None:

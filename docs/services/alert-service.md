@@ -16,8 +16,9 @@ S10 fans out intelligence signals to users watching relevant entities. It:
 5. Stores undelivered alerts for offline clients (`GET /api/v1/alerts/pending`)
 6. Sends weekly email digests (APScheduler `CronTrigger(minute=0)` — hourly tick, per-user day/hour gate, via Resend/SendGrid/SMTP)
 7. Evaluates user-created standing alert rules (PLAN-0113) — a poller process
-   periodically evaluates 5 rule types (`PRICE_CROSS`, `NEWS_COUNT`,
-   `NEWS_MOMENTUM`, `KG_CONNECTION`, `FUNDAMENTAL_CROSS`) reading from S3/S6/S7
+   periodically evaluates the poll rule types (`PRICE_CROSS`, `NEWS_COUNT`,
+   `NEWS_MOMENTUM`, `FUNDAMENTAL_CROSS`) reading from S3/S6/S7; event-driven types
+   (`KG_CONNECTION`, `PREDICTION`) fire from the intelligence consumer instead
 
 **Never does**: Any direct database access to other services, JWT issuance,
 business logic about what constitutes a signal.
@@ -100,14 +101,18 @@ channel for the user it is serving.
 | DELETE | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Delete one owned rule (204; 404 if missing/cross-owner) |
 
 **Rule types** (`rule_type` enum, `RuleType` StrEnum): `PRICE_CROSS`, `NEWS_COUNT`,
-`NEWS_MOMENTUM`, `KG_CONNECTION`, `FUNDAMENTAL_CROSS`. Each pairs with a
-discriminated-union `condition` value object (`domain/rule_conditions.py`) and a
-`RuleEvaluator` registered in `application/rules/registry.py`.
+`NEWS_MOMENTUM`, `KG_CONNECTION`, `FUNDAMENTAL_CROSS`, `PREDICTION` (PLAN-0056 Wave D3).
+Each pairs with a discriminated-union `condition` value object (`domain/rule_conditions.py`)
+and a `RuleEvaluator` registered in `application/rules/registry.py`.
 
-**Keying**: `PRICE_CROSS` / `NEWS_COUNT` / `NEWS_MOMENTUM` / `FUNDAMENTAL_CROSS`
-key on `entity_id`; `KG_CONNECTION` keys on `node_a_entity_id` + `node_b_entity_id`
-(must be distinct). `FUNDAMENTAL_CROSS` validates its `metric_key` against the S3
-fundamentals vocabulary at create/update time (S3 unreachable → allowed but logged).
+**Keying**: `PRICE_CROSS` / `NEWS_COUNT` / `NEWS_MOMENTUM` / `FUNDAMENTAL_CROSS` /
+`PREDICTION` key on `entity_id`; `KG_CONNECTION` keys on `node_a_entity_id` +
+`node_b_entity_id` (must be distinct). `FUNDAMENTAL_CROSS` validates its `metric_key`
+against the S3 fundamentals vocabulary at create/update time (S3 unreachable → allowed
+but logged). `PREDICTION` is event-driven (`market.prediction.signal.v1`, poller-skipped
+like `KG_CONNECTION`); its `PredictionCondition` filters by `min_impact_score`/`polarities`/
+`triggers`. NOTE: prediction alerts fire via the watchlist fanout regardless of any rule —
+the PREDICTION rule type is a user-configurable toggle/filter only.
 
 ### Internal Service-Caller Endpoints (exposed)
 
@@ -149,11 +154,15 @@ transaction (R8 outbox pattern). Also used by the S8 rag-chat `create_alert` too
 
 Status codes: 201 success, 409 duplicate rule within dedup window.
 
-The four alert types in the system:
+The alert types in the system:
 - `SIGNAL` — financial signal detected by S6 NLP pipeline (from `nlp.signal.detected.v1`)
 - `GRAPH_CHANGE` — knowledge graph update from S7 (from `graph.state.changed.v1`)
 - `CONTRADICTION` — cross-source contradiction from S7 (from `intelligence.contradiction.v1`)
 - `USER_RULE` — user-initiated alert created via this endpoint or the LLM `create_alert` tool
+- `PREDICTION` (`"prediction"`) — prediction-market signal from S7 (from `market.prediction.signal.v1`,
+  PLAN-0056 Wave D3). Severity from `market_impact_score` (already adverse-boosted by S7 D2, so bearish
+  moves land higher); title/copy emphasises risk when a bad-for-the-entity outcome is being priced up.
+  Watchlist-gated like the other SIGNAL-class events.
 
 #### `GET /api/v1/alerts/pending`
 
@@ -271,6 +280,7 @@ needed for each new connection (30 s TTL).
 | `nlp.signal.detected.v1` | `alert-service-group` | Financial signals from S6 |
 | `graph.state.changed.v1` | `alert-service-group` | Graph changes from S7 |
 | `intelligence.contradiction.v1` | `alert-service-group` | Contradictions from S7 |
+| `market.prediction.signal.v1` | `alert-service-group` | Prediction-market signals from S7 → `AlertType.PREDICTION` (PLAN-0056 Wave D3) |
 | `portfolio.watchlist.updated.v1` | `alert-service-watchlist-group` | Watchlist cache invalidation |
 
 ---
@@ -384,15 +394,17 @@ CREATE TABLE alert_rules (
     last_state       JSONB,                   -- edge-trigger memory (nullable until first eval)
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    -- CHECK ck_alert_rules_rule_type: PRICE_CROSS|NEWS_COUNT|NEWS_MOMENTUM|KG_CONNECTION|FUNDAMENTAL_CROSS|PREDICTION (migration 0011)
     -- CHECK ck_alert_rules_keying: KG_CONNECTION needs both nodes distinct; else entity_id NOT NULL
 );
 -- Partial indexes (WHERE enabled): idx_alert_rules_type_enabled, idx_alert_rules_entity_enabled,
 -- idx_alert_rules_nodes_enabled; plus idx_alert_rules_owner (tenant_id, user_id) for CRUD list.
 ```
 
-> Migration head: **`0010_create_alert_rules`** (10 migrations: 0001 base, 0002/0003 email,
+> Migration head: **`0011_add_prediction_rule_type`** (11 migrations: 0001 base, 0002/0003 email,
 > 0004 severity, 0005 tenant_id, 0006 enrichment columns, 0007 ack+snooze, 0008 title backfill,
-> 0009 user_rule alert_type comment, 0010 alert_rules).
+> 0009 user_rule alert_type comment, 0010 alert_rules, 0011 widen ck_alert_rules_rule_type to add
+> `PREDICTION` — PLAN-0056 Wave D3).
 
 ---
 
@@ -519,6 +531,7 @@ All env vars use prefix `ALERT_` except where noted.
 | `ALERT_KAFKA_TOPIC_SIGNAL` | `nlp.signal.detected.v1` | Consumed signal topic |
 | `ALERT_KAFKA_TOPIC_GRAPH_STATE` | `graph.state.changed.v1` | Consumed graph change topic |
 | `ALERT_KAFKA_TOPIC_CONTRADICTION` | `intelligence.contradiction.v1` | Consumed contradiction topic |
+| `ALERT_KAFKA_TOPIC_PREDICTION_SIGNAL` | `market.prediction.signal.v1` | Consumed prediction-market signal topic (PLAN-0056 Wave D3) |
 | `ALERT_KAFKA_TOPIC_WATCHLIST` | `portfolio.watchlist.updated.v1` | Consumed watchlist change topic |
 | `ALERT_KAFKA_TOPIC_ALERT_DELIVERED` | `alert.delivered.v1` | Produced alert delivery topic |
 | `ALERT_KAFKA_DLQ_TOPIC` | `alert.dead-letter.v1` | Produced DLQ topic |

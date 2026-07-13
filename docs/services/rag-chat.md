@@ -1,13 +1,13 @@
 # RAG / Chat Service
 
 > **Owner**: Chat domain · **Database**: `rag_db` (owned) · **Port**: 8008
-> **Status**: Tool-use chat pipeline + **26-tool catalog** (`capability_manifest.yaml` v5) + SSE streaming + morning/instrument briefings + brief pre-generation scheduler
+> **Status**: Tool-use chat pipeline + **28-tool catalog** (`capability_manifest.yaml` v7) + SSE streaming + morning/instrument briefings + brief pre-generation scheduler
 
 ---
 
 ## Mission & Boundaries
 
-**Owns**: Query rewriting, tool-use chat pipeline, 26-tool catalog, SSE streaming
+**Owns**: Query rewriting, tool-use chat pipeline, 27-tool catalog, SSE streaming
 (vector + KG + SQL tools), result injection, context assembly, prompt building,
 LLM provider fallback, streaming response delivery, citation injection, response caching.
 
@@ -37,6 +37,7 @@ LLM provider fallback, streaming response delivery, citation injection, response
 | POST | `/v1/internal/retrieve` | Eval-harness read-only retrieval (NOT proxied via S9). See Internal Retrieval Endpoint section | X-Internal-JWT (system) |
 | POST | `/internal/v1/briefings` | Generate portfolio risk narrative for the S10 email digest (rate-limited 100/day per user) | X-Internal-JWT |
 | GET | `/internal/v1/llm-costs` | LLM cost aggregates for rag-chat (PLAN-0033); queries `rag_db.llm_usage_log` (no service_name filter — S8-exclusive DB); params: `period` (YYYY-MM), `provider`, `breakdown` | X-Internal-JWT (system) |
+| POST | `/internal/v1/llm-usage` | **PLAN-0117 W4 (FR-6)**: ingest ONE LLM usage record into `rag_db.llm_usage_log` (from S9's direct DeepInfra screener call, which owns no ledger — R9). Body: `model_id`, `provider`, `capability`, `tokens_in/out`, `estimated_cost_usd` (Decimal ≥0), `cost_source` (`provider`\|`pricematrix`\|`local`), `latency_ms`, `success`, `error_code`, `tenant_id`, `user_id`. Best-effort: `200 {"recorded": bool}` — never 5xx on persistence failure (NFR-1); 401 non-internal; 422 bad body. Router → `RecordLlmUsageUseCase` (raw `text()` INSERT, R25/R27) | X-Internal-JWT |
 | GET | `/internal/v1/instruments/{instrument_id}/ai-brief-flag` | Non-failing rollup: whether any cached entity-scoped AI brief exists for the instrument (`has_ai_brief` + `brief_generated_at`); powers the screener `has_ai_brief` flag. Absence → `has_ai_brief=false` + HTTP 200 (L-5b sync worker) | X-Internal-JWT |
 
 ### Public Briefing Endpoints (prefix `/api/v1`, proxied via S9)
@@ -213,10 +214,10 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
       → Re-acquire UoW → persist thread + message
 ```
 
-### Tool Catalog (26 tools — `libs/tools/src/tools/capability_manifest.yaml` v5)
+### Tool Catalog (28 tools — `libs/tools/src/tools/capability_manifest.yaml` v7)
 
 The `get_alerts` / `create_alert` action tools are documented separately below
-(Action Tools and User Authorization). The remaining 24 read-only tools:
+(Action Tools and User Authorization). The remaining 25 read-only tools:
 
 | Tool | Target | Description | Since |
 |------|--------|-------------|-------|
@@ -240,10 +241,12 @@ The `get_alerts` / `create_alert` action tools are documented separately below
 | `get_morning_brief` | DB | User's latest morning brief from `user_briefs` table via `BriefArchivePort`. Read-only (R27). trust_weight=0.92 | v3 |
 | `compare_entities` | S3 | Side-by-side comparison of 2-4 tickers: fundamentals highlights + latest quote in parallel | v3 |
 | `get_entity_news` | S9→S6 | Recent news articles scoped to a single entity (PLAN-0103 W2) | v5 |
+| `get_filings` | S6 | SEC EDGAR filings (10-K/10-Q/8-K/…) for an entity via `S6.search_chunks(source_types=['sec_edgar'])`, deduped to one row per filing; every result carries `citation_meta.url` = the canonical EDGAR filing-index URL. `form_type` is best-effort (label recovered from text). trust_weight=0.95 (feat/chat-sec-filings-tool) | v5 |
 | `screen_universe` | S9→S3 | Quantitative screener via S9 `POST /v1/fundamentals/screen`. Filter by market_cap, P/E, sector, region | v3 |
 | `get_market_movers` | S9→S3 | Top gainers/losers/most-active via S9 `GET /v1/market/top-movers`. Default: gainers/1d | v3 |
 | `get_economic_calendar` | S9→S3 | Macro events (CPI, FOMC, GDP) via S9 `GET /v1/fundamentals/economic-calendar` | v3 |
 | `get_earnings_calendar` | S9→S3 | Earnings release dates + EPS via S9 `GET /v1/fundamentals/earnings-calendar` | v3 |
+| `get_prediction_markets` | S9→S3 | Polymarket odds search via S9 `GET /v1/signals/prediction-markets` (free-text `query` ILIKE + `category`/`status`/`limit`). One `RetrievedItem` per market; `citation_meta.url` is the canonical `https://polymarket.com/event/<market_slug>` deep link (search fallback for null/malformed slugs). `source_name="polymarket"`. PLAN-0056 Wave E3: odds are now grounded — each item sets `grounding_fields` (`<outcome>_probability` as the same integer percent the text cites, `volume_24h`, `market_id`) so the value-substantiation eval can verify cited odds (metadata-only; prose/citation unchanged) | v6 |
 
 **v2 intelligence tools (PLAN-0080 Wave A)**: all 4 call S9-proxied endpoints (R14/R7 compliance — never S7 directly). All respect `EntityContext` scope: when the executor is bound to an entity via `ToolExecutorFactory.for_request(entity_context=...)`, the `entity_id` is auto-injected and LLM-supplied values are silently overridden (M-1 enforcement).
 
@@ -386,7 +389,7 @@ Indexes: `ix_messages_thread_created (thread_id, created_at ASC)`; `ix_messages_
 
 | Table | Migration | Purpose |
 |-------|-----------|---------|
-| `llm_usage_log` | `0003` (+ `0006`) | Per-call LLM cost/usage telemetry powering `/internal/v1/llm-costs`. `0006` added `prompt_cache_read_tokens`, `prompt_cache_creation_tokens`, `tool_calls_count`, `tool_names TEXT[]` |
+| `llm_usage_log` | `0003` (+ `0006`, `0010`) | Per-call LLM cost/usage telemetry powering `/internal/v1/llm-costs`. `0006` added `prompt_cache_read_tokens`, `prompt_cache_creation_tokens`, `tool_calls_count`, `tool_names TEXT[]`. `0010` (PLAN-0117 W2) added `cost_source VARCHAR(16)` + `user_id UUID` (both nullable). Leaf rows (`tool_loop_iter`/`synthesis`) carry the real provider cost (`cost_source='provider'` via `ml_clients.resolve_cost`); the `chat_with_tools` aggregate wrapper stays `$0` with `cost_source='aggregate'` (OQ-3 — no double count) |
 | `user_briefs` | `0004` | Persisted generated briefs (morning + entity); read-only source for `get_morning_brief` and the AI-brief flag |
 | `brief_feedback` | `0004` | Bullet/section/brief-level user feedback (FK → `user_briefs`, CASCADE) |
 | `chat_audit_log` | `0007` | Per-turn observability audit trail (E-12) |
@@ -1010,3 +1013,25 @@ source is tripped. To reset manually, delete the Valkey key `rag:cb:state:{sourc
 Set `RAG_CHAT_CITATION_CRON_ENABLED=false` (default). Enable only when you want
 daily citation accuracy scoring (consumes LLM tokens). PLAN-0107 switched the
 cadence from weekly Sunday → DAILY 03:00 UTC and the sample window from 7 days → 24 hours.
+
+## LLM Cost Metering & Guardrails (PLAN-0117)
+
+All `llm_usage_log` writes to `rag_db` funnel through the single INSERT choke-point
+`RagChatUsageLogRepository.log`, which emits the cross-service counter
+`llm_usage_silent_zero_cost_total{service, model_id}` whenever a row has
+`tokens_in + tokens_out > 0` AND `estimated_cost_usd == 0` AND
+`cost_source NOT IN ('local','aggregate')`.
+
+- **Both recorder paths are covered**: the leaf per-call recorder and the
+  `chat_with_tools` aggregate wrapper both write via the same choke-point, so the metric
+  observes every row exactly once.
+- **Aggregate wrapper is exempt by design**: `chat_with_tools` writes a roll-up row with
+  `cost_source='aggregate'` and `$0` cost (its constituent leaf calls are already priced
+  individually). The `aggregate` exemption prevents double-counting and keeps the wrapper
+  row from tripping the silent-zero counter.
+- **Internal usage endpoint**: `POST /internal/v1/llm-usage` (`RecordLlmUsageUseCase`)
+  also routes through the choke-point and therefore emits the metric — this is how S9's
+  NL-screener DeepInfra calls get cost-tracked.
+- **Boot-time priceability warning**: app lifespan calls `warn_unpriceable_models(...)`,
+  logging a structured WARNING for any configured chat model with no pricing path.
+  Prometheus alert `LlmUsageSilentZeroCost`; see `docs/BUG_PATTERNS.md` BP-715.

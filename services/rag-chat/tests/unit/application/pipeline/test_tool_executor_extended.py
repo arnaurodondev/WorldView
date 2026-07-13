@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 from unittest.mock import AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -156,6 +156,7 @@ def _make_claim_result(
     polarity: str = "positive",
     claim_text: str = "AAPL will reach $250",
     confidence: float = 0.78,
+    doc_id: str | None = None,
 ) -> Any:
     """Build a ClaimResult for search_claims tests."""
     from rag_chat.application.ports.upstream_clients import ClaimResult
@@ -167,6 +168,7 @@ def _make_claim_result(
         polarity=polarity,
         claim_text=claim_text,
         extraction_confidence=confidence,
+        doc_id=doc_id,
     )
 
 
@@ -176,6 +178,7 @@ def _make_event_result(
     event_text: str = "Q1 2026 earnings beat expectations",
     event_date: str | None = "2026-04-30",
     extraction_confidence: float = 0.82,
+    doc_id: str | None = None,
 ) -> Any:
     """Build an EventResult for search_events tests."""
     from rag_chat.application.ports.upstream_clients import EventResult
@@ -186,6 +189,32 @@ def _make_event_result(
         event_text=event_text,
         event_date=event_date,
         extraction_confidence=extraction_confidence,
+        doc_id=doc_id,
+    )
+
+
+def _make_content_store(metadata: dict | None = None) -> AsyncMock:
+    """Build a mock ContentStorePort returning a fixed {doc_id: DocumentMetadata} map."""
+    mock = AsyncMock()
+    mock.get_documents_metadata.return_value = metadata or {}
+    return mock
+
+
+def _make_doc_meta(
+    doc_id: UUID,
+    url: str | None = "https://example.com/news/article",
+    source_name: str | None = "Reuters",
+    published_at: Any = None,
+) -> Any:
+    """Build a DocumentMetadata for source-link backfill tests."""
+    from rag_chat.application.ports.upstream_clients import DocumentMetadata
+
+    return DocumentMetadata(
+        doc_id=str(doc_id),
+        title="Source article",
+        url=url,
+        source_name=source_name,
+        published_at=published_at,
     )
 
 
@@ -234,6 +263,7 @@ def _make_executor(
     user_id: UUID | None = None,
     tenant_id: UUID | None = None,
     internal_jwt: str | None = None,
+    content_store: Any | None = None,
 ) -> Any:
     """Build a ToolExecutor with configurable ports and auth context."""
     from rag_chat.application.pipeline.tool_executor import ToolExecutor
@@ -244,6 +274,7 @@ def _make_executor(
         s6=s6,
         s7=s7,
         s1=s1,
+        content_store=content_store,
         entity_context=entity_context,
         user_id=user_id,
         tenant_id=tenant_id,
@@ -577,6 +608,67 @@ class TestSearchClaims:
         assert len(result) == 1
         assert "AAPL will expand into India" in result[0].text
 
+    async def test_search_claims_backfills_citation_url_from_source_doc(self) -> None:
+        """feat/chat-kg-source-links: a claim carrying a doc_id must resolve the
+        source article's URL into citation_meta so the chat UI can render "Read ↗".
+        """
+        from datetime import UTC, datetime
+
+        doc_id = uuid4()
+        published = datetime(2026, 4, 30, tzinfo=UTC)
+        claim = _make_claim_result(doc_id=str(doc_id))
+        s7 = _make_s7_port(claims=[claim])
+        content_store = _make_content_store(
+            {doc_id: _make_doc_meta(doc_id, url="https://news.example/aapl", published_at=published)}
+        )
+        executor = _make_executor(s7=s7, entity_context=_make_entity_context(), content_store=content_store)
+
+        tc = _make_tool_call("search_claims", entity_name="Apple Inc.")
+        result = await executor.execute(tc)
+
+        assert len(result) == 1
+        cm = result[0].citation_meta
+        assert cm.url == "https://news.example/aapl"
+        assert cm.source_name == "Reuters"  # real article source, not "knowledge_graph"
+        assert cm.published_at == published
+        assert result[0].doc_id == doc_id
+        # The batched lookup must have been issued exactly once with the doc_id.
+        content_store.get_documents_metadata.assert_awaited_once()
+
+    async def test_search_claims_url_none_when_doc_unresolved(self) -> None:
+        """When content-store returns no metadata for a doc_id (or claim has no
+        doc_id), the citation degrades to the legacy non-clickable shape.
+        """
+        claim = _make_claim_result(doc_id=None)
+        s7 = _make_s7_port(claims=[claim])
+        content_store = _make_content_store({})  # nothing resolved
+        executor = _make_executor(s7=s7, entity_context=_make_entity_context(), content_store=content_store)
+
+        tc = _make_tool_call("search_claims", entity_name="Apple Inc.")
+        result = await executor.execute(tc)
+
+        assert len(result) == 1
+        cm = result[0].citation_meta
+        assert cm.url is None
+        assert cm.source_name == "knowledge_graph"
+
+    async def test_search_claims_survives_content_store_failure(self) -> None:
+        """A content-store outage must NOT fail the claims tool — the claim data
+        still returns, just without a clickable URL (best-effort enrichment).
+        """
+        doc_id = uuid4()
+        claim = _make_claim_result(doc_id=str(doc_id))
+        s7 = _make_s7_port(claims=[claim])
+        content_store = _make_content_store()
+        content_store.get_documents_metadata.side_effect = RuntimeError("content-store down")
+        executor = _make_executor(s7=s7, entity_context=_make_entity_context(), content_store=content_store)
+
+        tc = _make_tool_call("search_claims", entity_name="Apple Inc.")
+        result = await executor.execute(tc)
+
+        assert len(result) == 1
+        assert result[0].citation_meta.url is None
+
 
 # ── search_events tests ───────────────────────────────────────────────────────
 
@@ -616,6 +708,23 @@ class TestSearchEvents:
         assert isinstance(result, list)
         text = result[0].text
         assert "earnings" in text.lower() or "Beat Q1 estimates" in text
+
+    async def test_search_events_backfills_citation_url_from_source_doc(self) -> None:
+        """feat/chat-kg-source-links: an event carrying a doc_id must resolve the
+        source article's URL into citation_meta.
+        """
+        doc_id = uuid4()
+        event = _make_event_result(doc_id=str(doc_id))
+        s7 = _make_s7_port(events=[event])
+        content_store = _make_content_store({doc_id: _make_doc_meta(doc_id, url="https://news.example/earnings")})
+        executor = _make_executor(s7=s7, entity_context=_make_entity_context(), content_store=content_store)
+
+        tc = _make_tool_call("search_events", entity_name="Apple Inc.")
+        result = await executor.execute(tc)
+
+        assert len(result) == 1
+        assert result[0].citation_meta.url == "https://news.example/earnings"
+        assert result[0].doc_id == doc_id
 
 
 # ── get_contradictions tests ──────────────────────────────────────────────────

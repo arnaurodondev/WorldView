@@ -88,6 +88,9 @@ def _make_claim() -> Any:
         extraction_confidence = 0.8
         source = "analyst_report"
         extracted_at = None
+        # doc_id mirrors the real ClaimResult DTO — the source-link backfill
+        # reads it (None here → citation stays non-clickable, no content-store).
+        doc_id = None
 
     return _Claim()
 

@@ -37,10 +37,11 @@ Design choices:
 
 from __future__ import annotations
 
+import difflib
 import math
 import re
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -105,6 +106,46 @@ _WORD_MAGNITUDE_RE = re.compile(r"^\s+(thousand|million|billion|trillion)\b", re
 
 # Citation markers we must ignore so [N7] does not count as the number 7.
 _CITATION_RE = re.compile(r"\[N\d+\]")
+
+# ── BUG-2 (2026-07-01) — fullwidth / CJK bracket variants around citations ────
+#
+# The live ``gpt-oss-120b`` model emits its ``[tool_name row N]`` provenance tags
+# with NON-ASCII brackets almost exclusively (CJK lenticular brackets around the
+# tag), and occasionally the fullwidth or tortoise-shell forms. Every citation
+# regex in this module (normalize, phantom, out-of-range, and the validator's
+# ``_PROSE_CITATION_RE`` / ``_CITED_TOOL_RE`` grounding fast-path) is anchored on
+# the ASCII ``[``/``]`` characters, so a CJK-bracketed tag was invisible:
+# citations were dropped (the assembler never saw a ``[N]``) AND the fast-path
+# could not confirm the cited tool, so a genuinely-grounded number was flagged
+# unsupported -> a spurious rewrite that ALSO dropped the citations.
+#
+# We map every open variant to ASCII ``[`` and every close variant to ``]`` at the
+# entry points that matter. Keys are Unicode CODE POINTS (str.translate accepts
+# int keys) so no ambiguous literal characters live in the source. O(n),
+# allocation-light and idempotent (ASCII brackets are absent -> map to themselves).
+_CITATION_BRACKET_TRANSLATION = {
+    0xFF3B: "[",  # FULLWIDTH LEFT SQUARE BRACKET
+    0x3010: "[",  # LEFT BLACK LENTICULAR BRACKET (the live-model default)
+    0x3014: "[",  # LEFT TORTOISE SHELL BRACKET
+    0xFF3D: "]",  # FULLWIDTH RIGHT SQUARE BRACKET
+    0x3011: "]",  # RIGHT BLACK LENTICULAR BRACKET
+    0x3015: "]",  # RIGHT TORTOISE SHELL BRACKET
+}
+
+
+def normalize_citation_brackets(text: str) -> str:
+    """Map fullwidth / CJK citation-bracket variants to ASCII ``[ ]``.
+
+    Recognised open variants: fullwidth (U+FF3B), lenticular (U+3010) and
+    tortoise-shell (U+3014); close variants U+FF3D / U+3011 / U+3015.
+
+    Deterministic and idempotent. Applied to the answer BEFORE grounding
+    validation (so the validator's citation fast-path recognises the tag and does
+    not spuriously rewrite) and inside :func:`normalize_tool_row_citations` (so the
+    tool-row -> positional citation rewrite fires on CJK-bracketed tags too).
+    """
+    return text.translate(_CITATION_BRACKET_TRANSLATION)
+
 
 # ── BP-670 — non-claim number shapes (live Apple-news false positives) ───────
 #
@@ -332,6 +373,95 @@ def _extract_orphan_rationalisations(text: str) -> list[str]:
     return orphans
 
 
+# ── Framing / intent-aware grounding (Point 2 Stage 1, 2026-07-03) ────────────
+#
+# WHY: the hard material-grounding gate below classifies a number as MATERIAL
+# purely by KIND/MAGNITUDE (revenue/market-cap scale = material). It has no
+# notion of HYPOTHETICAL / PROJECTION framing, so a legitimately REASONED figure
+# — "this **could** add ~$2B to next-quarter revenue" — is a large uncited
+# number → MATERIAL → false-positive refusal/rewrite. As users ask more
+# analytical / what-if questions these false positives grow.
+#
+# The fix distinguishes a CLAIMED RETRIEVED FACT ("revenue **was** $34.6B", no
+# citation → still refuse — the AMD fabrication class) from a REASONED
+# PROJECTION or an explicitly DERIVED figure (allow). A number that already
+# failed tool-grounding is DOWNGRADED to non-material — and thus allowed —
+# only when its sentence context is:
+#   (a) HEDGED / projection-framed BEFORE the number — one of the owner-approved
+#       hedge markers (could/would/might/estimate(d)/roughly/approximately/~/
+#       about/if/assuming/projected/implies/potential), OR
+#   (b) explicitly COMPUTED / DERIVED — a derivation sentence (derived/computed/
+#       calculated/sum of/difference/product of…) referencing figures.
+#
+# ── SAFETY RATIONALE (the fabrication guarantee is fully preserved) ───────────
+#   1. This ONLY reclassifies numbers ALREADY in ``result.unsupported`` — i.e.
+#      numbers that already failed BOTH the tool-value match AND the ±50-char
+#      grounding-citation fast-path. A number with a real citation never reaches
+#      here, so cited/grounded numbers are untouched.
+#   2. A bare factual assertion with NO hedge before it and NO derivation in its
+#      sentence ("revenue was $34.6B") stays MATERIAL → still refuses. The
+#      no-fabrication grounding guarantee for FACTUAL claims is intact.
+#   3. Hedge markers are matched ONLY in the PRE-window (sentence start → the
+#      number) so a trailing hedge on a different clause ("revenue was $34.6B,
+#      which could grow") does NOT downgrade the factual figure. Derivation
+#      verbs are unambiguous enough to scan the whole sentence.
+#   4. "may" is deliberately EXCLUDED from the hedge lexicon (it collides with
+#      the month "May" once the context is lower-cased — "May revenue was $X").
+#      Only the owner-approved markers are used. Erring toward keeping the guard.
+#
+# Owner-approved hedge markers + safe morphological variants. Symbols ``~`` /
+# ``≈`` are approximation markers the models emit directly before a figure.
+_HEDGE_RE = re.compile(
+    r"(?:~|≈"
+    r"|\bcould\b|\bwould\b|\bmight\b"
+    r"|\bestimate[sd]?\b|\broughly\b|\bapproximately\b|\bapprox\.?"
+    r"|\babout\b|\bif\b|\bassum(?:e|es|ing|ed)\b"
+    r"|\bproject(?:s|ed|ion|ions)?\b|\bimpl(?:y|ies|ied)\b"
+    r"|\bpotential(?:ly)?\b)",
+    re.IGNORECASE,
+)
+# Explicit derivation / computation verbs — an uncited figure the model itself
+# says it DERIVED/COMPUTED from other figures is reasoned, not a retrieved fact.
+_DERIVATION_RE = re.compile(
+    r"(?:\bderive[sd]?\b|\bcomput(?:e|es|ed|ing)\b|\bcalculat(?:e|es|ed|ing)\b"
+    r"|\bsum of\b|\bdifference\b|\bproduct of\b|\bsubtract(?:ing)?\b|\badding\b"
+    r"|\bimpl(?:y|ies|ied)\b)",
+    re.IGNORECASE,
+)
+# Sentence terminators used to bound the pre-window / full-sentence scans. A
+# period is a boundary ONLY when it is NOT between two digits — otherwise the
+# decimal point inside a number token ($34.6B) would falsely split the sentence
+# and hide a derivation clause ("…derived from $34.6B revenue minus $26.6B…").
+_SENTENCE_BOUNDARY_RE = re.compile(r"[!?\n]|(?<!\d)\.(?!\d)")
+
+
+def _sentence_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """Return (sentence_start, sentence_end) char offsets around ``[start:end]``.
+
+    ``sentence_start`` is just after the last terminator before ``start``;
+    ``sentence_end`` is at the first terminator at/after ``end`` (or EOF).
+    """
+    lo = 0
+    for m in _SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
+        lo = m.end()
+    hi_m = _SENTENCE_BOUNDARY_RE.search(text, end)
+    hi = hi_m.start() if hi_m else len(text)
+    return lo, hi
+
+
+def _framing_allows(sentence_pre: str, sentence_full: str) -> bool:
+    """True when the number is HEDGED (projection language before it) or DERIVED.
+
+    ``sentence_pre`` is the sentence text BEFORE the number (hedge scope);
+    ``sentence_full`` is the whole sentence (derivation scope). See the block
+    comment above for the safety rationale — this NEVER allows a bare factual
+    assertion, only explicitly reasoned/projected/derived figures.
+    """
+    if _HEDGE_RE.search(sentence_pre):
+        return True
+    return bool(_DERIVATION_RE.search(sentence_full))
+
+
 # ── Public result types ──────────────────────────────────────────────────────
 
 
@@ -345,6 +475,16 @@ class UnsupportedNumber:
     closest_tool_value: float | None
     # The verbatim text snippet from the response (helpful for re-prompt).
     snippet: str
+    # Point 2 Stage 1 (2026-07-03) — framing/intent-aware downgrade signals.
+    # ``hedged_or_derived`` is True when this number's sentence hedges it as a
+    # projection or explicitly derives it (see :func:`_framing_allows`); such a
+    # number is downgraded to non-material in :func:`material_unsupported_numbers`
+    # so a reasoned "could add ~$2B" is not treated as a fabricated fact. Default
+    # False keeps every existing constructor (quarter/prose/tests) unchanged.
+    # ``context`` is the number's lower-cased sentence, retained so the
+    # analytical-intent relaxation can re-scan the full sentence for a hedge.
+    hedged_or_derived: bool = False
+    context: str = ""
 
 
 @dataclass(frozen=True)
@@ -705,10 +845,119 @@ def _has_grounding_citation(
 # relation types like ``[partner_of]``, ``[N1]`` citation markers, ``[entity:UUID]``
 # refs). A ``[name row N]`` whose ``name`` is NOT in the called-tools set is a
 # fabrication marker, full stop.
+#
+# ── 2026-07-01 marker-robustness — NAMESPACE PREFIX TOLERANCE ─────────────────
+# The live model sometimes prefixes the tool name with the OpenAI
+# function-calling namespace, e.g. ``[functions.get_prediction_markets row 0]``
+# (also ``tool.``/``tools.`` and, in principle, any dotted head). Before this fix
+# the tag was INVISIBLE to every consumer of this regex: ``functions`` matched
+# ``(?P<tool>…)`` but the following ``.get_prediction_markets`` failed the
+# ``\s+row`` anchor, so the WHOLE tag did not match and the citation was silently
+# dropped. We now accept ONE optional ``<segment>.`` namespace prefix and capture
+# only the BARE tool name into ``tool`` (the ``ns`` group is discarded), so every
+# downstream lookup keys on the tool-row map's ``tool_name_lower`` key EXACTLY as
+# before — no consumer needs to know the prefix existed. Single-segment only
+# (``[a-z_][a-z0-9_]*\.``): a real tool name is snake_case and never dotted, so
+# any dotted head in a ``[X row N]`` tag is a namespace artifact, not a tool name.
 _TOOL_ROW_CITATION_RE = re.compile(
-    r"\[\s*(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+\d+\s*\]",
+    r"\[\s*(?:(?P<ns>[a-z_][a-z0-9_]*)\.)?(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+\d+\s*\]",
     re.IGNORECASE,
 )
+
+
+# ── (2026-07-08 Track-1 D-a follow-up) informal tool-name resolver ────────────
+#
+# The live gpt-oss-120b model overwhelmingly emits ``[tool_name row N]`` provenance
+# tags, but its ``tool_name`` is frequently an INFORMAL variant of the real
+# registered tool that ran this turn:
+#   * a dropped verb prefix        — ``[fundamentals_history_batch row 2]`` for the
+#                                     tool ``get_fundamentals_history_batch``;
+#   * a namespace prefix           — ``[functions.query_fundamentals row 0]``;
+#   * a spelling typo              — ``[query_fundmamentals row 0]``.
+# Under an EXACT tool-name match these tags look like citations to a NEVER-CALLED
+# tool → the phantom-citation gate refuses the WHOLE (otherwise fully-grounded)
+# answer (run_20260708T211838Z: chain_top_mover_fundamentals + chain_portfolio_
+# worst_fundamentals — grounded drafts DISCARDED). These are LEGITIMATE tool-row
+# references, so we resolve the informal name back to the real called tool before
+# the gate/normaliser run.
+#
+# The resolution is deliberately CONSERVATIVE so the numeric-fabrication guarantee
+# survives — a genuinely fabricated tool name (``[query_fundamentals row 4]`` when
+# only ``get_entity_news`` ran) must NOT resolve to anything and stays phantom:
+#   1. exact (lower-cased) match;
+#   2. verb-prefix-insensitive equality — stripping a leading ``get_`` / ``query_``
+#      / ``search_`` / … verb from BOTH sides and comparing the cores (this is the
+#      ``fundamentals_history_batch`` ↔ ``get_fundamentals_history_batch`` case);
+#   3. full-containment substring (min core length 4) — one name fully contains the
+#      other on a token boundary;
+#   4. typo tolerance — difflib ratio on the prefix-stripped cores ≥ 0.85.
+# Steps 3/4 only match tightly-related names; unrelated tools score far below the
+# threshold (``fundamentals`` vs ``entity_news`` ≈ 0.4), so a fabricated tool name
+# never resolves into validity.
+_TOOL_VERB_PREFIXES = (
+    "get_",
+    "query_",
+    "fetch_",
+    "search_",
+    "list_",
+    "screen_",
+    "lookup_",
+    "retrieve_",
+    "find_",
+)
+_RESOLVE_TYPO_RATIO_MIN = 0.85
+
+
+def _strip_tool_verb_prefix(name: str) -> str:
+    """Drop one leading tool verb prefix (``get_`` / ``query_`` / …) if present."""
+    for pfx in _TOOL_VERB_PREFIXES:
+        if name.startswith(pfx) and len(name) > len(pfx):
+            return name[len(pfx) :]
+    return name
+
+
+def resolve_tool_name(name: str, called_tool_names: Iterable[str]) -> str | None:
+    """Map an INFORMAL ``[tool row N]`` tool name to the real called tool, or ``None``.
+
+    Returns the lower-cased real tool name (as it appears in *called_tool_names*)
+    that *name* references, or ``None`` when *name* does not resolve to any tool
+    that actually ran this turn. Conservative by design — see the module comment:
+    exact → verb-prefix-insensitive → full-containment substring → difflib typo
+    tolerance. Deterministic and side-effect free so the phantom gate, the
+    normaliser and the tests share ONE definition.
+    """
+    name = (name or "").strip().lower()
+    if "." in name:  # strip a ``functions.`` / ``tool.`` namespace prefix
+        name = name.rsplit(".", 1)[-1]
+    called = [str(c).strip().lower() for c in called_tool_names if c and str(c).strip()]
+    if not name or not called:
+        return None
+    # 1. exact.
+    if name in called:
+        return name
+    # 2. verb-prefix-insensitive equality (get_/query_ added or dropped).
+    core = _strip_tool_verb_prefix(name)
+    prefix_matches = [c for c in called if _strip_tool_verb_prefix(c) == core]
+    if prefix_matches:
+        # Deterministic: the shortest real name (fewest extra chars) wins a tie.
+        return min(prefix_matches, key=len)
+    # 3. full-containment substring, both directions, min core length 4 so a tiny
+    #    fragment can never latch onto an unrelated tool.
+    subs = [c for c in called if (name in c or c in name) and min(len(name), len(c)) >= 4]
+    if len(subs) == 1:
+        return subs[0]
+    if subs:
+        return min(subs, key=len)
+    # 4. typo tolerance on the prefix-stripped cores.
+    best: str | None = None
+    best_ratio = 0.0
+    for c in called:
+        ratio = difflib.SequenceMatcher(None, core, _strip_tool_verb_prefix(c)).ratio()
+        if ratio > best_ratio:
+            best_ratio, best = ratio, c
+    if best is not None and best_ratio >= _RESOLVE_TYPO_RATIO_MIN:
+        return best
+    return None
 
 
 def find_phantom_tool_citations(
@@ -735,8 +984,10 @@ def find_phantom_tool_citations(
 
 # Like _TOOL_ROW_CITATION_RE but captures the row INDEX too, so the
 # out-of-range check below can compare it against the tool's returned row count.
+# Same optional ``<segment>.`` namespace-prefix tolerance as above (2026-07-01):
+# ``[functions.get_filings row 10]`` captures ``tool=get_filings`` / ``row=10``.
 _TOOL_ROW_CITATION_WITH_INDEX_RE = re.compile(
-    r"\[\s*(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+(?P<row>\d+)\s*\]",
+    r"\[\s*(?:(?P<ns>[a-z_][a-z0-9_]*)\.)?(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+(?P<row>\d+)\s*\]",
     re.IGNORECASE,
 )
 
@@ -768,6 +1019,519 @@ def find_out_of_range_tool_citations(
         row = int(m.group("row"))
         if row >= counts[tool]:
             out.add(m.group(0))
+    return out
+
+
+# ── BUG-2 mechanism 1 — tool-row → positional citation normalisation ──────────
+#
+# The synthesis prompt (``prompts/chat/synthesis.py``) instructs the model to
+# cite tool provenance as ``[tool_name row N]`` (0-indexed within that tool's
+# result set) — and the live models overwhelmingly emit THIS shape, not the
+# plain ``[N]`` positional marker. But the citation assembler
+# (:class:`OutputProcessor`) only recognises ``[N]``, so the structured
+# provenance tags were silently dropped and the answer shipped with an EMPTY
+# citations array (``citations:[]``). The 2026-06-30 investigation confirmed
+# only answers that happened to use ``[1] [2]`` retained their source links.
+#
+# This helper rewrites each ``[tool_name row N]`` marker to ``[<pos>]`` where
+# ``pos`` is the 1-based index of the corresponding retrieved item within the
+# prompt-enumerated item list. Markers that map to no retrieved item (a tool
+# that returned fewer rows than N, or a never-called tool) are LEFT UNTOUCHED so
+# the downstream out-of-range / phantom strip guards can handle them — this
+# helper only PROMOTES genuine provenance to real citations, it never invents
+# one.
+
+
+def normalize_tool_row_citations(
+    response: str,
+    position_resolver: Callable[[str, int], int | None],
+    row_count_resolver: Callable[[str], int | None] | None = None,
+    name_resolver: Callable[[str], str | None] | None = None,
+) -> str:
+    """Rewrite ``[tool_name row N]`` provenance tags to ``[<pos>]`` citation markers.
+
+    ``position_resolver(tool_name_lower, row_index)`` returns the 1-based
+    position of the retrieved item that produced ``row_index`` of ``tool_name``
+    within the prompt-enumerated item list, or ``None`` when the pair maps to no
+    retrieved item (out-of-range / phantom — left verbatim for the strip guards).
+
+    ``row_count_resolver(tool_name_lower)`` (optional, 2026-07-01 marker-robustness)
+    returns how many rows the tool actually returned this turn, or ``None`` when the
+    tool was NEVER called. When supplied it enables OUT-OF-RANGE CLAMPING: if the
+    primary resolver cannot map ``(tool, N)`` yet the tool WAS called and returned
+    ``count`` rows (``count > 0``), the row index is clamped into the valid 0-based
+    range ``0..count-1`` (past-the-end ``N → count-1``; negative ``N → 0``) and the
+    resolver is retried. This delivers a citation pointing at that tool's result set
+    instead of stripping the marker — the observed ``[get_filings row 10]`` on a
+    5-row result set now cites the last real filing rather than vanishing. The clamp
+    is GATED on ``count > 0``: a genuinely phantom / never-called tool (``None`` or
+    ``0``) is left verbatim for :func:`find_phantom_tool_citations` /
+    :func:`partition_phantom_tool_citations`, so the phantom-tool refusal guarantee
+    is never weakened — a fabricated-tool citation cannot be clamped into validity.
+
+    Deterministic and side-effect free so the orchestrator + tests share one
+    definition.
+
+    BUG-2 (2026-07-01): the live model emits full-width / CJK brackets
+    (``【search_events row 1】``); we translate every bracket variant to ASCII
+    first so the ASCII-anchored ``_TOOL_ROW_CITATION_WITH_INDEX_RE`` matches them.
+    The ``_TOOL_ROW_CITATION_WITH_INDEX_RE`` also tolerates a ``functions.`` /
+    ``tool.`` namespace prefix on the tool name and captures only the bare name, so
+    ``[functions.get_prediction_markets row 0]`` resolves against the tool-row map.
+    """
+    # Normalise CJK / fullwidth brackets to ASCII so the tag regex sees them.
+    response = normalize_citation_brackets(response)
+
+    def _sub(m: re.Match[str]) -> str:
+        # ``tool`` is already the BARE name — the regex discards any ``functions.``
+        # / ``tool.`` namespace prefix into the (unused) ``ns`` group.
+        tool = m.group("tool").lower()
+        try:
+            row = int(m.group("row"))
+        except ValueError:  # pragma: no cover — regex guarantees digits
+            return m.group(0)
+        pos = position_resolver(tool, row)
+        # 2026-07-08: when the exact bare name maps to no item, try the INFORMAL
+        # tool-name resolver (dropped ``get_`` prefix / spelling typo). It returns
+        # the real called tool name, which the position/count resolvers key on —
+        # so ``[fundamentals_history_batch row 2]`` promotes to the real citation
+        # for ``get_fundamentals_history_batch`` instead of surviving to the strip
+        # guards. A genuinely fabricated tool name resolves to None → left verbatim.
+        canon = tool
+        if pos is None and name_resolver is not None:
+            alt = name_resolver(tool)
+            if alt is not None and alt != tool:
+                canon = alt
+                pos = position_resolver(canon, row)
+        if pos is None and row_count_resolver is not None:
+            # Out-of-range clamp — ONLY for a tool that was actually called and
+            # returned rows. count is None/0 for a phantom tool → no clamp.
+            count = row_count_resolver(canon)
+            if count is not None and count > 0:
+                clamped = 0 if row < 0 else min(row, count - 1)
+                if clamped != row:
+                    pos = position_resolver(canon, clamped)
+        if pos is None:
+            return m.group(0)
+        return f"[{pos}]"
+
+    return _TOOL_ROW_CITATION_WITH_INDEX_RE.sub(_sub, response)
+
+
+# ── BUG-2 mechanism 2 — material vs incidental numeric claims ─────────────────
+#
+# The numeric-grounding rewrite used to fire whenever ANY extracted number was
+# not found in a tool value. On a QUALITATIVE answer (events, claims,
+# relationships) the only "unsupported" numbers are incidental prose structure —
+# list ordinals, month-day dates, counts ("3 partnerships"), calendar years —
+# which the validator classifies as YEAR / QUARTER / UNKNOWN. Firing a full
+# rewrite turn for those (observed live at up to 16.5 s) replaced a good answer
+# with ``[row N]``-style text AND dropped the citations array
+# (``reason=numeric_grounding_failed``). The 2026-06-30 investigation measured
+# this on 3 of 4 recent answers.
+#
+# ``FieldKind`` families that represent a MATERIAL financial claim genuinely
+# needing tool grounding (the AMD ``$34.6B`` fabrication class). Everything else
+# (YEAR / QUARTER / PROSE, and small UNKNOWN integers) is incidental.
+_MATERIAL_NUMERIC_KINDS: frozenset[FieldKind] = frozenset(
+    {
+        FieldKind.REVENUE,
+        FieldKind.EPS,
+        FieldKind.MARKET_CAP,
+        FieldKind.PRICE,
+        FieldKind.RATIO,
+        FieldKind.RETURN_PCT,
+        FieldKind.SHARES,
+        FieldKind.HEADCOUNT,
+    }
+)
+# An UNKNOWN-classified number this large is almost certainly a real financial
+# magnitude (revenue/market-cap scale) the classifier simply could not bucket —
+# treat it as material so the grounding guarantee is never weakened by a
+# classification miss. Counts, ordinals and dates are all far below this.
+_MATERIAL_UNKNOWN_MIN = 1000.0
+
+
+def _is_material_kind(u: UnsupportedNumber) -> bool:
+    """True when ``u``'s KIND/MAGNITUDE marks it a material financial claim."""
+    return u.field_kind in _MATERIAL_NUMERIC_KINDS or (
+        u.field_kind == FieldKind.UNKNOWN and abs(u.value) >= _MATERIAL_UNKNOWN_MIN
+    )
+
+
+def material_unsupported_numbers(
+    result: GroundingResult,
+    *,
+    analytical_intent: bool = False,
+) -> tuple[UnsupportedNumber, ...]:
+    """Return the subset of ``result.unsupported`` that are MATERIAL claims.
+
+    A number is material when its KIND/MAGNITUDE marks it a financial claim
+    (see :data:`_MATERIAL_NUMERIC_KINDS`) AND its framing does NOT reveal it as
+    a reasoned projection or an explicitly derived figure.
+
+    Point 2 Stage 1 (2026-07-03) — FRAMING/INTENT-AWARE DOWNGRADE. A
+    material-by-kind number is downgraded to non-material (i.e. ALLOWED, no
+    rewrite) when:
+      * ``u.hedged_or_derived`` — its sentence hedges it as a projection
+        ("could add ~$2B") or explicitly derives it ("$X, derived from …"); OR
+      * ``analytical_intent`` is True AND its full sentence contains a hedge
+        marker — the intent classifier flagged an analytical / what-if question,
+        so a hedged figure anywhere in the sentence is relaxed.
+
+    The fabrication guarantee is preserved: a bare factual assertion with no
+    hedge/derivation ("revenue was $34.6B") is NEVER downgraded (see the
+    ``_HEDGE_RE`` / ``_framing_allows`` block comment for the full rationale),
+    and only numbers that ALREADY failed tool-grounding + citation checks reach
+    this function at all.
+
+    ``analytical_intent`` defaults False so existing callers are unchanged; it
+    is the minimal wiring point for the intent signal (read-only, no orchestrator
+    edit required to keep current behaviour).
+    """
+    out: list[UnsupportedNumber] = []
+    for u in result.unsupported:
+        if not _is_material_kind(u):
+            continue  # incidental (year/quarter/prose/small-int) — never material
+        # ``getattr`` defaults keep duck-typed test doubles (which may omit the
+        # Point-2 fields) working — a fake without framing signals is treated as
+        # a bare factual claim, i.e. STAYS material (never weakens the guard).
+        if getattr(u, "hedged_or_derived", False):
+            continue  # framing-aware downgrade: reasoned projection / derived figure
+        context = getattr(u, "context", "")
+        if analytical_intent and context and _HEDGE_RE.search(context):
+            continue  # intent-relaxed full-sentence hedge on an analytical question
+        out.append(u)
+    return tuple(out)
+
+
+def numeric_grounding_effectively_passed(
+    result: GroundingResult,
+    *,
+    analytical_intent: bool = False,
+) -> bool:
+    """True when the numeric result has NO material unsupported claim.
+
+    Preserves the guarantee for numeric answers: a genuinely unsupported
+    revenue / EPS / price / market-cap / ratio / return / share / headcount
+    figure (or a large unclassified magnitude) stated as a FACT still returns
+    ``False`` (rewrite required). It returns ``True`` for the qualitative case
+    (every "unsupported" number is a date/count/ordinal/year) AND for the
+    reasoned-projection case (every material number is hedged/derived) — so the
+    rewrite is skipped and the streamed answer + its citations survive.
+
+    ``analytical_intent`` is threaded through to :func:`material_unsupported_numbers`.
+    """
+    return result.passed or not material_unsupported_numbers(result, analytical_intent=analytical_intent)
+
+
+# ── P0 (2026-07-01) — benign prose bracket labels must NOT refuse the answer ───
+#
+# WHY: the phantom-citation gate (:func:`find_phantom_tool_citations`) refuses the
+# WHOLE answer whenever it sees a ``[name row N]`` tag whose ``name`` was never a
+# called tool. That is correct for a GENUINE fabricated numeric citation
+# (``[query_fundamentals row 4]`` next to an invented ``$34.6B`` figure). But the
+# live ``gpt-oss-120b`` model, on a plain news question, tags its own editorial
+# prose as ``[commentary row 1]`` — a NON-tool word in brackets pointing at no
+# real retrieval. Refusing the entire "latest news on NVIDIA" answer over that
+# benign label is a false positive (regression: that query used to PASS with real
+# finnhub/yahoo URLs).
+#
+# DISCRIMINATOR: a phantom ``[name row N]`` tag is a genuine fabricated citation
+# ONLY when it sits next to a MATERIAL numeric claim (revenue/EPS/price/market-cap/
+# ratio/return/shares/headcount, or a large unclassified magnitude — the AMD
+# ``$34.6B`` class). A phantom tag with NO material number within
+# :data:`_PHANTOM_MATERIAL_WINDOW` chars is a benign prose label — it must be
+# STRIPPED from the answer (so it never leaks to the user) rather than nuke the
+# whole response. This keeps the numeric-fabrication guarantee fully intact: any
+# fabricated tool-citation attached to a material figure is still refused.
+#
+# The window matches :data:`_VALIDATOR_CITATION_WINDOW` (±50 chars) — the exact
+# distance the validator uses to decide whether a bracket citation is "citing" a
+# number. This is deliberately TIGHT: a material fabrication the early gate misses
+# (figure and phantom tag further apart) is still caught by the downstream
+# ``NumericGroundingValidator`` (unsupported material number → rewrite/banner), so
+# erring toward "benign" here only trades an early deterministic refusal for the
+# validator's backstop — it never lets a fabricated figure through unguarded.
+_PHANTOM_MATERIAL_WINDOW = _VALIDATOR_CITATION_WINDOW
+
+
+# ── (2026-07-03) Deterministic backstop for the prediction-market false refusal ─
+#
+# WHY a proximity-only discriminator is not enough here: prediction-market answers
+# are ENTIRELY about odds numbers (``Yes 63%``), so when the model slips and tags
+# its own prose ``Yes 63% [commentary row 0]`` the ``[commentary row 0]`` tag lands
+# INSIDE ``_PHANTOM_MATERIAL_WINDOW`` of ``63%`` → classified MATERIAL → HARD
+# REFUSAL (see audit docs/audits/2026-07-03-prediction-market-refusal.md). The
+# v1.11 prompt rule lowers the incidence but is probabilistic on gpt-oss-120b.
+#
+# This allowlist is the deterministic guarantee. A ``[<name> row N]`` whose ``name``
+# is one of these words is UNAMBIGUOUSLY the model mislabeling its own interpretive
+# prose — never a fabricated tool citation — because:
+#   1. Every REAL tool is a snake_case verb identifier registered in the tool
+#      manifest (``get_prediction_markets``, ``query_fundamentals``). None of these
+#      plain English nouns can ever be a tool name, so the tag cannot be citing a
+#      (real or fabricated) tool row — it is a prose label the model bracketed.
+#   2. The fabrication guard is FULLY PRESERVED: a genuinely fabricated tool name
+#      (``[query_fundamentals row 9]`` when that tool never ran) stays OUTSIDE this
+#      allowlist and is STILL classified material → still refuses.
+#   3. The odds/figures themselves stay independently protected by the numeric-
+#      substantiation gate (``material_unsupported_numbers`` /
+#      ``pin_numbers_to_tool_values``, chat_orchestrator ~4757) and the real
+#      ``[get_prediction_markets row N]`` citation. Stripping a mislabeled *tag*
+#      never removes the numeric grounding of the value it sat next to.
+#
+# Kept lower-case; matched against the lower-cased ``tool`` capture group.
+_BENIGN_PROSE_TAG_NAMES = frozenset(
+    {
+        "commentary",
+        "analysis",
+        "note",
+        "notes",
+        "interpretation",
+        "summary",
+        "context",
+        "caveat",
+        "disclaimer",
+        "observation",
+    }
+)
+
+
+def _material_number_spans(response: str) -> list[tuple[int, int]]:
+    """Return (start, end) char spans of MATERIAL numeric claims in *response*.
+
+    Spans are reported against the citation-marker-cleaned text (the exact text
+    :func:`partition_phantom_tool_citations` scans for phantom tags), so span
+    offsets line up between the two.
+    """
+    spans: list[tuple[int, int]] = []
+    for value, raw_token, ctx, start, end in _extract_numbers_with_spans(response):
+        kind = classify_number(value, raw_token, ctx)
+        if kind in _MATERIAL_NUMERIC_KINDS or (kind == FieldKind.UNKNOWN and abs(value) >= _MATERIAL_UNKNOWN_MIN):
+            spans.append((start, end))
+    return spans
+
+
+def material_number_spans(response: str) -> list[tuple[int, int]]:
+    """Public wrapper over :func:`_material_number_spans`.
+
+    Returns the (start, end) char spans of MATERIAL numeric claims
+    (revenue/EPS/price/market-cap/ratio/return/shares/headcount, or a large
+    unclassified magnitude) in *response*. Incidental numbers — years, ordinals,
+    dates, small counts — are NOT included. Used by the orchestrator's caveat-
+    suppression gate so a stray uncited YEAR / ordinal never forces the
+    "some figures could not be matched" banner onto a bracket-cited answer.
+    """
+    return _material_number_spans(response)
+
+
+# ── (2026-07-09 Area 2 P4) FUNDAMENTALS-FAMILY tool aliasing ──────────────────
+#
+# WHY the conservative ``resolve_tool_name`` matcher is not enough here: the three
+# fundamentals tools are DISTINCT registered tools with distinct names that all
+# surface the SAME per-quarter fundamentals rows —
+#   * ``query_fundamentals``            (point-in-time snapshot)
+#   * ``get_fundamentals_history``      (single-entity history)
+#   * ``get_fundamentals_history_batch``(multi-entity history)
+# The live gpt-oss-120b model routinely tags a fundamentals figure with
+# ``[query_fundamentals row N]`` even when the tool that actually ran (and
+# returned that exact figure) was ``get_fundamentals_history_batch``. Those names
+# share NO verb-prefix core, NO containment and score far below the difflib typo
+# threshold (``fundamentals`` vs ``fundamentals_history_batch`` ≈ 0.67), so
+# ``resolve_tool_name`` returns ``None`` → the phantom gate refuses the WHOLE
+# grounded answer (run_20260709T064913Z: ``ripple_aapl_shared_suppliers_nvda``
+# scored 0 despite a strong, tool-grounded TSMC fundamentals table).
+#
+# The three names are INTERCHANGEABLE for citation-resolution purposes: a
+# ``[<family tool> row N]`` tag is legitimate when ANY family tool ran this turn
+# AND the cited figure actually appears in a family tool's result. The alias set
+# below is consulted ONLY after every ``resolve_tool_name`` step has already
+# failed, and ONLY when value-gated (see :func:`partition_phantom_tool_citations`)
+# — a citation to a family tool that NEVER ran, or that ran but did NOT return the
+# cited value (empty result / fabricated figure), still resolves to nothing and
+# stays phantom. The numeric-fabrication guarantee is fully preserved.
+_FUNDAMENTALS_FAMILY_TOOLS: frozenset[str] = frozenset(
+    {
+        "query_fundamentals",
+        "get_fundamentals_history",
+        "get_fundamentals_history_batch",
+    }
+)
+
+# Value-membership tolerance for the family-alias gate. The cited figure is the
+# model echoing a fundamentals row value, so it should match up to display
+# rounding only ("$839.25B" for 839.25…e9). 1% is tight enough that a materially
+# different (fabricated) figure never latches onto an unrelated pool value, while
+# absorbing the answer's rounding of the exact tool value.
+_FUNDAMENTALS_FAMILY_VALUE_TOLERANCE = 0.01
+
+
+def fundamentals_family_value_pool(family_tool_results: Iterable[Any]) -> set[float]:
+    """Flatten fundamentals-family tool-result rows to a set of base-unit values.
+
+    Pass the RetrievedItem rows produced by tools in :data:`_FUNDAMENTALS_FAMILY_TOOLS`
+    (and ONLY those — the caller filters by tool name) so the returned set is the
+    exact pool the family-alias gate in :func:`partition_phantom_tool_citations`
+    consults. An EMPTY / never-run family tool yields an empty set, which keeps a
+    fabricated ``[query_fundamentals row N]`` citation phantom. Deterministic.
+    """
+    return {tv.value for tv in _flatten_tool_values(family_tool_results)}
+
+
+def _fundamentals_family_tag_grounded(
+    tag: re.Match[str],
+    material_values: list[tuple[int, int, float]],
+    value_pool: set[float],
+) -> bool:
+    """True when a MATERIAL number adjacent to *tag* appears in *value_pool*.
+
+    Used only for a fundamentals-family phantom tag: the adjacency window mirrors
+    the phantom-material proximity test so the value we check is the one the tag is
+    actually citing. Value membership is tolerance-matched (rounding only) against
+    the fundamentals-family pool. An empty pool (family tool returned nothing) can
+    never match → the tag stays phantom.
+    """
+    if not value_pool or not material_values:
+        return False
+    tag_start, tag_end = tag.start(), tag.end()
+    candidates = list(value_pool)
+    for num_start, num_end, value in material_values:
+        # Same proximity test as the phantom-material overlap check below.
+        if not (tag_end + _PHANTOM_MATERIAL_WINDOW < num_start or num_end + _PHANTOM_MATERIAL_WINDOW < tag_start):
+            matched, _closest = _matches_any(value, candidates, _FUNDAMENTALS_FAMILY_VALUE_TOLERANCE)
+            if matched:
+                return True
+    return False
+
+
+def partition_phantom_tool_citations(
+    response: str,
+    called_tool_names: Iterable[str],
+    fundamentals_value_pool: set[float] | None = None,
+) -> tuple[set[str], list[str]]:
+    """Split phantom ``[name row N]`` tags into (material, benign).
+
+    A phantom tag is a ``[name row N]`` whose ``name`` was NEVER called. It is:
+
+      * **material** (genuine fabrication → the caller must REFUSE) when a
+        material numeric claim sits within :data:`_PHANTOM_MATERIAL_WINDOW` chars
+        of the tag — the fabricated-figure-with-fake-provenance shape;
+      * **benign** (prose label → the caller should STRIP the tag, keep the
+        answer) otherwise — e.g. the model tagging its own ``[commentary row 1]``.
+
+    Returns ``(material_tool_names, benign_tag_substrings)``. ``material_tool_names``
+    is the set of lower-cased phantom tool names that warrant a refusal;
+    ``benign_tag_substrings`` is the list of exact ``[name row N]`` substrings that
+    should be stripped from the answer.
+
+    :func:`find_phantom_tool_citations` is intentionally left UNCHANGED (the
+    strict "any phantom → refuse" behaviour it encodes is still exercised by the
+    existing regression suite); this function is the P0-aware refinement the
+    orchestrator uses at delivery time.
+
+    ``fundamentals_value_pool`` (optional, 2026-07-09 Area 2 P4) is the set of
+    base-unit numeric values returned by fundamentals-family tools this turn (see
+    :func:`fundamentals_family_value_pool`). When supplied it enables
+    FUNDAMENTALS-FAMILY ALIASING: a ``[<family tool> row N]`` tag whose name is not
+    the exact called tool (``[query_fundamentals row 0]`` when
+    ``get_fundamentals_history_batch`` ran) is treated as a real citation — NOT
+    phantom — provided (a) some fundamentals-family tool actually ran AND (b) the
+    material figure the tag cites appears in this pool. The gate is skipped when no
+    pool is supplied, when no family tool ran, or when the cited value is absent
+    from the pool (family tool returned empty / the figure is fabricated) — so the
+    phantom-tool refusal guarantee is never weakened.
+    """
+    called = {str(t).strip().lower() for t in called_tool_names if t}
+    family_ran = bool(called & _FUNDAMENTALS_FAMILY_TOOLS)
+    # Clean citation markers the SAME way _extract_numbers_with_spans does, so the
+    # phantom-tag offsets and the material-number spans share one coordinate space.
+    cleaned = _CITATION_RE.sub("", response)
+    tag_matches = list(_TOOL_ROW_CITATION_WITH_INDEX_RE.finditer(cleaned))
+    tag_spans = [(m.start(), m.end()) for m in tag_matches]
+
+    # The row INDEX inside a ``[name row N]`` tag is itself a digit; it must NOT be
+    # mistaken for a material numeric claim (otherwise EVERY phantom tag would look
+    # "material" because it abuts its own ``row 1``). Drop any extracted number
+    # whose span falls fully inside a tool-row tag. We keep the VALUE alongside each
+    # span so the fundamentals-family gate can test the adjacent figure against the
+    # tool-value pool.
+    material_values: list[tuple[int, int, float]] = []
+    for value, raw_token, ctx, ns, ne in _extract_numbers_with_spans(response):
+        kind = classify_number(value, raw_token, ctx)
+        is_material = kind in _MATERIAL_NUMERIC_KINDS or (
+            kind == FieldKind.UNKNOWN and abs(value) >= _MATERIAL_UNKNOWN_MIN
+        )
+        if is_material and not any(ts <= ns and ne <= te for ts, te in tag_spans):
+            material_values.append((ns, ne, value))
+    material_spans = [(ns, ne) for (ns, ne, _v) in material_values]
+
+    material_names: set[str] = set()
+    benign_tags: list[str] = []
+    for m in tag_matches:
+        name = m.group("tool").lower()
+        if name in called or resolve_tool_name(name, called) is not None:
+            # A real called tool — OR an INFORMAL variant of one (dropped ``get_``
+            # prefix / ``functions.`` namespace / spelling typo). Not phantom: the
+            # normaliser rewrites it to a real ``[n]`` citation and the out-of-range
+            # / D-a guards handle any residual. This is the fix that stops a
+            # grounded draft being refused over ``[fundamentals_history_batch row 2]``
+            # (the tool ``get_fundamentals_history_batch`` DID run) — see
+            # resolve_tool_name for the conservative matching that keeps a genuinely
+            # fabricated tool name (never-called) phantom.
+            continue
+        if (
+            name in _FUNDAMENTALS_FAMILY_TOOLS
+            and family_ran
+            and fundamentals_value_pool is not None
+            and _fundamentals_family_tag_grounded(m, material_values, fundamentals_value_pool)
+        ):
+            # 2026-07-09 Area 2 P4 — fundamentals-family aliasing. The cited family
+            # tool (``query_fundamentals``) is not the exact tool that ran, but a
+            # SIBLING family tool (``get_fundamentals_history_batch``) DID run and
+            # its result contains the material figure this tag cites. The three
+            # fundamentals tools surface the same rows, so this is a legitimate
+            # provenance tag, not a fabrication — do NOT refuse. Recovers the
+            # ripple_aapl_shared_suppliers_nvda phantom-veto. Gated on family-ran +
+            # value-in-pool so a never-run / empty-result / fabricated citation
+            # still falls through to the phantom classification below.
+            continue
+        if name in _BENIGN_PROSE_TAG_NAMES:
+            # Deterministic backstop (2026-07-03): a known-non-tool prose word can
+            # NEVER be a fabricated tool citation, so it is benign REGARDLESS of
+            # material-number proximity. This is what stops the prediction-market
+            # ``Yes 63% [commentary row 0]`` false refusal without weakening the
+            # fabrication guard for real snake_case tool names. See
+            # _BENIGN_PROSE_TAG_NAMES for the full safety rationale.
+            benign_tags.append(m.group(0))
+            continue
+        tag_start, tag_end = m.start(), m.end()
+        near_material = any(
+            # overlap / proximity test: the tag window and the number window touch
+            not (tag_end + _PHANTOM_MATERIAL_WINDOW < num_start or num_end + _PHANTOM_MATERIAL_WINDOW < tag_start)
+            for num_start, num_end in material_spans
+        )
+        if near_material:
+            material_names.add(name)
+        else:
+            benign_tags.append(m.group(0))
+    return material_names, benign_tags
+
+
+def strip_tool_row_tags(response: str, tags: Iterable[str]) -> str:
+    """Remove each exact ``[name row N]`` *tag* substring from *response*.
+
+    Also collapses a single orphaned space left where the tag sat (so
+    ``"news today [commentary row 1] and more"`` → ``"news today and more"``),
+    then trims spaces before punctuation. Deterministic and idempotent.
+    """
+    out = response
+    for tag in tags:
+        # Drop the tag plus one adjacent (leading) space when present.
+        out = out.replace(" " + tag, "").replace(tag, "")
+    # Tidy any double spaces / space-before-punctuation the removal introduced.
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"[ \t]+([.,;:!?)])", r"\1", out)
     return out
 
 
@@ -1302,6 +2066,19 @@ class NumericGroundingValidator:
         # any-kind pool — but the legacy fall-back is exact-match only
         # (tol=0) so we don't silently accept cross-entity collisions.
         total_numbers = len(response_numbers)
+        # Point 3 (2026-07-05): the derivation fast-path (below) draws only on
+        # MEANINGFUL financial operands — a tool value that is itself a material
+        # kind (revenue/EPS/price/…) or a large unclassified magnitude. Incidental
+        # tool numbers (a quarter digit "2" from "Q2", a calendar year, a small
+        # count) must NEVER seed a derivation: dividing a real revenue by a stray
+        # "2" would coincidentally "ground" a fabricated half-sized figure and
+        # weaken the guard. Precomputed once so the per-number loop stays cheap.
+        _operand_tool_values = [
+            tv
+            for tv in tool_values
+            if tv.field_kind in _MATERIAL_NUMERIC_KINDS
+            or (tv.field_kind == FieldKind.UNKNOWN and abs(tv.value) >= _MATERIAL_UNKNOWN_MIN)
+        ]
         for value, raw_tok, ctx, span_start, span_end in response_numbers_with_spans:
             kind = classify_number(value, raw_tok, ctx)
             if kind in self._skip_kinds:
@@ -1321,6 +2098,25 @@ class NumericGroundingValidator:
                 scoped_any = [tv.value for tv in scoped]
                 candidate_pool = scoped_same or scoped_any
                 effective_tol = tol
+                # NEW-3 / over-fire fix (2026-07-06,
+                # docs/audits/2026-07-06-r1-final-exhaustive-qa.md): the response
+                # scoped a number to an entity (e.g. "Apple") but NO tool value
+                # carries a matching entity_tag. This is the sec_edgar-filing case
+                # — the filer name lives only in the chunk TEXT, not a structured
+                # tag, so a correct figure quoted verbatim from the filing chunk
+                # was flagged as ungrounded (false positive), which suppressed the
+                # answer / dropped its citation. Fall back to UNTAGGED same-kind
+                # tool values at EXACT tolerance (tol=0), mirroring the no-entity
+                # branch's cross-entity safeguard: a fabricated number matches
+                # nothing, a real figure present verbatim in the untagged filing
+                # text matches. Only UNTAGGED values (not other tagged entities)
+                # are eligible, so this can never launder one company's figure
+                # onto another.
+                if not candidate_pool:
+                    untagged_same = [tv.value for tv in tool_values if not tv.entity_tag and tv.field_kind is kind]
+                    if untagged_same:
+                        candidate_pool = untagged_same
+                        effective_tol = 0.0
             else:
                 # No entity context — keep legacy same-kind > any-kind
                 # ordering, but tighten tolerance for any-kind fallback
@@ -1355,7 +2151,42 @@ class NumericGroundingValidator:
                 ):
                     per_kind_passed[kind] += 1
                     continue
+                # Point 3 (2026-07-05): grounded-by-DERIVATION fast-path. A
+                # material number the model DERIVED from grounded figures — a
+                # full-year SUM of cited quarters, a YoY growth %, a P/E from a
+                # cited price & EPS — has a real grounded basis even though the
+                # derived result appears verbatim in no tool value. Recognise it
+                # so the over-eager "unmatched source" caveat no longer fires on
+                # legitimate deep answers (consistent with synthesis v1.9/v1.10's
+                # hedged/derived permission). Only MATERIAL numbers take this path
+                # (incidental years/counts are non-material anyway), and every
+                # derivation input is itself grounded, so a truly invented figure
+                # with no grounded basis matches nothing and stays flagged.
+                _is_material_here = kind in _MATERIAL_NUMERIC_KINDS or (
+                    kind == FieldKind.UNKNOWN and abs(value) >= _MATERIAL_UNKNOWN_MIN
+                )
+                if _is_material_here:
+                    if entity_tag:
+                        _deriv_pool = [
+                            tv.value for tv in _operand_tool_values if tv.entity_tag and entity_tag in tv.entity_tag
+                        ]
+                    else:
+                        _deriv_pool = [tv.value for tv in _operand_tool_values]
+                    if _is_derivable_from_grounded(value, _deriv_pool):
+                        per_kind_passed[kind] += 1
+                        continue
                 per_kind_failed[kind] += 1
+                # Point 2 Stage 1: capture the number's SENTENCE framing so the
+                # material gate can downgrade a reasoned projection / derived
+                # figure. Hedge markers are scanned ONLY in the pre-window
+                # (sentence start → this number) so a trailing hedge on another
+                # clause never excuses a bare factual assertion; derivation verbs
+                # are scanned over the whole sentence. Uses the cleaned response +
+                # this token's spans so offsets line up.
+                _sent_lo, _sent_hi = _sentence_bounds(cleaned_response, span_start, span_end)
+                _pre = cleaned_response[_sent_lo:span_start]
+                _full = cleaned_response[_sent_lo:_sent_hi]
+                _hedged_or_derived = _framing_allows(_pre, _full)
                 unsupported.append(
                     UnsupportedNumber(
                         value=value,
@@ -1363,6 +2194,8 @@ class NumericGroundingValidator:
                         tolerance_used=tol,
                         closest_tool_value=closest,
                         snippet=raw_tok,
+                        hedged_or_derived=_hedged_or_derived,
+                        context=_full.lower(),
                     )
                 )
 
@@ -1435,6 +2268,233 @@ def _matches_any(
         if abs(value - cand) / denom <= tolerance:
             return True, closest
     return False, closest
+
+
+# ── Point 3 (2026-07-05) — grounded-by-DERIVATION recognition ──────────────────
+#
+# WHY (root cause of the over-eager "unmatched source" caveat): deep answers
+# legitimately DERIVE numbers from cited figures — a full-year revenue is the SUM
+# of the four cited quarters, a YoY growth % is ``(this - prior) / prior`` of two
+# cited revenues, a P/E is ``price / EPS`` of two cited values. None of those
+# derived results appears VERBATIM in any tool value, so the direct
+# :func:`_matches_any` check fails, the ±50-char citation fast-path fails, and the
+# number is flagged as "unsupported" → the validator emits the
+# ``⚠ Some numbers could not be verified`` banner (collapsed to the canonical
+# "…could not be matched to a retrieved source" disclaimer by the orchestrator).
+# The pre-existing framing gate (:func:`_framing_allows`) only rescues these when
+# the sentence carries an explicit hedge/derivation VERB — but good answers state
+# the derived figure plainly ("Full-year revenue totalled $86B"), so the caveat
+# fired on nearly every deep answer. This is in direct tension with synthesis
+# v1.9/v1.10 which deliberately PERMIT hedged/derived numbers.
+#
+# FIX: before flagging a MATERIAL number as unsupported, test whether it is
+# arithmetically DERIVABLE from the entity-scoped pool of GROUNDED tool values.
+# A match means the number has a real grounded basis — it is derived, not
+# fabricated — so it is treated as grounded.
+#
+# FABRICATION GUARANTEE (preserved): every input to the derivation is itself a
+# grounded tool value, so a number with NO grounded basis (a truly invented P/E
+# with no cited price/EPS, an invented revenue with no cited components) matches
+# no combination and STAYS flagged. The pool is entity-scoped and bounded, and
+# the derivation tolerance is tight (rounding-only), so the path cannot silently
+# ground a materially-off figure.
+#
+# Tolerance: a derived value should equal its computed result up to display
+# rounding only. 1% is looser than the tight direct-match field tolerances on
+# purpose — the answer rounds ("$86B" for 86.0000…, "8.1%" for 0.081081) — but far
+# tighter than any material claim gap.
+_DERIVATION_TOLERANCE = 0.01
+# Cap the combinatorial work (and the coincidence surface): only attempt
+# derivation when the entity-scoped pool is bounded. A DEEP answer legitimately
+# draws on many cited figures — several quarters x several segments, plus totals
+# and margins — so 12 was too small and caused good answers to be flagged. Raised
+# to 40, which comfortably covers a multi-quarter/multi-segment deep answer while
+# staying bounded (the subset-sum below is a PRUNED DFS with a hard node budget,
+# NOT the old brute-force ``itertools.combinations`` — see ``_subset_sum_within``;
+# C(40, 8) ≈ 76M would have been prohibitive, the pruned walk is not).
+_MAX_DERIVATION_POOL = 40
+# Maximum number of terms summed together. A FY total is 4 quarters; a two-year
+# trailing sum is 8, and a combined multi-segment total can reach a similar count.
+# Raised 4 → 8. Enumeration stays bounded because the subset walk is pruned by
+# reachable-range bounds and a node budget, not by term-count alone.
+_MAX_SUM_TERMS = 8
+# Hard ceiling on subset-sum DFS node expansions. The pruned walk visits far fewer
+# nodes than this on real (large, positive) financial pools; the budget is a
+# safety valve that guarantees bounded runtime even on a pathological pool. On
+# exhaustion the SUM shape returns "not derivable" — the CONSERVATIVE direction
+# (the figure stays flagged), so the fabrication guarantee is never weakened by
+# the cutoff, only the over-eager-caveat relief is (rarely) forgone.
+_DERIVATION_NODE_BUDGET = 60_000
+# Upper bound on the "multiplier" operand in the two-step product form. A real
+# margin/ratio applied to a figure is ≤ ~100 (a fraction like 0.749 or a percent
+# like 74.9). Requiring one operand to be this small forbids multiplying two
+# billion-scale figures together, which could otherwise coincidentally land on a
+# fabricated large number.
+_PRODUCT_MULTIPLIER_MAX = 100.0
+
+
+def _approx_eq(a: float, b: float, tol: float) -> bool:
+    """Relative-tolerance equality; ``b == 0`` falls back to absolute ``tol``."""
+    if b == 0:
+        return abs(a) <= tol
+    return abs(a - b) / abs(b) <= tol
+
+
+def _subset_sum_within(
+    value: float,
+    operands: list[float],
+    *,
+    max_terms: int,
+    tol: float,
+) -> bool:
+    """True when some 2..``max_terms``-element subset of *operands* sums to *value*.
+
+    Replaces the old ``itertools.combinations`` brute force (which was
+    ``Σ_{r=2..max_terms} C(N, r)`` — e.g. C(40, 8) ≈ 76M subsets — and became
+    unusable once the caps were raised) with a **pruned depth-first walk**:
+
+      * operands are sorted ascending so the include/skip recursion can bound the
+        still-reachable sum range at every node using precomputed suffix sums of
+        the remaining positive / negative operands;
+      * a branch is abandoned as soon as *value* falls outside
+        ``[current + reachable_negative, current + reachable_positive]`` widened by
+        the match tolerance — for the common all-positive financial pool this
+        prunes the walk to a small fraction of the full subset lattice;
+      * a hard ``_DERIVATION_NODE_BUDGET`` on node expansions guarantees bounded
+        runtime; on exhaustion we return ``False`` (conservative: the figure stays
+        flagged, so the fabrication guarantee is never weakened by the cutoff).
+
+    Only subsets of size ≥ 2 count as a derivation — a single value is a direct
+    match handled elsewhere, and admitting it here would broaden the coincidence
+    surface.
+    """
+    n = len(operands)
+    if n < 2:
+        return False
+    # DESCENDING sort so the include-first walk tries the LARGEST operands first.
+    # A real total (FY = Σ quarters, trailing sum) is the sum of the largest,
+    # comparable-magnitude figures, so this reaches it within a handful of node
+    # expansions — well inside the budget — instead of churning through tiny
+    # filler values first.
+    ops = sorted(operands, reverse=True)
+    # Suffix bounds: suf_pos[i] / suf_neg[i] = sum of the positive / negative
+    # operands in ops[i:]. current + suf_neg[i] .. current + suf_pos[i] is the
+    # widest sum still reachable from position i (ignoring the term cap, which
+    # only makes the true reachable set SMALLER — a safe over-approximation, so
+    # pruning never discards a genuinely reachable target).
+    suf_pos = [0.0] * (n + 1)
+    suf_neg = [0.0] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        suf_pos[i] = suf_pos[i + 1] + (ops[i] if ops[i] > 0 else 0.0)
+        suf_neg[i] = suf_neg[i + 1] + (ops[i] if ops[i] < 0 else 0.0)
+    band = tol * abs(value) + 1e-9
+    budget = _DERIVATION_NODE_BUDGET
+    # Explicit stack: (index, running_sum, terms_used). Recursion depth would be
+    # bounded by n anyway, but the stack keeps the node-budget accounting simple.
+    stack: list[tuple[int, float, int]] = [(0, 0.0, 0)]
+    while stack:
+        i, current, terms = stack.pop()
+        budget -= 1
+        if budget < 0:
+            return False
+        if terms >= 2 and _approx_eq(value, current, tol):
+            return True
+        if i >= n or terms >= max_terms:
+            continue
+        # Reachability prune: if the target cannot be hit from here even using all
+        # remaining positive/negative mass, abandon this branch.
+        if value > current + suf_pos[i] + band:
+            continue
+        if value < current + suf_neg[i] - band:
+            continue
+        # Branch: skip ops[i], or include it.
+        stack.append((i + 1, current, terms))
+        stack.append((i + 1, current + ops[i], terms + 1))
+    return False
+
+
+def _is_derivable_from_grounded(
+    value: float,
+    candidates: list[float],
+    *,
+    tol: float = _DERIVATION_TOLERANCE,
+) -> bool:
+    """True when ``value`` is arithmetically derivable from grounded tool values.
+
+    Recognises the derivation shapes deep answers legitimately produce from cited
+    figures (consistent with synthesis v1.9/v1.10 which PERMIT hedged/derived
+    numbers), using ONLY grounded ``candidates``:
+
+      * SUM of 2..``_MAX_SUM_TERMS`` grounded values — FY revenue = Σ quarters,
+        multi-year trailing sums, combined-segment totals;
+      * PERCENT-CHANGE / growth of an ordered pair — ``(a - b) / b`` in both the
+        fraction form (``0.081``) and the whole-number form (``8.1``); this is the
+        YoY-growth case;
+      * RATIO of an ordered pair — ``a / b`` (a P/E from grounded price & EPS, a
+        margin from grounded profit & revenue), in both the fraction and the
+        ``x100`` percent form;
+      * PRODUCT of an ordered pair where one operand is a ratio/percent-scale
+        multiplier — ``margin x revenue`` (the two-step "apply a cited margin to a
+        cited revenue" case). Gated tightly: at least one operand must be small
+        (|op| ≤ ``_PRODUCT_MULTIPLIER_MAX``, i.e. a fraction or a percent), so two
+        large figures can NEVER be multiplied into a coincidental match.
+
+    Because every candidate is a GROUNDED tool value, a match means the number has
+    a genuine grounded basis — it is derived, not fabricated. A number with NO
+    grounded basis matches nothing and stays flagged, so the fabrication guarantee
+    is fully preserved. Plain single-value ``a`` and pairwise ``a - b`` differences
+    are DELIBERATELY excluded: they are broad enough that a fabricated large figure
+    could coincidentally equal one, which would weaken the guard.
+    """
+    if value == 0 or not candidates:
+        return False
+    # Deduplicate + drop zeros (a zero candidate makes ratios/percent-change
+    # undefined and adds nothing to a sum).
+    uniq: list[float] = []
+    seen: set[float] = set()
+    for c in candidates:
+        if c is None or c == 0:
+            continue
+        key = round(float(c), 6)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(float(c))
+    if not uniq or len(uniq) > _MAX_DERIVATION_POOL:
+        return False
+
+    # 1. SUM of subsets (2..``_MAX_SUM_TERMS`` terms) — FY = Σ quarters, trailing
+    #    multi-year sums, combined-segment totals. Uses the pruned, node-budgeted
+    #    subset-sum walk (NOT brute-force combinations) so it stays fast at the
+    #    raised caps.
+    if _subset_sum_within(value, uniq, max_terms=_MAX_SUM_TERMS, tol=tol):
+        return True
+
+    # 2. Pairwise ratio / percent-change / gated product (ordered pairs). O(N^2),
+    #    trivial at N ≤ _MAX_DERIVATION_POOL.
+    for a in uniq:
+        for b in uniq:
+            if a is b or b == 0:
+                continue
+            ratio = a / b
+            # P/E, EV/EBITDA multiple, margin fraction, or its x100 percent form.
+            if _approx_eq(value, ratio, tol) or _approx_eq(value, ratio * 100.0, tol):
+                return True
+            # YoY / period-over-period growth, fraction and whole-number forms.
+            pct = (a - b) / b
+            if _approx_eq(value, pct, tol) or _approx_eq(value, pct * 100.0, tol):
+                return True
+            # Two-step product: apply a cited margin/ratio to a cited figure
+            # (margin x revenue → segment/adjusted figure). Gated so at least one
+            # operand is a small multiplier (a fraction or percent) — two large
+            # figures can never be multiplied into a coincidental large match.
+            if abs(a) <= _PRODUCT_MULTIPLIER_MAX or abs(b) <= _PRODUCT_MULTIPLIER_MAX:
+                product = a * b
+                # margin as a fraction (a in 0..1) → a*b directly; margin as a
+                # percent (a in 0..100) → a*b/100.
+                if _approx_eq(value, product, tol) or _approx_eq(value, product / 100.0, tol):
+                    return True
+    return False
 
 
 # ── C1 #1: deterministic exact-value substitution (numeric pin) ───────────────
@@ -1716,8 +2776,15 @@ __all__ = [
     "detect_fabricated_series",
     "find_phantom_tool_citations",
     "flatten_tool_values_count",
+    "fundamentals_family_value_pool",
+    "material_number_spans",
+    "normalize_citation_brackets",
+    "normalize_tool_row_citations",
+    "partition_phantom_tool_citations",
     "pin_numbers_to_tool_values",
+    "resolve_tool_name",
     "response_has_numeric_claims",
+    "strip_tool_row_tags",
 ]
 
 

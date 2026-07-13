@@ -19,13 +19,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from datetime import timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
-
-import jwt
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -36,6 +33,7 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embeddin
     sha256_hex,
 )
 from observability import get_logger  # type: ignore[import-untyped]
+from observability.internal_jwt import mint_internal_jwt  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     import httpx
@@ -186,33 +184,25 @@ def _next_backoff_seconds(current: int | None) -> int:
 def _system_jwt_headers(private_key_pem: str = "") -> dict[str, str]:
     """Generate X-Internal-JWT for service-to-service calls to market-data.
 
+    DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
+    always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
+    ``InternalJWTMiddleware`` once real verification is enabled).
+
     F-015: when ``private_key_pem`` is provided (non-empty), issues an RS256 JWT
     signed with the same key as S9 api-gateway so market-data (and other backends)
     can verify it via the gateway JWKS.  Falls back to the HS256 dev token when
     the key is absent — market-data must have skip_verification=True for this to
     work (acceptable in dev/test; guarded by a production check in market-data config).
     """
-    now = int(time.time())
-    payload = {
-        "iss": "worldview-gateway",
-        "sub": "system:kg-fundamentals-refresh",
-        "user_id": "00000000-0000-0000-0000-000000000000",
-        "tenant_id": "00000000-0000-0000-0000-000000000000",
-        "role": "system",
-        "iat": now,
-        # WHY 1-hour TTL (not 24h HS256 dev token): RS256 tokens are more
-        # expensive to issue but cryptographically verifiable, so a shorter TTL
-        # is safer. The worker runs every 2h and creates a new client each run.
-        "exp": now + 3600,
-    }
-    if private_key_pem:
-        from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
-        private_key = load_pem_private_key(private_key_pem.encode(), password=None)
-        token = jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[arg-type]
-    else:
-        # Fallback: HS256 dev token — only accepted when skip_verification=True
-        token = jwt.encode(payload, _INTERNAL_JWT_DEV_KEY, algorithm="HS256")
+    # WHY 1-hour TTL (not 24h HS256 dev token): RS256 tokens are more expensive
+    # to issue but cryptographically verifiable, so a shorter TTL is safer. The
+    # worker runs every 2h and creates a new client each run.
+    token = mint_internal_jwt(
+        sub="system:kg-fundamentals-refresh",
+        ttl_seconds=3600,
+        private_key_pem=private_key_pem,
+        dev_hs256_secret=_INTERNAL_JWT_DEV_KEY,
+    )
     return {"X-Internal-JWT": token}
 
 

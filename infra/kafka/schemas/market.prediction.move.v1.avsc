@@ -1,0 +1,25 @@
+{
+  "type": "record",
+  "name": "PredictionMarketMove",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S3 Market Data (PredictionMoveDetector) when a market's implied probability moves materially over a window (gated by liquidity/volume). Consumed by S7 Knowledge Graph (PredictionSignalEmitter) which joins to entity exposures. PLAN-0056 Wave Z1/D1.",
+  "fields": [
+    {"name": "event_id",         "type": "string",           "doc": "UUIDv7 envelope event identifier"},
+    {"name": "event_type",       "type": "string",           "default": "market.prediction.move", "doc": "Event type discriminator"},
+    {"name": "schema_version",   "type": "int",              "default": 1},
+    {"name": "occurred_at",      "type": "string",           "default": "1970-01-01T00:00:00Z", "doc": "ISO-8601 UTC timestamp. Default is epoch sentinel — callers MUST always supply a real value."},
+    {"name": "market_id",        "type": "string",           "doc": "Polymarket conditionId"},
+    {"name": "token_id",         "type": "string",           "doc": "Polymarket CLOB token identifier (outcome that moved)"},
+    {"name": "outcome_name",     "type": ["null", "string"], "default": null, "doc": "Outcome name (e.g. Yes/No) if known"},
+    {"name": "interval",         "type": "string",           "doc": "Window granularity used to compute the move: 1h | 1d | 1w"},
+    {"name": "prev_price",       "type": "double",           "doc": "Implied probability at window start [0.0, 1.0]"},
+    {"name": "new_price",        "type": "double",           "doc": "Implied probability at window end [0.0, 1.0]"},
+    {"name": "delta",            "type": "double",           "doc": "new_price - prev_price (signed)"},
+    {"name": "direction",        "type": "string",           "doc": "up | down"},
+    {"name": "liquidity",        "type": ["null", "double"], "default": null, "doc": "Market liquidity in USD at detection time (conviction weight)"},
+    {"name": "volume_24h",       "type": ["null", "double"], "default": null, "doc": "24-hour volume in USD at detection time (conviction weight)"},
+    {"name": "window_start_ts",  "type": "string",           "doc": "ISO-8601 UTC start of the move window"},
+    {"name": "is_backfill",      "type": "boolean",          "default": false, "doc": "True when computed over backfilled history (should not fire user signals)"},
+    {"name": "correlation_id",   "type": ["null", "string"], "default": null}
+  ]
+}

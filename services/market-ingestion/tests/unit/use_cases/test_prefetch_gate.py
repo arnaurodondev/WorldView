@@ -158,6 +158,7 @@ def _make_use_case(quota_result: str = "ok") -> tuple[ExecuteTaskUseCase, MagicM
     quota_service = MagicMock()
     quota_service.try_consume = AsyncMock(return_value=QuotaCheckResult(quota_result))
     quota_service._hard_limit = 100_000
+    quota_service._daily_hard_limit = 100_000
 
     provider = MagicMock()
     provider.fetch_quotes = AsyncMock(

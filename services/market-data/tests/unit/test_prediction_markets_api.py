@@ -11,12 +11,22 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from market_data.api.dependencies import (
+    get_list_prediction_events_uc,
     get_list_prediction_markets_uc,
+    get_prediction_event_uc,
     get_prediction_market_history_uc,
+    get_prediction_market_price_history_uc,
+    get_prediction_market_trades_uc,
     get_prediction_market_uc,
 )
 from market_data.api.routers import prediction_markets
-from market_data.domain.entities import PredictionMarket, PredictionMarketSnapshot
+from market_data.domain.entities import (
+    PredictionEvent,
+    PredictionMarket,
+    PredictionMarketPrice,
+    PredictionMarketSnapshot,
+    PredictionMarketTrade,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -46,6 +56,7 @@ def _make_market(
 def _make_snapshot(
     market_id: str = "mkt-001",
     outcomes_prices: dict[str, float] | None = None,
+    liquidity: Decimal | None = None,
 ) -> PredictionMarketSnapshot:
     return PredictionMarketSnapshot(
         market_id=market_id,
@@ -53,6 +64,7 @@ def _make_snapshot(
         outcomes_prices=outcomes_prices or {"Yes": 0.72, "No": 0.28},
         source_event_id="evt-001",
         volume_24h=Decimal("1500.0"),
+        liquidity=liquidity,
     )
 
 
@@ -65,6 +77,10 @@ def _make_app(
     list_uc: MagicMock | None = None,
     detail_uc: MagicMock | None = None,
     history_uc: MagicMock | None = None,
+    price_history_uc: MagicMock | None = None,
+    trades_uc: MagicMock | None = None,
+    list_events_uc: MagicMock | None = None,
+    event_uc: MagicMock | None = None,
 ) -> tuple[FastAPI, TestClient]:
     app = FastAPI(lifespan=_null_lifespan)
     app.include_router(prediction_markets.router, prefix="/api/v1")
@@ -74,9 +90,73 @@ def _make_app(
         app.dependency_overrides[get_list_prediction_markets_uc] = lambda: list_uc
     if detail_uc is not None:
         app.dependency_overrides[get_prediction_market_uc] = lambda: detail_uc
-    if history_uc is not None:
-        app.dependency_overrides[get_prediction_market_history_uc] = lambda: history_uc
+    # PLAN-0056 A4: the /history route now declares BOTH the snapshot and the
+    # interval-price use case as dependencies (it branches on ?interval=).
+    # FastAPI resolves every declared dependency eagerly, so both must be
+    # overridden in a bare test app — otherwise the un-overridden one falls
+    # through to get_read_uow and blows up on missing app.state. We install a
+    # harmless default double for whichever branch a given test doesn't drive.
+    if history_uc is not None or price_history_uc is not None:
+        _snap = history_uc if history_uc is not None else _make_history_uc(snapshots=[])
+        _price = price_history_uc if price_history_uc is not None else _make_result_uc([])
+        app.dependency_overrides[get_prediction_market_history_uc] = lambda: _snap
+        app.dependency_overrides[get_prediction_market_price_history_uc] = lambda: _price
+    if trades_uc is not None:
+        app.dependency_overrides[get_prediction_market_trades_uc] = lambda: trades_uc
+    if list_events_uc is not None:
+        app.dependency_overrides[get_list_prediction_events_uc] = lambda: list_events_uc
+    if event_uc is not None:
+        app.dependency_overrides[get_prediction_event_uc] = lambda: event_uc
     return app, TestClient(app)
+
+
+def _make_result_uc(result: object, raises: Exception | None = None) -> MagicMock:
+    """Generic single-return use-case double used by the A4 endpoints."""
+    uc = MagicMock()
+    if raises is not None:
+        uc.execute = AsyncMock(side_effect=raises)
+    else:
+        uc.execute = AsyncMock(return_value=result)
+    return uc
+
+
+def _make_price(
+    token_id: str = "t1",  # noqa: S107
+    interval: str = "1h",
+    price: str = "0.72",
+    outcome_name: str | None = "Yes",
+) -> PredictionMarketPrice:
+    return PredictionMarketPrice(
+        market_id="mkt-001",
+        token_id=token_id,
+        interval=interval,
+        window_start_ts=_SNAP_AT,
+        price=Decimal(price),
+        outcome_name=outcome_name,
+    )
+
+
+def _make_trade(trade_id: str = "trd-1", side: str = "buy", size_usd: str | None = "100.0") -> PredictionMarketTrade:
+    return PredictionMarketTrade(
+        market_id="mkt-001",
+        trade_id=trade_id,
+        token_id="t1",
+        price=Decimal("0.72"),
+        side=side,
+        ts=_SNAP_AT,
+        size_usd=Decimal(size_usd) if size_usd is not None else None,
+    )
+
+
+def _make_event(event_id: str = "evt-001", name: str = "Fed decision") -> PredictionEvent:
+    return PredictionEvent(
+        event_id=event_id,
+        name=name,
+        category="macro",
+        start_date=_NOW,
+        end_date=None,
+        market_count=3,
+    )
 
 
 def _make_list_uc(
@@ -266,6 +346,27 @@ def test_get_history_endpoint_200() -> None:
     assert first["outcomes_prices"]["Yes"] == pytest.approx(0.72)
 
 
+def test_get_history_exposes_liquidity() -> None:
+    """PLAN-0056 A1: each history snapshot surfaces liquidity on the wire.
+
+    A snapshot carrying a Decimal liquidity round-trips into the response as a
+    float; a snapshot without liquidity serialises as ``liquidity: null``.
+    """
+    snaps = [
+        _make_snapshot(liquidity=Decimal("12345.67")),
+        _make_snapshot(liquidity=None),
+    ]
+    uc = _make_history_uc(snapshots=snaps)
+    _, client = _make_app(history_uc=uc)
+
+    resp = client.get("/api/v1/prediction-markets/mkt-001/history")
+
+    assert resp.status_code == 200
+    snapshots = resp.json()["snapshots"]
+    assert snapshots[0]["liquidity"] == pytest.approx(12345.67)
+    assert snapshots[1]["liquidity"] is None
+
+
 def test_get_history_endpoint_404() -> None:
     """Returns 404 when history use case returns None (market not found)."""
     uc = _make_history_uc(snapshots=None)
@@ -295,3 +396,154 @@ def test_history_invalid_limit() -> None:
     resp = client.get("/api/v1/prediction-markets/mkt-001/history?limit=0")
 
     assert resp.status_code == 422
+
+
+# ── PLAN-0056 A4: interval price history ─────────────────────────────────────
+
+
+def test_history_interval_returns_price_points() -> None:
+    """?interval=1h routes to the price use case and returns interval bars."""
+    price_uc = _make_result_uc([_make_price(interval="1h"), _make_price(interval="1h", price="0.70")])
+    _, client = _make_app(price_history_uc=price_uc)
+
+    resp = client.get("/api/v1/prediction-markets/mkt-001/history?interval=1h")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["market_id"] == "mkt-001"
+    assert data["interval"] == "1h"
+    assert len(data["points"]) == 2
+    pt = data["points"][0]
+    assert pt["token_id"] == "t1"  # noqa: S105
+    assert pt["price"] == pytest.approx(0.72)
+    assert pt["outcome_name"] == "Yes"
+    # It must call the price use case with the interval forwarded.
+    assert price_uc.execute.call_args.kwargs["interval"] == "1h"
+
+
+def test_history_interval_invalid_value_422() -> None:
+    """An unsupported interval value returns 422 without hitting the use case."""
+    price_uc = _make_result_uc([])
+    _, client = _make_app(price_history_uc=price_uc)
+
+    resp = client.get("/api/v1/prediction-markets/mkt-001/history?interval=5m")
+
+    assert resp.status_code == 422
+    price_uc.execute.assert_not_awaited()
+
+
+def test_history_interval_market_not_found_404() -> None:
+    """Interval branch returns 404 when the price use case returns None."""
+    price_uc = _make_result_uc(None)
+    _, client = _make_app(price_history_uc=price_uc)
+
+    resp = client.get("/api/v1/prediction-markets/missing/history?interval=1d")
+
+    assert resp.status_code == 404
+
+
+def test_history_without_interval_uses_snapshots() -> None:
+    """Omitting interval keeps the legacy snapshot shape (backward compatible)."""
+    snap_uc = _make_history_uc(snapshots=[_make_snapshot()])
+    _, client = _make_app(history_uc=snap_uc)
+
+    resp = client.get("/api/v1/prediction-markets/mkt-001/history")
+
+    assert resp.status_code == 200
+    assert "snapshots" in resp.json()
+
+
+# ── PLAN-0056 A4: trades ─────────────────────────────────────────────────────
+
+
+def test_trades_endpoint_200() -> None:
+    """GET /{id}/trades returns 200 with a trades list, newest first."""
+    trades_uc = _make_result_uc([_make_trade("trd-1"), _make_trade("trd-2", side="sell", size_usd=None)])
+    _, client = _make_app(trades_uc=trades_uc)
+
+    resp = client.get("/api/v1/prediction-markets/mkt-001/trades")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["market_id"] == "mkt-001"
+    assert data["limit"] == 100
+    assert len(data["items"]) == 2
+    first = data["items"][0]
+    assert first["side"] == "buy"
+    assert first["price"] == pytest.approx(0.72)
+    # size_usd null survives unchanged.
+    assert data["items"][1]["size_usd"] is None
+
+
+def test_trades_endpoint_404() -> None:
+    """GET /{id}/trades returns 404 when the market is unknown."""
+    trades_uc = _make_result_uc(None)
+    _, client = _make_app(trades_uc=trades_uc)
+
+    resp = client.get("/api/v1/prediction-markets/missing/trades")
+
+    assert resp.status_code == 404
+
+
+def test_trades_invalid_limit_422() -> None:
+    """?limit=0 returns 422 (clamp 1..200)."""
+    trades_uc = _make_result_uc([])
+    _, client = _make_app(trades_uc=trades_uc)
+
+    resp = client.get("/api/v1/prediction-markets/mkt-001/trades?limit=0")
+
+    assert resp.status_code == 422
+
+
+# ── PLAN-0056 A4: events ─────────────────────────────────────────────────────
+
+
+def test_list_events_endpoint_200() -> None:
+    """GET /events returns 200 with a paginated events list."""
+    events_uc = _make_result_uc(([_make_event("evt-001"), _make_event("evt-002", name="Election")], 2))
+    _, client = _make_app(list_events_uc=events_uc)
+
+    resp = client.get("/api/v1/prediction-markets/events")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    assert data["limit"] == 50
+    assert data["offset"] == 0
+    assert len(data["items"]) == 2
+    assert data["items"][0]["event_id"] == "evt-001"
+    assert data["items"][0]["market_count"] == 3
+
+
+def test_list_events_invalid_limit_422() -> None:
+    """?limit=0 returns 422 (clamp 1..200)."""
+    events_uc = _make_result_uc(([], 0))
+    _, client = _make_app(list_events_uc=events_uc)
+
+    resp = client.get("/api/v1/prediction-markets/events?limit=0")
+
+    assert resp.status_code == 422
+
+
+def test_get_event_endpoint_200() -> None:
+    """GET /events/{event_id} returns 200 with the event detail."""
+    event_uc = _make_result_uc(_make_event("evt-001"))
+    _, client = _make_app(event_uc=event_uc)
+
+    resp = client.get("/api/v1/prediction-markets/events/evt-001")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["event_id"] == "evt-001"
+    assert data["category"] == "macro"
+    assert data["market_count"] == 3
+
+
+def test_get_event_endpoint_404() -> None:
+    """GET /events/{event_id} returns 404 for an unknown event."""
+    event_uc = _make_result_uc(None)
+    _, client = _make_app(event_uc=event_uc)
+
+    resp = client.get("/api/v1/prediction-markets/events/missing")
+
+    assert resp.status_code == 404

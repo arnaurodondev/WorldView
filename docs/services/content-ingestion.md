@@ -132,6 +132,10 @@ curl -X POST http://localhost:8004/api/v1/documents/upload \
 | `content.article.raw.v1` | `infrastructure/messaging/schemas/content.article.raw.v1.avsc` | `url_hash` | Raw article fetched from news sources and stored in MinIO bronze |
 | `market.prediction.v1` | `infrastructure/messaging/schemas/market.prediction.v1.avsc` | `market_id` | Polymarket prediction market snapshot (`market.prediction.snapshot` event type via outbox) |
 | `content.document.deleted.v1` | `infrastructure/messaging/schemas/content.document.deleted.v1.avsc` | `doc_id` | Tenant document soft-deletion event (emitted by `DeleteTenantDocumentUseCase`) so downstream services purge derived artifacts |
+| `market.prediction.event.v1` | `infrastructure/messaging/schemas/market.prediction.event.v1.avsc` | `group_id` | Polymarket Gamma `/events` group (`market.prediction.event` event type via outbox) — PLAN-0056 B3 |
+| `market.prediction.history.v1` | `infrastructure/messaging/schemas/market.prediction.history.v1.avsc` | `token_id` | CLOB `/prices-history` datapoint (`market.prediction.history`), one event per datapoint — B3. **B4**: payload `market_id` = PARENT conditionId (was token_id surrogate), `token_id` = per-outcome token → S3 price rows JOIN to `prediction_markets` |
+| `market.prediction.trade.v1` | `infrastructure/messaging/schemas/market.prediction.trade.v1.avsc` | `trade_id` | Data-API `/trades` fill (`market.prediction.trade`) — B3. **B4**: payload `market_id` = PARENT conditionId (was token_id surrogate), `token_id` = per-outcome token → S3 trade rows JOIN to `prediction_markets` |
+| `market.prediction.oi.v1` | `infrastructure/messaging/schemas/market.prediction.oi.v1.avsc` | `market_id` | Data-API daily open-interest snapshot (`market.prediction.oi`) — B3 |
 
 **`ContentArticleRaw` Avro fields:**
 
@@ -144,6 +148,7 @@ curl -X POST http://localhost:8004/api/v1/documents/upload \
 | `doc_id` | string | UUIDv7 document identifier |
 | `source_type` | string | `eodhd` / `sec_edgar` / `finnhub` / `newsapi` / `manual` |
 | `source_url` | string? | Original article URL |
+| `external_id` | string? | Upstream market/source identity (PLAN-0056 Wave C2b). `null` for normal articles; the synthetic prediction emitter sets `"polymarket:<condition_id>"`. Carried verbatim through S5→S6→KG so a prediction doc resolves to its real market. Nullable, default null (R5). |
 | `minio_bronze_key` | string | MinIO bronze layer object key |
 | `content_hash` | string | SHA-256 hex of raw bytes |
 | `fetch_id` | string | UUIDv7 of `article_fetch_log` row |
@@ -333,8 +338,10 @@ CREATE INDEX idx_tdu_uploaded_at ON tenant_document_uploads (tenant_id, uploaded
 | `0007_add_tenant_document_uploads` | Add `tenant_document_uploads` table (PLAN-0086) |
 | `0008_seed_default_sources` | Seed the canonical default content sources (idempotent via `uq_sources_dedup`) — PLAN-0106 Wave B-1 |
 | `0009_remove_finnhub_global_news` | Remove the `finnhub` source seeded with no `symbol` (Finnhub `company-news` requires a symbol); per-ticker `Finnhub-<SYM>` sources are kept |
+| `0010_sec_edgar_cik_watchlist` | Scope the `sec-edgar-filings` source to a per-CIK watchlist (`config["ciks"]`) so watched mega-caps are always ingested (R1 Fix ②) |
+| `0011_seed_pm_wave2_sources` | Seed the 4 deeper Polymarket-stream sources (`polymarket_gamma_events`/`polymarket_clob`/`polymarket_data_trades`/`polymarket_data_oi`) — PLAN-0056 Wave B3. **B4**: CLOB + trades seed reshaped to `{"markets": []}` (a `{condition_id, token_ids}` work-list); OI keeps `condition_ids` |
 
-**Latest head:** `0009_remove_finnhub_global_news`.
+**Latest head:** `0011_seed_pm_wave2_sources`.
 
 ---
 
@@ -358,18 +365,74 @@ All news-source `SourceType` values come from `contracts.enums.ContentSourceType
 |--------|--------------|------|------------|-------------|-----------------|
 | **EODHD News** (global) | per-source config | `EODHD_API_KEY` query param | Token bucket (10 req/s) | `sha256(article.link)` | Date-range via `from`/`to` |
 | **EODHD Ticker News** (`eodhd_ticker_news`) | 1 hour (`ticker_news_poll_interval_seconds=3600`) | `EODHD_API_KEY` query param | Token bucket (10 req/s) | `sha256(article.link)` | Date-range via `from`/`to` |
-| **SEC EDGAR** | 30 min | User-Agent header (required) | `asyncio.Semaphore(8)` | `sha256(accession_no + filename)` | Date-range via `startdt`/`enddt` |
+| **SEC EDGAR** | 30 min | User-Agent header (required) | `asyncio.Semaphore(8)` | `sha256(accession_no)` | Date-range via `startdt`/`enddt`; per-CIK via `config["ciks"]` |
 | **Finnhub** | 15 min | `FINNHUB_API_KEY` query param | Token bucket (55 req/min) | `sha256(str(article_id))` | Date-range on news + transcripts |
 | **NewsAPI** | 4 hours* | `NEWSAPI_KEY` (`X-Api-Key` header) | Valkey daily counter (100 req/day default) | `sha256(article.url)` | Date-range via `from` |
 | **Polymarket** | Configurable | None (public Gamma API) | `max_pages_per_cycle=20` | `(market_id, fetched_at)` unique | Full catalogue re-fetch |
 
 *NewsAPI default poll interval is 4 hours (`poll_interval_seconds=14400`) to stay under the 100 req/day free-tier limit.
 
+**SEC EDGAR primary-document fetch (R1 Fix, 2026-07-04):** the adapter fetches the **primary filing document**, not the `…-index.htm` directory page (which carried only ~40 words of filer/form/CIK boilerplate — the R1 grounding-gap root cause). For each filing it fetches the `{accession}/index.json` manifest, resolves the primary document (`resolve_primary_document`: largest form-matching `.htm`, excluding XBRL instance/linkbase/`R\d+.htm` viewer files and exhibits), downloads that HTML, and synthesizes a citation title `"{FORM} — {Company} ({Period})"` (persisted to `document_source_metadata.title`, previously NULL for 100% of `sec_edgar` docs). Filings with no groundable HTML body are skipped. **Coverage:** an unscoped EFTS search only returns the most-recent filings across all filers, so watched companies (e.g. Apple) were never ingested; the source `config["ciks"]` watchlist (seeded by migration `0010`) scopes the search per-CIK. Existing pre-fix docs are re-driven by `scripts/ops/backfill_sec_edgar_primary_docs.py` (dry-run default, `--apply` to re-emit via the outbox).
+
 **Retry policy (all adapters):** 3x exponential backoff (1s/2s/4s). `AdapterError` raised after exhaustion → task moves to DLQ.
 
 **`ADAPTER_REGISTRY` (in `infrastructure/scheduler/scheduler.py`)** maps the standard source types to adapters: `EODHD`, `EODHD_TICKER_NEWS`, `SEC_EDGAR`, `FINNHUB`, `NEWSAPI`.
 
 **Polymarket special path:** `POLYMARKET` is intentionally NOT in `ADAPTER_REGISTRY`. The worker detects `SourceType.POLYMARKET` and dispatches directly to `_execute_polymarket_task()` → `PolymarketAdapter` → `FetchAndWritePredictionMarketsUseCase` (R24: batch-collect first, then short-lived session for dedup). The scheduler uses `PolymarketAdapter` only for its `fetch_log_exists_fn` dedup callback.
+
+**Deeper-stream Polymarket adapters (PLAN-0056 Wave B1):** four additional streams supplement the base markets snapshot. Each is a `{Name}Client` + `{Name}Adapter` package under `infrastructure/adapters/`, mirroring `PolymarketAdapter` (dedup via `fetch_log_exists_fn(id, snapshot_at)`, non-fatal MinIO bronze write, `AdapterError` on non-200, 429 → retryable). Like base `POLYMARKET`, all four route directly through `_execute_polymarket_task()` (wired in Wave B3) and are NOT in `ADAPTER_REGISTRY`. This wave delivers clients + adapters + config + fetch-result entities only.
+
+| Stream | `SourceType` | Package | Client / Adapter | Endpoint (default `base_url`) | Fetch-result entity |
+|--------|--------------|---------|------------------|-------------------------------|---------------------|
+| Events | `polymarket_gamma_events` | `polymarket_gamma_events/` | `PolymarketEventsClient` / `PolymarketEventsAdapter` | `https://gamma-api.polymarket.com/events` (cursor-paginated) | `PredictionEventFetchResult` |
+| Price history | `polymarket_clob` | `polymarket_clob/` | `PolymarketClobHistoryClient` / `PolymarketClobHistoryAdapter` | `https://clob.polymarket.com/prices-history` (per token_id) | `PredictionHistoryFetchResult` |
+| Trades | `polymarket_data_trades` | `polymarket_data_trades/` | `PolymarketTradesClient` / `PolymarketTradesAdapter` | `https://data-api.polymarket.com/trades` (per condition_id, offset) | `PredictionTradeFetchResult` |
+| Open interest | `polymarket_data_oi` | `polymarket_data_oi/` | `PolymarketOIClient` / `PolymarketOIAdapter` | `https://data-api.polymarket.com/oi` (per condition_id) | `PredictionOIFetchResult` |
+
+- **CLOB resolved-market fallback:** the price-history adapter requests `interval=1h`; if that returns HTTP 400 (via `AdapterError.status_code`) or an empty series, it retries once at `interval=1d` (resolved markets frequently lack a fine-grained series — PRD-0033 §4.4/§9.2). Backfill uses `backfill_days`; ongoing polling uses `ongoing_window_hours` (6h) for the `startTs` lower bound.
+- **Config:** `Polymarket{Events,Clob,Trades,OI}ProviderSettings` in `config.py`, wired into `Settings` as `polymarket_events` / `polymarket_clob` / `polymarket_trades` / `polymarket_oi`. Every `base_url` is env-overridable (`CONTENT_INGESTION_POLYMARKET_EVENTS__BASE_URL`, etc.) so exact live API paths can be corrected at deploy without a code change. `AdapterError` gained an optional `status_code` kwarg (backward-compatible) to carry the HTTP status for the CLOB fallback.
+- **Token/market ids** for the CLOB/trades adapters are read from a `source.config["markets"]` **work-list** — `[{"condition_id": ..., "token_ids": [...]}]` pairing each parent market conditionId with its child CLOB outcome tokens (PLAN-0056 **Wave B4**; parsed by `infrastructure/adapters/polymarket_worklist.py`, camelCase-tolerant, legacy flat `token_ids`/`condition_ids` fallback). The parent `condition_id` is threaded onto every `PredictionHistoryFetchResult`/`PredictionTradeFetchResult` as `market_id` so S3 price/trade rows JOIN to `prediction_markets` (keyed on conditionId) instead of the per-outcome token surrogate. OI still reads `condition_ids`. Those source rows are seeded (empty) in migration `0011`.
+
+**End-to-end wiring (PLAN-0056 Wave B3 — Sub-Plan B complete):** the 4 deeper `SourceType`s route directly through `WorkerProcess._execute_task` → `_execute_prediction_stream_task` (mirrors `_execute_polymarket_task`; shares the 900s Polymarket timeout; NOT in `ADAPTER_REGISTRY`). Per task the worker loads the live `sources.config` row (for `token_ids`/`condition_ids`), builds the B1 client+adapter via `_build_prediction_stream_adapter`, fetches with no session held (R24), then under the `s4:fetch:<source>` advisory lock the generic `FetchAndWritePredictionStreamUseCase` (`application/use_cases/fetch_and_write_prediction_streams.py`) writes fetch_log + outbox in one tx (R8).
+
+| Stream | Fetch-result | `event_type` | Topic | Dedup key | Outbox cardinality |
+|--------|--------------|--------------|-------|-----------|--------------------|
+| Events | `PredictionEventFetchResult` | `market.prediction.event` | `MARKET_PREDICTION_EVENT` | `event_id` | 1 / event |
+| History | `PredictionHistoryFetchResult` | `market.prediction.history` | `MARKET_PREDICTION_HISTORY` | `token_id` | 1 / price datapoint |
+| Trades | `PredictionTradeFetchResult` | `market.prediction.trade` | `MARKET_PREDICTION_TRADE` | `trade_id` | 1 / trade |
+| Open interest | `PredictionOIFetchResult` | `market.prediction.oi` | `MARKET_PREDICTION_OI` | `market_id` | 1 / snapshot |
+
+- **Payload builders** map each fetch-result to the matching `market.prediction.{event,history,trade,oi}.v1` Avro shape (field names verbatim). The `prediction_market_fetch_log.market_id` column is reused as a generic natural-key column. **Surrogate `market_id`:** the B1 CLOB/trades entities carry no parent `conditionId`, so history/trade payloads set `market_id = token_id` (the S3 dedup keys already include `token_id`/`trade_id`; a later wave can enrich token→conditionId).
+- **Outbox dispatcher** (`messaging/outbox/dispatcher.py`) registers the 4 new `event_type`s → per-schema Avro serializers. The 4 `.avsc` are copied into the service-local `infrastructure/messaging/schemas/` dir; `OutboxEventValueSerializer` routes on the outbox `event_type` column (not the topic).
+- **Scheduler cadence:** `scheduler_main`'s `source_type_intervals` reads each provider's `poll_interval_seconds` — events 1h, CLOB history 6h, trades 1h, OI daily (PRD-0033 §4.2).
+- **Backfill:** CLOB/trades run `is_backfill=BACKFILL_ON_STARTUP`; the window comes from the flat `CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS` (default **3** — reduced from 14, PLAN-0056 QA) / `…_TRADES_BACKFILL_DAYS` (default 14) env vars, threaded into the adapter provider settings via `model_copy`.
+
+**CLOB history is INCREMENTAL + BOUNDED (PLAN-0056 QA — fix for the `market.prediction.history.v1` outbox firehose that starved the FIFO dispatcher):** the generic single-pass path above re-fetched the FULL `backfill_days` price depth (14 days × hourly ≈ 336 points/token) for EVERY work-list token EVERY cycle, and `build_prediction_history_payloads` emits **ONE outbox event per datapoint**. The `fetch_log` dedup keyed on `(token_id, fetched_at)` never hit (`fetched_at` advances each cycle), so every cycle re-emitted the entire depth for every token → the outbox grew to ~2.1M pending `market.prediction.history.v1` rows, and the single FIFO dispatcher (`ORDER BY created_at`) starved trades + synthetic docs queued behind it. CLOB therefore routes to a DEDICATED `WorkerProcess._execute_history_stream_task` instead of `_execute_prediction_stream_task` (same shape as the trades fix):
+  - **Incremental cursor** — `PolymarketClobHistoryAdapter.fetch_market(market, cursor)` fetches only points newer than the persisted per-market `cursor.last_point_ts` and returns `MarketHistoryResult(results, new_cursor)`. First cycle (no cursor) floor = `now - backfill_days` — a BOUNDED backfill, never the full depth.
+  - **Bounded per-cycle work** — a ROTATING window of `polymarket_clob.markets_per_cycle` markets (default 25, round-robin via `config["history_market_offset"]`) plus a `polymarket_clob.max_points_per_market_per_cycle` cap (default 2000, a TOTAL across a market's outcome tokens; a deeper backfill drains oldest-first over cycles).
+  - **Incremental commit** — the use case commits per fetch-result (R8 outbox), and `_persist_history_progress` read-modify-writes the advanced cursor into `config["history_cursors"][market_key]` and the rotation offset into `config["history_market_offset"]` PER MARKET, so a timeout/retry resumes at the next market. SEPARATE config keys the Wave B5 seeder preserves. `market_key` = parent conditionId (or the joined token ids for legacy flat config).
+  - Idempotency is unchanged (use-case `fetch_log` dedup + S3 `ON CONFLICT`); the legacy `PolymarketClobHistoryAdapter.fetch()` is retained for flat-config/tests but is off the steady-state cadence. Recommended future work (not done under time pressure): make the outbox dispatcher round-robin across topics so one firehose can't starve others.
+
+**Trades are INCREMENTAL + BOUNDED (PLAN-0056 QA — fix for the 900s timeout deadlock that kept `prediction_market_trades` at 0):** the generic single-pass path above re-fetched the FULL `/trades` history (offset 0→~3500) for EVERY work-list market EVERY cycle with a per-trade MinIO put and one final commit — with ~100 markets this blew even the 900s Polymarket task timeout → RETRY → restart from market 1 → nothing committed → the cursor/dedup never bootstrapped → **0 trades ever persisted**. Trades therefore route to a DEDICATED `WorkerProcess._execute_trades_stream_task` instead of `_execute_prediction_stream_task`:
+  - **Incremental cursor** — `PolymarketTradesAdapter.fetch_market(condition_id, cursor)` (trades are append-only) fetches only trades newer than the persisted `cursor.last_trade_ts` and returns `MarketTradesResult(results, new_cursor)`. The first cycle for a market (no cursor) uses a floor of `now - backfill_days` — a BOUNDED backfill of the recent window (capped), never the full historical depth.
+  - **Bounded per-cycle work** — a ROTATING window of `polymarket_trades.markets_per_cycle` markets (default 25, round-robin via `config["trades_market_offset"]`) plus a `polymarket_trades.max_trades_per_market_per_cycle` cap (default 500), so a task comfortably fits under the timeout (live: ~20-27s for 25 markets, ~5k trades).
+  - **Incremental commit** — the use case commits per-trade (R8 outbox), and `_persist_trades_progress` read-modify-writes the advanced cursor into `config["trade_cursors"][condition_id]` and the rotation offset into `config["trades_market_offset"]` PER MARKET, so a timeout/retry resumes at the next market instead of restarting. These are SEPARATE config keys the Wave B5 work-list seeder preserves (it only rewrites `config["markets"]`).
+  - **Batched bronze** — ONE MinIO object per market-cycle holds all the new raw trades (mirrors the CLOB adapter's one-object-per-token-cycle), replacing the per-trade put that was the dominant cost driver; the Kafka trade event + S3 `prediction_market_trades` table are the authoritative copies.
+  - Idempotency is unchanged: the use-case `prediction_market_fetch_log` dedup + the S3 consumer's `ON CONFLICT (market_id, trade_id)`. The legacy `PolymarketTradesAdapter.fetch()` (full-history, per-trade bronze) is retained for flat-config/backfill callers and tests but is no longer on the steady-state cadence.
+
+### Synthetic-document emitter (PLAN-0056 Wave B2)
+
+A prediction-market *question* is natural language, so it is routed through the existing `content.article.raw.v1` rails as a **synthetic document** — S6's NER then links the question to the entities it mentions with **zero S6 change** (PRD-0033 §7). This is the entity-linking bridge for the KG keystone (Sub-Plan C).
+
+`SyntheticDocumentEmitter` (`application/use_cases/emit_synthetic_prediction_document.py`) is invoked by `WorkerProcess._emit_synthetic_documents(results)` at the end of `_execute_polymarket_task()`, after the market snapshots are written. It runs **outside** the snapshot advisory lock in a fresh write session and is strictly best-effort — a synthetic-doc failure never fails the snapshot task.
+
+- **Document body** (`build_synthetic_document_body`): the question, then one `- {outcome name}: {price*100:.1f}%` line per outcome, then `Market closes {close_time}`, `Category: {category}`, and (when a parent-event name is supplied) `Belongs to event: {name}`. The resolution document additionally appends the resolved outcome.
+- **Payload mapping** (via the existing `build_raw_article_payload`): `source_type='polymarket'`, `title` = question, `published_at` = close_time, `content_hash` = sha256(body), `minio_bronze_key` reuses the snapshot's bronze key.
+- **Two documents per market lifetime**, each deduped on `article_fetch_log.url_hash`:
+  - first-sight — `url_hash = sha256("polymarket:<condition_id>")`
+  - resolution (emitted only when `resolution_status == "resolved"`) — `url_hash = sha256("polymarket:<condition_id>:resolved")`
+- **Idempotent:** `FetchLogRepository.exists_by_url_hash` (cheap first pass) plus the `url_hash` UNIQUE constraint (concurrency guard) mean re-polls emit **0** new documents. An empty `condition_id` emits nothing (would collide dedup keys across markets).
+- **R8 outbox:** each document writes its `article_fetch_log` row + `outbox_events` row in one transaction and commits; on error the session is rolled back and the failure counted (the emit result is committed, never merely returned/logged).
 
 ---
 
@@ -443,6 +506,18 @@ All environment variables are prefixed with `CONTENT_INGESTION_`. Nested provide
 | `CONTENT_INGESTION_POLYMARKET__BASE_URL` | `https://gamma-api.polymarket.com/markets` | Gamma API endpoint |
 | `CONTENT_INGESTION_POLYMARKET__PAGE_SIZE` | `500` | Markets per page (max 1000) |
 | `CONTENT_INGESTION_POLYMARKET__MAX_PAGES_PER_CYCLE` | `20` | Max pages per cycle (20 × 500 = 10K markets) |
+| `CONTENT_INGESTION_POLYMARKET_EVENTS__BASE_URL` | `https://gamma-api.polymarket.com/events` | Gamma events endpoint (B1) |
+| `CONTENT_INGESTION_POLYMARKET_CLOB__BASE_URL` | `https://clob.polymarket.com/prices-history` | CLOB price-history endpoint (B1) |
+| `CONTENT_INGESTION_POLYMARKET_CLOB__INTERVAL` / `__FALLBACK_INTERVAL` | `1h` / `1d` | Primary + resolved-market fallback interval (B1) |
+| `CONTENT_INGESTION_POLYMARKET_CLOB__BACKFILL_DAYS` / `__ONGOING_WINDOW_HOURS` | `14` / `6` | CLOB backfill horizon + incremental window (B1) |
+| `CONTENT_INGESTION_POLYMARKET_TRADES__BASE_URL` | `https://data-api.polymarket.com/trades` | Data-API trades endpoint (B1) |
+| `CONTENT_INGESTION_POLYMARKET_OI__BASE_URL` | `https://data-api.polymarket.com/oi` | Data-API open-interest endpoint (B1) |
+| `CONTENT_INGESTION_POLYMARKET_EVENTS__POLL_INTERVAL_SECONDS` | `3600` | Events poll cadence — 1h (B3) |
+| `CONTENT_INGESTION_POLYMARKET_CLOB__POLL_INTERVAL_SECONDS` | `21600` | CLOB history poll cadence — 6h (B3) |
+| `CONTENT_INGESTION_POLYMARKET_TRADES__POLL_INTERVAL_SECONDS` | `3600` | Trades poll cadence — 1h (B3) |
+| `CONTENT_INGESTION_POLYMARKET_OI__POLL_INTERVAL_SECONDS` | `86400` | Open-interest poll cadence — daily (B3) |
+| `CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS` | `14` | CLOB history backfill horizon; gated by `BACKFILL_ON_STARTUP` (B3) |
+| `CONTENT_INGESTION_POLYMARKET_TRADES_BACKFILL_DAYS` | `14` | Trades backfill horizon; gated by `BACKFILL_ON_STARTUP` (B3) |
 | `CONTENT_INGESTION_HTTP_CLIENT__TIMEOUT_SECONDS` | `30.0` | httpx total timeout |
 | `CONTENT_INGESTION_HTTP_CLIENT__CONNECT_TIMEOUT_SECONDS` | `5.0` | httpx connect timeout |
 | `CONTENT_INGESTION_HTTP_CLIENT__MAX_RETRIES` | `3` | Default retry count |

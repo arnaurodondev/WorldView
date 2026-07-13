@@ -134,6 +134,74 @@ export function categorize(title: string): Category {
   return "general";
 }
 
+// ── Polymarket URL builder ──────────────────────────────────────────────────────
+
+/**
+ * MALFORMED_SLUG_TAIL — regex that detects the corrupted "numeric-tail" slugs.
+ *
+ * WHY this exists: ~4/525 stored slugs have a junk tail of dash-separated
+ * numbers appended (e.g. `...-143-229-513-574-212-254`). These are NOT valid
+ * Polymarket event slugs — navigating to `/event/{that}` 404s. The clean
+ * majority (521/525) look like `will-harvey-weinstein-be-sentenced-...`.
+ *
+ * The pattern matches a trailing run of "-<digits>" groups, requiring at
+ * LEAST three groups (`-\d+` then `(-\d+){2,}`). WHY ≥3 and not ≥1: a
+ * legitimate slug can naturally end in a single number — e.g. a market about
+ * "...more-than-30-years" or "...by-2024" or even "...-game-7". Requiring a
+ * chain of 3+ purely-numeric segments is specific to the corruption pattern
+ * and avoids false-positives on real slugs that merely contain a year/number.
+ */
+const MALFORMED_SLUG_TAIL = /-\d+(-\d+){2,}$/;
+
+/**
+ * buildPolymarketUrl — produce the best Polymarket link for a market row.
+ *
+ * WHY a single shared helper: the URL was previously constructed in THREE
+ * places (the gateway transform, the dashboard widget, the /prediction-markets
+ * page), each with its own subtly-different fallback logic. The widget + page
+ * even hardcoded a title-search URL because the gateway set `url: ""`. That
+ * divergence is the "wrong links" bug — every row went to a generic text
+ * search instead of the specific market. Centralising here guarantees one
+ * behaviour everywhere.
+ *
+ * RETURN VALUE:
+ *   - A canonical deep link `https://polymarket.com/event/{slug}` when `slug`
+ *     is a clean, non-empty slug.
+ *   - The title-search fallback `https://polymarket.com/markets?_q={title}`
+ *     when the slug is null/empty/whitespace OR matches the malformed
+ *     numeric-tail pattern above. The search page always resolves to a usable
+ *     results list, so it is a safe degraded experience.
+ *
+ * WHY `/event/` (and NOT `/market/`): Polymarket serves two canonical paths.
+ * `/event/{slug}` is the grouped/standard page for the markets we ingest from
+ * the Gamma API — it is the page a human lands on from Polymarket's own UI and
+ * the one that resolves for our slugs. `/market/{slug}` is the single-binary
+ * sub-route and does NOT match our stored slugs, so using it would 404. We
+ * deliberately use `/event/` for the deep link.
+ */
+export function buildPolymarketUrl(
+  slug: string | null | undefined,
+  title: string,
+): string {
+  // WHY trim first: a slug that is whitespace-only is effectively empty and
+  // must take the search fallback, not produce `/event/%20`.
+  const cleanSlug = (slug ?? "").trim();
+
+  // The search fallback. WHY encodeURIComponent: titles contain spaces, `?`,
+  // `%`, etc. which would otherwise break the query string. `title` may be ""
+  // (the gateway sets description "" but title is always present) — an empty
+  // search still lands on Polymarket's market list rather than a broken URL.
+  const searchUrl = `https://polymarket.com/markets?_q=${encodeURIComponent(title)}`;
+
+  // Empty / whitespace slug → search fallback.
+  if (cleanSlug.length === 0) return searchUrl;
+  // Malformed numeric-tail slug → search fallback (would 404 on /event/).
+  if (MALFORMED_SLUG_TAIL.test(cleanSlug)) return searchUrl;
+
+  // Clean slug → canonical deep link.
+  return `https://polymarket.com/event/${cleanSlug}`;
+}
+
 // ── Countdown helper ──────────────────────────────────────────────────────────
 
 /**

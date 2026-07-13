@@ -1,12 +1,13 @@
 """Outbox dispatcher for intelligence_db (PRD §6.7 Block D).
 
 Polls ``intelligence_db.outbox_events`` and publishes to Kafka.
-Publishes 5 topics:
+Publishes 6 topics:
   - graph.state.changed.v1
   - intelligence.contradiction.v1
   - relation.type.proposed.v1
   - entity.canonical.created.v1 (emitted by ProvisionalEnrichmentWorker)
   - entity.narrative.generated.v1 (emitted by NarrativeGenerationWorker, Wave C)
+  - market.prediction.signal.v1 (emitted by PredictionSignalEmitter, PLAN-0056 Wave D2)
 
 NOTE: entity.dirtied.v1 is produced DIRECTLY in Block 12a — it must NOT
 appear in outbox_events.  If found, a WARNING is logged and the row is
@@ -23,6 +24,7 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
     TOPIC_CONTRADICTION,
     TOPIC_ENTITY_CANONICAL_CREATED,
     TOPIC_GRAPH_STATE_CHANGED,
+    TOPIC_MARKET_PREDICTION_SIGNAL,
     TOPIC_RELATION_PROPOSED,
     OutboxRepository,
 )
@@ -53,6 +55,10 @@ _ALLOWED_TOPICS = frozenset(
         TOPIC_RELATION_PROPOSED,
         TOPIC_ENTITY_CANONICAL_CREATED,
         _TOPIC_ENTITY_NARRATIVE_GENERATED,
+        # PLAN-0056 Wave D2: per-entity prediction signal (PredictionSignalEmitter).
+        # BP-147: every topic written via OutboxRepository.append() MUST be here or
+        # the dispatcher mark_failed()s it and the event is permanently lost.
+        TOPIC_MARKET_PREDICTION_SIGNAL,
     },
 )
 

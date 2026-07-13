@@ -896,3 +896,319 @@ class TestPgFundamentalMetricsRepository:
         session = uow.get_read_session()
         metrics = await query_available_metrics(session, instr_id)
         assert set(metrics) == {"pe_ratio", "pb_ratio", "enterprise_value"}
+
+
+# ── Prediction market repository — free-text query ESCAPE (BP-712) ────────────
+
+
+class TestPgPredictionMarketRepositoryQuery:
+    """Real-DB regression tests for the free-text ILIKE ESCAPE clause (BP-712).
+
+    Runs the ``list_markets`` free-text branch against a live TimescaleDB
+    container (``standard_conforming_strings=on`` by default) — the exact
+    condition under which the old two-backslash ESCAPE literal raised
+    asyncpg ``InvalidEscapeSequenceError`` → HTTP 500.
+    """
+
+    @staticmethod
+    async def _cleanup(uow) -> None:
+        # prediction_markets is not in the conftest TRUNCATE list, so remove the
+        # rows this test inserted to keep the shared session state clean.
+        from sqlalchemy import text as _sql_text
+
+        await uow.get_write_session().execute(_sql_text("DELETE FROM prediction_markets"))
+        await uow.commit()
+
+    @staticmethod
+    def _market(market_id: str, question: str) -> object:
+        from market_data.domain.entities import PredictionMarket
+
+        return PredictionMarket(market_id=market_id, question=question)
+
+    async def test_free_text_query_filters_without_escape_error(self, uow) -> None:
+        """A free-text query executes cleanly and filters on question text."""
+        try:
+            await uow.prediction_markets.upsert(
+                self._market("mkt-election", "US presidential election outcome 2024"),
+            )
+            await uow.prediction_markets.upsert(
+                self._market("mkt-sports", "Will the home team win the final"),
+            )
+            await uow.commit()
+
+            # Before the fix this raised InvalidEscapeSequenceError (HTTP 500).
+            pairs, total = await uow.prediction_markets.list_markets(
+                status=None,
+                query="election",
+                limit=10,
+                offset=0,
+            )
+
+            assert total == 1
+            assert len(pairs) == 1
+            assert pairs[0][0].market_id == "mkt-election"
+        finally:
+            await self._cleanup(uow)
+
+    async def test_percent_in_query_is_escaped_not_wildcard(self, uow) -> None:
+        """A literal ``%`` in the query is escaped, not treated as a wildcard.
+
+        Proves the single-backslash ESCAPE char is consistent with the
+        ``safe_query`` metacharacter escaping: ``"win 50%"`` must match a
+        literal ``50%`` substring only, so it does NOT match ``"win 50k"``.
+        """
+        try:
+            await uow.prediction_markets.upsert(
+                self._market("mkt-50k", "Will BTC win 50k this year"),
+            )
+            await uow.commit()
+
+            # Pattern becomes `%win 50\%%` — the escaped % matches a literal %,
+            # which "win 50k" does not contain → zero rows (not a wildcard hit).
+            pairs, total = await uow.prediction_markets.list_markets(
+                status=None,
+                query="win 50%",
+                limit=10,
+                offset=0,
+            )
+
+            assert total == 0
+            assert pairs == []
+        finally:
+            await self._cleanup(uow)
+
+    async def test_multi_word_query_matches_out_of_order_tokens(self, uow) -> None:
+        """R2 fix: a natural multi-word phrase matches on AND-ed tokens.
+
+        The market question does not contain the query as a verbatim substring
+        (word order differs, extra words in between), so the old whole-phrase
+        ILIKE returned 0. Tokenised AND matching now finds it.
+        """
+        try:
+            await uow.prediction_markets.upsert(
+                self._market(
+                    "mkt-dem-2028",
+                    "Who will win the 2028 Democratic presidential nomination?",
+                ),
+            )
+            await uow.prediction_markets.upsert(
+                self._market("mkt-gop-2028", "2028 Republican primary winner"),
+            )
+            await uow.commit()
+
+            # "presidential nomination" is not a contiguous substring match test
+            # here — both tokens appear (in order) but the key point is the query
+            # phrase differs from the stored question; multi-token AND matches.
+            pairs, total = await uow.prediction_markets.list_markets(
+                status=None,
+                query="Democratic 2028 nomination",
+                limit=10,
+                offset=0,
+            )
+
+            assert total == 1
+            assert len(pairs) == 1
+            assert pairs[0][0].market_id == "mkt-dem-2028"
+        finally:
+            await self._cleanup(uow)
+
+    async def test_nonsense_multi_word_phrase_matches_nothing(self, uow) -> None:
+        """A phrase whose tokens do not all co-occur in any question → 0 rows."""
+        try:
+            await uow.prediction_markets.upsert(
+                self._market(
+                    "mkt-dem-2028",
+                    "Who will win the 2028 Democratic presidential nomination?",
+                ),
+            )
+            await uow.commit()
+
+            # "presidential" is present but "bitcoin" is not → AND fails.
+            pairs, total = await uow.prediction_markets.list_markets(
+                status=None,
+                query="bitcoin presidential nomination",
+                limit=10,
+                offset=0,
+            )
+
+            assert total == 0
+            assert pairs == []
+        finally:
+            await self._cleanup(uow)
+
+
+# ── PLAN-0056 A2: prediction deeper-stream repos (real TimescaleDB) ────────────
+#
+# These tables are NOT in the conftest TRUNCATE list, so each test cleans up the
+# rows it inserts in a try/finally (same pattern as the free-text query tests).
+
+
+class TestPgPredictionStreamRepositories:
+    @staticmethod
+    async def _cleanup(uow) -> None:
+        from sqlalchemy import text as _sql_text
+
+        session = uow.get_write_session()
+        for tbl in (
+            "prediction_market_prices",
+            "prediction_market_trades",
+            "prediction_market_oi",
+            "prediction_events",
+        ):
+            await session.execute(_sql_text(f"DELETE FROM {tbl}"))  # noqa: S608 — tbl is a hardcoded constant list
+        await uow.commit()
+
+    async def test_price_insert_dedup_and_list(self, uow) -> None:
+        from market_data.domain.entities import PredictionMarketPrice
+
+        try:
+            p1 = PredictionMarketPrice(
+                market_id="mkt-p",
+                token_id="tok-a",
+                interval="1h",
+                window_start_ts=_utc(2026, 1, 1),
+                price=Decimal("0.40"),
+            )
+            assert await uow.prediction_market_prices.insert_if_not_exists(p1) is True
+            # Same natural key → conflict → False, no duplicate row.
+            assert await uow.prediction_market_prices.insert_if_not_exists(p1) is False
+            await uow.commit()
+
+            rows = await uow.prediction_market_prices.list_prices(
+                "mkt-p", token_id="tok-a", interval="1h", from_dt=None, to_dt=None, limit=10
+            )
+            assert len(rows) == 1
+            assert rows[0].price == Decimal("0.400000")
+        finally:
+            await self._cleanup(uow)
+
+    async def test_price_bulk_insert_counts_and_orders_desc(self, uow) -> None:
+        from market_data.domain.entities import PredictionMarketPrice
+
+        try:
+            prices = [
+                PredictionMarketPrice(
+                    market_id="mkt-p",
+                    token_id="tok-a",
+                    interval="1h",
+                    window_start_ts=_utc(2026, 1, d),
+                    price=Decimal(f"0.{d:02d}"),
+                )
+                for d in (1, 2, 3)
+            ]
+            inserted = await uow.prediction_market_prices.bulk_insert(prices)
+            await uow.commit()
+            assert inserted == 3
+
+            # Re-inserting the same 3 + 1 new → only the new one counts.
+            more = [
+                *prices,
+                PredictionMarketPrice(
+                    market_id="mkt-p",
+                    token_id="tok-a",
+                    interval="1h",
+                    window_start_ts=_utc(2026, 1, 4),
+                    price=Decimal("0.44"),
+                ),
+            ]
+            assert await uow.prediction_market_prices.bulk_insert(more) == 1
+            await uow.commit()
+
+            rows = await uow.prediction_market_prices.list_prices(
+                "mkt-p",
+                token_id=None,
+                interval=None,
+                from_dt=_utc(2026, 1, 2),
+                to_dt=_utc(2026, 1, 3),
+                limit=10,
+            )
+            # Date-range filter → only Jan 2 and Jan 3, newest first.
+            assert [r.window_start_ts.day for r in rows] == [3, 2]
+        finally:
+            await self._cleanup(uow)
+
+    async def test_trade_insert_dedup_and_list_since(self, uow) -> None:
+        from market_data.domain.entities import PredictionMarketTrade
+
+        try:
+            t1 = PredictionMarketTrade(
+                market_id="mkt-t",
+                trade_id="trd-1",
+                token_id="tok-a",
+                price=Decimal("0.5"),
+                side="buy",
+                ts=_utc(2026, 1, 1),
+            )
+            t2 = PredictionMarketTrade(
+                market_id="mkt-t",
+                trade_id="trd-2",
+                token_id="tok-a",
+                price=Decimal("0.6"),
+                side="sell",
+                ts=_utc(2026, 1, 5),
+            )
+            assert await uow.prediction_market_trades.bulk_insert([t1, t2]) == 2
+            # Dedup on (market_id, trade_id, ts).
+            assert await uow.prediction_market_trades.insert_if_not_exists(t1) is False
+            await uow.commit()
+
+            recent = await uow.prediction_market_trades.list_trades("mkt-t", since=_utc(2026, 1, 3), limit=10)
+            assert [t.trade_id for t in recent] == ["trd-2"]
+        finally:
+            await self._cleanup(uow)
+
+    async def test_oi_upsert_overwrites_and_get_latest(self, uow) -> None:
+        from datetime import date
+
+        from market_data.domain.entities import PredictionMarketOI
+
+        try:
+            await uow.prediction_market_oi.upsert(
+                PredictionMarketOI("mkt-o", date(2026, 1, 1), Decimal("100"), Decimal("10"))
+            )
+            # Same (market_id, snapshot_date) → overwrite money fields.
+            await uow.prediction_market_oi.upsert(
+                PredictionMarketOI("mkt-o", date(2026, 1, 1), Decimal("250"), Decimal("25"))
+            )
+            await uow.prediction_market_oi.upsert(PredictionMarketOI("mkt-o", date(2026, 1, 2), Decimal("300"), None))
+            await uow.commit()
+
+            rows = await uow.prediction_market_oi.list_oi("mkt-o", from_date=None, to_date=None, limit=10)
+            assert len(rows) == 2  # two distinct days, not three inserts
+            by_day = {r.snapshot_date: r for r in rows}
+            assert by_day[date(2026, 1, 1)].total_oi_usd == Decimal("250.0000")
+
+            latest = await uow.prediction_market_oi.get_latest("mkt-o")
+            assert latest is not None
+            assert latest.snapshot_date == date(2026, 1, 2)
+            assert latest.total_volume_24h_usd is None
+        finally:
+            await self._cleanup(uow)
+
+    async def test_event_upsert_find_and_list(self, uow) -> None:
+        from market_data.domain.entities import PredictionEvent
+
+        try:
+            await uow.prediction_events.upsert(
+                PredictionEvent(event_id="evt-1", name="Election", category="politics", market_count=2)
+            )
+            # Upsert on event_id → update metadata (market_count grows).
+            await uow.prediction_events.upsert(
+                PredictionEvent(event_id="evt-1", name="Election 2028", category="politics", market_count=5)
+            )
+            await uow.prediction_events.upsert(
+                PredictionEvent(event_id="evt-2", name="World Cup", category="sports", market_count=1)
+            )
+            await uow.commit()
+
+            found = await uow.prediction_events.find_by_event_id("evt-1")
+            assert found is not None
+            assert found.name == "Election 2028"
+            assert found.market_count == 5
+
+            events, total = await uow.prediction_events.list_events(limit=10, offset=0)
+            assert total == 2
+            assert {e.event_id for e in events} == {"evt-1", "evt-2"}
+            assert await uow.prediction_events.find_by_event_id("missing") is None
+        finally:
+            await self._cleanup(uow)

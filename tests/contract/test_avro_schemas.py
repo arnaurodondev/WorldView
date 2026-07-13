@@ -20,13 +20,20 @@ ENVELOPE_FIELDS = {"event_id", "event_type", "schema_version", "occurred_at"}
 
 # Expected field counts per schema (from PRD-0001 §6.3.2)
 EXPECTED_FIELD_COUNTS: dict[str, int] = {
-    "content.article.raw.v1": 14,
-    "content.article.stored.v1": 15,
+    # PLAN-0056 Wave C2b (2026-07-10): external_id added (nullable passthrough).
+    # NOTE: the prior expected value of 14 was stale — the schema already carried
+    # 15 fields (tenant_id was added without bumping this count); the true actual
+    # is now 16 with external_id.
+    "content.article.raw.v1": 16,
+    # PLAN-0056 Wave C2b: external_id added. Prior value 15 was likewise stale
+    # (tenant_id already made it 16); true actual is now 17 with external_id.
+    "content.article.stored.v1": 17,
     # PLAN-0084: added raw_relations_json, raw_events_json, raw_claims_json + correlation_id
     # PLAN-0086 (?): tenant_id added (24 fields).
     # PLAN-0087 D-INIT-6 (2026-05-09): source_name added so KG enriched_consumer
     # can stamp evidence-row provenance without an R7 cross-DB query (25 fields).
-    "nlp.article.enriched.v1": 25,
+    # PLAN-0056 Wave C2b (2026-07-10): external_id added (26 fields).
+    "nlp.article.enriched.v1": 27,  # PLAN-0056 Wave C3: +source_title passthrough (26→27)
     "nlp.signal.detected.v1": 14,
     "graph.state.changed.v1": 12,
     "intelligence.contradiction.v1": 12,
@@ -42,6 +49,13 @@ EXPECTED_FIELD_COUNTS: dict[str, int] = {
     # + 6 data (instrument_id, symbol, exchange, entity_id, correlation_id, causation_id).
     "market.instrument.discovered.v1": 10,
     "market.dataset.fetched": 27,  # Existing mature schema: 27 fields (claim-check pattern)
+    # PLAN-0056 Wave Z1 — prediction-market Wave 2 topics (6 new). Envelope(4) + payload.
+    "market.prediction.history.v1": 13,
+    "market.prediction.event.v1": 11,
+    "market.prediction.trade.v1": 12,
+    "market.prediction.oi.v1": 9,
+    "market.prediction.move.v1": 17,
+    "market.prediction.signal.v1": 12,
     "portfolio.events.v1": 10,  # 10 record types in multi-record schema file
     "portfolio.watchlist.updated.v1": 9,
     "watchlist.item_added": 13,
@@ -438,3 +452,252 @@ class TestMarketInstrumentDiscoveredV1Schema:
         rows = list(fastavro.reader(buf))
         assert rows[0]["entity_id"] == sample["entity_id"]
         assert rows[0]["correlation_id"] == "corr-1"
+
+
+@pytest.mark.contract
+class TestPredictionWave2Schemas:
+    """PLAN-0056 Wave Z1: the 6 new prediction-market Wave 2 topics.
+
+    Each must parse, carry the standard envelope, and round-trip through fastavro
+    with both a minimal payload (optional fields fall back to defaults — R5
+    forward-compat) and a fully-populated payload.
+    """
+
+    _ENVELOPE: ClassVar[dict] = {
+        "event_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9cf",
+        "occurred_at": "2026-07-09T12:00:00Z",
+    }
+
+    # (schema stem, minimal required payload beyond envelope) — optional fields omitted on purpose.
+    _MINIMAL: ClassVar[dict[str, dict]] = {
+        "market.prediction.history.v1": {
+            "market_id": "0xcond",
+            "token_id": "0xtok",
+            "interval": "1h",
+            "window_start_ts": "2026-07-09T11:00:00Z",
+            "price": 0.63,
+        },
+        "market.prediction.event.v1": {
+            "group_id": "evt-123",
+            "name": "2028 US Presidential Election",
+        },
+        "market.prediction.trade.v1": {
+            "market_id": "0xcond",
+            "trade_id": "t-1",
+            "token_id": "0xtok",
+            "price": 0.63,
+            "size_usd": 250.0,
+            "side": "buy",
+            "ts": "2026-07-09T11:30:00Z",
+        },
+        "market.prediction.oi.v1": {
+            "market_id": "0xcond",
+            "snapshot_date": "2026-07-09",
+            "total_oi_usd": 10000.0,
+            "total_volume_24h_usd": 5000.0,
+        },
+        "market.prediction.move.v1": {
+            "market_id": "0xcond",
+            "token_id": "0xtok",
+            "interval": "1h",
+            "prev_price": 0.50,
+            "new_price": 0.66,
+            "delta": 0.16,
+            "direction": "up",
+            "window_start_ts": "2026-07-09T11:00:00Z",
+        },
+        "market.prediction.signal.v1": {
+            "subject_entity_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9d0",
+            "market_id": "0xcond",
+            "trigger": "material_move",
+            "question": "Will Company X miss Q3 earnings?",
+        },
+    }
+
+    # Fields whose Avro default must apply when omitted (forward-compat proof).
+    _DEFAULTED: ClassVar[dict[str, dict]] = {
+        "market.prediction.history.v1": {
+            "outcome_name": None,
+            "source": "polymarket_clob",
+            "is_backfill": False,
+            "correlation_id": None,
+        },
+        "market.prediction.event.v1": {
+            "category": None,
+            "start_date": None,
+            "end_date": None,
+            "market_count": 0,
+            "correlation_id": None,
+        },
+        "market.prediction.trade.v1": {"correlation_id": None},
+        "market.prediction.oi.v1": {"correlation_id": None},
+        "market.prediction.move.v1": {
+            "outcome_name": None,
+            "liquidity": None,
+            "volume_24h": None,
+            "is_backfill": False,
+            "correlation_id": None,
+        },
+        "market.prediction.signal.v1": {
+            "market_impact_score": 0.0,
+            "polarity": "neutral",
+            "url": None,
+            "correlation_id": None,
+        },
+    }
+
+    @pytest.mark.parametrize("schema_name", list(_MINIMAL.keys()))
+    def test_parses_and_has_envelope(self, schema_name: str) -> None:
+        schema = _load_schema(SCHEMA_DIR / f"{schema_name}.avsc")
+        assert fastavro.parse_schema(schema) is not None
+        field_names = {f["name"] for f in schema["fields"]}
+        assert ENVELOPE_FIELDS <= field_names, f"{schema_name} missing envelope fields"
+
+    @pytest.mark.parametrize("schema_name", list(_MINIMAL.keys()))
+    def test_minimal_payload_roundtrip_applies_defaults(self, schema_name: str) -> None:
+        import io
+
+        schema = _load_schema(SCHEMA_DIR / f"{schema_name}.avsc")
+        parsed = fastavro.parse_schema(schema)
+        record = {**self._ENVELOPE, **self._MINIMAL[schema_name]}
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [record])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert len(rows) == 1
+        # Envelope round-trips; event_type/schema_version defaults are applied.
+        assert rows[0]["event_id"] == record["event_id"]
+        assert rows[0]["schema_version"] == 1
+        assert rows[0]["event_type"].startswith("market.prediction.")
+        # Every omitted optional field must fall back to its declared default.
+        for field_name, expected in self._DEFAULTED[schema_name].items():
+            assert rows[0][field_name] == expected, f"{schema_name}.{field_name} default not applied"
+
+
+@pytest.mark.contract
+class TestExternalIdPassthroughC2b:
+    """PLAN-0056 Wave C2b: the ``external_id`` passthrough field.
+
+    The field carries the upstream market/source identity
+    ("polymarket:<condition_id>") verbatim through
+    content.article.raw.v1 → content.article.stored.v1 → nlp.article.enriched.v1.
+    It MUST be nullable (union [null, string]) with a null default so old
+    producers/consumers that pre-date the field stay forward-compatible (R5).
+    """
+
+    _SCHEMAS = (
+        "content.article.raw.v1",
+        "content.article.stored.v1",
+        "nlp.article.enriched.v1",
+    )
+
+    @pytest.mark.parametrize("schema_name", _SCHEMAS)
+    def test_external_id_is_nullable_with_null_default(self, schema_name: str) -> None:
+        schema = _load_schema(SCHEMA_DIR / f"{schema_name}.avsc")
+        fields_by_name = {f["name"]: f for f in schema["fields"]}
+        assert "external_id" in fields_by_name, f"{schema_name} missing external_id"
+        field = fields_by_name["external_id"]
+        assert field["type"] == ["null", "string"], f"{schema_name}.external_id must be union [null, string]"
+        assert field.get("default", "MISSING") is None, f"{schema_name}.external_id must default to null (R5)"
+
+    def test_raw_round_trips_with_and_without_external_id(self) -> None:
+        """A producer that sets external_id AND a legacy one that omits it both decode."""
+        import io
+
+        schema = _load_schema(SCHEMA_DIR / "content.article.raw.v1.avsc")
+        parsed = fastavro.parse_schema(schema)
+
+        base = {
+            "event_id": "018f4a00-0000-7000-0000-000000000010",
+            "event_type": "content.article.raw",
+            "schema_version": 1,
+            "occurred_at": "2026-07-10T12:00:00Z",
+            "doc_id": "018f4a00-0000-7000-0000-000000000011",
+            "source_type": "polymarket",
+            "minio_bronze_key": "bronze/key",
+            "content_hash": "abc",
+            "fetch_id": "018f4a00-0000-7000-0000-000000000012",
+        }
+        # New producer: external_id populated.
+        with_ext = {**base, "external_id": "polymarket:0xcond"}
+        # Legacy producer: external_id omitted → Avro null default applies.
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [with_ext, base])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert rows[0]["external_id"] == "polymarket:0xcond"
+        assert rows[1]["external_id"] is None
+
+    def test_enriched_round_trips_with_and_without_external_id(self) -> None:
+        import io
+
+        schema = _load_schema(SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        parsed = fastavro.parse_schema(schema)
+
+        base = {
+            "event_id": "018f4a00-0000-7000-0000-000000000020",
+            "event_type": "nlp.article.enriched",
+            "schema_version": 1,
+            "occurred_at": "2026-07-10T12:00:00Z",
+            "doc_id": "018f4a00-0000-7000-0000-000000000021",
+            "source_type": "polymarket",
+            "routing_tier": "medium",
+            "routing_score": 0.55,
+            "section_count": 1,
+            "chunk_count": 1,
+            "mention_count": 0,
+        }
+        with_ext = {**base, "external_id": "polymarket:0xcond"}
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [with_ext, base])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert rows[0]["external_id"] == "polymarket:0xcond"
+        assert rows[1]["external_id"] is None
+
+
+@pytest.mark.contract
+class TestSourceTitlePassthroughC3:
+    """PLAN-0056 Wave C3: the ``source_title`` passthrough on nlp.article.enriched.v1.
+
+    S6 copies content.article.stored.v1.title verbatim into the enriched event's
+    ``source_title`` (for Polymarket synthetic docs this IS the market question).
+    The field MUST be nullable (union [null, string]) with a null default so old
+    producers/consumers that pre-date the field stay forward-compatible (R5).
+    """
+
+    def test_source_title_is_nullable_with_null_default(self) -> None:
+        schema = _load_schema(SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        fields_by_name = {f["name"]: f for f in schema["fields"]}
+        assert "source_title" in fields_by_name, "enriched schema missing source_title"
+        field = fields_by_name["source_title"]
+        assert field["type"] == ["null", "string"], "source_title must be union [null, string]"
+        assert field.get("default", "MISSING") is None, "source_title must default to null (R5)"
+
+    def test_enriched_round_trips_with_and_without_source_title(self) -> None:
+        """A producer that sets source_title AND a legacy one that omits it both decode."""
+        import io
+
+        schema = _load_schema(SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        parsed = fastavro.parse_schema(schema)
+
+        base = {
+            "event_id": "018f4a00-0000-7000-0000-000000000030",
+            "event_type": "nlp.article.enriched",
+            "schema_version": 1,
+            "occurred_at": "2026-07-10T12:00:00Z",
+            "doc_id": "018f4a00-0000-7000-0000-000000000031",
+            "source_type": "polymarket",
+            "routing_tier": "medium",
+            "routing_score": 0.55,
+            "section_count": 1,
+            "chunk_count": 1,
+            "mention_count": 0,
+        }
+        with_title = {**base, "source_title": "Will Company X miss Q3 earnings?"}
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [with_title, base])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert rows[0]["source_title"] == "Will Company X miss Q3 earnings?"
+        assert rows[1]["source_title"] is None

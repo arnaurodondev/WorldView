@@ -45,6 +45,9 @@ import { ConfidenceTrendSparkline } from "@/components/intelligence/ConfidenceTr
 import { SourceDistributionList } from "@/components/intelligence/SourceDistributionList";
 import { NarrativeCard } from "@/components/intelligence/NarrativeCard";
 import { KeyMetricsGrid } from "@/components/intelligence/KeyMetricsGrid";
+// PLAN-0056 Wave E2: prediction markets that reference this entity, with the
+// LLM-classified bullish/bearish/neutral polarity ("for or against" read).
+import { EntityPredictionsSection } from "@/components/intelligence/EntityPredictionsSection";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, BarChart2, ExternalLink } from "lucide-react";
@@ -612,6 +615,14 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
               </div>
             </div>
           )}
+
+          {/* ── Prediction markets referencing this entity ──────────────────── */}
+          {/* WHY here (after news, before metrics): prediction markets are a
+              forward-looking signal about the entity — the polarity says whether
+              the crowd is betting FOR or AGAINST it. The component renders its own
+              header + returns null when the entity has no linked markets (the
+              common case), so it never leaves a dangling header. */}
+          <EntityPredictionsSection entityId={displayEntityId} />
 
           {/* ── Key metrics grid ──────────────────────────────────────────── */}
           {Object.keys(displayIntel.key_metrics).length > 0 && (

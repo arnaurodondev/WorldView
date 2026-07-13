@@ -5,8 +5,18 @@
 import type {
   PredictionMarket,
   PredictionMarketsResponse,
+  PredictionMarketPriceHistory,
+  PredictionMarketTrades,
+  PredictionEventsResponse,
+  EntityPredictionsResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
+// WHY import here: URL construction is centralised in lib/prediction-markets so
+// the gateway transform, the dashboard widget, and the /prediction-markets page
+// all produce IDENTICAL links. Previously this transform hardcoded `url: ""`,
+// forcing the two UI files to build their own (title-search) URL — the root
+// cause of the "every row links to a generic search" bug.
+import { buildPolymarketUrl } from "@/lib/prediction-markets";
 
 export function createPredictionMarketsApi(t: string | undefined) {
   return {
@@ -82,18 +92,18 @@ export function createPredictionMarketsApi(t: string | undefined) {
           entity_ids: [], // Not available in summary response — would need entity linking
           tickers: [], // Same — summary doesn't include ticker associations
           source: "polymarket" as const, // Currently only Polymarket is integrated (PRD-0019)
-          // WHY a search URL by default (density bundle 2026-05-09): the previous
-          // ``/event/{slug}`` pattern returned 404 for many markets — Polymarket's
-          // canonical URLs distinguish ``/event/`` (grouped market) from
-          // ``/market/`` (single binary), and the ``slug`` field on the Gamma
-          // ``markets`` payload does NOT reliably match either path. The most
-          // robust user-facing fallback is the search page, which always resolves
-          // to a working result for any title. We empty the ``url`` so the widget's
-          // own ``url -> slug -> search`` ladder still runs and prefers the search.
-          url: "",
-          // WHY pass market_slug through: PredictionMarketsWidget (Wave A-4) builds
-          // the URL client-side using market_slug as a second fallback after url.
-          // Preserving it avoids re-fetching when url is empty.
+          // WHY populate url here (2026-06-28 "wrong links" fix): the transform
+          // used to hardcode ``url: ""`` on the theory that `/event/{slug}` 404s,
+          // pushing a title-search fallback into the two UI files. But 521/525
+          // stored slugs ARE valid Polymarket ``/event/`` slugs — emptying the
+          // url sent EVERY row to a generic text search. buildPolymarketUrl now
+          // returns the canonical ``/event/{slug}`` deep link for clean slugs and
+          // gracefully falls back to the title-search URL for the ~4 malformed
+          // (numeric-tail) slugs and any null/empty slug. Single source of truth.
+          url: buildPolymarketUrl(m.market_slug, m.question),
+          // WHY still pass market_slug through: the UI types/consumers expect it,
+          // and it lets a consumer re-derive the URL defensively via the same
+          // helper if it ever needs to (avoids re-fetching the payload).
           market_slug: m.market_slug,
           // 2026-06-10 fix: forward the server category. The PredictionMarket
           // type declared `category?` since PLAN-0049 but the transform never
@@ -191,6 +201,100 @@ export function createPredictionMarketsApi(t: string | undefined) {
       points.reverse();
 
       return { market_id: raw.market_id, points };
+    },
+
+    /**
+     * getPredictionMarketPriceHistory — per-token INTERVAL price bars (Wave E1/E2).
+     *
+     * WHY a SECOND history method (not overloading getPredictionMarketHistory):
+     * the legacy method above returns raw probability SNAPSHOTS keyed by
+     * `points:[{snapshot_at, yes_probability}]` and is consumed by the dashboard
+     * widget's delta+sparkline. This method hits the SAME S9 route but with an
+     * `interval` query param, which flips S3 onto the `prediction_market_prices`
+     * hypertable and returns a DIFFERENT shape (`points:[{window_start_ts, price,
+     * token_id, outcome_name}]`, one row per outcome token per bucket). Two
+     * distinct return shapes ⇒ two methods, so neither caller has to branch on
+     * the response union. The ProbabilityChart uses this one.
+     *
+     * @param conditionId Polymarket conditionId / S3 market_id.
+     * @param interval    Bucket size: "1h" | "1d" | "1w".
+     */
+    async getPredictionMarketPriceHistory(
+      conditionId: string,
+      interval: "1h" | "1d" | "1w" = "1d",
+    ): Promise<PredictionMarketPriceHistory> {
+      // WHY interval on the query string: S3 only serves interval bars when the
+      // param is present (omitting it returns the legacy snapshot shape). limit
+      // caps the bar count so a long-lived 1h series can't return thousands of
+      // rows to the browser.
+      const qs = new URLSearchParams({ interval, limit: "500" }).toString();
+      return apiFetch<PredictionMarketPriceHistory>(
+        `/v1/signals/prediction-markets/${encodeURIComponent(conditionId)}/history?${qs}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getPredictionMarketTrades — recent executed fills for a market (Wave E1/E2).
+     *
+     * Newest-first. Powers the detail Sheet's "recent flow" strip. `limit`
+     * bounds the strip; the default 30 is enough to read the last flow burst
+     * without paging.
+     */
+    async getPredictionMarketTrades(
+      conditionId: string,
+      limit = 30,
+    ): Promise<PredictionMarketTrades> {
+      const qs = new URLSearchParams({ limit: String(limit) }).toString();
+      return apiFetch<PredictionMarketTrades>(
+        `/v1/signals/prediction-markets/${encodeURIComponent(conditionId)}/trades?${qs}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getPredictionEvents — Polymarket "event" groups (Wave E1/E2).
+     *
+     * Each item is a group header (name + category + market_count). NOTE: the
+     * list response does NOT enumerate the child markets — S3 has no
+     * event_id→markets edge on the wire yet — so the Events section renders the
+     * group metadata and cannot (honestly) nest the individual market rows.
+     */
+    async getPredictionEvents(
+      params: { limit?: number; offset?: number } = {},
+    ): Promise<PredictionEventsResponse> {
+      const qs = new URLSearchParams(
+        Object.entries(params)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => [k, String(v)]),
+      ).toString();
+      return apiFetch<PredictionEventsResponse>(
+        `/v1/signals/prediction-markets/events${qs ? `?${qs}` : ""}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getEntityPredictions — prediction markets that reference an entity (Wave E1).
+     *
+     * Backed by S7 GET /v1/entities/{id}/predictions. Each item carries a
+     * `polarity` (bullish/bearish/neutral) that is the directional read FOR the
+     * entity. An entity with no linked markets returns `{items:[], total:0}` —
+     * never a 404 (absence of links is a valid state).
+     */
+    async getEntityPredictions(
+      entityId: string,
+      params: { limit?: number; offset?: number } = {},
+    ): Promise<EntityPredictionsResponse> {
+      const qs = new URLSearchParams(
+        Object.entries(params)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => [k, String(v)]),
+      ).toString();
+      return apiFetch<EntityPredictionsResponse>(
+        `/v1/entities/${encodeURIComponent(entityId)}/predictions${qs ? `?${qs}` : ""}`,
+        { token: t },
+      );
     },
   };
 }

@@ -6,22 +6,12 @@ WORKDIR /build
 
 RUN pip install --no-cache-dir uv==0.4.29
 
-# Cache-bust for the shared-lib COPY layers below.
-#
-# WHY: BuildKit's `local` build-context source op is content/metadata-addressed
-# and is NOT invalidated by `docker build --no-cache` (that flag only re-runs
-# RUN/COPY ops, it does not re-snapshot the local source those ops read from).
-# When an edited file under libs/<x>/src happened to present metadata (size +
-# mtime + inode) matching a prior snapshot, BuildKit fed the `COPY libs/<x>/src`
-# layer a STALE snapshot while genuinely-changed services/rag-chat/src was
-# re-transferred — silently shipping old shared-lib code (notably libs/prompts:
-# the container kept serving an old synthesis-prompt version after a rebuild).
-# See docs/audits/2026-06-27-compose-build-stale-prompts.md.
-#
-# Changing CACHE_BUST forces this RUN (and therefore every COPY below it) to
-# re-resolve the local source, defeating the stale dedup. scripts/rebuild_service.sh
-# passes a per-commit/per-worktree value; the default `unset` keeps plain
-# `docker build` behaviour unchanged.
+# Cache-bust for the shared-lib COPY layers below — defeats the BuildKit
+# metadata-match stale-snapshot bug where an edited libs/<x>/src file (notably
+# libs/prompts prompt VERSIONS) silently ships OLD code. Changing CACHE_BUST
+# forces this RUN + every COPY below to re-run. This was wrongly removed during
+# the build-opt pass (the .next fix does NOT cover libs/prompts). See
+# docs/ops/docker-build-hygiene.md.
 ARG CACHE_BUST=unset
 RUN echo "cache-bust=${CACHE_BUST}"
 

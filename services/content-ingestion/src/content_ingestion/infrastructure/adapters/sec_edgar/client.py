@@ -53,6 +53,7 @@ class SECEdgarClient:
         from_date: str = "",
         to_date: str = "",
         forms: str = "",
+        ciks: str = "",
     ) -> list[dict[str, Any]]:
         """Search EFTS for recent filings.
 
@@ -60,6 +61,12 @@ class SECEdgarClient:
             from_date: Start date ``YYYY-MM-DD``.
             to_date: End date ``YYYY-MM-DD``.
             forms: Comma-separated form types.  Defaults to ``default_forms`` from config.
+            ciks: Optional comma-separated, zero-padded 10-digit CIK(s) to scope the
+                search to specific filers.  When empty, EFTS returns the most-recent
+                filings across ALL filers (date-sorted) — which is why a watched
+                company (e.g. Apple) is otherwise never ingested: its filings are
+                diluted out of the global date-sorted result set.  Passing the
+                company's CIK pins the search to that filer (coverage fix, R1 Fix ②).
 
         Returns:
             List of filing metadata dicts.
@@ -75,6 +82,9 @@ class SECEdgarClient:
             params["dateRange"] = "custom"
             params["startdt"] = from_date
             params["enddt"] = to_date
+        # EFTS scopes results to specific filers via the ``ciks`` query param.
+        if ciks:
+            params["ciks"] = ciks
 
         headers = {"User-Agent": self._user_agent}
 
@@ -93,6 +103,45 @@ class SECEdgarClient:
         if not isinstance(hits, list):
             return []
         return hits  # type: ignore[no-any-return]
+
+    async def fetch_filing_manifest(
+        self,
+        *,
+        cik: str,
+        accession_no: str,
+    ) -> dict[str, Any]:
+        """Fetch the filing's JSON manifest (``index.json``).
+
+        The manifest lists every document in the filing (primary document, XBRL
+        instance/linkbases, exhibits, R-viewer files) with ``name``/``type``/``size``.
+        We parse it to resolve the *primary* document filename so we can download
+        the actual 10-K/10-Q/8-K narrative rather than the ~40-word index page
+        (R1 root cause — see docs/audits/2026-07-04-sec-filings-ingestion-storage-gap.md).
+
+        Args:
+            cik: Central Index Key (no leading zeros).
+            accession_no: Accession number (dashes are stripped for the URL).
+
+        Returns:
+            The parsed manifest dict (``{"directory": {"item": [...]}}``), or an
+            empty dict if the response is not a JSON object.
+
+        Raises:
+            AdapterError: On HTTP errors.
+        """
+        acc_clean = accession_no.replace("-", "")
+        url = f"{self._filing_base_url}/{cik}/{acc_clean}/index.json"
+        headers = {"User-Agent": self._user_agent}
+
+        async with self._semaphore:
+            response = await self._http.get(url, headers=headers)
+
+        if response.status_code >= 400:
+            msg = f"SEC EDGAR manifest fetch error: HTTP {response.status_code} for {url}"
+            raise AdapterError(msg)
+
+        data = response.json()
+        return data if isinstance(data, dict) else {}
 
     async def fetch_filing_document(
         self,

@@ -1,4 +1,4 @@
-version: "5"
+version: "8"
 tools:
   - name: get_price_history
     description: >
@@ -680,6 +680,55 @@ tools:
       - "What's happening with NVDA this week?"
       - "Any recent news about Tesla?"
 
+  - name: get_filings
+    description: >
+      Retrieves a company's SEC EDGAR filings (10-K, 10-Q, 8-K, DEF 14A, S-1,
+      etc.), each returned with a clickable link to the primary filing on
+      sec.gov. **Use this tool — NOT search_documents — for ANY question about a
+      company's regulatory filings, annual/quarterly reports, or "where can I read
+      the official filing".** Triggers: "show me Apple's latest 10-K", "list
+      NVDA's recent 8-K filings", "link me to Tesla's annual report", "what did
+      MSFT file with the SEC this quarter". Identify the company by ticker (or
+      entity_id). Returns filings newest-first with the form type, filed date, and
+      the EDGAR URL as the citation source. The form_type filter is best-effort
+      (the form label is recovered from the filing text); when no filing matches
+      the requested form the tool still returns the company's recent filings so
+      the user can verify via the EDGAR link.
+    parameters:
+      - name: ticker
+        type: string
+        description: "Stock ticker (e.g. 'AAPL'). Provide this OR entity_id."
+        required: false
+      - name: entity_id
+        type: string
+        description: "Canonical entity UUID. Provide this OR ticker (entity_id wins if both given)."
+        required: false
+      - name: form_type
+        type: string
+        description: >
+          Optional SEC form filter, e.g. "10-K", "10-Q", "8-K", "DEF 14A".
+          Best-effort: matched against the form label detected in the filing.
+        required: false
+      - name: date_from
+        type: date
+        description: "Earliest filed date (YYYY-MM-DD). Optional."
+        required: false
+      - name: date_to
+        type: date
+        description: "Latest filed date (YYYY-MM-DD). Optional."
+        required: false
+      - name: max_results
+        type: integer
+        description: "Max filings to return (1-20). Default 10."
+        required: false
+    source_type: "sec_edgar"
+    since: "v5"
+    deprecated_at: null
+    example_queries:
+      - "Show me Apple's latest 10-K filing"
+      - "List NVDA's recent 8-K filings with links"
+      - "Link me to Tesla's annual report on EDGAR"
+
   - name: get_market_movers
     description: >
       Returns the top gainers, losers, or most-active stocks over a time period.
@@ -751,6 +800,86 @@ tools:
     example_queries:
       - "What companies are reporting earnings this week?"
       - "When does Apple next report earnings?"
+
+  - name: get_prediction_markets
+    description: >
+      Searches Polymarket prediction markets by topic, entity, or keyword and returns
+      the top matching markets with the current outcome probabilities (implied odds),
+      resolution date, 24h volume, and category. Use when the user asks what the market
+      is pricing for a future event — elections, Fed rate decisions, crypto price
+      targets, AI milestones, sports outcomes, or any "will X happen?" / "what are the
+      odds of Y" question. Each returned market links to its live Polymarket event page.
+    parameters:
+      - name: query
+        type: string
+        description: >
+          Free-text topic / entity / keyword to match against the market question
+          (e.g. 'Fed rate cut', 'Bitcoin 100k', 'presidential election'). Optional —
+          omit to list the most recently-updated open markets.
+        required: false
+      - name: category
+        type: string
+        description: >
+          Optional category filter. Suggested values: macro, politics, sports, crypto,
+          ai, energy, tech, general (non-binding — backend does case-insensitive
+          equality only).
+        required: false
+      - name: status
+        type: string
+        enum: [open, resolved, all]
+        description: "Market resolution status to filter on. Default 'open'."
+        required: false
+      - name: limit
+        type: integer
+        description: Max markets to return (1-50). Default 10.
+        required: false
+    source_type: "market_data"
+    since: "v6"
+    deprecated_at: null
+    example_queries:
+      - "What are the odds the Fed cuts rates in March?"
+      - "What is Polymarket pricing for the next presidential election?"
+      - "Show me prediction markets about Bitcoin hitting 100k"
+
+  - name: get_market_sizing
+    description: >
+      Returns curated TAM / total-addressable-market, served-market-size, and
+      segment-share ESTIMATES for a sector or segment. Use this — not memory —
+      whenever a projection, what-if, sensitivity, or share-shift question needs a
+      market size, TAM, served market, or vendor share as a scenario parameter
+      (e.g. "if AMD captures 15% of the AI accelerator TAM, what revenue is that?",
+      "how big is the data-center CPU market?", "HBM market share"). Covers
+      semiconductor segments (AI accelerator/data-center GPU, data-center CPU, HBM,
+      foundry, DRAM, NAND, analog, automotive, EDA), smartphone (revenue, units,
+      mobile SoC), and cloud (IaaS/PaaS, SaaS, generative-AI platform,
+      cybersecurity, data-center capex). IMPORTANT: this is ANALYST-ESTIMATE
+      REFERENCE DATA with an as-of date, NOT a real-time feed — present every
+      figure as a dated estimate and cite it ([get_market_sizing row N]).
+    parameters:
+      - name: query
+        type: string
+        description: >
+          Free-text sector / segment / keyword to match (e.g. 'AI accelerator TAM',
+          'data-center CPU market', 'HBM share', 'cloud infrastructure',
+          'smartphone units'). Optional — omit to list reference rows (optionally
+          narrowed by category).
+        required: false
+      - name: category
+        type: string
+        enum: [semiconductor, smartphone, cloud]
+        description: "Optional coarse category filter."
+        required: false
+      - name: limit
+        type: integer
+        description: Max reference rows to return (1-20). Default 5.
+        required: false
+    source_type: "market_data"
+    since: "v8"
+    deprecated_at: null
+    example_queries:
+      - "How big is the AI accelerator TAM?"
+      - "What is the data-center CPU market size and AMD's share?"
+      - "If AMD wins 20% of the AI GPU market, what revenue is that?"
 
   - name: get_alerts
     description: >

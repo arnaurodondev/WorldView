@@ -68,6 +68,45 @@ def test_unrelated_item_still_refused() -> None:
     assert "different entities" in result
 
 
+# ── BUG-1 (2026-07-01) — prediction markets are topic-matched, not entity-scoped ─
+
+
+@dataclass
+class _FakeCitationMeta:
+    source_name: str | None = None
+    entity_name: str | None = None
+
+
+def test_polymarket_item_is_exempt_from_entity_grounding() -> None:
+    """A topic-matched polymarket item grounds even when question entities don't overlap.
+
+    Entity resolution routinely mis-scopes prediction queries (e.g. "odds for
+    Nikki Haley" → "The US"), so no entity overlap could ever be found and the
+    guard refused a valid markets answer (entity_grounding_failed
+    item_entity_names:[null,null]). The guard now exempts polymarket items.
+    """
+    item = _FakeItem(
+        text="## Will Nikki Haley win the 2028 nomination?\n- Implied odds: Yes 12%, No 88%",
+        entity_id=None,
+        citation_meta=_FakeCitationMeta(source_name="polymarket", entity_name="Politics"),
+    )
+    # Question resolved to an unrelated entity ("the us") — no overlap possible.
+    result = _check_entity_grounding([item], {"the us"})
+    assert result is None, "polymarket items must be exempt from the entity-grounding refusal"
+
+
+def test_non_polymarket_item_still_refused_when_unrelated() -> None:
+    """The exemption is scoped to polymarket only — other sources still refuse."""
+    item = _FakeItem(
+        text="Some unrelated news about the US economy.",
+        entity_id=None,
+        citation_meta=_FakeCitationMeta(source_name="news", entity_name="United States"),
+    )
+    result = _check_entity_grounding([item], {"nvda"})
+    assert result is not None
+    assert "different entities" in result
+
+
 def test_substring_match_does_not_admit() -> None:
     """Whole-word check: "TS" should NOT match because of the 2-char floor.
 

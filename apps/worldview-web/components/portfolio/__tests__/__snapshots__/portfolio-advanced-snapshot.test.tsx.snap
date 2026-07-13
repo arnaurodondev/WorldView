@@ -1,0 +1,898 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`PLAN-0122 W-A · Advanced-mode parity (anti-fork guard) > test_advanced_mode_is_todays_layout: Advanced HoldingsTab === committed snapshot 1`] = `
+<div>
+  <div
+    class="flex flex-col h-full bg-background relative"
+  >
+    <div
+      class="grid shrink-0 grid-cols-1 xl:grid-cols-3 divide-y xl:divide-y-0 xl:divide-x divide-border border-b border-border"
+      data-testid="overview-panel-band"
+    >
+      <div
+        class="flex h-[128px] flex-col bg-card overflow-hidden"
+        data-testid="market-exposure-panel"
+      >
+        <div
+          class="flex h-[22px] shrink-0 items-center justify-between border-b border-border px-3"
+        >
+          <span
+            class="text-[10px] uppercase tracking-[0.06em] text-muted-foreground"
+          >
+            Market Exposure
+          </span>
+        </div>
+        <div
+          aria-hidden="true"
+          class="grid flex-1 grid-cols-2 gap-x-4 px-3 py-1"
+          data-testid="market-exposure-skeleton"
+        >
+          <div
+            class="flex h-[26px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[26px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[26px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[26px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[26px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[26px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[26px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[26px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+        </div>
+      </div>
+      <div
+        class="flex h-[128px] flex-col bg-card overflow-hidden"
+        data-testid="sector-exposure-panel"
+      >
+        <div
+          class="flex h-[22px] shrink-0 items-center justify-between border-b border-border px-3"
+        >
+          <span
+            class="text-[10px] uppercase tracking-[0.06em] text-muted-foreground"
+          >
+            Sector Exposure
+          </span>
+        </div>
+        <div
+          aria-hidden="true"
+          class="px-3 py-1"
+          data-testid="sector-exposure-skeleton"
+        >
+          <div
+            class="flex h-[22px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[22px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[22px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[22px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+        </div>
+      </div>
+      <div
+        class="flex h-[128px] flex-col bg-card overflow-hidden"
+        data-testid="performance-periods-panel"
+      >
+        <div
+          class="flex h-[22px] shrink-0 items-center justify-between border-b border-border px-3"
+        >
+          <span
+            class="text-[10px] uppercase tracking-[0.06em] text-muted-foreground"
+          >
+            Performance — TWR vs SPY
+          </span>
+        </div>
+        <div
+          aria-hidden="true"
+          class="px-3 py-1"
+          data-testid="performance-periods-skeleton"
+        >
+          <div
+            class="flex h-[22px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[22px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[22px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+          <div
+            class="flex h-[22px] items-center"
+          >
+            <div
+              class="h-2.5 w-full rounded-[2px] bg-muted/30"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      class="flex h-[22px] shrink-0 items-center border-b border-border bg-card px-3 gap-3"
+    >
+      <span
+        class="text-[10px] uppercase tracking-[0.06em] text-muted-foreground"
+      >
+        Concentration
+      </span>
+      <span
+        class="text-[10px] uppercase text-muted-foreground"
+      >
+        Sectors:
+      </span>
+      <span
+        class="font-mono text-[11px] tabular-nums text-foreground"
+      >
+        TECH
+         
+        +100.0%
+      </span>
+    </div>
+    <div
+      class="flex flex-col shrink-0 border-b border-border bg-card h-[120px]"
+    >
+      <div
+        class="flex h-[28px] shrink-0 items-center px-3 gap-2"
+      >
+        <button
+          aria-label="Collapse performance chart"
+          class="text-[10px] uppercase tracking-[0.06em] text-muted-foreground hover:text-foreground flex items-center gap-1"
+          type="button"
+        >
+          <span>
+            Performance
+          </span>
+          <span
+            aria-hidden="true"
+          >
+            ▼
+          </span>
+        </button>
+        <span
+          class="ml-1 text-[10px] text-muted-foreground"
+        >
+          vs SPY
+        </span>
+        <div
+          class="ml-auto flex items-center gap-0"
+        >
+          <button
+            class="h-5 px-1.5 text-[10px] font-mono text-muted-foreground hover:text-foreground"
+            type="button"
+          >
+            1W
+          </button>
+          <button
+            class="h-5 px-1.5 text-[10px] font-mono text-muted-foreground hover:text-foreground"
+            type="button"
+          >
+            1M
+          </button>
+          <button
+            class="h-5 px-1.5 text-[10px] font-mono border-b-2 border-primary text-primary"
+            type="button"
+          >
+            3M
+          </button>
+          <button
+            class="h-5 px-1.5 text-[10px] font-mono text-muted-foreground hover:text-foreground"
+            type="button"
+          >
+            6M
+          </button>
+          <button
+            class="h-5 px-1.5 text-[10px] font-mono text-muted-foreground hover:text-foreground"
+            type="button"
+          >
+            1Y
+          </button>
+          <button
+            class="h-5 px-1.5 text-[10px] font-mono text-muted-foreground hover:text-foreground"
+            type="button"
+          >
+            All
+          </button>
+        </div>
+      </div>
+      <div
+        class="flex-1 min-h-0 relative"
+      >
+        <div
+          aria-label="Portfolio performance chart"
+          class="absolute inset-0 w-full h-full"
+        >
+          <span
+            aria-hidden="true"
+            class="absolute top-0.5 left-1 z-10 text-[9px] text-muted-foreground pointer-events-none select-none"
+          >
+            Value ($)
+          </span>
+        </div>
+      </div>
+    </div>
+    <div
+      class="flex h-[22px] shrink-0 items-center border-b border-border bg-card px-3 gap-2"
+    >
+      <span
+        class="text-[10px] uppercase tracking-[0.06em] text-muted-foreground shrink-0"
+      >
+        Sector
+      </span>
+      <div
+        class="flex flex-1 h-[10px] overflow-hidden"
+      >
+        <div
+          class="h-full bg-primary/70"
+          style="width: 100%;"
+          title="Technology: +100.00%"
+        />
+      </div>
+      <div
+        class="flex items-center gap-2 shrink-0"
+      >
+        <span
+          class="font-mono text-[10px] text-muted-foreground tabular-nums"
+        >
+          TECH
+           
+          +100.00%
+        </span>
+      </div>
+    </div>
+    <div
+      class="shrink-0 bg-card border-b border-border"
+    >
+      <div
+        class="flex h-[22px] items-center px-3 gap-3"
+      >
+        <span
+          class="text-[10px] uppercase tracking-[0.06em] text-muted-foreground"
+        >
+          Positions
+        </span>
+        <span
+          class="font-mono text-[11px] tabular-nums text-foreground"
+        >
+          1
+        </span>
+        <div
+          class="ml-auto flex items-center gap-1"
+        >
+          <button
+            class="text-[10px] font-mono text-muted-foreground hover:text-foreground"
+            type="button"
+          >
+            ⎵ filter (Ctrl+F)
+          </button>
+          <button
+            aria-controls="radix-:r0:"
+            aria-expanded="false"
+            aria-haspopup="dialog"
+            aria-label="Show or hide table columns"
+            class="flex h-7 w-7 items-center justify-center rounded-[2px] text-muted-foreground hover:text-foreground hover:bg-white/[0.04] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            data-state="closed"
+            data-tour-target="column-toggle"
+            title="Show / hide column groups"
+            type="button"
+          >
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-settings2 h-3.5 w-3.5"
+              fill="none"
+              height="24"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              viewBox="0 0 24 24"
+              width="24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M20 7h-9"
+              />
+              <path
+                d="M14 17H5"
+              />
+              <circle
+                cx="17"
+                cy="17"
+                r="3"
+              />
+              <circle
+                cx="7"
+                cy="7"
+                r="3"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div
+      class="flex-1 min-h-0"
+    >
+      <div
+        aria-label="Portfolio holdings table"
+        class="flex flex-col h-full relative"
+        role="region"
+      >
+        <div
+          class="terminal-ag-grid ag-theme-alpine-dark w-full h-full flex-1"
+        >
+          <table>
+            <thead>
+              <tr>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    TICKER
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    NAME
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    QTY
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    AVG COST
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    LAST
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    DAY Δ$
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    DAY Δ%
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    SPARK
+                  </span>
+                </th>
+                <th
+                  aria-sort="descending"
+                  role="columnheader"
+                >
+                  <span>
+                    MKT VALUE
+                  </span>
+                  <span>
+                     ▼
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    UNREAL $
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    UNREAL %
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    WEIGHT
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    SECTOR
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    ASSET
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span>
+                    DIV YLD
+                  </span>
+                </th>
+                <th
+                  aria-sort="none"
+                  role="columnheader"
+                >
+                  <span />
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-primary font-medium"
+                  >
+                    AAPL
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="min-w-0 text-[11px] text-foreground truncate block"
+                    title="Apple"
+                  >
+                    Apple
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-foreground text-right w-full block"
+                  >
+                    10
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-foreground text-right w-full block"
+                  >
+                    $100.00
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-foreground text-right w-full block"
+                  >
+                    $150.00
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-right w-full block text-muted-foreground"
+                  >
+                    —
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-right w-full block text-muted-foreground"
+                  >
+                    —
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] text-muted-foreground"
+                  >
+                    —
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-foreground text-right w-full block"
+                  >
+                    $1,500.00
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-right w-full block text-positive"
+                  >
+                    +$500.00
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-right w-full block text-positive"
+                  >
+                    +50.00%
+                  </span>
+                </td>
+                <td>
+                  <div
+                    class="flex w-full items-center gap-1.5 justify-end"
+                  >
+                    <div
+                      class="w-[48px] h-[3px] rounded-[1px] bg-muted/50 shrink-0"
+                    >
+                      <div
+                        class="h-full rounded-[1px] bg-primary/50"
+                        style="width: 100%;"
+                      />
+                    </div>
+                    <span
+                      class="font-mono text-[11px] tabular-nums w-[36px] text-right text-muted-foreground"
+                    >
+                      100.00%
+                    </span>
+                  </div>
+                </td>
+                <td>
+                  <span
+                    class="min-w-0 text-[11px] text-muted-foreground truncate block"
+                  >
+                    —
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] text-muted-foreground"
+                  >
+                    —
+                  </span>
+                </td>
+                <td>
+                  <span
+                    class="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block"
+                  >
+                    —
+                  </span>
+                </td>
+                <td>
+                  <button
+                    aria-label="Actions for AAPL"
+                    class="flex h-full w-full items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    type="button"
+                  >
+                    <svg
+                      aria-hidden="true"
+                      class="lucide lucide-ellipsis-vertical h-3 w-3"
+                      fill="none"
+                      height="24"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      viewBox="0 0 24 24"
+                      width="24"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="1"
+                      />
+                      <circle
+                        cx="12"
+                        cy="5"
+                        r="1"
+                      />
+                      <circle
+                        cx="12"
+                        cy="19"
+                        r="1"
+                      />
+                    </svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div
+      class="flex h-[124px] w-full flex-row divide-x divide-border overflow-hidden border-b border-border"
+      data-testid="bottom-strip-cluster"
+    >
+      <div
+        class="flex-1 overflow-hidden"
+        data-testid="cell-contributors"
+      >
+        <div
+          class="flex flex-col bg-card border-b border-border h-full"
+          data-testid="movers-contributors"
+        >
+          <div
+            class="flex h-[22px] shrink-0 items-center border-b border-border px-3"
+          >
+            <span
+              class="text-[10px] uppercase tracking-[0.06em] text-neutral-500"
+            >
+              Top Contributors
+            </span>
+          </div>
+          <div
+            class="flex h-[22px] items-center gap-2 px-3"
+          >
+            <a
+              class="w-12 shrink-0 font-mono text-[11px] text-primary hover:underline"
+              href="/instruments/AAPL"
+            >
+              AAPL
+            </a>
+            <span
+              class="min-w-0 flex-1 truncate font-mono text-[11px] text-neutral-500"
+            >
+              Apple
+            </span>
+            <span
+              class="shrink-0 font-mono text-[11px] tabular-nums text-positive"
+            >
+              +50.00%
+            </span>
+          </div>
+          <div
+            class="flex h-[22px] items-center px-3"
+          >
+            <span
+              class="font-mono text-[11px] text-muted-foreground"
+            >
+              —
+            </span>
+          </div>
+          <div
+            class="flex h-[22px] items-center px-3"
+          >
+            <span
+              class="font-mono text-[11px] text-muted-foreground"
+            >
+              —
+            </span>
+          </div>
+          <div
+            class="flex h-[22px] items-center px-3"
+          >
+            <span
+              class="font-mono text-[11px] text-muted-foreground"
+            >
+              —
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="flex-1 overflow-hidden"
+        data-testid="cell-detractors"
+      >
+        <div
+          class="flex flex-col bg-card border-b border-border h-full"
+          data-testid="movers-detractors"
+        >
+          <div
+            class="flex h-[22px] shrink-0 items-center border-b border-border px-3"
+          >
+            <span
+              class="text-[10px] uppercase tracking-[0.06em] text-neutral-500"
+            >
+              Top Detractors
+            </span>
+          </div>
+          <div
+            class="flex h-[22px] items-center px-3"
+          >
+            <span
+              class="font-mono text-[11px] text-muted-foreground"
+            >
+              —
+            </span>
+          </div>
+          <div
+            class="flex h-[22px] items-center px-3"
+          >
+            <span
+              class="font-mono text-[11px] text-muted-foreground"
+            >
+              —
+            </span>
+          </div>
+          <div
+            class="flex h-[22px] items-center px-3"
+          >
+            <span
+              class="font-mono text-[11px] text-muted-foreground"
+            >
+              —
+            </span>
+          </div>
+          <div
+            class="flex h-[22px] items-center px-3"
+          >
+            <span
+              class="font-mono text-[11px] text-muted-foreground"
+            >
+              —
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="flex-1 overflow-hidden"
+        data-testid="cell-recent-activity"
+      >
+        <div
+          class="flex flex-col bg-card border-t-0 h-full"
+        >
+          <div
+            class="flex h-[22px] shrink-0 items-center border-b border-border px-2"
+          >
+            <span
+              class="text-[10px] uppercase tracking-[0.06em] text-muted-foreground"
+            >
+              Recent Activity
+            </span>
+          </div>
+          <div
+            aria-hidden="true"
+            class="flex h-5 items-center px-2 gap-1"
+          >
+            <div
+              class="h-2 w-[26px] rounded-[2px] bg-muted/30"
+            />
+            <div
+              class="h-2 flex-1 rounded-[2px] bg-muted/20"
+            />
+            <div
+              class="h-2 w-[48px] rounded-[2px] bg-muted/15"
+            />
+          </div>
+          <div
+            aria-hidden="true"
+            class="flex h-5 items-center px-2 gap-1"
+          >
+            <div
+              class="h-2 w-[26px] rounded-[2px] bg-muted/30"
+            />
+            <div
+              class="h-2 flex-1 rounded-[2px] bg-muted/20"
+            />
+            <div
+              class="h-2 w-[48px] rounded-[2px] bg-muted/15"
+            />
+          </div>
+          <div
+            aria-hidden="true"
+            class="flex h-5 items-center px-2 gap-1"
+          >
+            <div
+              class="h-2 w-[26px] rounded-[2px] bg-muted/30"
+            />
+            <div
+              class="h-2 flex-1 rounded-[2px] bg-muted/20"
+            />
+            <div
+              class="h-2 w-[48px] rounded-[2px] bg-muted/15"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      class="flex flex-wrap items-center gap-1 px-2 py-1 border-t border-border bg-card shrink-0"
+    >
+      <span
+        class="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono shrink-0"
+      >
+        Detail:
+      </span>
+      <button
+        class="text-[10px] font-mono px-1.5 py-0.5 rounded-[2px] border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring border-border/60 text-muted-foreground hover:text-foreground hover:border-border"
+        type="button"
+      >
+        AAPL
+      </button>
+    </div>
+  </div>
+</div>
+`;

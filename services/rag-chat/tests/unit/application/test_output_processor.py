@@ -71,6 +71,58 @@ def test_output_parses_citation_markers(processor: OutputProcessor) -> None:
 
 
 @pytest.mark.unit
+def test_output_news_citation_carries_url_source_published(processor: OutputProcessor) -> None:
+    """A well-formed news/doc item surfaces url + source_name + published_at.
+
+    Guards the happy path: when the upstream gives us real values they must
+    reach the Citation verbatim (this is what powers the frontend "Read ↗"
+    link and the source/date labels).
+    """
+    raw = "Apple beat estimates [1]."
+    _, citations = processor.process(raw, [_item("chunk-1")])
+
+    assert len(citations) == 1
+    assert citations[0].url == "https://sec.gov/apple"
+    assert citations[0].source_name == "SEC"
+    assert citations[0].published_at == datetime(2024, 1, 15, tzinfo=UTC)
+
+
+@pytest.mark.unit
+def test_output_empty_string_url_source_normalised_to_none(processor: OutputProcessor) -> None:
+    """Empty-string url/source_name/title from upstream collapse to None.
+
+    The /briefing-articles feed behind get_entity_news coerces a missing
+    url/source_name to "" (``row["url"] or ""``). Without normalisation the
+    Citation would carry url="" and the frontend would either render a broken
+    "Read ↗" link or a blank source label. We assert the choke point cleans it.
+    """
+    item = RetrievedItem.create(
+        item_id="news-1",
+        item_type=ItemType.chunk,
+        text="Some news body.",
+        score=0.5,
+        trust_weight=0.85,
+        citation_meta=CitationMeta(
+            title="   ",  # whitespace-only -> None
+            url="",  # empty -> None (no broken link)
+            source_name="",  # empty -> None (no blank label)
+            published_at=datetime(2026, 6, 30, tzinfo=UTC),
+            entity_name="",  # empty -> None
+        ),
+    )
+
+    _, citations = processor.process("Headline [1].", [item])
+
+    assert len(citations) == 1
+    assert citations[0].url is None
+    assert citations[0].source_name is None
+    assert citations[0].title is None
+    assert citations[0].entity_name is None
+    # published_at is a real value and must survive untouched.
+    assert citations[0].published_at == datetime(2026, 6, 30, tzinfo=UTC)
+
+
+@pytest.mark.unit
 def test_output_citation_out_of_range_ignored(processor: OutputProcessor) -> None:
     """[99] when only 5 items -> citation 99 not in list."""
     raw = "Some answer with [99] invalid reference."
@@ -318,3 +370,144 @@ def test_output_bug_a_mstr_news_last_14_days_verbatim(processor: OutputProcessor
     answer, _ = processor.process(raw, items)
     assert "(Last  Days)" not in answer, f"'14' was deleted: {answer!r}"
     assert "(Last 14 Days)" in answer
+
+
+# ── R3 (2026-07-03): PII redaction must NOT corrupt inline EDGAR URLs ──────────
+# Root cause: docs/audits/2026-07-03-chat-bug2-bug4-rootcause.md §R3. The phone
+# regex matched the 10-digit SEC accession prefix embedded in a filing index URL
+# and redacted it to [REDACTED], breaking the clickable link in the answer prose.
+
+
+@pytest.mark.unit
+def test_redact_pii_preserves_edgar_accession_url() -> None:
+    """A SEC EDGAR index URL survives PII redaction verbatim (R3)."""
+    from rag_chat.application.pipeline.output_processor import _redact_pii
+
+    url = "https://www.sec.gov/Archives/edgar/data/1498547/000119312526286851/0001193125-26-286851-index.htm"
+    text = f"Apple's 10-K is filed here: {url}"
+    out = _redact_pii(text)
+    assert "[REDACTED]" not in out, f"URL accession was redacted: {out!r}"
+    assert url in out, f"EDGAR URL not preserved verbatim: {out!r}"
+
+
+@pytest.mark.unit
+def test_contains_pii_ignores_url_embedded_digit_runs() -> None:
+    """URL-embedded accession runs do not trip the PII detector (no false log)."""
+    from rag_chat.application.pipeline.output_processor import _contains_pii
+
+    url = "https://www.sec.gov/Archives/edgar/data/1498547/000119312526286851/0001193125-26-286851-index.htm"
+    assert _contains_pii(f"Filing: {url}") is False
+
+
+@pytest.mark.unit
+def test_redact_pii_still_redacts_real_phone_outside_url() -> None:
+    """Genuine PII outside a URL is still redacted (guard not weakened)."""
+    from rag_chat.application.pipeline.output_processor import _contains_pii, _redact_pii
+
+    text = "Call investor relations at 415-555-0198 for details."
+    assert _contains_pii(text) is True
+    assert "[REDACTED]" in _redact_pii(text)
+    assert "415-555-0198" not in _redact_pii(text)
+
+
+@pytest.mark.unit
+def test_redact_pii_mixed_url_and_phone() -> None:
+    """PII outside the URL is redacted while the URL span is preserved."""
+    from rag_chat.application.pipeline.output_processor import _redact_pii
+
+    url = "https://www.sec.gov/Archives/edgar/data/1498547/000119312526286851/0001193125-26-286851-index.htm"
+    text = f"See {url} or call 212-555-0147."
+    out = _redact_pii(text)
+    assert url in out
+    assert "212-555-0147" not in out
+    assert "[REDACTED]" in out
+
+
+@pytest.mark.unit
+def test_output_process_keeps_edgar_url_in_answer(processor: OutputProcessor) -> None:
+    """End-to-end through process(): EDGAR link in prose stays intact (R3)."""
+    url = "https://www.sec.gov/Archives/edgar/data/1498547/000119312526286851/0001193125-26-286851-index.htm"
+    items = [_item()]
+    raw = f"Apple's most recent filing is available at {url} [1]."
+    answer, _ = processor.process(raw, items)
+    assert url in answer, f"EDGAR URL mangled by output pipeline: {answer!r}"
+    assert "[REDACTED]" not in answer
+
+
+# ── NEW-4 (2026-07-06): PII redaction must NOT mask financial magnitudes ───────
+# Root cause: docs/audits/2026-07-06-r1-final-exhaustive-qa.md NEW-4. The phone
+# regex matched the 11-digit integer part of a screener market-cap float
+# (``10440000000.0`` -> ``[REDACTED].0``) and the credit-card regex matched
+# 13-16 digit caps (``3010000000000``). These are financial values, not PII.
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value",
+    [
+        "10440000000.0",  # the exact NEW-4 repro: 11-digit float integer part
+        "3010000000000.0",  # ~$3.01T market-cap raw float (13-digit integer part)
+        "$10.44 B",  # unit-suffixed cap
+        "$3.01T",  # unit-suffixed cap, no space
+        "10.44 billion",  # spelled-out unit suffix
+        "3,010,000,000,000",  # comma-grouped large integer
+        "$3,010,000,000,000",  # $-prefixed comma-grouped
+        "$391.02",  # share price
+        "up 42% to $150.25",  # price in prose
+        "revenue of 97,690,000,000",  # comma-grouped revenue
+    ],
+)
+def test_redact_pii_preserves_financial_values(value: str) -> None:
+    """Legitimate financial magnitudes pass through PII redaction unredacted."""
+    from rag_chat.application.pipeline.output_processor import _contains_pii, _redact_pii
+
+    text = f"Market data: {value}."
+    assert _redact_pii(text) == text, f"financial value redacted: {_redact_pii(text)!r}"
+    assert _contains_pii(text) is False, f"financial value tripped PII detector: {value!r}"
+
+
+@pytest.mark.unit
+def test_output_process_keeps_market_cap_raw_value(processor: OutputProcessor) -> None:
+    """End-to-end NEW-4: screener market-cap raw float survives the pipeline."""
+    items = [_item()]
+    raw = "JKHY market cap $10.44 B (raw: 10440000000.0) [1]."
+    answer, _ = processor.process(raw, items)
+    assert "[REDACTED]" not in answer, f"market cap redacted: {answer!r}"
+    assert "10440000000.0" in answer
+    assert "$10.44 B" in answer
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("text", "leaked"),
+    [
+        # R19: genuine PII must STILL be redacted — the fix must not weaken it.
+        ("Call investor relations at 415-555-0198 today.", "415-555-0198"),
+        ("Dotted phone 212.555.0147 here.", "212.555.0147"),
+        ("Spaced phone +1 415 555 0198 here.", "415 555 0198"),
+        ("Bare phone 4155550198 here.", "4155550198"),
+        ("SSN on file 123-45-6789 redact me.", "123-45-6789"),
+        ("Card number 4111 1111 1111 1111 charged.", "4111 1111 1111 1111"),
+        ("Reach me at jane.doe@example.com please.", "jane.doe@example.com"),
+    ],
+)
+def test_redact_pii_still_redacts_real_pii_after_financial_exemption(text: str, leaked: str) -> None:
+    """Real phone / SSN / card / email is still redacted (R19 — no weakening)."""
+    from rag_chat.application.pipeline.output_processor import _contains_pii, _redact_pii
+
+    assert _contains_pii(text) is True, f"PII no longer detected: {text!r}"
+    out = _redact_pii(text)
+    assert "[REDACTED]" in out
+    assert leaked not in out, f"PII leaked through: {out!r}"
+
+
+@pytest.mark.unit
+def test_redact_pii_mixed_financial_and_phone() -> None:
+    """A market cap survives while a real phone in the same sentence is redacted."""
+    from rag_chat.application.pipeline.output_processor import _redact_pii
+
+    text = "Cap $3.01T — call 415-555-0198 for the deck."
+    out = _redact_pii(text)
+    assert "$3.01T" in out
+    assert "415-555-0198" not in out
+    assert "[REDACTED]" in out

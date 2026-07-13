@@ -32,6 +32,12 @@ import { Button } from "@/components/ui/button";
 // to the "All Accounts" label in the selector and header, explaining what the
 // aggregate view is and why it's read-only.
 import { RootPortfolioPopover } from "@/components/portfolio/RootPortfolioPopover";
+// PLAN-0122 W-A: the Simple|Advanced detail-level toggle lives in the header
+// action row. WHY the header owns the hook (not the toggle): usePortfolioMode
+// touches nuqs + localStorage; keeping it here leaves PortfolioModeToggle a pure
+// presentational control that unit-tests without a router.
+import { PortfolioModeToggle } from "@/components/portfolio/PortfolioModeToggle";
+import { usePortfolioMode } from "@/hooks/usePortfolioMode";
 import type { Portfolio } from "@/types/api";
 
 interface PortfolioPageHeaderProps {
@@ -71,6 +77,12 @@ export function PortfolioPageHeader({
   onCreatePortfolio,
   onDeletePortfolio,
 }: PortfolioPageHeaderProps) {
+  // PLAN-0122 W-A: resolve the current detail level (Simple | Advanced). The
+  // header is the single call site of the hook for the page chrome; the value is
+  // threaded to child surfaces as a prop from page.tsx (this instance only drives
+  // the toggle's own checked state + writes on click).
+  const { mode, setMode } = usePortfolioMode();
+
   return (
     <>
       {/* ── Page header ─────────────────────────────────────────────────── */}
@@ -80,7 +92,13 @@ export function PortfolioPageHeader({
           header needs the panel tone (#111113) to read as the chrome row
           at the top of the workspace. */}
       <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-3 bg-card">
-        <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
+        <h1
+          className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono"
+          // PLAN-0122 W-F: onboarding-tour anchor for the Welcome + Connect steps.
+          // The header is present in both Simple and Advanced, so these steps
+          // always resolve an anchor (never skipped).
+          data-tour-target="portfolio-header"
+        >
           Portfolio
         </h1>
 
@@ -173,6 +191,12 @@ export function PortfolioPageHeader({
         {/* WHY ml-auto: push the action buttons to the right side, matching
             Bloomberg convention of left=labels, right=actions. */}
         <div className="ml-auto flex items-center gap-2">
+          {/* PLAN-0122 W-A: detail-level toggle, positioned at the LEFT of the
+              action cluster (before Add Position) per PRD §6.1. WHY here and not
+              in the empty-portfolio early-return: that branch shows no data, so a
+              Simple/Advanced switch would have nothing to gate. */}
+          <PortfolioModeToggle mode={mode} onModeChange={setMode} />
+
           {/* "Add Position" — only useful when there's an active portfolio.
               PLAN-0046 Wave 3 / T-46-3-04: also disabled when active is ROOT
               (S1 rejects POST /v1/transactions on root portfolios with HTTP
@@ -193,6 +217,10 @@ export function PortfolioPageHeader({
                 if (!activeIsRoot) onAddPosition();
               }}
               disabled={activeIsRoot}
+              // PLAN-0122 W-F: onboarding-tour anchor for the "Add a position"
+              // step (W-C's plan left this for W-F). Absent on root portfolios
+              // (the button isn't rendered) → that tour step self-skips.
+              data-tour-target="add-position"
               className={cn(
                 "h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] flex items-center gap-1 transition-colors",
                 activeIsRoot
