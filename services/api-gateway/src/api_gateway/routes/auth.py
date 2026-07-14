@@ -20,6 +20,7 @@ from typing import Any
 import jwt
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel
 
 from api_gateway.pkce import (
     generate_code_challenge,
@@ -160,10 +161,9 @@ async def callback(
     from observability import get_logger  # type: ignore[import-untyped]
 
     logger = get_logger("api_gateway.auth")
-    settings = request.app.state.settings
-    oidc_config = getattr(request.app.state, "oidc_config", None)
+    # settings/oidc_config/httpx_client are only needed for the token exchange, which
+    # now lives in _complete_oidc_login; this handler only needs valkey (verifier lookup).
     valkey = getattr(request.app.state, "valkey", None)
-    httpx_client = getattr(request.app.state, "httpx_client", None)
 
     # 1. Zitadel error forwarded in query params
     if error:
@@ -200,6 +200,52 @@ async def callback(
             status_code=400,
             content={"error": "invalid_state", "detail": "State expired or invalid"},
         )
+
+    # Steps 4-9 (exchange → validate → provision → cache → cookie) are shared with the
+    # POST /callback browser-PKCE variant below — see _complete_oidc_login.
+    return await _complete_oidc_login(request, code, code_verifier)
+
+
+class CallbackExchangeRequest(BaseModel):
+    """Body of POST /v1/auth/callback (browser-PKCE flow).
+
+    The SPA runs the PKCE authorize itself and owns the code_verifier (kept in
+    sessionStorage, never in a URL/log), then POSTs it here so S9 does the
+    token exchange server-to-server with the client_secret. This is the flow the
+    worldview-web frontend uses (lib/api/auth.ts exchangeCode). It differs from the
+    GET /callback hosted flow, where S9 owns the verifier in Valkey keyed by `state`.
+    """
+
+    code: str
+    code_verifier: str
+
+
+@router.post("/callback")
+async def callback_post(request: Request, body: CallbackExchangeRequest) -> Response:
+    """Browser-PKCE token exchange: {code, code_verifier} in the JSON body.
+
+    Same result as GET /callback but the verifier comes from the request body
+    (the SPA generated it) instead of a Valkey state lookup. Added 2026-07-11: the
+    frontend POSTs here and the GET-only route was 405'ing, breaking every real
+    Zitadel login ("token exchange with the identity provider failed").
+    """
+    return await _complete_oidc_login(request, body.code, body.code_verifier)
+
+
+async def _complete_oidc_login(request: Request, code: str, code_verifier: str) -> Response:
+    """Exchange an auth code (+ PKCE verifier) for tokens, validate, provision, respond.
+
+    Shared by GET /callback (hosted flow — verifier from Valkey) and POST /callback
+    (browser-PKCE flow — verifier from the request body). Returns the JSON
+    AuthCallbackResponse and sets the httpOnly refresh cookie.
+    """
+    from observability import get_logger  # type: ignore[import-untyped]
+
+    logger = get_logger("api_gateway.auth")
+    settings = request.app.state.settings
+    oidc_config = getattr(request.app.state, "oidc_config", None)
+    valkey = getattr(request.app.state, "valkey", None)
+    httpx_client = getattr(request.app.state, "httpx_client", None)
 
     # Guard against missing OIDC config / httpx client (fail-fast after PKCE)
     if oidc_config is None:
@@ -244,6 +290,7 @@ async def callback(
 
     access_token: str = token_data.get("access_token", "")
     refresh_token_value: str = token_data.get("refresh_token", "")
+    id_token_value: str = token_data.get("id_token", "")
     expires_in: int = int(token_data.get("expires_in", 900))
 
     # 5. Validate access_token signature using Zitadel JWKS
@@ -268,11 +315,86 @@ async def callback(
             content={"error": "invalid_token", "detail": "Access token validation failed"},
         )
 
-    # 6. Extract user claims
+    # 5b. Decode the ID token for profile claims. Zitadel's JWT ACCESS token does NOT
+    # carry email/profile — those live in the ID token (standard OIDC). Provisioning
+    # needs a valid email (S1 rejects an empty one with 422). Validate the ID token
+    # against the same JWKS (aud = client_id) and prefer its claims; fall back to the
+    # access-token claims if the ID token is absent/invalid.
+    id_claims: dict[str, Any] = {}
+    if id_token_value:
+        try:
+            id_header = jwt.get_unverified_header(id_token_value)
+            id_key = oidc_config.public_keys.get(id_header.get("kid", "default")) or public_key
+            id_claims = jwt.decode(  # type: ignore[assignment]
+                id_token_value,
+                id_key,
+                algorithms=["RS256"],
+                options={"require": ["sub", "exp", "iss"]},
+                audience=settings.oidc_client_id,
+                issuer=oidc_config.issuer,
+            )
+        except jwt.InvalidTokenError as exc:
+            logger.warning("id_token_invalid", action="login", result="error", reason=str(exc))
+            id_claims = {}
+
+    # 6. Extract user claims — prefer the ID token for profile fields (email/username).
+    profile: dict[str, Any] = id_claims or claims
     sub: str = claims["sub"]
-    email: str = claims.get("email", "")
-    email_verified: bool = bool(claims.get("email_verified", False))
-    preferred_username: str = claims.get("preferred_username", "")
+    email: str = profile.get("email", "") or claims.get("email", "")
+    email_verified: bool = bool(profile.get("email_verified", claims.get("email_verified", False)))
+    preferred_username: str = profile.get("preferred_username", "") or claims.get("preferred_username", "")
+
+    # 6b. UserInfo fallback. Zitadel by default does NOT embed the email/profile
+    # claims in either the access token or the ID token — it exposes them only at the
+    # OIDC /userinfo endpoint (the app-level "Userinfo inside ID Token" toggle is off
+    # by default). S1 provisioning requires a real email (EmailStr), so an empty one
+    # 422s the whole login. When the tokens didn't carry an email, fetch it from
+    # /userinfo with the access token as Bearer — the canonical, config-independent
+    # source of the user's profile claims.
+    if not email:
+        userinfo_url = f"{oidc_config.issuer.rstrip('/')}/oidc/v1/userinfo"
+        try:
+            ui_resp = await httpx_client.get(
+                userinfo_url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10.0,
+            )
+            if ui_resp.status_code == 200:
+                userinfo: dict[str, Any] = ui_resp.json()
+                email = userinfo.get("email", "") or email
+                email_verified = bool(userinfo.get("email_verified", email_verified))
+                preferred_username = (
+                    userinfo.get("preferred_username", "") or userinfo.get("name", "") or preferred_username
+                )
+            else:
+                logger.warning(
+                    "userinfo_fetch_failed",
+                    action="login",
+                    status=ui_resp.status_code,
+                    result="error",
+                )
+        except Exception as exc:  # — userinfo is best-effort; provision still guards email
+            logger.warning("userinfo_error", action="login", error=str(exc), result="error")
+
+    # If the email is STILL unresolved, fail fast with a precise reason. This means
+    # Zitadel released no email claim anywhere (token or userinfo) — an IdP-config
+    # issue (missing email scope grant, or the user has no verified email), NOT a
+    # transient outage. Surfacing it distinctly avoids masquerading as a 503.
+    if not email:
+        logger.error(
+            "email_unresolved",
+            action="login",
+            sub=sub,
+            has_id_token=bool(id_token_value),
+            result="error",
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "email_unresolved",
+                "detail": "Identity provider returned no email claim for this user",
+            },
+        )
     # F-Q2-01: resolve the OIDC role claim once at callback time so we can
     # cache it alongside user_id/tenant_id. OIDCAuthMiddleware also resolves
     # role on every request, but caching it here means /v1/auth/me and any
