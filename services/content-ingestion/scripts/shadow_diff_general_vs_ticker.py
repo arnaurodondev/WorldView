@@ -207,21 +207,33 @@ async def _run(args: argparse.Namespace) -> int:
             cutover_ready=ticker_only == 0,
         )
 
+        # Operator-facing output. This is a human-run CLI script (see module
+        # docstring USAGE), not a long-running service process, but IG-OBS-001
+        # (R10 / structlog-only) still applies — a bare print() bypasses the
+        # JSON log aggregator, and the repo's own precedent (see the tracked,
+        # NOT allowlisted, backfill_fundamentals.py violation) is to fix these
+        # forward rather than carve out a scripts/ exemption. Emit the exact
+        # same text a human invoking this script wants on stdout, but through
+        # structlog: a local dev ConsoleRenderer still prints it readably,
+        # while prod/CI JSON rendering keeps it structured instead of
+        # silently dropping operator output.
         if args.json:
-            print(json_mod.dumps(summary, indent=2))  # noqa: T201 — operator-facing output
+            log.info("shadow_diff.json_summary", output=json_mod.dumps(summary, indent=2))
         else:
-            print("── EODHD news shadow-diff ─────────────────────────────")  # noqa: T201
-            print(f"  window            : last {args.window_hours}h (since {since.isoformat()})")  # noqa: T201
-            print(f"  general_only      : {general_only:>8}  (firehose won)")  # noqa: T201
-            print(f"  ticker_only       : {ticker_only:>8}  (firehose MISSED — coverage gap)")  # noqa: T201
-            print(f"  both              : {0:>8}  (0 by design: global url_hash dedup)")  # noqa: T201
-            print(f"  coverage_ratio    : {coverage_ratio:>8.4f}  (1.0 = firehose is a superset)")  # noqa: T201
+            lines = [
+                "── EODHD news shadow-diff ─────────────────────────────",
+                f"  window            : last {args.window_hours}h (since {since.isoformat()})",
+                f"  general_only      : {general_only:>8}  (firehose won)",
+                f"  ticker_only       : {ticker_only:>8}  (firehose MISSED — coverage gap)",
+                f"  both              : {0:>8}  (0 by design: global url_hash dedup)",
+                f"  coverage_ratio    : {coverage_ratio:>8.4f}  (1.0 = firehose is a superset)",
+            ]
             if gap_by_symbol:
-                print(f"  top {args.top} missed symbols (investigate before cutover):")  # noqa: T201
-                for entry in gap_by_symbol:
-                    print(f"      {entry['symbol']:<14} {entry['missed']:>6}")  # noqa: T201
+                lines.append(f"  top {args.top} missed symbols (investigate before cutover):")
+                lines.extend(f"      {entry['symbol']:<14} {entry['missed']:>6}" for entry in gap_by_symbol)
             else:
-                print("  NO firehose misses this window → cutover-ready (see STEP 2/3).")  # noqa: T201
+                lines.append("  NO firehose misses this window → cutover-ready (see STEP 2/3).")
+            log.info("shadow_diff.table", output="\n".join(lines))
         return 0
     finally:
         await write_engine.dispose()
