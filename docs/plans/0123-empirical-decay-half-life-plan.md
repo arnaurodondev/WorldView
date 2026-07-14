@@ -206,12 +206,21 @@ Cross-plan note: PRD-0119 (PLAN-0119, status `draft`, 0/5 waves — not started)
 
 ---
 
-## Wave 2: Offline Censored-Survival Fitter Core (SS-1 Fix Applied)
+## Wave 2: Offline Censored-Survival Fitter Core (SS-1 Fix Applied) ✅
+
+**Status**: **DONE** — 2026-07-14 · 48 tests pass (17 domain + 8 NHPP + 10 supersession + 9 extraction + 4 entrypoint) · ruff + mypy + import-guards + architecture tests clean · `confidence.py` zero diff · full KG unit suite 1835 pass (0 regressions)
 
 **Goal**: Build the offline, read-only fitter that estimates a per-`TEMPORAL_CLAIM`-type decay rate from two lifetime definitions, using the corrected (non-inter-arrival) estimator for corroboration. Shadow-only in this wave — no write-back yet (that's Wave 3).
 **Depends on**: Wave 1 (registry columns must exist so the eventual write target is real, even though this wave doesn't write)
 **Estimated effort**: 2-3 hours
 **Architecture layer**: application (new analytics module) + domain (value objects)
+
+**Implementation notes**:
+- New dependency: added `numpy>=1.26,<3` + `scipy>=1.11,<2` to `services/knowledge-graph/pyproject.toml` (needed for `scipy.optimize.minimize` in the NHPP MLE); installed into the service `.venv` for local dev/test. Will need to be baked into the Docker image on next container rebuild (deploy phase).
+- `test_nhpp_recovers_known_alpha_lambda0` and `test_nhpp_rejects_inter_arrival_proxy` (both pass) are the load-bearing SS-1 regression guards: the latter constructs two mention patterns (steady vs. cutoff) with **identical** ~3-day inter-arrival gaps but very different true decay, and proves the NHPP fit distinguishes them (`alpha_b > alpha_a * 3`) while a naive inter-arrival-gap statistic cannot.
+- Domain-modeling correction made during implementation (not in the original plan text): `relation_evidence_raw` has no `relation_id` column — `extract_mention_series` joins to `relations` on the natural key (subject/object/canonical_type) to attach the real `relation_id`, rather than fabricating one from the subject entity ID as first drafted.
+- `build_lifetime`'s competing-risks convention (SS-3) was reworked from a "days-ago" framing (bug-prone — initially picked the wrong event via `min()`/`max()` confusion) to direct durations-since-`first_evidence_at`, making "earliest terminal event wins" a plain `min()` over unambiguous quantities.
+- `relations_history` confirmed NOT read anywhere in this wave (no `decay_alpha` column there — everything needed is on `relations` directly), per the Wave 1 codebase-state finding.
 
 ### Locked design decision: SS-1 fix (supersedes PRD §4 FR-3(a) as literally written)
 
