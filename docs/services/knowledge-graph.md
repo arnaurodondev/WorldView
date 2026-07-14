@@ -376,11 +376,33 @@ Contradiction = min(sum(top-3 decayed link strengths), 0.60)
 Final         = clamp(support + corroboration - contradiction, 0.0, 1.0)
 ```
 
-Decay alpha selection:
-- `RELATION_STATE` → uses `decay_alpha` from `decay_class_config` row for this relation's decay class
-- `TEMPORAL_CLAIM` → always uses `0.02310` (30-day half-life)
+Decay alpha selection (PRD-0120, PLAN-0123 — registry-first, class-fallback):
+- `relation_type_registry.py`'s canonicalization queries (`find_exact`/`find_by_embedding`) resolve `decay_alpha = COALESCE(rtr.decay_alpha, dcc.decay_alpha)` — a per-type fitted value (written by the offline decay fitter, see below) overrides the `decay_class_config` class value when present; NULL falls back to the class value (the only behavior that existed pre-PRD-0120).
+- `RELATION_STATE` → uses the resolved `decay_alpha` above, but is **out of scope for fitting** (P-3) — these relations are interval-truthed (`d = 1.0` until `valid_to` closes the window), so the alpha value is largely inert for them.
+- `TEMPORAL_CLAIM` → uses the resolved `decay_alpha` above (`d = exp(-alpha * age_days)`); this is a per-type fitted value once the type clears the fitter's minimum sample size, else the class value — **not** a fixed constant.
+
+`confidence.py` (`compute_confidence` / the current default `compute_confidence_beta`, PLAN-0109 W3) has **zero diff** from PLAN-0123 — only the source of the `decay_alpha` value changed, not the decay arithmetic.
 
 `ConfidenceComponents.validate()` asserts: final ∈ [0,1], corroboration ≤ 0.20, contradiction ≤ 0.60.
+
+### Offline Decay-Rate Fitter (PRD-0120, PLAN-0123)
+
+`application/analytics/decay_fitting/` — an offline, mostly-read job that empirically fits a per-type `decay_alpha` for `TEMPORAL_CLAIM` relation types, replacing the hand-asserted class constant where enough data exists. `decay_class_config`'s 6 classes remain in place as **empirical-Bayes priors** for cold-start/sparse types — nothing about the class table or its FK is removed.
+
+Pipeline (each stage independently testable):
+1. **Extraction** (`lifetime_extraction.py`, read-only) — pulls pre-confidence-gating evidence from `relation_evidence_raw` (never the confidence-gated `relation_evidence`, to avoid fitting-on-its-own-output circularity) and relation lifetimes directly from `relations` (`first_evidence_at`/`latest_contra_at`/`valid_to` — NOT `relations_history`, which has no `decay_alpha` column).
+2. **Two lifetime-definition estimators**:
+   - Corroboration-decay (`nhpp_estimator.fit_nhpp`) — models mention timestamps as a non-homogeneous Poisson process with intensity `∝ exp(-alpha·age)`, fit by MLE. This corrects a PRD-drafting error (review finding SS-1): an inter-arrival-gap exponential MLE estimates mention *rate*, not the decay *rate* the confidence engine consumes — two claims mentioned at the same average cadence but with very different true relevance decay would get the *same* estimate under the naive approach. `normalize_by_entity_baseline` corrects for entity news-volume confounding (a heavily-covered entity's claims look artificially fast-decaying otherwise).
+   - Supersession/contradiction (`supersession_estimator.fit_supersession`) — a standard right-censored exponential MLE; `build_lifetime` applies a competing-risks rule (whichever of contradiction/validity-closure fired first wins as the terminal event).
+3. **Pooling** (`pooling.pool_type_fit`) — prefers the supersession signal (a durability/truth signal) over corroboration (an attention signal) once it clears a minimum sample size; empirical-Bayes shrinkage (`w = n/(n+k)`) pulls sparse types toward the class prior; below the min-n threshold the fit is labeled `pooled_prior` regardless of the raw shrinkage math (honest provenance).
+4. **Write-back** (`write_back.write_back_fit`) — shadow (report-only) or write-gated; a `pooled_prior`-labeled fit is deliberately left NULL rather than written (behaviorally identical to writing the prior, given the COALESCE above, and simpler to reason about/revert).
+5. **Backfill** (`backfill.backfill_relations_for_type`) — an explicit, type-scoped `UPDATE relations SET decay_alpha=…, confidence_stale=true`. Required because `relations.decay_alpha` denormalizes only on upsert (`relation.py`'s `ON CONFLICT ... EXCLUDED.decay_alpha`) — a relation with no new evidence would otherwise never pick up a freshly-fitted alpha.
+6. **Evaluation** (`evaluation.evaluate_fit_vs_prior`) — held-out censored-exponential log-likelihood, fitted vs. prior; types below the min-n threshold are reported `insufficient_data`, never a false "win".
+7. **Metrics** (`observability.py` → `application/metrics.py`) — 7 gauges: `decay_fit_alpha`, `decay_fit_half_life_days`, `decay_fit_sample_n`, `decay_fit_censoring_rate`, `decay_fit_shrinkage_weight`, `decay_types_using_fitted_total`/`decay_types_using_prior_total`, `decay_fit_signal`.
+
+Scope guard (P-3): every extraction function asserts `semantic_mode == 'TEMPORAL_CLAIM'` via the registry, raising for any `RELATION_STATE` type. 5 pre-existing hardcoded-`decay_alpha` call sites (`relation.py`, `entity_consumer.py`, `entity_enrichment_adapter.py`, `fundamentals_refresh.py` ×2) all write `RELATION_STATE` types and are intentionally untouched (verified by a static scope-guard test).
+
+Not yet done: a scheduled worker/CLI entrypoint that runs the full pipeline (extract → fit → pool → write-back → backfill → metrics) end-to-end on a cadence — each stage exists and is composable, but the orchestration wiring is follow-up work.
 
 ---
 
@@ -424,7 +446,8 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
 | `graph_stats` | — | PLAN-0112 (migration 0052). Single-row (`id=1` CHECK) normaliser store: `total_edges`, `total_meaningful_edges`, `max_degree`, `refreshed_at` — the `2m` term for the configuration-model surprise. Upserted alongside `node_degree`. |
 | `outbox_events` | — | Transactional outbox for Kafka messages |
 | `dead_letter_queue` | — | Poison-pill events that exhausted retries |
-| `decay_class_config` | — | 6 seeded decay classes with `decay_alpha` |
+| `decay_class_config` | — | 6 seeded decay classes with `decay_alpha` — the empirical-Bayes prior for cold-start/sparse types (PRD-0120) |
+| `relation_type_registry` | — | 32 relation types, `decay_class` FK. As of migration 0067 (PLAN-0123) also carries 5 nullable per-type decay-fit columns: `decay_alpha`, `half_life_days`, `alpha_fit_n`, `alpha_fit_method`, `alpha_fit_at` — NULL until the offline decay fitter writes a fit; overrides the class value via `COALESCE(rtr.decay_alpha, dcc.decay_alpha)` when non-NULL |
 | `source_trust_weights` | — | 11 seeded source types with trust weights |
 | `model_registry` | — | Registered ML models |
 | `prompt_templates` | — | LLM prompt templates used across S6/S7 |

@@ -2,7 +2,7 @@
 id: PLAN-0123
 title: "Empirically-Fit Per-Type Decay Half-Lives — Implementation Plan"
 prd: PRD-0120
-status: in-progress
+status: completed
 created: 2026-07-14
 updated: 2026-07-14
 ---
@@ -511,12 +511,22 @@ ll(λ0, α) = Σ_i [ln(λ0) - α·t_i] - λ0 · (1 - exp(-α·T)) / α
 
 ---
 
-## Wave 4: Held-Out Evaluation + Metrics + Documentation
+## Wave 4: Held-Out Evaluation + Metrics + Documentation ✅
+
+**Status**: **DONE** — 2026-07-14 · 13 tests pass (5 evaluation + 8 observability) · ruff + mypy + import-guards + architecture tests clean · `confidence.py` zero diff · full KG unit suite 1869 pass (0 regressions). **PLAN-0123 COMPLETE (4/4 waves).**
 
 **Goal**: Produce the thesis-grade evidence that fitted half-lives beat class priors where data allows, wire observability, and fix documentation (including the pre-existing stale `.claude-context.md` drift found during code-grounding).
 **Depends on**: Wave 3 (needs written-back fits to evaluate against held-out data)
 **Estimated effort**: 1.5 hours
 **Architecture layer**: application (eval) + docs
+
+**Implementation notes**:
+- `evaluate_fit_vs_prior` uses the same right-censored exponential log-likelihood family `fit_supersession` optimizes, evaluated at two FIXED rates (fitted vs. prior) on held-out data — a genuinely independent check, not a re-fit.
+- Found and fixed a real edge case during implementation: `prior_alpha` can legitimately be `0.0` (the PERMANENT decay-class prior), which would `ZeroDivisionError` on a naive `math.log(2)/alpha` half-life calc and `math.log(0)` domain-error on an observed-event log-likelihood term. Added a `_half_life` helper (alpha=0 → `math.inf`) and an explicit `rate == 0.0 → -inf` branch in the log-likelihood for observed events (a PERMANENT-prior model correctly assigns zero density to an observed terminal event).
+- 7 Prometheus gauges added to `application/metrics.py` (existing per-service metrics-module convention, not a new file) + a `decay_fitting/observability.py` recording layer, kept separate from `write_back.py` so its existing SQL-assertion tests stay decoupled from metrics assertions.
+- Fixed the pre-existing stale `.claude-context.md` confidence-formula block (found during Wave 1 code-grounding — described the wrong formula and falsely claimed a fixed TEMPORAL_CLAIM alpha) and the matching block in `docs/services/knowledge-graph.md`; also found and fixed `intelligence-migrations/.claude-context.md`'s "Current Head" being stale at `0064` (real head was already `0066` before this plan even started — two prior sessions' migrations had never been logged) — brought up to date through this plan's own `0067`.
+- Added BP-725 (naive mean lifetime under censoring) and BP-726 (inter-arrival-gap MLE vs. NHPP) to `docs/BUG_PATTERNS.md`, appended in-file per the established recent-entry convention (BP-719–724 already live directly in the root file rather than routed to a category file).
+- **Known gap, documented, not closed in this plan**: no scheduled worker/CLI entrypoint yet runs the full pipeline (extract → fit → pool → write-back → backfill → metrics) end-to-end on a cadence. Every stage exists, is tested, and is composable; wiring them into one orchestrated job is explicitly flagged as follow-up work in both `.claude-context.md` and `docs/services/knowledge-graph.md`.
 
 ### Tasks
 
