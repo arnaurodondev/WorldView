@@ -230,8 +230,20 @@ jobs:
         # intelligence-migrations builds in its OWN job (build-intelligence-
         # migrations) with a service-local context — its Dockerfile uses relative
         # COPY paths that break under the repo-root context this matrix uses.
+        #
+        # postgres/gliner/synthetic are NOT services/** entries — they're
+        # infra/** paths that share this same dorny/paths-filter block (so
+        # they appear in `detect-changes.outputs.services` whenever their own
+        # path changes), but each already has its own dedicated custom job
+        # (build-postgres, build-gliner, build-synthetic-monitor) using a
+        # non-repo-root context. Without excluding them here, this matrix
+        # tries `file: services/<name>/Dockerfile`, which doesn't exist for
+        # any of the three.
         exclude:
           - service: intelligence-migrations
+          - service: postgres
+          - service: gliner
+          - service: synthetic
     permissions:
       contents: read
       packages: write  # required for ghcr.io push
@@ -481,9 +493,15 @@ jobs:
       fail-fast: false
       matrix:
         # Same service list, but exclude intelligence-migrations (no Deployment)
+        # and postgres/gliner/synthetic (custom-context images with no
+        # values/<name>.yaml Deployment to bump — see build-and-push's exclude
+        # list above for the full explanation).
         service: ${{ fromJson(needs.detect-changes.outputs.services) }}
         exclude:
           - service: intelligence-migrations
+          - service: postgres
+          - service: gliner
+          - service: synthetic
 
     steps:
       - name: Generate GitHub App token
