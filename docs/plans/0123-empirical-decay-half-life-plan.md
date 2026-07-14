@@ -392,12 +392,19 @@ ll(λ0, α) = Σ_i [ln(λ0) - α·t_i] - λ0 · (1 - exp(-α·T)) / α
 
 ---
 
-## Wave 3: Partial Pooling + Min-n Gate + Provenance Write-Back + Backfill
+## Wave 3: Partial Pooling + Min-n Gate + Provenance Write-Back + Backfill ✅
+
+**Status**: **DONE** — 2026-07-14 · 21 tests pass (10 pooling + 6 write-back + 5 backfill) · ruff + mypy + import-guards + architecture tests clean · `confidence.py` zero diff · full KG unit suite 1856 pass (0 regressions)
 
 **Goal**: Combine the two lifetime-definition estimates into one final per-type `alpha`, shrink toward the class prior for sparse types, and write back with full provenance — gated, reversible, and (per the review's elevated OQ-7) including an explicit backfill so existing `relations` rows actually pick up a newly-fitted alpha instead of waiting indefinitely for their next upsert.
 **Depends on**: Wave 2 (needs `DecayFit` objects to pool/write)
 **Estimated effort**: 1.5-2 hours
 **Architecture layer**: application (pooling + write-back use case)
+
+**Implementation notes**:
+- Found and fixed a real bug during implementation (not in the original plan text): the write-back's `half_life_days` must be derived from `alpha_final` (the pooled/shrunk value), not from `DecayFit.half_life_days` (a property derived from the raw pre-shrinkage `lambda_hat`) — otherwise the stored half-life would silently disagree with the stored `decay_alpha`. Added `test_half_life_reflects_alpha_final_not_raw_lambda_hat` as a regression guard.
+- Per FR-6, a `pooled_prior`-method fit is deliberately **not written** (columns stay NULL) rather than writing the prior value explicitly — behaviorally identical (Wave 1's COALESCE already falls back to the class prior) and simpler/safer (nothing to revert for a type that was never actually fit).
+- `backfill_relations_for_type` follows this codebase's established `rowcount` pattern (`int(result.rowcount or 0)  # type: ignore[attr-defined,no-any-return]`, matching `alert`/`provisional_enrichment.py` conventions) rather than inventing a new one.
 
 ### Tasks
 
