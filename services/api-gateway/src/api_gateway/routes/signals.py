@@ -136,6 +136,9 @@ def _to_momentum_row(entity: dict[str, Any]) -> dict[str, Any] | None:
         "prior_count": entity.get("prior_count"),
         "delta": entity.get("delta"),
         "delta_pct": entity.get("delta_pct"),
+        # True when there is no prior-window baseline → the widget shows a "NEW" badge
+        # instead of delta_pct (which is 0.0/meaningless for new-coverage rows).
+        "is_new": bool(entity.get("is_new", False)),
         "top_article": top_article,
     }
 

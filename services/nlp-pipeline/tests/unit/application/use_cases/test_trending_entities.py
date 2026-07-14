@@ -114,12 +114,38 @@ async def test_ranks_by_delta_pct_then_count() -> None:
 
 
 @pytest.mark.asyncio
-async def test_zero_prior_uses_floor_denominator() -> None:
-    """A 0->N jump yields N*100% (denominator floored at 1), never +inf."""
+async def test_zero_prior_is_flagged_new_not_fabricated_pct() -> None:
+    """A 0->N jump has NO baseline, so it is flagged is_new with delta_pct=0.0 —
+    never a fabricated N*100% surge (the old floor-denominator behaviour that made
+    the whole widget read as ↑700%-↑1400% during a news-ingestion gap)."""
     e = uuid4()
     out = await _run([_row(e, 4, 0)], {e: _canonical(e, "TSLA")})
-    assert out[0].delta_pct == 400.0
+    assert out[0].is_new is True
+    assert out[0].delta_pct == 0.0
     assert out[0].prior_count == 0
+    assert out[0].delta == 4  # absolute velocity is still carried
+
+
+@pytest.mark.asyncio
+async def test_real_surge_ranks_above_new_coverage() -> None:
+    """Rows WITH a prior baseline (real surges) rank above new-coverage rows; the
+    new-coverage rows sort among themselves by raw volume, not a fake percentage."""
+    e_surge, e_new_big, e_new_small = uuid4(), uuid4(), uuid4()
+    rows = [
+        _row(e_surge, 6, 3),  # real surge: prior>0 -> delta_pct=100%
+        _row(e_new_big, 20, 0),  # new coverage, high volume
+        _row(e_new_small, 5, 0),  # new coverage, low volume
+    ]
+    canonical = {
+        e_surge: _canonical(e_surge, "SURGE"),
+        e_new_big: _canonical(e_new_big, "NEWBIG"),
+        e_new_small: _canonical(e_new_small, "NEWSML"),
+    }
+    out = await _run(rows, canonical)
+    # Real surge first (has a baseline), then new-coverage by descending volume.
+    assert [r.ticker for r in out] == ["SURGE", "NEWBIG", "NEWSML"]
+    assert out[0].is_new is False and out[0].delta_pct == 100.0
+    assert out[1].is_new is True and out[2].is_new is True
 
 
 @pytest.mark.asyncio

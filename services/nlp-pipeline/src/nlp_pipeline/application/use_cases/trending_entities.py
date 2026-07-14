@@ -59,6 +59,10 @@ class TrendingEntityData:
     prior_count: int
     delta: int
     delta_pct: float
+    # True when there is NO prior-window coverage (prior_count == 0). In that case a
+    # percentage surge is undefined — the API/UI should render a "NEW" badge instead of
+    # a fabricated ``count * 100%``. See the delta_pct computation in ``execute``.
+    is_new: bool
     top_article_id: UUID | None
     top_article_title: str | None
     top_article_url: str | None
@@ -119,10 +123,15 @@ class GetTrendingEntitiesUseCase:
                 continue
 
             delta = r.count - r.prior_count
-            # delta_pct: relative surge vs the prior equal window. We floor the
-            # denominator at 1 so a 0→N jump yields a large-but-finite surge
-            # (N*100%) rather than a division-by-zero / +inf.
-            delta_pct = 100.0 * delta / max(r.prior_count, 1)
+            # delta_pct: relative surge vs the prior equal window. When there is NO
+            # prior coverage (prior_count == 0) a percentage is UNDEFINED — the old code
+            # floored the denominator at 1, turning a 0→N jump into a fabricated N*100%
+            # surge (e.g. 0→14 → "1400%"). During a news-ingestion gap the prior window
+            # is empty for EVERY entity, so the whole panel read as an explosive rally.
+            # Instead we flag the row is_new and emit delta_pct=0.0; the API/UI renders a
+            # "NEW" badge. Real surges (prior_count > 0) keep an honest percentage.
+            is_new = r.prior_count <= 0
+            delta_pct = 0.0 if is_new else 100.0 * delta / r.prior_count
 
             results.append(
                 TrendingEntityData(
@@ -134,6 +143,7 @@ class GetTrendingEntitiesUseCase:
                     prior_count=r.prior_count,
                     delta=delta,
                     delta_pct=delta_pct,
+                    is_new=is_new,
                     top_article_id=r.top_article_id,
                     top_article_title=r.top_article_title,
                     top_article_url=r.top_article_url,
@@ -143,6 +153,9 @@ class GetTrendingEntitiesUseCase:
                 )
             )
 
-        # 4. Rank by surge (delta_pct DESC), tie-break by raw count DESC.
-        results.sort(key=lambda x: (x.delta_pct, x.count), reverse=True)
+        # 4. Rank: real surges (prior coverage) first, ordered by delta_pct; then
+        #    new-coverage rows ordered by raw volume. `not x.is_new` is True(1) for real
+        #    rows and False(0) for new rows, so with reverse=True the real surges lead.
+        #    New rows have delta_pct=0.0, so within them the tie-break is raw count.
+        results.sort(key=lambda x: (not x.is_new, x.delta_pct, x.count), reverse=True)
         return results[:limit]
