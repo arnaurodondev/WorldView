@@ -69,9 +69,7 @@ class TestGetAlertsTransportError:
         """R19 guard: the transport-error catch is additive — a successful
         get_alerts still returns the alert items unchanged."""
         s10 = AsyncMock()
-        s10.get_alerts = AsyncMock(
-            return_value=[{"id": "a1", "condition": "price_below", "threshold": {"price": 100}}]
-        )
+        s10.get_alerts = AsyncMock(return_value=[{"id": "a1", "condition": "price_below", "threshold": {"price": 100}}])
         handler = _make_handler(s10)
 
         items = await handler._handle_get_alerts()

@@ -1155,9 +1155,9 @@ class TestPendingActionJsonWarning:
         # structlog renders the event name + key=value context into stdout.
         captured = capsys.readouterr()
         combined = captured.out + captured.err
-        assert "pending_action_json_parse_failure" in combined, (
-            f"expected pending_action_json_parse_failure log event, got: {combined!r}"
-        )
+        assert (
+            "pending_action_json_parse_failure" in combined
+        ), f"expected pending_action_json_parse_failure log event, got: {combined!r}"
         # The warning must carry pending_id + error context so operators can
         # triage the malformed upstream payload.
         assert "pending_id" in combined, f"warning missing pending_id key: {combined!r}"
@@ -1323,9 +1323,9 @@ class TestPlannerSynthesisModelSplit:
         # keeps the adapter's configured completion_model (synthesis discipline).
         assert stream_kwargs, "synthesis stream_chat was never called"
         for kw in stream_kwargs:
-            assert kw.get("model") is None, (
-                f"synthesis must keep completion_model (no override), got {kw.get('model')!r}"
-            )
+            assert (
+                kw.get("model") is None
+            ), f"synthesis must keep completion_model (no override), got {kw.get('model')!r}"
 
     def test_planning_model_unset_is_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """With RAG_CHAT_PLANNING_MODEL unset, the planning turn passes
