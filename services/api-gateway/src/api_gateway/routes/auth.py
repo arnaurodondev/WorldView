@@ -452,15 +452,16 @@ async def _complete_oidc_login(request: Request, code: str, code_verifier: str) 
     try:
         import json
 
-        await valkey.set(
-            f"auth:user:{sub}",
-            # F-Q2-01: cache the role alongside the user identifiers so
-            # OIDCAuthMiddleware can read it back on a Valkey hit (the
-            # middleware also re-resolves it from the token, but caching
-            # keeps /v1/auth/me consistent without re-decoding the JWT).
-            json.dumps({"user_id": user_id, "tenant_id": tenant_id, "role": oidc_role}),
-            ttl=3600,
-        )
+        if valkey is not None:
+            await valkey.set(
+                f"auth:user:{sub}",
+                # F-Q2-01: cache the role alongside the user identifiers so
+                # OIDCAuthMiddleware can read it back on a Valkey hit (the
+                # middleware also re-resolves it from the token, but caching
+                # keeps /v1/auth/me consistent without re-decoding the JWT).
+                json.dumps({"user_id": user_id, "tenant_id": tenant_id, "role": oidc_role}),
+                ttl=3600,
+            )
     except Exception:  # noqa: S110 — fail-open: cache miss handled on next request
         pass
 

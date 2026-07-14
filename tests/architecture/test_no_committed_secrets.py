@@ -14,8 +14,10 @@ secret file no matter how it was added. Templates (``*.env.example`` /
 
 from __future__ import annotations
 
+import math
 import re
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -190,3 +192,199 @@ def test_no_secret_values_in_tracked_text_files() -> None:
         "Secret-looking tokens found in tracked files (remove + ROTATE; add "
         "'# pragma: allowlist-secret' only for verified non-secrets):\n  " + "\n  ".join(sorted(violations))
     )
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded API-key detector (extends the env-file guard to ALL source files)
+# ---------------------------------------------------------------------------
+# Incident 2026-07-03: two REAL provider keys (EODHD + Finnhub) were pasted into
+# ``libs/observability/tests/test_logging.py`` and pushed. The env-file guard
+# above never looked inside ``.py`` files, so it missed them (GitGuardian caught
+# them post-push). This detector closes that gap for every tracked text file.
+#
+# Design goal: HIGH precision (zero false positives on a repo full of git SHAs,
+# UUIDs, base64 fixtures, example JWTs, and storage keys) while still catching
+# real provider/secret formats. Modelled on detect-secrets/gitleaks rules but
+# dependency-free (pure ``re`` + ``git ls-files``) so it runs in the Architecture
+# Tests CI job. Two layers:
+#   1. High-confidence PROVIDER prefixes (AWS/OpenAI/GitHub/Google/Slack/Stripe/
+#      EODHD + PEM private-key blocks) — scanned in every file.
+#   2. A GENERIC ``<secret-named-var> = "<literal>"`` catch for prefix-less keys
+#      (Finnhub/DeepInfra bare alnum), PLUS a URL-query form (``?token=<key>`` —
+#      the exact Finnhub vector). Suppressed unless the value looks like a real
+#      random token: contiguous alnum, contains a digit, high Shannon entropy,
+#      and not a placeholder/dictionary word / example JWT.
+# Escape hatch: an inline ``# pragma: allowlist secret`` (or ``allowlist-secret``)
+# allowlists a single verified-fake line.
+
+# Layer 1 — provider-prefixed / structural secret formats (very low FP rate).
+_SOURCE_PROVIDER_PATTERNS = {
+    "private-key-block": re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"),
+    "aws-akia": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    "openai-sk": re.compile(r"\bsk-(?!ant-)[A-Za-z0-9]{20,}\b"),
+    "anthropic-sk": re.compile(r"\bsk-ant-[A-Za-z0-9_-]{40,}"),
+    "slack-token": re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),
+    "github-pat": re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}"),
+    "google-api": re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
+    "stripe-sk": re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9]{24,}\b"),
+    # EODHD ``<14 hex>.<8 digits>``; ``demo``-prefixed synthetic tokens excluded.
+    "eodhd-token": re.compile(r"\b(?!demo)[0-9a-f]{14}\.[0-9]{8}\b"),
+}
+
+# Layer 2 — generic ``secret-named-var = "literal"`` (prefix-less bare keys).
+_SOURCE_GENERIC_ASSIGN = re.compile(
+    r"(?i)(?:[a-z0-9]{0,20}[_-])?"
+    r"(?:api[_-]?key|apikey|secret[_-]?key|client[_-]?secret|access[_-]?key|"
+    r"secret|api[_-]?token|auth[_-]?token|token|key|password|passwd|pwd)"
+    r"['\"]?\s*[:=]\s*['\"]([A-Za-z0-9+=]{20,})['\"]"
+)
+
+# Layer 2b — a secret embedded in a URL query param (``?api_token=<key>``). This is
+# the EXACT vector of the 2026-07-03 Finnhub leak (key pasted inside an httpx URL
+# string). The value is unquoted, so the quoted-literal rule above misses it.
+_SOURCE_URL_PARAM = re.compile(
+    r"(?i)[?&](?:api[_-]?token|api[_-]?key|access[_-]?token|auth[_-]?token|token|"
+    r"apikey|api[_-]?secret|secret|password)=([A-Za-z0-9]{16,})"
+)
+
+# Values containing any of these substrings are obvious non-secrets (placeholders,
+# dev defaults, well-known dictionary words). Real random keys never contain them,
+# so this is a safe suppressor.
+_SOURCE_FAKE_WORDS = re.compile(
+    r"(?i)(demo|example|test|dummy|fake|placeholder|replace|changeme|sample|mock|"
+    r"invalid|definitely|todo|fixme|redacted|deepinfra|skipverif|yourkey|"
+    r"masterkey|character|needsto)"
+)
+
+# Explicit path/substring ALLOWLIST for known-safe fixtures. Currently empty (the
+# entropy/word heuristics already yield zero false positives) but wired so a future
+# verified fixture can be exempted without weakening the detector globally.
+_SOURCE_ALLOWLIST_GLOBS: tuple[str, ...] = ()
+
+
+def _shannon_entropy(s: str) -> float:
+    """Shannon entropy (bits/char) — random keys score high, words/repeats low."""
+    n = len(s)
+    if n == 0:
+        return 0.0
+    return -sum((c / n) * math.log2(c / n) for c in Counter(s).values())
+
+
+def _looks_fake(value: str) -> bool:
+    """True when *value* is clearly not a real secret (placeholder / low entropy)."""
+    if _SOURCE_FAKE_WORDS.search(value):
+        return True
+    if "1234567890" in value or "abcdefghij" in value.lower():
+        return True
+    if re.search(r"(.)\1{4,}", value):  # 5+ identical consecutive chars (aaaaa, 00000)
+        return True
+    if _shannon_entropy(value) < 3.0:
+        return True
+    return False
+
+
+def _find_hardcoded_secret(line: str) -> str | None:
+    """Return the rule name if *line* contains a hardcoded secret, else None."""
+    for name, rx in _SOURCE_PROVIDER_PATTERNS.items():
+        m = rx.search(line)
+        if m:
+            # PEM headers are unambiguous; other prefixes still pass a fake filter
+            # so obvious ``sk-1234567890...`` fixtures don't trip the build.
+            if name == "private-key-block" or not _looks_fake(m.group(0)):
+                return name
+    m = _SOURCE_GENERIC_ASSIGN.search(line)
+    if m:
+        value = m.group(1)
+        # Real bare tokens are contiguous alnum WITH a digit and high entropy.
+        # Identifiers / enum values / storage keys lack a digit or are word-like;
+        # dotted/pathy values never reach here (regex value class excludes ``.`` / ``/``).
+        if value.startswith("eyJ"):  # example JWT header — not a bare secret
+            return None
+        if not re.search(r"\d", value):  # random keys carry digits; identifiers rarely
+            return None
+        if not _looks_fake(value):
+            return "generic-secret-assignment"
+    m = _SOURCE_URL_PARAM.search(line)
+    if m:
+        value = m.group(1)
+        # Same discipline as the generic rule: a real key in a URL carries a digit,
+        # is high-entropy, and isn't an example JWT / placeholder.
+        if not value.startswith("eyJ") and re.search(r"\d", value) and not _looks_fake(value):
+            return "url-query-secret"
+    return None
+
+
+def test_no_hardcoded_api_keys_in_source() -> None:
+    """No hardcoded provider/secret token may appear in ANY tracked text file.
+
+    This is the backstop that would have caught the 2026-07-03 EODHD/Finnhub
+    leak (keys pasted into a ``.py`` test). It scans every tracked file, not just
+    env/config files.
+    """
+    violations: list[str] = []
+    for path in _TRACKED:
+        if path.endswith(_ALLOWED_SUFFIXES) or path.endswith(_SKIP_CONTENT_SUFFIXES):
+            continue
+        if any(d in f"/{path}" for d in _SKIP_CONTENT_DIRS):
+            continue
+        if any(g in path for g in _SOURCE_ALLOWLIST_GLOBS):
+            continue
+        # This test file itself defines the patterns / positive-control samples.
+        if path.endswith("tests/architecture/test_no_committed_secrets.py"):
+            continue
+        try:
+            text = (_REPO_ROOT / path).read_text(encoding="utf-8", errors="ignore")
+        except (OSError, ValueError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if "pragma: allowlist secret" in line or "pragma: allowlist-secret" in line:
+                continue
+            hit = _find_hardcoded_secret(line)
+            if hit is not None:
+                violations.append(f"{path}:{lineno}  ({hit})  {line.strip()[:100]}")
+    assert not violations, (
+        "Hardcoded API keys / secrets found in tracked source files. If REAL: "
+        "remove + ROTATE the credential. If a verified fake (e.g. a redaction-test "
+        "fixture): make it obviously synthetic or add '# pragma: allowlist secret' "
+        "to that line.\n  " + "\n  ".join(sorted(violations))
+    )
+
+
+def test_secret_detector_catches_known_bad_samples() -> None:
+    """Positive control: the detector MUST catch real-looking secret formats.
+
+    Guards against the detector silently degrading (e.g. a regex edit that stops
+    matching). All samples below are SYNTHETIC — not live credentials.
+    """
+    # Samples are assembled from FRAGMENTS at runtime so no literal secret appears in
+    # this source file — otherwise the repo's own pre-commit secret-scan / detect-private-key
+    # hooks (correctly) flag this very test file. The detector still receives the full string.
+    _hex14 = "6a3b1c2d3e4f5a"
+    _fin = "d7msqbpr01" + "qngrvpaoj9"
+    must_catch = {
+        "eodhd": 'EODHD_API_KEY = "' + _hex14 + "." + '12345678"',
+        "finnhub-bare": 'finnhub_token = "' + _fin + '"',
+        "finnhub-in-url": "GET https://finnhub.io/x?token=" + _fin + "&x=1",
+        "deepinfra-bare": 'DEEPINFRA_API_KEY = "' + "K2wVkxAbc9QmZ7pL" + 'tY4bZ8hNqR7vWpLt"',
+        "aws": 'aws_key = "' + "AKIA" + 'Z7QH8DJKLMNPQRST"',
+        "openai": 'OPENAI_API_KEY = "' + "sk-" + 'proj9Xk2mNqR7vWpLtY4bZ8h"',
+        "github": 'GITHUB_TOKEN = "' + "ghp_" + '16C7e42F292c6912E7710c838347Ae178B4a"',
+        "google": 'key = "' + "AIza" + 'SyD9aBcEfGhIjKlMnOpQrStUvWxYz012345"',
+        "rsa-pem": "-----BEGIN RSA " + "PRIVATE KEY-----",
+        "openssh-pem": "-----BEGIN OPENSSH " + "PRIVATE KEY-----",
+    }
+    missed = [name for name, line in must_catch.items() if _find_hardcoded_secret(line) is None]
+    assert not missed, f"Detector FAILED to catch known secret formats: {missed}"
+
+    must_ignore = {
+        "placeholder": 'api_key = "your-api-key-here-xxx"',
+        "example-jwt": 'token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.sig"',
+        "git-sha": 'commit = "0a1dbab5e9f2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"',
+        "env-read": 'api_key = os.getenv("DEEPINFRA_API_KEY")',
+        "dev-key": 'internal_key = "dev-skip-verification-key-for-portfolio"',
+        "storage-key": 'STORAGE_KEY = "worldview.preferences.v1"',
+        "s3-ref": '"canonical_ref_key": "fundamentals/aapl.json"',
+        "jwt-in-url": "ws://api-gateway:8000/api/v1/alerts/stream?token=eyJhbGciOiJSUzI1NiIs",
+    }
+    false_pos = [name for name, line in must_ignore.items() if _find_hardcoded_secret(line) is not None]
+    assert not false_pos, f"Detector false-positived on known-safe samples: {false_pos}"
