@@ -6,6 +6,15 @@ Block 11 canonicalization is 3-step:
 1. Exact match against canonical_type (this repo's ``find_exact``).
 2. Soft-map via ANN cosine search on embedding column (this repo's ``find_by_embedding``).
 3. No match → propose via outbox (handled by the application block, not here).
+
+Decay-alpha resolution (PRD-0120, PLAN-0123 Wave 1): ``find_exact`` and
+``find_by_embedding`` resolve ``decay_alpha`` as
+``COALESCE(rtr.decay_alpha, dcc.decay_alpha)`` — a per-type fitted value
+(``relation_type_registry.decay_alpha``, written by the offline decay fitter)
+overrides the class-level prior (``decay_class_config.decay_alpha``) when
+present; NULL falls back to the class value exactly as before PRD-0120.
+``find_exact_simple`` intentionally does not join ``decay_class_config`` and
+is out of scope for this resolution (no caller uses it for confidence math).
 """
 
 from __future__ import annotations
@@ -30,7 +39,8 @@ class RelationTypeRegistryRepository(RelationTypeRegistryRepositoryPort):
         """Step 1: exact-match lookup against canonical_type."""
         result = await self._session.execute(
             text("""
-SELECT rtr.type_id, rtr.canonical_type, rtr.semantic_mode, rtr.decay_class, rtr.base_confidence, dcc.decay_alpha
+SELECT rtr.type_id, rtr.canonical_type, rtr.semantic_mode, rtr.decay_class, rtr.base_confidence,
+             COALESCE(rtr.decay_alpha, dcc.decay_alpha) AS decay_alpha
 FROM relation_type_registry rtr
 JOIN decay_class_config dcc ON dcc.decay_class = rtr.decay_class
 WHERE rtr.canonical_type = :canonical_type
@@ -86,7 +96,7 @@ WHERE canonical_type = :canonical_type AND is_active = true
         result = await self._session.execute(
             text("""
 SELECT rtr.type_id, rtr.canonical_type, rtr.semantic_mode, rtr.decay_class, rtr.base_confidence,
-             dcc.decay_alpha,
+             COALESCE(rtr.decay_alpha, dcc.decay_alpha) AS decay_alpha,
        rtr.embedding <=> CAST(:query_embedding AS vector) AS cosine_distance
 FROM relation_type_registry rtr
 JOIN decay_class_config dcc ON dcc.decay_class = rtr.decay_class
