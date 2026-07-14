@@ -10,6 +10,7 @@ from knowledge_graph.application.analytics.decay_fitting.observability import (
 from knowledge_graph.application.metrics import (
     decay_fit_alpha,
     decay_fit_censoring_rate,
+    decay_fit_half_life_days,
     decay_fit_sample_n,
     decay_fit_shrinkage_weight,
     decay_fit_signal,
@@ -59,6 +60,17 @@ class TestRecordDecayFitMetrics:
         assert decay_fit_sample_n.labels(canonical_type="test_type_a")._value.get() == 150
         assert decay_fit_censoring_rate.labels(canonical_type="test_type_a")._value.get() == pytest.approx(0.35)
         assert decay_fit_shrinkage_weight.labels(canonical_type="test_type_a")._value.get() == pytest.approx(0.83)
+
+    def test_sets_half_life_gauge(self) -> None:
+        """Regression guard (QA 2026-07-14): decay_fit_half_life_days was declared but never .set()."""
+        import math
+
+        fit = _pooled_fit(canonical_type="test_type_f")
+        record_decay_fit_metrics(fit)
+
+        assert decay_fit_half_life_days.labels(canonical_type="test_type_f")._value.get() == pytest.approx(
+            math.log(2) / 0.025,
+        )
 
     def test_signal_gauge_set_for_corroboration(self) -> None:
         fit = _pooled_fit(method="nhpp_corroboration", canonical_type="test_type_b")

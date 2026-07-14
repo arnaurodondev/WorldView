@@ -8,11 +8,13 @@ from the shadow path too (metrics are useful even when nothing is written).
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from knowledge_graph.application.metrics import (
     decay_fit_alpha,
     decay_fit_censoring_rate,
+    decay_fit_half_life_days,
     decay_fit_sample_n,
     decay_fit_shrinkage_weight,
     decay_fit_signal,
@@ -45,6 +47,8 @@ def record_decay_fit_metrics(fit: DecayFit) -> None:
         )
 
     decay_fit_alpha.labels(canonical_type=fit.canonical_type).set(fit.alpha_final)
+    half_life = math.log(2) / fit.alpha_final if fit.alpha_final != 0.0 else math.inf
+    decay_fit_half_life_days.labels(canonical_type=fit.canonical_type).set(half_life)
     decay_fit_sample_n.labels(canonical_type=fit.canonical_type).set(fit.n)
     decay_fit_censoring_rate.labels(canonical_type=fit.canonical_type).set(fit.censoring_rate)
     decay_fit_shrinkage_weight.labels(canonical_type=fit.canonical_type).set(fit.shrinkage_weight or 0.0)

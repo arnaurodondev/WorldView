@@ -2,11 +2,16 @@
 
 Runs both lifetime-definition estimators for every target ``TEMPORAL_CLAIM``
 type (PRD-0120 §4 FR-3) and emits a structured per-type report via
-structlog (R10). **Writes nothing to the database in this wave** — write-back
-gating (min-n, shrinkage, provenance) is Wave 3 (T-A-3-01/T-A-3-02).
+structlog (R10). **Writes nothing to the database** — this module only
+extracts and fits; pooling/write-back/backfill/metrics (Wave 3/4) are
+separate, independently-tested functions in this package that a future
+scheduled orchestrator composes with this module's output (see the
+package-level ``.claude-context.md`` note — the composition itself is not
+yet wired, a known and documented gap, not an oversight).
 
-Invocation (once wired into a container entrypoint):
-    python -m knowledge_graph.application.analytics.decay_fitting.run_fitter --shadow
+Not yet invocable as a CLI or ``-m`` entrypoint — call ``run_shadow_fit``
+as a library function with a read-replica-bound session. A future
+orchestrator will add the ``-m`` entrypoint alongside the wiring above.
 
 The ~14 target types are the seeded ``TEMPORAL_CLAIM`` set (PRD §4 FR-3):
 analyst_rating, market_share_claim, price_target, earnings_guidance,
@@ -52,9 +57,7 @@ TARGET_TEMPORAL_CLAIM_TYPES: tuple[str, ...] = (
     "reported_revenue_of",
 )
 
-# Class-prior alphas (decay_class_config seed, migration 0001) — used as the
-# ``prior_alpha`` reference on every DecayFit until Wave 3 resolves the
-# type's real decay_class from the registry.
+# Class-prior alphas (decay_class_config seed, migration 0001).
 _CLASS_PRIOR_ALPHAS: dict[str, float] = {
     "PERMANENT": 0.0,
     "DURABLE": 0.000950,
@@ -63,7 +66,35 @@ _CLASS_PRIOR_ALPHAS: dict[str, float] = {
     "FAST": 0.049510,
     "EPHEMERAL": 0.231049,
 }
-_DEFAULT_PRIOR_ALPHA = _CLASS_PRIOR_ALPHAS["MEDIUM"]
+
+# Each target type's SEEDED decay_class (relation_type_registry, migration
+# 0001/0004/0041 — verified live against intelligence_db 2026-07-14). QA
+# review (2026-07-14) found every DecayFit was being stamped with a single
+# hardcoded MEDIUM prior regardless of the type's real class — this map
+# fixes that: `_type_prior_alpha(canonical_type)` resolves the CORRECT
+# class-prior per type instead of one constant for all ~14 types.
+_TYPE_DECAY_CLASS: dict[str, str] = {
+    "analyst_rating": "FAST",
+    "market_share_claim": "MEDIUM",
+    "price_target": "FAST",
+    "earnings_guidance": "MEDIUM",
+    "sentiment_signal": "EPHEMERAL",
+    "credit_rating": "DURABLE",
+    "issues_debt": "MEDIUM",
+    "earnings_released": "MEDIUM",
+    "corporate_action": "DURABLE",
+    "revenue_from_country": "MEDIUM",
+    "divested_from": "PERMANENT",
+    "downgraded_by": "FAST",
+    "filed_lawsuit_against": "SLOW",
+    "reported_revenue_of": "MEDIUM",
+}
+
+
+def _type_prior_alpha(canonical_type: str) -> float:
+    """Resolve *canonical_type*'s real decay-class prior (falls back to MEDIUM if unmapped)."""
+    decay_class = _TYPE_DECAY_CLASS.get(canonical_type, "MEDIUM")
+    return _CLASS_PRIOR_ALPHAS[decay_class]
 
 
 async def run_shadow_fit(
@@ -121,6 +152,7 @@ async def run_shadow_fit(
 
 async def _fit_one_type(canonical_type: str, session: AsyncSession) -> list[DecayFit]:
     fits: list[DecayFit] = []
+    prior_alpha = _type_prior_alpha(canonical_type)
 
     mention_series = await extract_mention_series(canonical_type, session)
     events_with_mentions = [s for s in mention_series if s.mention_ages_days]
@@ -134,8 +166,8 @@ async def _fit_one_type(canonical_type: str, session: AsyncSession) -> list[Deca
                 lambda_hat=alpha_hat,
                 n=total_mentions,
                 exposure_time=sum(s.observation_window_days for s in mention_series),
-                censoring_rate=1.0 - (len(events_with_mentions) / len(mention_series) if mention_series else 0.0),
-                prior_alpha=_DEFAULT_PRIOR_ALPHA,
+                censoring_rate=1.0 - (len(events_with_mentions) / len(mention_series)),
+                prior_alpha=prior_alpha,
                 method="nhpp_corroboration",
             ),
         )
@@ -161,7 +193,7 @@ async def _fit_one_type(canonical_type: str, session: AsyncSession) -> list[Deca
                     n=len(events),
                     exposure_time=sum(lt.duration_days for lt in lifetimes),
                     censoring_rate=1.0 - (len(events) / len(lifetimes)),
-                    prior_alpha=_DEFAULT_PRIOR_ALPHA,
+                    prior_alpha=prior_alpha,
                     method="mle_supersession",
                 ),
             )

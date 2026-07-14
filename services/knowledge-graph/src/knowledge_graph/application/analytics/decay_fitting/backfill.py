@@ -29,6 +29,7 @@ UPDATE relations
 SET decay_alpha = :decay_alpha,
     confidence_stale = true
 WHERE canonical_type = :canonical_type
+  AND decay_alpha IS DISTINCT FROM :decay_alpha
 """
 
 

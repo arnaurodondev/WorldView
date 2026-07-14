@@ -74,3 +74,18 @@ class TestBackfillUpdatesExistingRelations:
         updated = _run(backfill_relations_for_type("issues_debt", 0.01, session))
 
         assert updated == 0
+
+    def test_skips_rows_whose_alpha_is_already_current(self) -> None:
+        """QA fix (2026-07-14): unchanged rows are excluded via IS DISTINCT FROM.
+
+        Without this guard, a re-run (or a re-fit producing an unchanged
+        alpha) would rewrite every row of the type and re-flip
+        confidence_stale=true even when nothing changed, needlessly forcing
+        the confidence worker to recompute the whole type.
+        """
+        session = _make_session(rowcount=3)
+
+        _run(backfill_relations_for_type("market_share_claim", 0.02, session))
+
+        executed_sql = str(session.execute.call_args[0][0])
+        assert "decay_alpha IS DISTINCT FROM :decay_alpha" in executed_sql

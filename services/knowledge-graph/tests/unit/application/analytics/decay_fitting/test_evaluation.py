@@ -80,6 +80,29 @@ class TestSparseTypesReportedInconclusive:
         assert row.verdict == "insufficient_data"
         assert row.censoring_rate == pytest.approx(1.0)
 
+    def test_permanent_prior_with_observed_event_scores_negative_infinity(self) -> None:
+        """Regression guard (QA 2026-07-14): the rate==0 + observed-event log-likelihood branch.
+
+        A PERMANENT-class prior (alpha=0.0) assigns zero density to an
+        OBSERVED terminal event — the held-out log-likelihood at that prior
+        must be -inf, not a math-domain crash (the only prior-existing test
+        for rate==0 was all-censored, which never touches this branch).
+        """
+        import math
+
+        held_out = [Lifetime(duration_days=10.0, event_observed=True) for _ in range(40)]
+
+        row = evaluate_fit_vs_prior(
+            "divested_from",
+            held_out,
+            fitted_alpha=0.02,
+            prior_alpha=0.0,
+            min_n=30,
+        )
+
+        assert row.held_out_loglik_prior == -math.inf
+        assert row.verdict == "fitted_better"
+
 
 class TestEvalRowShape:
     def test_half_lives_derived_correctly(self) -> None:
