@@ -6,7 +6,7 @@ without crossing into infrastructure/. prometheus.py re-exports from here.
 
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram  # type: ignore[import-not-found]
+from prometheus_client import Counter, Gauge, Histogram  # type: ignore[import-not-found]
 
 s7_enrichment_entities_total = Counter(
     "s7_enrichment_entities_total",
@@ -84,4 +84,54 @@ s7_relation_edge_materialized_on_unblock_total = Counter(
     "s7_relation_edge_materialized_on_unblock_total",
     "Graph edges upserted into ``relations`` when a newly-created entity "
     "unblocked previously-deferred provisional relation evidence.",
+)
+
+# PLAN-0123 (PRD-0120 §13) — offline decay-rate fitter observability.
+# Emitted by write_back.write_back_fit() for every type it processes,
+# regardless of whether a write actually occurred (a pooled_prior fit still
+# reports its shrinkage/censoring stats, it's just not persisted).
+decay_fit_alpha = Gauge(
+    "decay_fit_alpha",
+    "Per-type fitted/pooled decay alpha (the value that would be or was written).",
+    ["canonical_type"],
+)
+
+decay_fit_half_life_days = Gauge(
+    "decay_fit_half_life_days",
+    "Implied half-life (ln2/alpha) for the per-type fitted/pooled alpha.",
+    ["canonical_type"],
+)
+
+decay_fit_sample_n = Gauge(
+    "decay_fit_sample_n",
+    "Lifetime-event sample size behind the selected signal's fit.",
+    ["canonical_type"],
+)
+
+decay_fit_censoring_rate = Gauge(
+    "decay_fit_censoring_rate",
+    "Fraction of right-censored lifetimes for the selected signal.",
+    ["canonical_type"],
+)
+
+decay_fit_shrinkage_weight = Gauge(
+    "decay_fit_shrinkage_weight",
+    "Empirical-Bayes pooling weight w (0 = pure prior, 1 = pure fit).",
+    ["canonical_type"],
+)
+
+decay_types_using_fitted_total = Gauge(
+    "decay_types_using_fitted_total",
+    "Count of TEMPORAL_CLAIM types currently on a fitted (non-prior) alpha.",
+)
+
+decay_types_using_prior_total = Gauge(
+    "decay_types_using_prior_total",
+    "Count of TEMPORAL_CLAIM types still on the class-prior alpha (pooled_prior).",
+)
+
+decay_fit_signal = Gauge(
+    "decay_fit_signal",
+    "Which lifetime definition dominated the final per-type alpha (1 = active).",
+    ["canonical_type", "signal"],
 )

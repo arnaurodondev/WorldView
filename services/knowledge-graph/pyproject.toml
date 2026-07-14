@@ -27,6 +27,9 @@ dependencies = [
     "apscheduler[asyncio]>=3.10,<4",
     "prometheus-client>=0.20",
     "ml-clients[openai]",
+    # PLAN-0123 (PRD-0120) decay fitter: NHPP + censored-exponential MLE (scipy.optimize).
+    "numpy>=1.26,<3",
+    "scipy>=1.11,<2",
 ]
 
 [project.optional-dependencies]

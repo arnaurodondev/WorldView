@@ -401,3 +401,71 @@ class TestCaseNormalization:
         assert result.step == "proposed"
         # Registry received normalized key, still found nothing.
         registry.find_exact.assert_called_once_with("invented_by")
+
+
+# ---------------------------------------------------------------------------
+# PRD-0120 / PLAN-0123 Wave 1 (T-A-1-03): fitted per-type decay_alpha flows
+# through unmodified — canonicalization does not clamp/override whatever the
+# repository resolves (class value or per-type fit), it just forwards it.
+# ---------------------------------------------------------------------------
+
+
+class TestFittedDecayAlphaPassthrough:
+    def test_exact_match_forwards_fitted_per_type_alpha_unmodified(self) -> None:
+        """A per-type fitted alpha (not the class value) passes through as-is."""
+        from knowledge_graph.application.blocks.canonicalization import (
+            canonicalize_relation_type,
+        )
+
+        fitted_row = {
+            **_EXACT_ROW,
+            "canonical_type": "analyst_rating",
+            "decay_class": "FAST",
+            # 0.0088 is a fitted per-type value, deliberately NOT equal to the
+            # FAST class prior (0.049510) or any other class constant — proves
+            # the value isn't silently re-resolved to a class constant anywhere
+            # downstream of the repository.
+            "decay_alpha": 0.0088,
+        }
+        registry = _make_registry_repo(exact_return=fitted_row)
+
+        result = asyncio.run(
+            canonicalize_relation_type(
+                raw_type="analyst_rating",
+                semantic_mode_hint="TEMPORAL_CLAIM",
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                source_doc_id=uuid4(),
+                registry_repo=registry,
+                outbox_repo=_make_outbox_repo(),
+                embedding_client=_make_embedding_client(),
+            )
+        )
+
+        assert result.decay_alpha == pytest.approx(0.0088)
+
+    def test_soft_match_forwards_fitted_per_type_alpha_unmodified(self) -> None:
+        from knowledge_graph.application.blocks.canonicalization import (
+            canonicalize_relation_type,
+        )
+
+        fitted_soft_row = {
+            **_SOFT_ROW,
+            "decay_alpha": 0.0088,
+        }
+        registry = _make_registry_repo(exact_return=None, ann_return=fitted_soft_row)
+
+        result = asyncio.run(
+            canonicalize_relation_type(
+                raw_type="rated_by_analyst",
+                semantic_mode_hint="TEMPORAL_CLAIM",
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                source_doc_id=uuid4(),
+                registry_repo=registry,
+                outbox_repo=_make_outbox_repo(),
+                embedding_client=_make_embedding_client(),
+            )
+        )
+
+        assert result.decay_alpha == pytest.approx(0.0088)
