@@ -20,16 +20,20 @@ from observability.logging import (
 class TestSecretRedaction:
     """Guards the httpx plaintext-key leak fix (incident 2026-07-03)."""
 
+    # NOTE: the tokens below are SYNTHETIC, obviously-fake placeholders that only
+    # mimic the SHAPE of real provider keys (EODHD ``<14 hex>.<8 digits>`` and
+    # Finnhub 20-char lowercase alnum). They exercise the redaction paths without
+    # embedding any live credential in the tree. Do NOT replace with real keys.
     def test_redacts_eodhd_api_token_keeps_last4(self) -> None:
-        url = "HTTP Request: GET https://eodhd.com/api/news?api_token=6a3b6d4598dec9.89061021&fmt=json"
+        url = "HTTP Request: GET https://eodhd.com/api/news?api_token=demo0000000000.00000000&fmt=json"
         out = _redact_secrets(url)
-        assert "6a3b6d4598dec9.89061021" not in out
-        assert "api_token=***REDACTED-1021" in out
+        assert "demo0000000000.00000000" not in out
+        assert "api_token=***REDACTED-0000" in out
 
     def test_redacts_finnhub_token(self) -> None:
-        out = _redact_secrets("GET https://finnhub.io/x?token=d7msqbpr01qngrvpaoj0&x=1")
-        assert "d7msqbpr01qngrvpaoj0" not in out
-        assert "token=***REDACTED-aoj0" in out
+        out = _redact_secrets("GET https://finnhub.io/x?token=demofinnhubkey000000&x=1")
+        assert "demofinnhubkey000000" not in out
+        assert "token=***REDACTED-0000" in out
 
     def test_leaves_non_secret_query_params_untouched(self) -> None:
         out = _redact_secrets("GET /api/news?limit=1000&from=2026-07-03&offset=0")
@@ -43,12 +47,13 @@ class TestSecretRedaction:
             pathname=__file__,
             lineno=1,
             msg='HTTP Request: %s "%s"',
-            args=("GET https://eodhd.com/api/news?api_token=6a3b6d4598dec9.89061021", "HTTP/1.1 200 OK"),
+            # Synthetic EODHD-shaped token (see note above) — not a real key.
+            args=("GET https://eodhd.com/api/news?api_token=demo0000000000.00000000", "HTTP/1.1 200 OK"),
             exc_info=None,
         )
         assert SecretRedactingFilter().filter(rec) is True
-        assert "89061021" not in rec.getMessage()
-        assert "api_token=***REDACTED-1021" in rec.getMessage()
+        assert "demo0000000000.00000000" not in rec.getMessage()
+        assert "api_token=***REDACTED-0000" in rec.getMessage()
 
 
 class TestConfigureLogging:
