@@ -183,11 +183,19 @@ def layer0() -> None:
         ", ".join(f"{t}={n}" for t, n in hot.items()) if hot else "all 5 DLQs = 0",
     )
 
-    # kafka consumer group lag
-    worst = kafka_worst_lag()
-    if worst is None:
-        R.add("0", "kafka consumer lag", WARN, "could not read groups")
+    # kafka consumer group health — per-group members + lag. A group with 0 active
+    # members is a DEAD consumer (silently stopped processing) even if aggregate lag
+    # looks fine; catching it per-group closes the "one idle consumer hides" gap.
+    n_groups, dead, worst = kafka_group_health()
+    if n_groups == 0:
+        R.add("0", "kafka consumers", WARN, "could not read groups")
     else:
+        R.add(
+            "0",
+            "kafka consumers alive",
+            FAIL if dead else PASS,
+            f"{len(dead)} dead (0 members): {dead[:5]}" if dead else f"all {n_groups} groups have members",
+        )
         grp, lag = worst
         st = FAIL if lag > KAFKA_LAG_FAIL else WARN if lag > KAFKA_LAG_WARN else PASS
         R.add("0", "kafka consumer lag", st, f"max {grp}={lag}")
@@ -256,28 +264,38 @@ def kafka_offsets(topics: list[str]) -> dict[str, int]:
     return out_map
 
 
-def kafka_worst_lag() -> tuple[str, int] | None:
+def kafka_group_health() -> tuple[int, list[str], tuple[str, int]]:
+    """Return (num_groups, dead_group_names, (worst_group, worst_lag)).
+
+    A group is DEAD when it has assigned partitions but 0 rows carry a live
+    CONSUMER-ID (member) — nobody is consuming. This catches a silently-stopped
+    consumer that aggregate lag alone would miss.
+    """
     _, groups = kubectl(
         f"-n {INFRA_NS} exec kafka-broker-0 -c kafka -- sh -c "
         f"'kafka-consumer-groups.sh --bootstrap-server localhost:9092 --list 2>/dev/null'"
     )
-    worst: tuple[str, int] | None = None
-    for g in groups.splitlines():
-        g = g.strip()
-        if not g:
-            continue
+    dead: list[str] = []
+    worst: tuple[str, int] = ("", 0)
+    names = [g.strip() for g in groups.splitlines() if g.strip()]
+    for g in names:
         _, desc = kubectl(
             f"-n {INFRA_NS} exec kafka-broker-0 -c kafka -- sh -c "
             f"'kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group {g} 2>/dev/null'"
         )
-        lag = 0
+        lag, members, rows = 0, 0, 0
         for ln in desc.splitlines()[1:]:
             f = ln.split()
             if len(f) >= 6 and f[5].isdigit():
+                rows += 1
                 lag += int(f[5])
-        if worst is None or lag > worst[1]:
+                if len(f) >= 7 and f[6] != "-":  # live CONSUMER-ID → a member
+                    members += 1
+        if rows > 0 and members == 0:
+            dead.append(g)
+        if lag > worst[1]:
             worst = (g, lag)
-    return worst
+    return len(names), dead, worst
 
 
 # ── LAYER 1 — public edge (no auth) ──────────────────────────────────────────
@@ -467,12 +485,11 @@ def layer23(res: dict) -> None:
 # backlogs drain, outboxes dispatch, jobs don't wedge, fresh data keeps landing —
 # plus one SYNTHETIC injection (a CJK embed) that drives a worker path end-to-end.
 def _psql(db: str, sql: str) -> str:
-    _, out = kubectl(
-        f'-n {INFRA_NS} exec postgres-0 -- psql -U postgres -d {db} -tAc "{sql}"'
-    )
+    _, out = kubectl(f'-n {INFRA_NS} exec postgres-0 -- psql -U postgres -d {db} -tAc "{sql}"')
     for ln in out.splitlines():
         s = ln.strip()
-        if s and "could not" not in s.lower() and "default" not in s.lower():
+        low = s.lower()
+        if s and "could not" not in low and "default" not in low and "error" not in low:
             return s
     return ""
 
@@ -539,11 +556,71 @@ def layer4(res: dict) -> None:
     R.add("4", "entity description/embedding backfill", PASS if cov else WARN, f"embedded {cov or '?'}")
 
 
+# ── LAYER 5 — external data & upstream APIs ──────────────────────────────────
+# A dead upstream API key (EODHD / Finnhub / Alpaca / Polymarket) doesn't error
+# loudly — it just STOPS the data landing (this has bitten repeatedly: "stale
+# since <date>"). So freshness of ingested data is the reliable liveness proxy:
+# if rows keep arriving, the key works. Thresholds are generous to avoid weekend
+# / off-hours false alarms.
+def layer5() -> None:
+    print("\n=== LAYER 5 — external data & upstream APIs ===")
+
+    def freshness(name, db, sql, warn_h, fail_h=None):
+        v = _psql(db, sql)
+        if v in ("", "none", None):
+            R.add("5", name, WARN, "no rows yet")
+            return
+        try:
+            h = float(v)
+        except ValueError:
+            R.add("5", name, WARN, f"unparseable: {v}")
+            return
+        st = FAIL if (fail_h is not None and h > fail_h) else WARN if h > warn_h else PASS
+        R.add("5", name, st, f"newest {h}h old")
+
+    # Alpaca (crypto trades 24/7 → OHLCV should always be minutes-fresh; a multi-hour
+    # gap means the Alpaca feed/key died). Equities-only would need market-hours logic.
+    freshness(
+        "market OHLCV (Alpaca)",
+        "market_data_db",
+        "SELECT round(extract(epoch from now()-max(bar_date))/3600,1)::text FROM ohlcv_bars",
+        warn_h=3,
+        fail_h=24,
+    )
+    # Polymarket prediction snapshots.
+    freshness(
+        "prediction markets (Polymarket)",
+        "market_data_db",
+        "SELECT round(extract(epoch from now()-max(snapshot_at))/3600,1)::text FROM prediction_market_snapshots",
+        warn_h=6,
+        fail_h=48,
+    )
+    # News / content ingestion (EODHD + content sources).
+    freshness(
+        "news/content ingestion",
+        "content_store_db",
+        "SELECT round(extract(epoch from now()-max(ingested_at))/3600,1)::text FROM documents",
+        warn_h=6,
+        fail_h=24,
+    )
+    # LLM/embedding provider (DeepInfra): recent successful embeddings prove the key
+    # + endpoint are live (entity_embedding_state advances only on DeepInfra 200s).
+    rec = _psql(
+        "intelligence_db",
+        "SELECT count(*) FROM entity_embedding_state WHERE embedding IS NOT NULL AND last_refreshed_at > now() - interval '30 minutes'",
+    )
+    R.add(
+        "5", "DeepInfra embeddings flowing", PASS if rec and rec != "0" else WARN, f"{rec or '0'} embedded in last 30m"
+    )
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser(description="worldview prod e2e smoke harness")
     ap.add_argument(
-        "--layer", default="0,1,2,3,4", help="comma list of layers to run (0 infra,1 edge,2 data,3 async,4 workers)"
+        "--layer",
+        default="0,1,2,3,4,5",
+        help="comma list of layers (0 infra,1 edge,2 data,3 async,4 workers,5 external-apis)",
     )
     ap.add_argument("--json", help="write full report JSON to this path")
     args = ap.parse_args()
@@ -563,6 +640,8 @@ def main() -> int:
             layer23(res)
         if "4" in layers:
             layer4(res)
+    if "5" in layers:
+        layer5()
 
     c = R.counts()
     print("\n" + "=" * 60)
