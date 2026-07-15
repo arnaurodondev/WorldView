@@ -499,10 +499,18 @@ jobs:
           YQ_VERSION="v4.44.3"
           YQ_BINARY="yq_linux_amd64"
           YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}"
-          YQ_CHECKSUM_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/checksums"
+          # yq's release "checksums" file switched to a proprietary multi-algorithm
+          # format (see checksums_hashes_order + extract-checksum.sh in the same
+          # release) — it no longer has plain `sha256  filename` lines, so the old
+          # `grep "$YQ_BINARY$" | awk '{print $1}'` extraction silently matched
+          # nothing and fed sha256sum an empty expected hash ("no properly formatted
+          # checksum lines found"). Since YQ_VERSION is already pinned, pin the
+          # expected SHA-256 directly instead of re-parsing their new format —
+          # verified against yq v4.44.3's own checksums via their
+          # extract-checksum.sh SHA-256 yq_linux_amd64.
+          YQ_SHA256="a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7"
           sudo wget -qO /usr/local/bin/yq "$YQ_URL"
-          EXPECTED=$(curl -sL "$YQ_CHECKSUM_URL" | grep "${YQ_BINARY}$" | awk '{print $1}')
-          echo "${EXPECTED}  /usr/local/bin/yq" | sha256sum -c -
+          echo "${YQ_SHA256}  /usr/local/bin/yq" | sha256sum -c -
           sudo chmod +x /usr/local/bin/yq
 
       - name: Checkout worldview-gitops
