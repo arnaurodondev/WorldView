@@ -145,14 +145,18 @@ def gateway_pod() -> str:
 def layer0() -> None:
     print("\n=== LAYER 0 — platform / infra ===")
 
-    # Terminal Job-outcome statuses — a finished/failed Job pod (incl. this smoke
-    # CronJob's own history) is NOT a not-ready workload. Excluding them avoids a
-    # feedback loop where one failed smoke run's lingering Error pod fails every
-    # subsequent run. A broken long-running workload never sits in these; it shows
-    # Pending / CrashLoopBackOff / ImagePullBackOff / Running-but-0-ready instead.
-    terminal = {"Completed", "Error", "OOMKilled", "DeadlineExceeded", "ContainerStatusUnknown"}
-    # pods ready + no crashloops
+    # pods ready + no crashloops. SKIP Job-owned pods entirely: CronJob pods
+    # (this smoke job, postgres-backup, migrations) are INHERENTLY transient — they
+    # pass through Pending/Init/PodInitializing → Running → Completed/Error as normal
+    # lifecycle. Readiness-checking them produced false FAILs (e.g. a postgres-backup
+    # pod caught mid-Init:0/1) that fired ProdSmokeTestFailed. Only long-running
+    # workloads (Deployments/StatefulSets/DaemonSets) should be readiness-checked.
     for ns in (INFRA_NS, NS, "monitoring"):
+        _, owners = kubectl(
+            f"-n {ns} get pods -o custom-columns=NAME:.metadata.name,"
+            f"OWNER:.metadata.ownerReferences[0].kind --no-headers"
+        )
+        job_pods = {ln.split()[0] for ln in owners.splitlines() if ln.split()[1:] == ["Job"]}
         _, out = kubectl(f"-n {ns} get pods --no-headers")
         not_ready, crash = [], []
         for ln in out.splitlines():
@@ -161,7 +165,7 @@ def layer0() -> None:
                 continue
             name, ready, status = f[0], f[1], f[2]
             restarts = f[3]
-            if status in terminal:
+            if name in job_pods:  # transient Job/CronJob pod — not a workload
                 continue
             if status != "Running":
                 not_ready.append(f"{name}={status}")
