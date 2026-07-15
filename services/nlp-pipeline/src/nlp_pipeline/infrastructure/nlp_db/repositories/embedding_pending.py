@@ -126,6 +126,39 @@ class EmbeddingPendingRepository:
             {"pending_id": str(pending_id), "backoff": backoff_seconds},
         )
 
+    async def mark_abandoned(self, pending_id: UUID, *, max_retries: int, error_detail: str) -> None:
+        """Permanently abandon a pending row after a fatal (non-retryable) error.
+
+        Jumps ``retry_count`` straight to *max_retries* so ``claim_batch`` will
+        never re-claim the row (identical skip semantics to natural retry
+        exhaustion, and ``count_abandoned`` still counts it) and records the
+        terminating error in ``error_detail``.
+
+        Used for HTTP 4xx (bad-input) embedding failures — empty/degenerate
+        text or still-oversized input — which can never succeed on retry.  This
+        short-circuits the full exponential-backoff schedule (5 attempts over
+        ~2 h) that would otherwise be wasted on a request guaranteed to return
+        400.  Transient errors (5xx / timeout / 429) still go through
+        ``mark_failure`` and keep their backoff-retry behaviour.
+        """
+        await self._session.execute(
+            text(
+                "UPDATE embedding_pending "
+                "SET retry_count = :max_retries, "
+                "    next_retry_at = now(), "
+                "    last_attempted_at = now(), "
+                "    error_detail = :error_detail "
+                "WHERE pending_id = :pending_id"
+            ),
+            {
+                "pending_id": str(pending_id),
+                "max_retries": max_retries,
+                # Cap the stored detail so a verbose upstream error body can't
+                # bloat the row (error_detail is diagnostic, not load-bearing).
+                "error_detail": error_detail[:1000],
+            },
+        )
+
     async def count_abandoned(self, max_retries: int = 5) -> int:
         """Return how many rows have been retried ``>= max_retries`` times.
 

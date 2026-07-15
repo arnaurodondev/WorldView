@@ -8,6 +8,14 @@ Backoff: ``base_seconds * 2^retry_count``, capped at 3 600 s (1 hour).
 Max retries: 5 — rows exceeding this limit are left in the table for manual
 triage; they are never automatically deleted.
 
+Error classification: transient failures (5xx / timeout / network / 429) keep
+the exponential-backoff-retry behaviour above.  A *fatal* failure — the
+embedding client raises :class:`ml_clients.errors.FatalError` for HTTP 4xx
+(non-429) bad input — will never succeed on retry, so the row is abandoned
+immediately (``retry_count`` jumped to ``max_retries``) with a distinct
+``embedding_retry_abandoned_permanent`` log instead of wasting all 5 attempts
+over ~2 h.
+
 Typical usage::
 
     worker = EmbeddingRetryWorker(nlp_sf, embedding_client, model_id="bge-large-en-v1.5", ...)
@@ -20,6 +28,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
+
+from ml_clients.errors import FatalError  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
@@ -131,6 +141,48 @@ class EmbeddingRetryWorker:
             if not outputs:
                 raise RuntimeError("Empty embedding response")
             vec = outputs[0].embedding
+        except FatalError as exc:
+            # Permanent failure — the embedding client raises FatalError only for
+            # HTTP 4xx (non-429): bad/degenerate input (empty text, still >512
+            # tokens after truncation), an unexpected vector dimension, or a
+            # malformed response.  None of these can ever succeed on retry, so
+            # burning all _MAX_RETRIES over ~2 h of exponential backoff is pure
+            # waste.  Abandon the row immediately (retry_count jumps to
+            # _max_retries) with a DISTINCT signal so operators can tell a fatal
+            # 4xx apart from genuine transient exhaustion.
+            #
+            # Transient errors are NOT FatalError: 5xx / timeout / network →
+            # RetryableError, and 429 → RateLimitError (a RetryableError
+            # subclass).  They fall through to the backoff-retry branch below.
+            logger.warning(  # type: ignore[no-any-return]
+                "embedding_retry_abandoned_permanent",
+                pending_id=str(job.pending_id),
+                doc_id=str(job.doc_id),
+                section_id=str(job.section_id) if job.section_id else None,
+                chunk_id=str(job.chunk_id) if job.chunk_id else None,
+                retry_count=job.retry_count,
+                reason="fatal_4xx",
+                error=str(exc),
+            )
+            # Fail-open: a DB error while abandoning must never crash the poll
+            # loop — worst case the row keeps its old next_retry_at and is
+            # retried once more later, which is still safe.
+            try:
+                async with self._nlp_sf() as session:
+                    repo = EmbeddingPendingRepository(session)
+                    await repo.mark_abandoned(
+                        job.pending_id,
+                        max_retries=self._max_retries,
+                        error_detail=str(exc),
+                    )
+                    await session.commit()
+            except Exception as mark_exc:  # pragma: no cover — last resort
+                logger.error(  # type: ignore[no-any-return]
+                    "embedding_retry_abandon_mark_failed",
+                    pending_id=str(job.pending_id),
+                    error=str(mark_exc),
+                )
+            return
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "embedding_retry_failed",

@@ -48,6 +48,28 @@ def _make_failing_embedding_client() -> AsyncMock:
     return client
 
 
+def _make_fatal_embedding_client() -> AsyncMock:
+    """Embedding client whose embed() raises FatalError — the typed exception the
+    DeepInfra adapter surfaces for HTTP 4xx (non-429) permanent/bad-input errors.
+    """
+    from ml_clients.errors import FatalError
+
+    client = AsyncMock()
+    client.embed = AsyncMock(side_effect=FatalError("DeepInfra embedding 4xx: 400 Bad Request"))
+    return client
+
+
+def _make_retryable_embedding_client() -> AsyncMock:
+    """Embedding client whose embed() raises RetryableError — the typed exception
+    the adapter surfaces for transient 5xx / timeout / network failures.
+    """
+    from ml_clients.errors import RetryableError
+
+    client = AsyncMock()
+    client.embed = AsyncMock(side_effect=RetryableError("DeepInfra embedding 5xx: 503"))
+    return client
+
+
 def _make_successful_embedding_client(*, vector: list[float] | None = None) -> AsyncMock:
     """Embedding client whose embed() returns a single 1024-dim vector."""
     from ml_clients.dataclasses import EmbeddingOutput
@@ -142,6 +164,111 @@ class TestAbandonedLogEmission:
 
         events = [event for event, _ in warning_calls]
         assert "embedding_retry_abandoned" not in events
+
+
+# ── Permanent (4xx) vs transient error classification ────────────────────────
+
+
+class TestErrorClassification:
+    """A FatalError (HTTP 4xx, permanent) must abandon the row immediately
+    without burning the full backoff-retry schedule; a transient RetryableError
+    must keep the existing exponential-backoff behaviour."""
+
+    @pytest.mark.asyncio
+    async def test_fatal_error_abandons_immediately_without_retries(self, monkeypatch) -> None:
+        """A first-attempt (retry_count=0) FatalError must:
+        - emit ``embedding_retry_abandoned_permanent`` (distinct from the
+          transient ``embedding_retry_abandoned`` exhaustion signal),
+        - call mark_abandoned(pending_id, max_retries=5) instead of mark_failure,
+        - NOT schedule another backoff attempt.
+        """
+        from nlp_pipeline.infrastructure.workers import embedding_retry_worker as mod
+
+        warning_calls: list[tuple[str, dict]] = []
+        fake_logger = MagicMock()
+        fake_logger.warning = lambda event, **kw: warning_calls.append((event, kw))
+        fake_logger.info = MagicMock()
+        fake_logger.error = MagicMock()
+        monkeypatch.setattr(mod, "logger", fake_logger)
+
+        repo_instance = MagicMock()
+        repo_instance.mark_abandoned = AsyncMock()
+        repo_instance.mark_failure = AsyncMock()
+        repo_cls = MagicMock(return_value=repo_instance)
+
+        worker = mod.EmbeddingRetryWorker(
+            nlp_session_factory=_make_session_factory(),
+            embedding_client=_make_fatal_embedding_client(),
+            model_id="bge-large",
+            instruction_prefix="Represent this passage: ",
+        )
+
+        with patch(
+            "nlp_pipeline.infrastructure.nlp_db.repositories.embedding_pending.EmbeddingPendingRepository",
+            repo_cls,
+        ):
+            await worker._process_job(_make_job(retry_count=0))
+
+        events = [e for e, _ in warning_calls]
+        # The permanent signal fires; NEITHER the transient failure nor the
+        # transient-exhaustion signal must appear.
+        assert "embedding_retry_abandoned_permanent" in events
+        assert "embedding_retry_failed" not in events
+        assert "embedding_retry_abandoned" not in events
+
+        # Abandoned via mark_abandoned (retry_count jumped to max) — never the
+        # backoff-scheduling mark_failure.
+        repo_instance.mark_abandoned.assert_awaited_once()
+        call = repo_instance.mark_abandoned.await_args
+        assert call.kwargs["max_retries"] == 5
+        repo_instance.mark_failure.assert_not_called()
+
+        # The permanent log must carry the reason + error for triage.
+        kw = next(kw for e, kw in warning_calls if e == "embedding_retry_abandoned_permanent")
+        assert kw["reason"] == "fatal_4xx"
+        assert "4xx" in kw["error"]
+
+    @pytest.mark.asyncio
+    async def test_transient_error_still_backoff_retries(self, monkeypatch) -> None:
+        """A RetryableError must NOT abandon — it goes through the existing
+        mark_failure backoff path and, mid-schedule, emits neither abandoned
+        signal."""
+        from nlp_pipeline.infrastructure.workers import embedding_retry_worker as mod
+
+        warning_calls: list[tuple[str, dict]] = []
+        fake_logger = MagicMock()
+        fake_logger.warning = lambda event, **kw: warning_calls.append((event, kw))
+        fake_logger.info = MagicMock()
+        fake_logger.error = MagicMock()
+        monkeypatch.setattr(mod, "logger", fake_logger)
+
+        repo_instance = MagicMock()
+        repo_instance.mark_abandoned = AsyncMock()
+        repo_instance.mark_failure = AsyncMock()
+        repo_cls = MagicMock(return_value=repo_instance)
+
+        worker = mod.EmbeddingRetryWorker(
+            nlp_session_factory=_make_session_factory(),
+            embedding_client=_make_retryable_embedding_client(),
+            model_id="bge-large",
+            instruction_prefix="Represent this passage: ",
+        )
+
+        with patch(
+            "nlp_pipeline.infrastructure.nlp_db.repositories.embedding_pending.EmbeddingPendingRepository",
+            repo_cls,
+        ):
+            await worker._process_job(_make_job(retry_count=1))
+
+        events = [e for e, _ in warning_calls]
+        assert "embedding_retry_failed" in events
+        assert "embedding_retry_abandoned_permanent" not in events
+        # Backoff scheduled (transient), not a permanent abandon.
+        repo_instance.mark_failure.assert_awaited_once()
+        call = repo_instance.mark_failure.await_args
+        # retry_count=1 → 60 * 2^1 = 120s backoff.
+        assert call.kwargs["backoff_seconds"] == 120.0
+        repo_instance.mark_abandoned.assert_not_called()
 
 
 # ── Wave C T-002: success-path + failure-path coverage ───────────────────────
