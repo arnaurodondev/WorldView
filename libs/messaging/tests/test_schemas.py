@@ -287,3 +287,76 @@ class TestSchemasModuleReexports:
 
     def test_iso_datetime_importable(self) -> None:
         from messaging.schemas import iso_datetime as _id  # noqa: F401
+
+
+class TestTrailingFieldSkewRecovery:
+    """New-reader/old-writer trailing-field skew (BP-720 follow-up).
+
+    A consumer deployed with a schema that APPENDED trailing optional fields,
+    before the producer was redeployed to emit them, must not dead-letter every
+    message. ``deserialize_avro`` recovers by resolving the missing trailing
+    defaulted fields to their declared defaults.
+    """
+
+    _WRITER: ClassVar[dict] = {
+        "type": "record",
+        "name": "ArticleStored",
+        "fields": [
+            {"name": "doc_id", "type": "string"},
+            {"name": "tenant_id", "type": ["null", "string"], "default": None},
+        ],
+    }
+    # Reader (new deploy) appended a trailing optional ``external_id``.
+    _READER: ClassVar[dict] = {
+        "type": "record",
+        "name": "ArticleStored",
+        "fields": [
+            {"name": "doc_id", "type": "string"},
+            {"name": "tenant_id", "type": ["null", "string"], "default": None},
+            {"name": "external_id", "type": ["null", "string"], "default": None},
+        ],
+    }
+
+    def _encode(self, schema: dict, record: dict) -> bytes:
+        import io
+
+        buf = io.BytesIO()
+        fastavro.schemaless_writer(buf, schema, record)
+        return buf.getvalue()
+
+    def test_recovers_missing_trailing_defaulted_field(self) -> None:
+        # Producer wrote OLD (2-field) bytes; consumer decodes with NEW schema.
+        data = self._encode(self._WRITER, {"doc_id": "d1", "tenant_id": None})
+        decoded = deserialize_avro(self._READER, data)
+        assert decoded == {"doc_id": "d1", "tenant_id": None, "external_id": None}
+
+    def test_normal_full_record_still_decodes(self) -> None:
+        # No skew: writer == reader. The fast path must be unchanged.
+        data = self._encode(
+            self._READER,
+            {"doc_id": "d2", "tenant_id": None, "external_id": "polymarket:abc"},
+        )
+        decoded = deserialize_avro(self._READER, data)
+        assert decoded["external_id"] == "polymarket:abc"
+
+    def test_missing_non_defaulted_trailing_field_still_raises(self) -> None:
+        # A trailing field WITHOUT a default cannot be silently defaulted — the
+        # payload is genuinely malformed and must still surface as EOFError.
+        reader_required_tail = {
+            "type": "record",
+            "name": "ArticleStored",
+            "fields": [
+                {"name": "doc_id", "type": "string"},
+                {"name": "must_have", "type": "string"},
+            ],
+        }
+        data = self._encode(
+            {
+                "type": "record",
+                "name": "ArticleStored",
+                "fields": [{"name": "doc_id", "type": "string"}],
+            },
+            {"doc_id": "d3"},
+        )
+        with pytest.raises(EOFError):
+            deserialize_avro(reader_required_tail, data)

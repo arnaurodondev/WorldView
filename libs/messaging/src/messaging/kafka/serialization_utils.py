@@ -118,9 +118,74 @@ def deserialize_avro(schema: dict[str, Any], data: bytes) -> dict[str, Any]:
 
     Returns:
         Decoded record as a plain dict.
+
+    Rolling-deploy schema skew (BP-720 follow-up): callers decode *positionally*
+    against their LOCAL schema (the registry writer schema is not fetched — see
+    :func:`deserialize_confluent_avro`).  fastavro's ``schemaless_reader`` with
+    ``reader_schema=None`` treats *schema* as the WRITER schema, so it reads
+    fields strictly by position and never applies field defaults.  When a
+    consumer is deployed with a NEW schema that APPENDED trailing optional
+    fields (e.g. ``external_id`` on ``content.article.stored.v1``) BEFORE the
+    producer was redeployed to emit them, the writer's bytes run out mid-record
+    and fastavro raises a bare ``EOFError('')`` — every message dead-letters.
+
+    The comment on such appended fields historically claimed "trailing additive
+    fields are safely ignored by old readers"; that is true for an OLD reader on
+    NEW data, but the reverse (NEW reader on OLD data) is exactly this failure.
+    To make trailing additive fields safe in BOTH deploy orders, on an
+    ``EOFError`` we retry using proper Avro writer/reader resolution: we trim
+    trailing fields that declare a ``default`` to reconstruct a candidate WRITER
+    schema and pass the full *schema* as the READER schema, so fastavro fills the
+    missing trailing fields with their declared defaults.
     """
     buf = io.BytesIO(data)
-    return cast("dict[str, Any]", fastavro.schemaless_reader(buf, schema, None))
+    try:
+        return cast("dict[str, Any]", fastavro.schemaless_reader(buf, schema, None))
+    except EOFError:
+        resolved = _deserialize_with_trailing_field_defaults(schema, data)
+        if resolved is not None:
+            return resolved
+        raise
+
+
+def _deserialize_with_trailing_field_defaults(
+    schema: dict[str, Any],
+    data: bytes,
+) -> dict[str, Any] | None:
+    """Recover from new-reader/old-writer trailing-field skew.
+
+    Reconstructs a candidate WRITER schema by dropping trailing record fields
+    that declare a ``default`` (one at a time, longest-writer first) and decodes
+    each with proper writer/reader resolution against the full *schema*.  Returns
+    the first successful decode (with dropped fields filled from their defaults),
+    or ``None`` if the schema is not a record, has no trailing defaulted fields,
+    or no candidate resolves — in which case the original ``EOFError`` should
+    propagate (the payload is genuinely malformed, not merely short a trailing
+    optional field).
+    """
+    if not isinstance(schema, dict) or schema.get("type") != "record":
+        return None
+    fields = schema.get("fields")
+    if not isinstance(fields, list) or not fields:
+        return None
+
+    # Try progressively shorter WRITER schemas: drop 1 trailing defaulted field,
+    # then 2, etc.  Stop as soon as a trailing field WITHOUT a default is hit —
+    # such a field cannot legitimately be absent from the writer's bytes.
+    for drop in range(1, len(fields)):
+        trailing = fields[len(fields) - drop]
+        if "default" not in trailing:
+            break
+        writer_fields = fields[: len(fields) - drop]
+        writer_schema = {**schema, "fields": writer_fields}
+        try:
+            return cast(
+                "dict[str, Any]",
+                fastavro.schemaless_reader(io.BytesIO(data), writer_schema, schema),
+            )
+        except EOFError:
+            continue
+    return None
 
 
 def serialize_confluent_avro(
