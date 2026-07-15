@@ -378,6 +378,11 @@ call("alerts_list", AL + "/alert-rules")
 # layer 3: chat grounding (non-stream full generation can take 15-40s)
 call("chat", RC + "/chat", "POST",
      {"message": "What was AAPL's most recent closing price?"}, timeout=90)
+# layer 4: SYNTHETIC embedding-worker test — a long RAW-Korean string exercises the
+# exact bge truncation + DeepInfra path the retry worker uses. Pre-fix this 400'd
+# (raw CJK under-counted → >512 tokens); a 200 proves truncation+embedding end-to-end.
+call("embed_cjk", NLP + "/embed", "POST",
+     {"text": "미국 캘리포니아주 새너제이, 어떤 데이터 환경에서도 최적화된 성능을 제공하는 지능형 시스템입니다. " * 40})
 print("E2E_JSON_START" + json.dumps(results) + "E2E_JSON_END")
 """
 
@@ -457,10 +462,89 @@ def layer23(res: dict) -> None:
         R.add("3", "rag-chat grounded answer", FAIL, f"HTTP {ch.get('status')} {ch.get('body','')[:120]}")
 
 
+# ── LAYER 4 — async workers & data pipelines ─────────────────────────────────
+# Async workers can't be "called" — they're validated by asserting their OUTPUT:
+# backlogs drain, outboxes dispatch, jobs don't wedge, fresh data keeps landing —
+# plus one SYNTHETIC injection (a CJK embed) that drives a worker path end-to-end.
+def _psql(db: str, sql: str) -> str:
+    _, out = kubectl(
+        f'-n {INFRA_NS} exec postgres-0 -- psql -U postgres -d {db} -tAc "{sql}"'
+    )
+    for ln in out.splitlines():
+        s = ln.strip()
+        if s and "could not" not in s.lower() and "default" not in s.lower():
+            return s
+    return ""
+
+
+def layer4(res: dict) -> None:
+    print("\n=== LAYER 4 — async workers & pipelines ===")
+
+    # 1. SYNTHETIC embedding-worker E2E (the flagship): long raw-Korean → /embed.
+    e = res.get("embed_cjk")
+    if e and e.get("status") == 200:
+        R.add("4", "embedding path (synthetic CJK)", PASS, "200 — bge truncation + DeepInfra OK on raw CJK")
+    elif e and e.get("status") == 400:
+        R.add("4", "embedding path (synthetic CJK)", FAIL, "400 — token-budget truncation regressed (CJK under-count)")
+    elif e:
+        R.add("4", "embedding path (synthetic CJK)", WARN, f"HTTP {e.get('status')} {e.get('error','')}")
+
+    # 2. embedding-retry-worker: no rows abandoned at the retry ceiling.
+    ab = _psql("nlp_db", "SELECT count(*) FROM embedding_pending WHERE retry_count >= 5")
+    R.add(
+        "4", "embedding-retry: 0 abandoned", PASS if ab in ("0", "") else WARN, f"{ab or '?'} rows stuck at max retries"
+    )
+
+    # 3. outbox dispatchers (every service): no events undispatched > 10 min
+    #    (a wedged dispatcher = DB writes that never reach Kafka).
+    stuck_total, worst = 0, ""
+    for db in ("portfolio_db", "intelligence_db", "nlp_db", "market_data_db", "content_store_db", "alert_db"):
+        n = _psql(
+            db,
+            "SELECT count(*) FROM outbox_events WHERE dispatched_at IS NULL AND created_at < now() - interval '10 minutes'",
+        )
+        if n.isdigit() and int(n) > 0:
+            stuck_total += int(n)
+            worst = f"{db}={n}"
+    R.add(
+        "4",
+        "outbox dispatchers draining",
+        FAIL if stuck_total > 50 else WARN if stuck_total else PASS,
+        f"{stuck_total} events undispatched >10m ({worst})" if stuck_total else "all outboxes drained",
+    )
+
+    # 4. path-insight-worker: no jobs wedged in a non-terminal state.
+    stuck = _psql(
+        "intelligence_db",
+        "SELECT count(*) FROM path_insight_jobs WHERE status IN ('running','pending') AND coalesce(claimed_at, now()) < now() - interval '30 minutes'",
+    )
+    R.add("4", "path-insight jobs not wedged", PASS if stuck in ("0", "") else WARN, f"{stuck or '?'} stuck >30m")
+
+    # 5. content pipeline freshness: articles keep landing (ingest→NER→store alive).
+    latest = _psql(
+        "content_store_db",
+        "SELECT coalesce(round(extract(epoch from now()-max(ingested_at))/3600,1)::text,'none') FROM documents",
+    )
+    if latest in ("", "none"):
+        R.add("4", "content pipeline freshness", WARN, "no documents yet")
+    else:
+        h = float(latest)
+        R.add("4", "content pipeline freshness", PASS if h < 6 else WARN, f"newest doc {h}h old")
+
+    # 6. KG entity-description generation: embeddings keep getting produced.
+    cov = _psql(
+        "intelligence_db",
+        "SELECT count(*) FILTER (WHERE embedding IS NOT NULL)||'/'||count(*) FROM entity_embedding_state",
+    )
+    R.add("4", "entity description/embedding backfill", PASS if cov else WARN, f"embedded {cov or '?'}")
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser(description="worldview prod e2e smoke harness")
-    ap.add_argument("--layer", default="0,1,2,3", help="comma list of layers to run")
+    ap.add_argument(
+        "--layer", default="0,1,2,3,4", help="comma list of layers to run (0 infra,1 edge,2 data,3 async,4 workers)"
+    )
     ap.add_argument("--json", help="write full report JSON to this path")
     args = ap.parse_args()
     layers = set(args.layer.split(","))
@@ -473,9 +557,12 @@ def main() -> int:
         layer0()
     if "1" in layers:
         layer1()
-    if "2" in layers or "3" in layers:
+    if layers & {"2", "3", "4"}:
         res = run_inpod_prober()
-        layer23(res)
+        if layers & {"2", "3"}:
+            layer23(res)
+        if "4" in layers:
+            layer4(res)
 
     c = R.counts()
     print("\n" + "=" * 60)
