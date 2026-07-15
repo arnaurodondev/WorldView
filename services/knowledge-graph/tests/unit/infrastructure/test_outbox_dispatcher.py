@@ -123,6 +123,33 @@ class TestOutboxDispatcherAllowedTopics:
         outbox_repo.mark_dispatched.assert_awaited_once()
         outbox_repo.mark_failed.assert_not_awaited()
 
+    def test_entity_refresh_topic_dispatched(self) -> None:
+        """entity.refresh.v1 is an allowed topic (TriggerEntityRefresh use case).
+
+        Regression: it was missing from _ALLOWED_TOPICS, so manual refresh events
+        were mark_failed()'d and went dead — a 202 that never re-embedded the entity.
+        """
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
+
+        event = _make_event("entity.refresh.v1")
+        sf, _session, outbox_repo = _make_session_factory([event])
+
+        producer = MagicMock()
+        producer.produce = MagicMock()
+        producer.flush = MagicMock(return_value=0)
+
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
+            dispatcher = OutboxDispatcher(sf, producer)
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
+
+        assert dispatched == 1
+        producer.produce.assert_called_once()
+        outbox_repo.mark_dispatched.assert_awaited_once()
+        outbox_repo.mark_failed.assert_not_awaited()
+
 
 class TestOutboxDispatcherEntityDirtied:
     def test_entity_dirtied_logs_warning_and_marks_dispatched(self) -> None:

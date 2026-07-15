@@ -48,6 +48,14 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # narrative events dispatched via outbox reach the NarrativeRefreshKafkaConsumer.
 _TOPIC_ENTITY_NARRATIVE_GENERATED = "entity.narrative.generated.v1"
 
+# entity.refresh.v1 (TriggerEntityRefresh use case, POST /entities/{id}/refresh) was
+# ALSO omitted from this allowlist even though trigger_entity_refresh.py appends it to
+# the outbox. Result: the dispatcher logged outbox_unknown_topic and mark_failed()'d
+# every manual-refresh event → they went `dead` after 5 retries and the S6
+# EntityRefreshConsumer never ran, so a triggered refresh returned 202 but silently
+# never re-embedded the entity. Added so manual refresh actually propagates.
+_TOPIC_ENTITY_REFRESH = "entity.refresh.v1"
+
 _ALLOWED_TOPICS = frozenset(
     {
         TOPIC_GRAPH_STATE_CHANGED,
@@ -55,6 +63,7 @@ _ALLOWED_TOPICS = frozenset(
         TOPIC_RELATION_PROPOSED,
         TOPIC_ENTITY_CANONICAL_CREATED,
         _TOPIC_ENTITY_NARRATIVE_GENERATED,
+        _TOPIC_ENTITY_REFRESH,
         # PLAN-0056 Wave D2: per-entity prediction signal (PredictionSignalEmitter).
         # BP-147: every topic written via OutboxRepository.append() MUST be here or
         # the dispatcher mark_failed()s it and the event is permanently lost.
