@@ -139,7 +139,18 @@ class DefinitionRefreshWorker:
         # Writes in Phase 3 stay on the primary write factory.
         async with self._read_session_factory() as session:
             emb_repo = EntityEmbeddingStateRepository(session)
-            due = await emb_repo.get_due_for_refresh(VIEW_DEFINITION, self._batch_limit)
+            # backfill_missing_description=True (2026-07-15 RC): also claim rows
+            # whose canonical_entities.description is still NULL/empty even if
+            # their next_refresh_at is in the future. The provisional-enrichment
+            # promotion path seeds definition rows with source_text=bare-name and
+            # next_refresh_at=+90d without ever writing a description, so without
+            # this flag ~1500 entities (orgs/persons) never get a real, grounded
+            # description generated + written back. See get_due_for_refresh.
+            due = await emb_repo.get_due_for_refresh(
+                VIEW_DEFINITION,
+                self._batch_limit,
+                backfill_missing_description=True,
+            )
         # Session released here — FOR UPDATE lock released, that is acceptable
         # because this worker runs as a single periodic process.
 

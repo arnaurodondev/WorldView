@@ -643,6 +643,35 @@ class TestDefinitionRefreshWorkerPhasedRun:
         # Only 1 session open (Phase 1 read); no Phase 3 write session
         assert open_count[0] == 1
 
+    async def test_run_requests_description_backfill(self) -> None:
+        """run() must claim rows via backfill_missing_description=True so the
+        worker also generates + writes back descriptions for entities the
+        provisional-enrichment path seeded with a bare-name source_text and a
+        +90d next_refresh_at (2026-07-15 RC). Without this flag those ~1500
+        org/person rows are never "due" and stay permanently undescribed.
+        """
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        session = AsyncMock()
+        session_cm = AsyncMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+        sf = MagicMock(return_value=session_cm)
+
+        emb_repo_mock = AsyncMock()
+        emb_repo_mock.get_due_for_refresh = AsyncMock(return_value=[])
+
+        worker = DefinitionRefreshWorker(sf, AsyncMock())
+
+        with patch(
+            "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+            return_value=emb_repo_mock,
+        ):
+            await worker.run()
+
+        _, kwargs = emb_repo_mock.get_due_for_refresh.call_args
+        assert kwargs.get("backfill_missing_description") is True
+
 
 class TestBuildDescriptionClient:
     def test_none_provider_returns_null_adapter(self) -> None:

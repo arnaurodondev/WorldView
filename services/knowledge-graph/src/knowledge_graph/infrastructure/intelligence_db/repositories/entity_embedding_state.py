@@ -164,12 +164,29 @@ ON CONFLICT (entity_id, view_type) DO NOTHING
         self,
         view_type: str,
         limit: int = 0,
+        *,
+        backfill_missing_description: bool = False,
     ) -> list[dict[str, object]]:
         """Fetch entities whose embedding is due for refresh (next_refresh_at < now()).
 
         When ``limit == 0`` (the default), a practical ceiling of 100 000 rows is
         applied so workers always drain the full due-queue in one cycle.  Pass an
         explicit positive integer to cap the result set.
+
+        ``backfill_missing_description`` (definition view only) widens the
+        selection to ALSO include rows whose linked ``canonical_entities.description``
+        is NULL/empty, regardless of ``next_refresh_at``.  This unblocks the
+        empty-description backfill (2026-07-15 RC): the provisional-enrichment
+        promotion path (``_write_embedding``) seeds every non-FI definition row
+        with ``source_text = bare canonical_name`` and ``next_refresh_at = now()
+        + 90 days`` and never writes ``canonical_entities.description``.  Because
+        those rows are not "due" for 90 days, ``DefinitionRefreshWorker`` — the
+        ONLY path that generates a real (news-grounded) description and writes it
+        back to ``canonical_entities.description`` — never selects them, so ~1500
+        entities (610 organizations, 265 persons, …) stay permanently
+        undescribed.  With the flag on, those rows are picked up on the next
+        cycle; once a (non-empty) description is written back they naturally drop
+        out of the backfill set, so the selection self-converges.
         """
         # 0 means "unlimited" — use a practical ceiling to avoid unbounded scans.
         effective_limit = limit if limit > 0 else 100_000
@@ -190,6 +207,14 @@ ON CONFLICT (entity_id, view_type) DO NOTHING
         # Without the filter the worker burns cycles + retries on rows that
         # will permanently stay NULL.
         entity_type_filter = "  AND ce.entity_type = 'financial_instrument'\n" if view_type == VIEW_FUNDAMENTALS else ""
+        # The base "due" predicate: next_refresh_at is set and has elapsed.
+        due_predicate = "(ees.next_refresh_at IS NOT NULL AND ees.next_refresh_at < now())"
+        if backfill_missing_description:
+            # Also claim rows whose entity has no description yet (see docstring).
+            # ``btrim`` collapses whitespace-only descriptions to '' so they count
+            # as missing. A row leaves this set as soon as the worker writes a
+            # non-empty description back, so backfill is self-limiting.
+            due_predicate = f"({due_predicate} OR ce.description IS NULL OR btrim(ce.description) = '')"
         result = await self._session.execute(
             text(f"""
 SELECT ees.entity_id, ees.source_hash, ees.source_text, ce.canonical_name,
@@ -198,8 +223,7 @@ SELECT ees.entity_id, ees.source_hash, ees.source_text, ce.canonical_name,
 FROM entity_embedding_state ees
 JOIN canonical_entities ce ON ce.entity_id = ees.entity_id
 WHERE ees.view_type       = :view_type
-  AND ees.next_refresh_at IS NOT NULL
-  AND ees.next_refresh_at  < now()
+  AND {due_predicate}
 {entity_type_filter}ORDER BY (ees.embedding IS NULL) DESC, ees.next_refresh_at
 LIMIT :limit
 FOR UPDATE OF ees SKIP LOCKED

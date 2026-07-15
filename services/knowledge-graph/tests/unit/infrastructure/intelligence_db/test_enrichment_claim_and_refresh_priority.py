@@ -125,3 +125,43 @@ def test_get_due_for_refresh_filters_non_equity_for_fundamentals() -> None:
     # condition and the SQL fragment are present.
     assert "VIEW_FUNDAMENTALS" in src
     assert "entity_type = 'financial_instrument'" in src
+
+
+# ── Empty-description backfill (2026-07-15 RC) ────────────────────────────────
+
+
+def test_get_due_for_refresh_accepts_backfill_flag() -> None:
+    """The empty-description backfill is opt-in via a keyword-only flag so the
+    narrative/fundamentals callers (which do NOT want to re-claim already
+    non-due rows) keep their existing behaviour unchanged.
+    """
+    sig = inspect.signature(EntityEmbeddingStateRepository.get_due_for_refresh)
+    param = sig.parameters.get("backfill_missing_description")
+    assert param is not None
+    assert param.default is False
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_get_due_for_refresh_backfill_selects_undescribed_rows() -> None:
+    """When the flag is set the query must widen the WHERE to also claim rows
+    whose canonical_entities.description is NULL/empty — regardless of
+    next_refresh_at. This unblocks the ~1500 entities the provisional-enrichment
+    path seeds with a bare-name source_text and a +90d next_refresh_at, which
+    the plain "due" predicate can never select.
+    """
+    src = inspect.getsource(EntityEmbeddingStateRepository.get_due_for_refresh)
+    assert "backfill_missing_description" in src
+    # The description-missing OR branch must reference the joined table column.
+    assert "ce.description IS NULL" in src
+    assert "btrim(ce.description) = ''" in src
+
+
+def test_get_due_for_refresh_backfill_is_gated_off_by_default() -> None:
+    """The description OR branch must be built conditionally, not baked
+    unconditionally into the SQL — otherwise narrative/fundamentals refreshes
+    would start re-claiming rows they should leave alone.
+    """
+    src = inspect.getsource(EntityEmbeddingStateRepository.get_due_for_refresh)
+    # The OR branch is appended only inside the `if backfill_missing_description`
+    # guard, so the guard keyword must appear before the description predicate.
+    assert src.index("if backfill_missing_description") < src.index("ce.description IS NULL")
