@@ -38,6 +38,8 @@
 # Whitelisted at the service level — any service that has a scripts/ directory
 # gets it baked into its image automatically.
 !services/*/scripts/
+# The in-cluster prod smoke image (infra/smoke/Dockerfile) bakes this harness.
+!scripts/prod_e2e_smoke.py
 
 # ── Kafka Avro schemas (needed by consumers at runtime) ──────────────────────
 !infra/kafka/schemas/
