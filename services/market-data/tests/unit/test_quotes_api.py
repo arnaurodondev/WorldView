@@ -195,3 +195,19 @@ def test_get_quote_cache_key_format() -> None:
     cache = QuoteCache.__new__(QuoteCache)
     cache._client = None  # type: ignore[assignment]
     assert cache._key(_INSTR_UUID) == f"quote:v1:{_INSTR_UUID}"
+
+
+def test_get_quotes_latest_missing_instrument_ids_returns_422() -> None:
+    """GET /api/v1/quotes/latest with NO instrument_ids returns a clean 422, not 500.
+
+    Regression: instrument_ids used ``Annotated[list[str], Query(...)] = ...`` where
+    ``= ...`` was a LITERAL Ellipsis default, so an omitted param reached the body as
+    ``...`` and ``for iid in instrument_ids`` raised "'ellipsis' object is not
+    iterable" → HTTP 500. Bare Annotated makes it required → FastAPI returns 422.
+    """
+    mock_uc = MagicMock()
+    mock_cache = AsyncMock()
+    _, client = _make_app(mock_uc, mock_cache)
+
+    resp = client.get("/api/v1/quotes/latest")
+    assert resp.status_code == 422

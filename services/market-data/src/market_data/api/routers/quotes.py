@@ -67,7 +67,11 @@ async def _get_quote_cached(
 # Literal-path routes BEFORE path-param routes
 @router.get("/quotes/latest", response_model=BatchQuoteResponse)
 async def get_quotes_latest(
-    instrument_ids: Annotated[list[str], Query(max_length=200)] = ...,  # type: ignore[assignment]  # F-SEC-006
+    # F-SEC-006. NOTE: no ``= ...`` default. With Annotated, ``= ...`` is a LITERAL
+    # Ellipsis default (not "required"), so an omitted instrument_ids reached the
+    # body as `...` and `for iid in instrument_ids` raised "'ellipsis' object is not
+    # iterable" → HTTP 500 instead of a clean 422. Bare Annotated makes it required.
+    instrument_ids: Annotated[list[str], Query(max_length=200)],
     uc: Annotated[GetQuoteUseCase, Depends(get_quote_uc)] = ...,  # type: ignore[assignment]
     cache: Annotated[QuoteCachePort, Depends(get_quote_cache)] = ...,  # type: ignore[assignment]
 ) -> BatchQuoteResponse:
