@@ -125,15 +125,39 @@ def estimate_bert_tokens(text: str) -> int:
     n += escape_count * _TOKENS_PER_UNICODE_ESCAPE
     pos = 0
     for m in _WORD_RE.finditer(scrubbed):
-        # Punctuation/symbols sitting BEFORE this word run → 1 token each.
-        n += sum(1 for c in scrubbed[pos : m.start()] if not c.isspace())
+        # Punctuation/symbols sitting BEFORE this word run.
+        n += _charge_nonword(scrubbed[pos : m.start()])
         # Alphanumeric run → ceil(len / 3) sub-word tokens (over-estimate).
         word_len = len(m.group())
         n += -(-word_len // 3)  # ceil division
         pos = m.end()
     # Trailing punctuation/symbols after the last word run.
-    n += sum(1 for c in scrubbed[pos:] if not c.isspace())
+    n += _charge_nonword(scrubbed[pos:])
     return n
+
+
+def _charge_nonword(segment: str) -> int:
+    """Token cost of a non-alphanumeric segment (over-estimate).
+
+    ASCII punctuation/symbols cost 1 token each. RAW non-ASCII codepoints (CJK,
+    Hebrew, accented Latin stored WITHOUT ``\\uXXXX`` escaping — e.g. Korean press
+    releases the pipeline now ingests) cost the same conservative
+    :data:`_TOKENS_PER_UNICODE_ESCAPE` as their escaped form: the English-centric
+    BGE WordPiece tokenizer byte-splits each into ~2-6 sub-word tokens.
+
+    BP-XXXX: the old rule charged EVERY non-word char 1 token, so raw (un-escaped)
+    CJK/Hebrew was under-counted ~3-6x. ``truncate_for_bge`` then cut a Korean row
+    to a prefix it *thought* was ~360 tokens but which was really >512, so
+    DeepInfra still rejected it with HTTP 400 and the retry worker abandoned the
+    row. The ``_UNICODE_ESCAPE_RE`` handling above only covered ``ensure_ascii``
+    (escaped) text — this closes the raw-UTF-8 gap.
+    """
+    total = 0
+    for c in segment:
+        if c.isspace():
+            continue
+        total += _TOKENS_PER_UNICODE_ESCAPE if ord(c) > 127 else 1
+    return total
 
 
 def truncate_for_bge(

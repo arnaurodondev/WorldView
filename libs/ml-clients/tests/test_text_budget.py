@@ -48,6 +48,17 @@ class TestEstimateBertTokens:
         plain = "x" * len(escaped)
         assert estimate_bert_tokens(escaped) > estimate_bert_tokens(plain)
 
+    def test_raw_cjk_scores_heavier_than_ascii_of_same_length(self) -> None:
+        # Regression: some sources (e.g. Korean GLOBE NEWSWIRE press releases) store
+        # embedding_text as RAW UTF-8, not \uXXXX escapes. Each raw Hangul/CJK
+        # codepoint byte-splits into ~2-6 BGE WordPiece tokens, so it must out-score
+        # the same number of ASCII letters — otherwise a "truncated" Korean row still
+        # exceeds 512 real tokens and DeepInfra 400s (the residual embedding-retry
+        # failures observed 2026-07-15 after the 480→360 budget fix).
+        korean = "미국 캘리포니아주 새너제이 지능형 시스템" * 5  # raw, no escapes
+        ascii_same = "x" * len(korean.replace(" ", ""))
+        assert estimate_bert_tokens(korean) > estimate_bert_tokens(ascii_same)
+
     def test_monotonic_in_prefix_length(self) -> None:
         # A longer prefix never has fewer estimated tokens — required for the
         # binary search in truncate_for_bge to be correct.
@@ -75,6 +86,17 @@ class TestTruncateForBge:
         assert len(out) <= MAX_CHARS
         # Dense text is cut aggressively — well below the proven-safe 1100-char boundary.
         assert len(out) < 1100
+
+    def test_raw_cjk_truncated_under_token_budget(self) -> None:
+        # The residual failing case: a long RAW (un-escaped) Korean row. Post-truncation
+        # the estimate must be <= MAX_TOKENS so the real BGE token count stays under 512
+        # and DeepInfra returns 200 instead of a fatal 400.
+        korean = (
+            "미국 캘리포니아주 새너제이, 어떤 데이터 환경에서도 최적화된 성능을 제공하는 지능형 시스템입니다. " * 40
+        )
+        out = truncate_for_bge(korean)
+        assert estimate_bert_tokens(out) <= MAX_TOKENS
+        assert len(out) <= MAX_CHARS
 
     def test_long_prose_keeps_more_than_dense_at_same_budget(self) -> None:
         # Sparse English packs fewer tokens/char, so the SAME token budget keeps a
