@@ -510,8 +510,12 @@ jobs:
         with:
           app_id: ${{ secrets.GITOPS_APP_ID }}
           private_key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
-          # Scope the token to the gitops repo only
-          repositories: worldview-gitops
+          # Scope the token to the gitops repo only. tibdex/github-app-token
+          # expects `repositories` as a JSON-array STRING, not a bare scalar —
+          # `repositories: worldview-gitops` fails at runtime with
+          # `SyntaxError: Unexpected token 'w', "worldview-gitops" is not
+          # valid JSON` (it JSON.parses this input internally).
+          repositories: '["worldview-gitops"]'
 
       - name: Install yq
         run: |
