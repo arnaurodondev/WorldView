@@ -145,6 +145,12 @@ def gateway_pod() -> str:
 def layer0() -> None:
     print("\n=== LAYER 0 — platform / infra ===")
 
+    # Terminal Job-outcome statuses — a finished/failed Job pod (incl. this smoke
+    # CronJob's own history) is NOT a not-ready workload. Excluding them avoids a
+    # feedback loop where one failed smoke run's lingering Error pod fails every
+    # subsequent run. A broken long-running workload never sits in these; it shows
+    # Pending / CrashLoopBackOff / ImagePullBackOff / Running-but-0-ready instead.
+    terminal = {"Completed", "Error", "OOMKilled", "DeadlineExceeded", "ContainerStatusUnknown"}
     # pods ready + no crashloops
     for ns in (INFRA_NS, NS, "monitoring"):
         _, out = kubectl(f"-n {ns} get pods --no-headers")
@@ -155,9 +161,11 @@ def layer0() -> None:
                 continue
             name, ready, status = f[0], f[1], f[2]
             restarts = f[3]
-            if status not in ("Running", "Completed"):
+            if status in terminal:
+                continue
+            if status != "Running":
                 not_ready.append(f"{name}={status}")
-            elif "/" in ready and ready.split("/")[0] != ready.split("/")[1] and status != "Completed":
+            elif "/" in ready and ready.split("/")[0] != ready.split("/")[1]:
                 not_ready.append(f"{name}={ready}")
             try:
                 if int(restarts.split()[0].strip("()")) > 5:
