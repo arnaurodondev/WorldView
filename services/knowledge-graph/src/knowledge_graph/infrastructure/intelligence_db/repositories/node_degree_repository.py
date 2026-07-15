@@ -20,9 +20,17 @@ DEGREE SOURCE — FAST raw-table SQL aggregation (NOT AGE Cypher):
       graphid → ``entity_id`` UUID, extracted via
       ``agtype_access_operator(properties, '"entity_id"')`` (quotes trimmed).
     * Each relation label is its own child table inheriting from
-      ``_ag_label_edge``; the four membership labels in ``MEMBERSHIP_RELATIONS``
-      are excluded from the *meaningful* degree by edge ``id`` (exact, unaffected
-      by parallel edges).
+      ``_ag_label_edge``; the membership labels in ``MEMBERSHIP_RELATIONS`` are
+      excluded from the *meaningful* degree by matching each edge's ``tableoid``
+      to its label name via ``ag_catalog.ag_label`` (``l.relation = e.tableoid``).
+      This reads ONLY the parent ``_ag_label_edge`` table + the AGE catalogue —
+      it never names a per-label child table.  That matters because AGE
+      materialises a label's child table lazily, on the FIRST edge of that label:
+      a fresh/small graph has no ``HEADQUARTERED_IN`` (etc.) table yet, so the
+      old ``SELECT id FROM worldview_graph."HEADQUARTERED_IN"`` enumeration raised
+      ``relation "worldview_graph.HEADQUARTERED_IN" does not exist`` every cycle
+      until the graph grew (fail-open, but noisy).  The catalogue join degrades
+      cleanly: absent labels simply contribute no rows.
 
   This is pure SQL — it needs neither ``LOAD 'age'`` nor any Cypher, and the
   full per-entity aggregation runs in well under 1 s on the live graph.
@@ -62,26 +70,39 @@ _GRAPH_SCHEMA = "worldview_graph"
 _AGE_LABEL_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
-def _membership_id_union_sql() -> str:
-    """Build the ``UNION ALL`` of membership child-table edge ids.
+def _membership_label_values_sql() -> str:
+    """Build the comma-separated string-literal list of membership label names.
 
-    Each membership label has its own child table under ``_ag_label_edge`` whose
-    name is the (uppercase) label, double-quoted.  Returns SQL selecting the
-    ``id`` graphids of every membership edge, or an empty-set sentinel when no
-    membership labels are configured.
+    Returns e.g. ``'HEADQUARTERED_IN', 'IS_IN_SECTOR', ...`` for embedding in an
+    ``IN (...)`` predicate against ``ag_catalog.ag_label.name``, or ``""`` when
+    no membership labels are configured (caller substitutes an always-true flag).
+
+    Unlike the previous child-table enumeration, these labels are compared as
+    *data* (catalogue rows), never as table identifiers — so a label whose child
+    table does not exist yet cannot raise "relation does not exist".
     """
     parts: list[str] = []
     for label in sorted(MEMBERSHIP_RELATIONS):
         # SECURITY: assert the label is a plain uppercase identifier before
-        # embedding it as a quoted child-table name (it never reaches data).
+        # embedding it as a SQL string literal (defence-in-depth; the values are
+        # compile-time constants from MEMBERSHIP_RELATIONS).
         if not _AGE_LABEL_RE.match(label):
             msg = f"Invalid AGE membership label (refusing to embed in SQL): {label!r}"
             raise ValueError(msg)
-        parts.append(f'SELECT id FROM {_GRAPH_SCHEMA}."{label}"')
-    if not parts:
-        # No membership labels → meaningful == full degree (empty exclusion set).
-        return "SELECT NULL::ag_catalog.graphid AS id WHERE false"
-    return " UNION ALL ".join(parts)
+        parts.append(f"'{label}'")
+    return ", ".join(parts)
+
+
+def _is_meaningful_expr(label_col: str) -> str:
+    """Boolean SQL expression: is an edge with label ``label_col`` non-membership?
+
+    Returns ``(<col> NOT IN ('LABEL', ...))`` or the literal ``TRUE`` when there
+    are no membership labels to exclude (an empty ``NOT IN ()`` is invalid SQL).
+    """
+    values = _membership_label_values_sql()
+    if not values:
+        return "TRUE"
+    return f"({label_col} NOT IN ({values}))"
 
 
 def _degree_aggregation_sql() -> str:
@@ -89,22 +110,26 @@ def _degree_aggregation_sql() -> str:
 
     Undirected degree = count of edge endpoints (``start_id`` + ``end_id``) that
     resolve to the vertex.  Meaningful degree = same but only over edges whose
-    ``id`` is NOT a membership-edge id.  Both computed in one pass via a tagged
-    endpoint enumeration joined to the vertex graphid→entity_id map.
+    label is NOT a membership label.  Membership is determined by joining each
+    edge's ``tableoid`` (its physical child table) to ``ag_catalog.ag_label`` and
+    testing the label ``name`` — this touches only the parent ``_ag_label_edge``
+    table + the AGE catalogue, never a per-label child table (which may not have
+    been materialised yet on a small graph).
     """
-    membership_ids = _membership_id_union_sql()
-    # ``is_meaningful`` flags each endpoint row by whether its edge is non-membership.
-    # The two SUMs over that flag give degree (all) and degree_meaningful.
+    is_meaningful = _is_meaningful_expr("l.name")
     return f"""
-WITH membership_ids AS (
-    {membership_ids}
+WITH edges AS (
+    SELECT
+        e.start_id,
+        e.end_id,
+        {is_meaningful} AS is_meaningful
+    FROM {_GRAPH_SCHEMA}._ag_label_edge e
+    JOIN ag_catalog.ag_label l ON l.relation = e.tableoid::regclass
 ),
 endpoints AS (
-    SELECT e.start_id AS gid, (e.id NOT IN (SELECT id FROM membership_ids)) AS is_meaningful
-    FROM {_GRAPH_SCHEMA}._ag_label_edge e
+    SELECT start_id AS gid, is_meaningful FROM edges
     UNION ALL
-    SELECT e.end_id AS gid, (e.id NOT IN (SELECT id FROM membership_ids)) AS is_meaningful
-    FROM {_GRAPH_SCHEMA}._ag_label_edge e
+    SELECT end_id AS gid, is_meaningful FROM edges
 ),
 vertices AS (
     SELECT
@@ -127,12 +152,13 @@ GROUP BY vx.entity_id
 # Graph-wide stat counts (total edges, total meaningful edges).  ``max_degree``
 # is derived in Python from the per-vertex aggregation (no extra scan).
 def _stats_count_sql() -> str:
-    membership_ids = _membership_id_union_sql()
+    is_meaningful = _is_meaningful_expr("l.name")
     return f"""
 SELECT
     (SELECT count(*) FROM {_GRAPH_SCHEMA}._ag_label_edge)::int AS total_edges,
     (SELECT count(*) FROM {_GRAPH_SCHEMA}._ag_label_edge e
-        WHERE e.id NOT IN (SELECT id FROM ({membership_ids}) m))::int AS total_meaningful_edges
+        JOIN ag_catalog.ag_label l ON l.relation = e.tableoid::regclass
+        WHERE {is_meaningful})::int AS total_meaningful_edges
 """
 
 

@@ -7,9 +7,17 @@ per-vertex ``(entity_id, degree, degree_meaningful)`` directly, and a separate
 stats query returns ``(total_edges, total_meaningful_edges)``.
 
 These tests mock the AsyncSession to drive that SQL contract: they assert the
-membership child-tables are excluded from both the SQL and the upserts, that the
+membership labels are excluded from the *meaningful* count via the AGE catalogue
+(``ag_catalog.ag_label``) rather than by naming per-label child tables, that the
 search_path is set (so the ``graphid`` operator resolves), and that the upserts
 encode the right degree / meaningful / stats values.
+
+Regression (fresh-graph fail-open noise): AGE materialises a label's child table
+lazily on the first edge of that label, so a small graph has no
+``worldview_graph."HEADQUARTERED_IN"`` table yet.  The membership exclusion must
+therefore NOT reference any per-label child table (which would raise
+``relation ... does not exist`` until the graph grows) — it filters on the
+parent ``_ag_label_edge`` + ``ag_label`` catalogue instead.
 """
 
 from __future__ import annotations
@@ -92,16 +100,50 @@ async def test_sets_ag_catalog_search_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_membership_tables_excluded_from_meaningful() -> None:
-    """All four MEMBERSHIP_RELATIONS child tables appear in the exclusion SQL."""
+async def test_membership_labels_excluded_from_meaningful() -> None:
+    """Every MEMBERSHIP_RELATIONS label appears (as a string literal) in the SQL."""
     session, captured = _make_session(degree_rows=[(_A, 3, 1)], stat_row=(3, 1))
     repo = NodeDegreeRepository(session)
     await repo.refresh_from_age()
     deg_sql = next(sql for sql, _ in captured if "GROUP BY vx.entity_id" in sql)
     for label in MEMBERSHIP_RELATIONS:
-        assert f'"{label}"' in deg_sql, f"membership label {label} must be excluded in the SQL"
+        # Excluded by matching the label NAME in ag_label (a string literal),
+        # NOT by naming its child table.
+        assert f"'{label}'" in deg_sql, f"membership label {label} must be excluded in the SQL"
+    # Membership is resolved via the AGE catalogue, not per-label tables.
+    assert "ag_catalog.ag_label" in deg_sql
+    assert "e.tableoid" in deg_sql
     # is_meaningful flag drives the FILTERed count.
     assert "FILTER (WHERE ep.is_meaningful)" in deg_sql
+
+
+@pytest.mark.asyncio
+async def test_no_per_label_child_table_referenced() -> None:
+    """Regression: the SQL must NEVER name a per-label child table.
+
+    AGE creates ``worldview_graph."<LABEL>"`` only after the first edge of that
+    label exists, so on a fresh/small graph a membership label such as
+    ``HEADQUARTERED_IN`` has no table yet.  The old exclusion did
+    ``SELECT id FROM worldview_graph."HEADQUARTERED_IN"`` and raised
+    ``relation "worldview_graph.HEADQUARTERED_IN" does not exist`` every cycle.
+    Both the degree query and the stats query must reference only the parent
+    ``_ag_label_edge`` table + the catalogue — never a quoted per-label table.
+    """
+    session, captured = _make_session(degree_rows=[(_A, 3, 1)], stat_row=(3, 1))
+    repo = NodeDegreeRepository(session)
+    # Must not raise regardless of which label tables exist (the SQL never
+    # depends on their existence).
+    await repo.refresh_from_age()
+
+    read_sqls = [sql for sql, _ in captured if "_ag_label_edge" in sql]
+    assert read_sqls, "expected the degree + stats queries to hit _ag_label_edge"
+    for sql in read_sqls:
+        for label in MEMBERSHIP_RELATIONS:
+            # A per-label child-table reference would look like  ."HEADQUARTERED_IN"
+            assert f'"{label}"' not in sql, (
+                f"per-label child table {label!r} must not be referenced "
+                "(it may not be materialised yet on a fresh graph)"
+            )
 
 
 @pytest.mark.asyncio
