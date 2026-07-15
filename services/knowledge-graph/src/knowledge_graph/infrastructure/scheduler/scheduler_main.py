@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 from typing import Any
@@ -70,9 +71,14 @@ async def main() -> None:
     # cleanly shuts down with the rest of the asyncio loop.  Port 9108
     # is preserved for backwards compatibility with the existing
     # Prometheus scrape job.
+    # BP-720: bind the metrics/health server to METRICS_PORT (default 9100) — the SAME
+    # port the k8s liveness/startup probes and containerPort target. Hardcoding 9108
+    # (while the probes hit 9100) made every probe "connection refused" → SIGTERM every
+    # ~156s → CrashLoopBackOff (440+ restarts). Every other KG worker main reads
+    # METRICS_PORT; the scheduler was the lone outlier.
     metrics_handle = start_metrics_server(
         service_name="knowledge-graph-scheduler",
-        port=9108,
+        port=int(os.environ.get("METRICS_PORT", "9100")),
     )
 
     # DEF-034 (Wave B-5): bind both engines + factories so the read replica is
