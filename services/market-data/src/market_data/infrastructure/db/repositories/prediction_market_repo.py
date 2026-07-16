@@ -290,6 +290,55 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
             return market
         return _row_to_market(row)
 
+    async def bulk_upsert(self, markets: list[PredictionMarket]) -> None:
+        """Insert-or-update many markets in ONE multi-row statement.
+
+        Same conflict target and COALESCE update policy as :meth:`upsert`; used
+        by the batched consumer to amortise per-message round-trips. Batches the
+        latest value per ``market_id`` so a duplicated market inside one Kafka
+        batch does not trip "ON CONFLICT cannot affect row a second time".
+        """
+        if not markets:
+            return
+        # Collapse duplicates within the batch (keep the LAST — newest poll wins).
+        by_id: dict[str, PredictionMarket] = {}
+        for m in markets:
+            by_id[m.market_id] = m
+        values = [
+            {
+                "id": m.id,
+                "market_id": m.market_id,
+                "source": m.source,
+                "question": m.question,
+                "description": m.description,
+                "outcomes": m.outcomes,
+                "close_time": m.close_time,
+                "resolution_status": m.resolution_status,
+                "resolved_answer": m.resolved_answer,
+                "market_slug": m.market_slug,
+                "category": m.category,
+            }
+            for m in by_id.values()
+        ]
+        stmt = pg_insert(PredictionMarketModel).values(values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["market_id"],
+            set_={
+                "question": stmt.excluded.question,
+                "description": stmt.excluded.description,
+                "outcomes": stmt.excluded.outcomes,
+                "close_time": stmt.excluded.close_time,
+                "resolution_status": stmt.excluded.resolution_status,
+                "resolved_answer": stmt.excluded.resolved_answer,
+                # COALESCE keeps an existing slug/category if the new poll omits it
+                # (identical policy to single upsert).
+                "market_slug": text("COALESCE(EXCLUDED.market_slug, prediction_markets.market_slug)"),
+                "category": text("COALESCE(EXCLUDED.category, prediction_markets.category)"),
+                "updated_at": text("now()"),
+            },
+        )
+        await self._session.execute(stmt)
+
     async def find_by_market_id(self, market_id: str) -> PredictionMarket | None:
         result = await self._session.execute(
             text(
@@ -507,6 +556,39 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none() is not None
+
+    async def bulk_insert_if_not_exists(self, snapshots: list[PredictionMarketSnapshot]) -> int:
+        """Insert many snapshots in ONE multi-row ``ON CONFLICT DO NOTHING``.
+
+        Conflict target ``(market_id, snapshot_at)``; returns rows inserted.
+        Collapses within-batch duplicate keys so the multi-row VALUES never
+        carries the same conflict key twice.
+        """
+        if not snapshots:
+            return 0
+        by_key: dict[tuple[str, Any], PredictionMarketSnapshot] = {}
+        for s in snapshots:
+            by_key[(s.market_id, s.snapshot_at)] = s
+        values = [
+            {
+                "id": s.id,
+                "market_id": s.market_id,
+                "snapshot_at": s.snapshot_at,
+                "outcomes_prices": s.outcomes_prices,
+                "volume_24h": s.volume_24h,
+                "liquidity": s.liquidity,
+                "source_event_id": s.source_event_id,
+            }
+            for s in by_key.values()
+        ]
+        stmt = (
+            pg_insert(PredictionMarketSnapshotModel)
+            .values(values)
+            .on_conflict_do_nothing(index_elements=["market_id", "snapshot_at"])
+            .returning(PredictionMarketSnapshotModel.id)
+        )
+        result = await self._session.execute(stmt)
+        return len(result.fetchall())
 
     async def list_snapshots(
         self,

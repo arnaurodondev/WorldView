@@ -521,6 +521,22 @@ class IngestionEventRepository(ABC):
         the check-before-insert race condition (BP-035).
         """
 
+    async def create_many_if_not_exists(
+        self,
+        events: list[tuple[str, str | None, str | None]],
+    ) -> set[str]:
+        """Bulk-insert events; return the set of event_ids that were NEW.
+
+        Multi-row ``INSERT … ON CONFLICT DO NOTHING … RETURNING event_id`` so a
+        batch consumer can dedup a whole batch in ONE round-trip. Duplicates are
+        absent from the returned set. Each tuple is
+        ``(event_id, event_type, content_sha256)``.
+
+        Default implementation raises so only adapters that support batching
+        need to provide it (opt-in, keeps the port back-compatible).
+        """
+        raise NotImplementedError
+
 
 class FailedTaskRepository(ABC):
     """Retry queue for consumer processing failures."""
@@ -674,6 +690,15 @@ class PredictionMarketRepository(ABC):
         resolution_status, resolved_answer, updated_at.
         """
 
+    async def bulk_upsert(self, markets: list[PredictionMarket]) -> None:
+        """Insert-or-update many markets in ONE multi-row statement.
+
+        Same conflict target (``market_id``) and COALESCE update policy as
+        :meth:`upsert`. Used by the batched consumer to amortise per-message DB
+        round-trips. Default raises so only batching adapters implement it.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     async def find_by_market_id(self, market_id: str) -> PredictionMarket | None:
         """Return the market with the given ``market_id``, or ``None``."""
@@ -736,6 +761,15 @@ class PredictionMarketSnapshotRepository(ABC):
 
         Conflict target: ``(market_id, snapshot_at)``.
         """
+
+    async def bulk_insert_if_not_exists(self, snapshots: list[PredictionMarketSnapshot]) -> int:
+        """Insert many snapshots in ONE multi-row ``ON CONFLICT DO NOTHING``.
+
+        Conflict target: ``(market_id, snapshot_at)``. Returns the number of
+        rows actually inserted (conflicts skipped). Default raises so only
+        batching adapters implement it.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     async def list_snapshots(
