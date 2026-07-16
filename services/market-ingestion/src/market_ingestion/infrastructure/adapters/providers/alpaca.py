@@ -26,6 +26,7 @@ from market_ingestion.domain.errors import (
     ProviderDataError,
     ProviderRateLimited,
     ProviderUnavailable,
+    ProviderUnsupportedSymbol,
 )
 from market_ingestion.infrastructure.adapters.providers.base import BaseProviderAdapter
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -211,7 +212,37 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
         t0 = time.monotonic()
         # Follow next_page_token to completion — a single response only carries up
         # to `limit` total data points, so long catch-ups span multiple pages.
-        bars_map = await self._get_paginated(url, params)
+        try:
+            bars_map = await self._get_paginated(url, params)
+        except ProviderUnsupportedSymbol:
+            # Alpaca does not cover this symbol (HTTP 400). Treat exactly like an
+            # empty (0-bar) response so the caller's zero-bar failover hands the
+            # symbol to the next provider in the routing chain (EODHD/Yahoo),
+            # instead of a fatal error that would strand the series. This makes
+            # the "Alpaca can't serve it" outcome uniform across the two ways
+            # Alpaca signals it (empty 200 vs 400) — see ``_get``.
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            self._record_api_call(
+                dataset_type=DatasetType.OHLCV.value,
+                symbol=symbol,
+                exchange=exchange or "",
+                timeframe=timeframe,
+                bars_returned=0,
+                latency_ms=duration_ms,
+                credit_cost=0,
+            )
+            return ProviderFetchResult(
+                provider=Provider.ALPACA,
+                dataset_type=DatasetType.OHLCV,
+                symbol=symbol,
+                raw_data=b"[]",
+                content_type="application/json",
+                fetched_at=datetime.now(tz=UTC),
+                duration_ms=duration_ms,
+                range_start=start,
+                range_end=end,
+                bars_returned=0,
+            )
         duration_ms = int((time.monotonic() - t0) * 1000)
 
         # Merged map is keyed by Alpaca-format symbol (BTC/USD for crypto). Normalise
@@ -596,6 +627,21 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
         if status >= 500:
             self._record_error(reason=f"http_{status}", endpoint=endpoint)
             raise ProviderUnavailable(f"Alpaca server error HTTP {status}")
+
+        if status == 400:
+            # Alpaca returns HTTP 400 for a symbol that is not in its universe
+            # (e.g. non-US indices ``N225``/``STOXX50E``, SHG ``000001``) — the
+            # request itself is well-formed, the *symbol* is unsupported. This is
+            # a per-symbol "not covered" signal, NOT a data-shape error. Mapping
+            # it to ``ProviderUnsupportedSymbol`` lets the OHLCV fetch paths turn
+            # it into a zero-bar result so the standard zero-bar failover routes
+            # the symbol to the EODHD/Yahoo chain — the same outcome as the many
+            # indices for which Alpaca returns an empty (0-bar) 200. Without this,
+            # a 400 raised ``ProviderDataError`` (fatal) which bypassed failover
+            # entirely and left those daily series stranded after the EOD routing
+            # flip to Alpaca-primary (prod review 2026-07-16).
+            self._record_error(reason=f"http_{status}", endpoint=endpoint)
+            raise ProviderUnsupportedSymbol(f"Alpaca: unsupported symbol (HTTP {status})")
 
         if status >= 400:
             self._record_error(reason=f"http_{status}", endpoint=endpoint)

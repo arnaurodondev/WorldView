@@ -183,6 +183,56 @@ async def test_fetch_ohlcv_bad_credentials_403() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test 4b — HTTP 400 (unsupported symbol) → 0-bar result (NOT a fatal error)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_unsupported_symbol_400_returns_zero_bars() -> None:
+    """HTTP 400 on the bars endpoint → 0-bar ProviderFetchResult, no raise.
+
+    Regression (prod review 2026-07-16): Alpaca returns HTTP 400 for symbols it
+    does not cover (non-US indices ``N225``/``STOXX50E``, SHG ``000001``). That
+    used to raise a fatal ``ProviderDataError`` which bypassed the zero-bar
+    failover, stranding those daily series after the EOD routing flip to
+    Alpaca-primary. The fetch must instead surface a 0-bar result so the standard
+    zero-bar failover routes the symbol to the EODHD/Yahoo chain — identical to
+    the many indices for which Alpaca returns an empty (0-bar) 200.
+    """
+    from datetime import UTC, datetime
+
+    adapter = _make_adapter()
+    adapter._client.get.return_value = _mock_response(status_code=400, content=b'{"message":"invalid symbol"}')
+
+    result = await adapter.fetch_ohlcv(
+        "N225",
+        "1d",
+        datetime(2020, 7, 27, tzinfo=UTC),
+        datetime(2026, 7, 16, tzinfo=UTC),
+        exchange="INDX",
+    )
+
+    assert result.bars_returned == 0
+    assert result.provider == Provider.ALPACA
+    assert json.loads(result.raw_data) == []
+
+
+@pytest.mark.asyncio
+async def test_get_maps_400_to_unsupported_symbol() -> None:
+    """The low-level ``_get`` maps HTTP 400 → ProviderUnsupportedSymbol.
+
+    Distinct from other 4xx (e.g. 402/422) which stay ``ProviderDataError``.
+    """
+    from market_ingestion.domain.errors import ProviderUnsupportedSymbol
+
+    adapter = _make_adapter()
+    adapter._client.get.return_value = _mock_response(status_code=400)
+
+    with pytest.raises(ProviderUnsupportedSymbol, match="unsupported symbol"):
+        await adapter._get("https://data.alpaca.markets/v2/stocks/bars", {"symbols": "N225"})
+
+
+# ---------------------------------------------------------------------------
 # Test 5 — Batch fetch: 1001 symbols → exactly 2 HTTP calls
 # ---------------------------------------------------------------------------
 
