@@ -41,6 +41,12 @@ spec:
         app.kubernetes.io/component: backfill
     spec:
       restartPolicy: Never
+      # k8s injects service-link env vars (e.g. MARKET_INGESTION_PORT=tcp://<ip>:8002 for
+      # the market-ingestion Service). That collides with pydantic-settings' `port` field
+      # (env_prefix MARKET_INGESTION_) and crashes Settings() with an int-parse error. The
+      # runtime Deployments dodge it by setting MARKET_INGESTION_PORT="8002" explicitly; a
+      # one-shot Job has no port to serve, so just disable service links.
+      enableServiceLinks: false
       serviceAccountName: market-ingestion
       imagePullSecrets:
         - name: ghcr-credentials
@@ -66,6 +72,10 @@ spec:
           env:
             - name: APP_ENV
               value: production
+            # Belt-and-suspenders with enableServiceLinks:false above: pin the Settings
+            # `port` field to a valid int so Settings() never trips on a service-link value.
+            - name: MARKET_INGESTION_PORT
+              value: "8002"
             - name: MARKET_INGESTION_DATABASE_URL
               value: postgresql+asyncpg://postgres:$(POSTGRES_PASSWORD)@postgres.infra.svc:5432/ingestion_db
             - name: MARKET_INGESTION_DATABASE_URL_READ
