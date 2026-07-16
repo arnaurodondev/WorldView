@@ -200,10 +200,18 @@ KG_GOLDEN_ISIN = "US0378331005"
 # source_text while last_refreshed_at was current — "stamps success, writes
 # nothing"). Root cause: KG→market-data internal-JWT rejected (see JWT probe).
 KG_FUND_OHLCV_EMBED_WARN = 50.0  # % fundamentals_ohlcv rows with an embedding
-# Generic "stamped-but-empty" anti-pattern: for a view_type with many rows
-# stamped last_refreshed_at, at most this fraction may have empty source_text
-# before it reads as a silent-failure worker. Applied per view_type, data-driven.
-KG_STAMPED_EMPTY_FRACTION_FAIL = 0.5
+# Generic "stamped-but-empty" anti-pattern: a view_type whose worker stamped
+# last_refreshed_at on many rows but left source_text empty. Calibrated against
+# observed-good (2026-07-16: definition 0% empty, narrative 15% empty) vs the D1
+# silent-failure signature (fundamentals_ohlcv was 100% empty). A gradual
+# backfill legitimately sits near 50% empty mid-fill (e.g. 578/1105 unfilled with
+# last_refreshed_at seconds old), so 0.5 as a HARD FAIL flaps on any in-progress
+# fill. FAIL only when the worker persists almost nothing (near-total empty = true
+# "reports success, writes nothing"); WARN in the ambiguous mid-fill band. The
+# actual D1 root cause (KG→market-data JWT) is caught deterministically by the
+# _internal_jwt_probe, so this stays a coverage signal, not the primary guard.
+KG_STAMPED_EMPTY_FRACTION_FAIL = 0.9  # ~all stamped rows empty → silent-failure worker
+KG_STAMPED_EMPTY_FRACTION_WARN = 0.5  # partial fill / backfill in progress → WARN
 KG_STAMPED_MIN_ROWS = 50  # only judge view_types with at least this many stamped rows
 # PLAN-0056 prediction entity-linking Kafka groups (must exist + bounded lag).
 KG_PREDICTION_GROUPS = ["kg-prediction-enriched-group", "kg-prediction-move-group"]

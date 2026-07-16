@@ -154,7 +154,8 @@ def _stamped_but_empty(R: H.Report, encoded: str) -> None:
     flag any such view_type, not just fundamentals_ohlcv, so a NEW view that
     regresses the same way is caught automatically.
     """
-    offenders: list[str] = []
+    fail_offenders: list[str] = []
+    warn_offenders: list[str] = []
     for part in (encoded or "").split(","):
         bits = part.split(":")
         if len(bits) != 3:
@@ -164,14 +165,20 @@ def _stamped_but_empty(R: H.Report, encoded: str) -> None:
         if stamped < T.KG_STAMPED_MIN_ROWS:
             continue
         empty_frac = 1 - (wtext / stamped)
+        label = f"{vt}={wtext}/{stamped} have text ({round(empty_frac * 100)}% empty)"
+        # FAIL only when the worker persists almost nothing (true D1 silent-failure).
+        # A mid-backfill view sits in the WARN band and must not read as a hard FAIL.
         if empty_frac > T.KG_STAMPED_EMPTY_FRACTION_FAIL:
-            offenders.append(f"{vt}={wtext}/{stamped} have text ({round(empty_frac * 100)}% empty)")
-    R.check(
-        SVC,
-        "no stamped-but-empty embedding view (worker persists text)",
-        not offenders,
-        "; ".join(offenders) if offenders else "all view_types write source_text where stamped",
+            fail_offenders.append(label)
+        elif empty_frac > T.KG_STAMPED_EMPTY_FRACTION_WARN:
+            warn_offenders.append(label)
+    st = H.FAIL if fail_offenders else H.WARN if warn_offenders else H.PASS
+    detail = (
+        "; ".join(fail_offenders + warn_offenders)
+        if (fail_offenders or warn_offenders)
+        else "all view_types write source_text where stamped"
     )
+    R.add(SVC, "no stamped-but-empty embedding view (worker persists text)", st, detail)
 
 
 def _prediction_linking(ctx: Ctx) -> None:
