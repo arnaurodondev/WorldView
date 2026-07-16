@@ -173,6 +173,43 @@ def test_output_empty_string_url_source_normalised_to_none(processor: OutputProc
 
 
 @pytest.mark.unit
+def test_output_citation_url_html_entities_unescaped(processor: OutputProcessor) -> None:
+    """2026-07-16 prod-review deep pass: a news citation URL arriving HTML-entity-
+    escaped (``&amp;``) is unescaped to a clean, clickable link.
+
+    The /briefing-articles feed delivered a real Apple news link as
+    ``...?utm_source=feed_news_all&amp;utm_medium=referral&amp;feed_item_type=news``.
+    ``&amp;`` is HTML encoding, not part of the URL — emitting it leaks ``amp;``
+    into the query-param names. The choke point must unescape it so the wire URL
+    uses a raw ``&`` separator. A already-clean URL is left untouched.
+    """
+    escaped = "https://seekingalpha.com/news/4614214-apple?utm_source=feed_news_all&amp;utm_medium=referral&amp;feed_item_type=news"
+    item = RetrievedItem.create(
+        item_id="news-esc",
+        item_type=ItemType.chunk,
+        text="Apple raises AppleCare+ prices.",
+        score=0.6,
+        trust_weight=0.85,
+        citation_meta=CitationMeta(
+            title="Apple quietly raises AppleCare+ prices",
+            url=escaped,
+            source_name="news",
+            published_at=datetime(2026, 7, 15, tzinfo=UTC),
+            entity_name="AAPL",
+        ),
+    )
+
+    _, citations = processor.process("Apple news [1].", [item])
+
+    assert len(citations) == 1
+    assert citations[0].url == (
+        "https://seekingalpha.com/news/4614214-apple"
+        "?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news"
+    )
+    assert "&amp;" not in (citations[0].url or "")
+
+
+@pytest.mark.unit
 def test_output_citation_out_of_range_ignored(processor: OutputProcessor) -> None:
     """[99] when only 5 items -> citation 99 not in list."""
     raw = "Some answer with [99] invalid reference."

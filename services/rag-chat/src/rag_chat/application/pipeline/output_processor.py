@@ -6,6 +6,7 @@ parses [N] citation markers, and builds the citations list.
 
 from __future__ import annotations
 
+import html
 import re
 from typing import TYPE_CHECKING
 
@@ -182,6 +183,26 @@ def _clean_optional_str(value: str | None) -> str | None:
     return stripped or None
 
 
+def _clean_citation_url(value: str | None) -> str | None:
+    """Normalise a citation URL: strip, drop empties, and HTML-unescape it.
+
+    WHY unescape (2026-07-16 prod-review deep pass): the NLP-pipeline
+    ``/briefing-articles`` feed carries source links HTML-ENTITY-ESCAPED — a real
+    Apple news citation came through as
+    ``...?utm_source=feed_news_all&amp;utm_medium=referral&amp;feed_item_type=news``.
+    ``&amp;`` is HTML encoding, NOT part of the actual URL; a raw ``&`` is the
+    correct query-parameter separator. Emitting ``&amp;`` on the SSE wire yields a
+    subtly wrong link (the ``amp;`` prefixes leak into param names) that some
+    targets reject. Unescape at the single citation-emission choke point so every
+    citation URL is a clean, clickable link regardless of the upstream's encoding.
+    ``html.unescape`` is a no-op on an already-clean URL.
+    """
+    stripped = _clean_optional_str(value)
+    if stripped is None:
+        return None
+    return html.unescape(stripped)
+
+
 def _redact_pii_outside_exempt_spans(text: str) -> str:
     """Apply the PII patterns to ``text`` but keep any exempt span verbatim.
 
@@ -295,7 +316,7 @@ class OutputProcessor:
                     # the /briefing-articles feed behind get_entity_news) never
                     # reaches the SSE wire as url="" — which the frontend would
                     # have to special-case as a broken "Read ↗" link.
-                    url=_clean_optional_str(item.citation_meta.url),
+                    url=_clean_citation_url(item.citation_meta.url),
                     source_name=_clean_optional_str(item.citation_meta.source_name),
                     published_at=item.citation_meta.published_at,
                     entity_name=_clean_optional_str(item.citation_meta.entity_name),
