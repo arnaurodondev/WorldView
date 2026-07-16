@@ -578,6 +578,10 @@ class FundamentalsRefreshWorker:
                             source_text=None,
                             source_hash=None,
                             next_refresh_at=utc_now() + timedelta(seconds=_bo_seconds),
+                            # Write-nothing bookkeeping: only push next_refresh_at
+                            # forward. Do NOT stamp last_refreshed_at (D1 fix) —
+                            # this row got no new source_text/embedding.
+                            touch_last_refreshed=False,
                         )
                         continue
 
@@ -677,6 +681,11 @@ class FundamentalsRefreshWorker:
                                 source_text=None,
                                 source_hash=None,
                                 next_refresh_at=utc_now() + timedelta(days=_INSTRUMENT_LOOKUP_MISS_DEFER_DAYS),
+                                # Write-nothing bookkeeping (D1 fix): the instrument
+                                # is genuinely absent, so we only defer — no new
+                                # source_text/embedding was produced, so leave
+                                # last_refreshed_at untouched (don't fake success).
+                                touch_last_refreshed=False,
                             )
                             logger.info(  # type: ignore[no-any-return]
                                 "fundamentals_refresh_instrument_lookup_long_defer",
@@ -1378,10 +1387,38 @@ ON CONFLICT DO NOTHING
                 return UUID(str(data["id"])), False
             except (KeyError, ValueError, TypeError):
                 return None, False  # genuine miss — no usable id in the payload
-        if 500 <= status < 600:
-            # Server-side problem — transient, keep retrying on the backoff ladder.
+        # ── 2026-07-15 (D1 root cause): AUTH REJECTION is TRANSIENT, not a miss ──
+        # A 401/403 means market-data REJECTED the request (it did not answer
+        # "no such instrument"). In prod this was the internal-JWT being refused:
+        # KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY was empty so the worker signed
+        # an HS256 dev token, and market-data (skip_verification=false) returned
+        # 401 for EVERY ticker — including ones it holds (CMCSA, AAPL, ...).
+        #
+        # Classifying that 4xx as a *genuine miss* sent all 581 ticker'd
+        # fundamentals rows down the 30-day ``instrument_lookup_miss`` long-defer,
+        # whose upsert stamps ``last_refreshed_at = now()`` while writing NO
+        # source_text/embedding — the "stamps success but persists nothing"
+        # silent-failure the D1 audit flagged. Treating auth (and 429 rate-limit)
+        # as TRANSIENT keeps the row on the loud escalate-and-retry-sooner path so
+        # it self-heals the moment the JWT/JWKS is provisioned, instead of going
+        # silently dark for a month.
+        if status in (401, 403):
+            logger.error(  # type: ignore[no-any-return]
+                "fundamentals_refresh_instrument_lookup_auth_rejected",
+                ticker=ticker,
+                status_code=status,
+                message=(
+                    "market-data rejected the internal JWT — check "
+                    "KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY and the market-data "
+                    "JWKS/skip_verification config. Treating as transient (no 30-day defer)."
+                ),
+            )
             return None, True
-        # 4xx (incl. 404): market-data positively has no such instrument → genuine miss.
+        if status == 429 or (500 <= status < 600):
+            # Rate-limit or server-side problem — transient, keep retrying on the
+            # backoff ladder rather than long-deferring for 30 days.
+            return None, True
+        # Other 4xx (incl. 404): market-data positively has no such instrument → genuine miss.
         return None, False
 
     @staticmethod

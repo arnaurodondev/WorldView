@@ -782,6 +782,102 @@ class TestInstrumentLookupMissLongDefer:
         emb_repo.upsert.assert_not_awaited()
 
 
+# ── D1 (2026-07-15): auth-rejection must NOT be a silent 30-day "miss" ────────
+
+
+class TestInstrumentLookupAuthIsTransient:
+    """D1 root cause: market-data rejecting the internal JWT (401/403) is an
+    infra/config fault, NOT evidence the instrument is absent. It must be
+    classified TRANSIENT so the row stays on the loud escalate-and-retry path,
+    never the 30-day ``instrument_lookup_miss`` long-defer that silently stamps
+    ``last_refreshed_at`` while writing no source_text/embedding (the exact prod
+    signature: all 581 ticker'd fundamentals rows NULL yet last_refreshed current).
+    """
+
+    @pytest.mark.parametrize(
+        ("status", "expect_transient"),
+        [
+            (200, False),  # resolved (handled separately — id present)
+            (401, True),  # auth rejected → TRANSIENT (was wrongly a genuine miss)
+            (403, True),  # forbidden → TRANSIENT
+            (429, True),  # rate-limited → TRANSIENT
+            (503, True),  # server error → TRANSIENT
+            (404, False),  # genuinely absent → genuine miss (long-defer OK)
+            (400, False),  # other client error → genuine miss
+        ],
+    )
+    def test_status_classification(self, status: int, expect_transient: bool) -> None:
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        resp = MagicMock()
+        resp.status_code = status
+        # A 200 needs a parseable id to resolve; give it one so the 200 row
+        # returns (UUID, False) rather than a genuine miss.
+        resp.json = MagicMock(return_value={"id": "01900000-0000-7000-8000-000000009001"})
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(return_value=resp)
+
+        worker = FundamentalsRefreshWorker(MagicMock(), AsyncMock(), "http://market-data:8003")
+        instrument_id, transient = asyncio.run(
+            worker._resolve_instrument_id_with_status(http_client, "AAPL"),
+        )
+        assert transient is expect_transient
+        if status == 200:
+            assert instrument_id is not None
+        else:
+            assert instrument_id is None
+
+    def test_lookup_401_escalates_backoff_and_does_not_long_defer(self) -> None:
+        """REGRESSION (write-nothing path): a 401 lookup must escalate the backoff
+        and must NOT call the 30-day defer upsert.
+
+        Under the pre-fix code, 401 → genuine miss → ``emb_repo.upsert`` was
+        awaited once (stamping last_refreshed_at while writing nothing) and the
+        backoff was NOT escalated. This test fails on that path.
+        """
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "CMCSA",
+                "canonical_name": "Comcast Corp",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        # instruments/lookup returns 401 (market-data rejected the internal JWT).
+        lookup_resp = MagicMock()
+        lookup_resp.status_code = 401
+        lookup_resp.json = MagicMock(return_value={"detail": "Invalid internal JWT"})
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(return_value=lookup_resp)
+        http_client.aclose = AsyncMock()
+
+        llm = AsyncMock()
+        llm.embed = AsyncMock(return_value=[])
+
+        valkey = _FakeValkey()
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(
+                sf,
+                llm,
+                "http://market-data:8003",
+                http_client=http_client,
+                valkey_client=valkey,  # type: ignore[arg-type]
+            )
+            asyncio.run(worker.run())
+
+        # No 30-day silent-success defer upsert on an auth failure.
+        emb_repo.upsert.assert_not_awaited()
+        # The failure is loud + retried: backoff escalated exactly once (1h stage).
+        assert len(valkey.set_calls) == 1, "auth failure must escalate the backoff, not silently long-defer"
+
+
 # ── DEF-002: internal-JWT claims (aud + jti) ──────────────────────────────────
 
 

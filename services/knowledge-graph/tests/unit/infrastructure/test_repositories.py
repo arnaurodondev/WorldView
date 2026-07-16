@@ -32,6 +32,49 @@ def _make_session(fetchone_return: object = None, fetchall_return: list | None =
 # ---------------------------------------------------------------------------
 
 
+class TestEntityEmbeddingStateRepository:
+    """D1 (2026-07-15): a write-nothing bookkeeping upsert must NOT stamp
+    ``last_refreshed_at`` (that faked success on permanently-empty
+    ``fundamentals_ohlcv`` rows). The ``touch_last_refreshed`` flag gates it.
+    """
+
+    @staticmethod
+    def _run_upsert(*, touch_last_refreshed: bool) -> str:
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            EntityEmbeddingStateRepository,
+        )
+
+        session = AsyncMock()
+        session.execute = AsyncMock()
+        repo = EntityEmbeddingStateRepository(session)
+        asyncio.run(
+            repo.upsert(
+                uuid4(),
+                "fundamentals_ohlcv",
+                embedding=None,
+                model_id=None,
+                source_text=None,
+                source_hash=None,
+                next_refresh_at=datetime(2026, 8, 14, tzinfo=UTC),
+                touch_last_refreshed=touch_last_refreshed,
+            ),
+        )
+        return str(session.execute.call_args_list[0][0][0])
+
+    def test_default_touch_stamps_now(self) -> None:
+        """Default (real refresh) advances last_refreshed_at to now()."""
+        sql = self._run_upsert(touch_last_refreshed=True)
+        assert "last_refreshed_at = now()" in sql
+
+    def test_bookkeeping_upsert_preserves_last_refreshed(self) -> None:
+        """Write-nothing defer keeps the existing last_refreshed_at (no fake success)."""
+        sql = self._run_upsert(touch_last_refreshed=False)
+        assert "last_refreshed_at = entity_embedding_state.last_refreshed_at" in sql
+        assert "last_refreshed_at = now()" not in sql
+
+
 class TestRelationRepository:
     def test_upsert_returns_relation_id(self) -> None:
         """upsert() must call advisory lock + INSERT … ON CONFLICT and return a UUID."""

@@ -70,18 +70,36 @@ class EntityEmbeddingStateRepository:
         source_text: str | None,
         source_hash: str | None,
         next_refresh_at: datetime | None,
+        touch_last_refreshed: bool = True,
     ) -> None:
         """Upsert an embedding row for (entity_id, view_type).
 
         Increments ``refresh_count`` on each update.
+
+        ``touch_last_refreshed`` (default ``True``): when ``True`` the row's
+        ``last_refreshed_at`` is advanced to ``now()`` — the correct behaviour
+        for a real refresh that actually (re)computed a source_text/embedding.
+
+        Pass ``False`` for *bookkeeping* upserts that only push
+        ``next_refresh_at`` forward while writing **no** source_text/embedding
+        (the ``fundamentals_ohlcv`` genuine-miss 30-day defer and the backoff
+        skip). Otherwise those write-nothing defers stamp ``last_refreshed_at =
+        now()`` and make a permanently-empty row look freshly refreshed — the
+        exact D1 silent-success signature (all 713 ``fundamentals_ohlcv`` rows
+        ``last_refreshed_at`` current yet source_text/embedding NULL). Keeping the
+        timestamp truthful lets monitoring alert on "embeddings gone stale".
         """
         # asyncpg cannot serialize list[float] → pgvector vector(1024) automatically.
         # Convert to pgvector text format ("[x,y,z]") and use CAST in SQL.
         # COALESCE(CAST(NULL AS vector), existing) preserves existing embedding when
         # embedding=None is passed (unchanged-hash branch).
         embedding_str: str | None = "[" + ",".join(str(x) for x in embedding) + "]" if embedding is not None else None
+        # When ``touch_last_refreshed`` is False, keep the existing timestamp on
+        # the UPDATE branch (a first INSERT still stamps now() — a brand-new row
+        # has never been refreshed so now() is the only sensible seed).
+        last_refreshed_update = "now()" if touch_last_refreshed else "entity_embedding_state.last_refreshed_at"
         await self._session.execute(
-            text("""
+            text(f"""
 INSERT INTO entity_embedding_state (
     entity_id, view_type, embedding, model_id, source_text, source_hash,
     last_refreshed_at, next_refresh_at, refresh_count
@@ -94,7 +112,7 @@ ON CONFLICT (entity_id, view_type) DO UPDATE SET
     model_id          = COALESCE(EXCLUDED.model_id, entity_embedding_state.model_id),
     source_text       = EXCLUDED.source_text,
     source_hash       = EXCLUDED.source_hash,
-    last_refreshed_at = now(),
+    last_refreshed_at = {last_refreshed_update},
     next_refresh_at   = EXCLUDED.next_refresh_at,
     refresh_count     = entity_embedding_state.refresh_count + 1
 """),
