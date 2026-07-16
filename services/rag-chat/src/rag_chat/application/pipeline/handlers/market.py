@@ -824,6 +824,55 @@ def _build_polymarket_url(slug: str | None, question: str) -> str:
     return f"https://polymarket.com/event/{clean_slug}"
 
 
+# ── PREDICTION-MARKET QUERY BROADENING (2026-07-16 prod-review deep pass) ─────
+# pm_bitcoin_150k still refused after v1.25: "Are there prediction markets on
+# Bitcoin hitting $150k, and what odds?". The store HAS a bitcoin market ("Will
+# bitcoin hit $1m before GTA VI?") — a search for query="Bitcoin" returns it —
+# but the planner echoes the user's specific milestone into the query
+# ("Bitcoin 150k" / "Bitcoin $150k"), which ILIKE-matches ZERO rows, so the tool
+# returns [] and the model refuses. The magnitude token ("150k", "$150k", "$1m")
+# is the DISCRIMINATOR that kills the match; the ENTITY ("Bitcoin") is what the
+# market catalogue is keyed on. So on an EMPTY first search we retry ONCE with a
+# broadened query that strips monetary/magnitude tokens while KEEPING 4-digit
+# years (2028 is the discriminator for election markets, never a magnitude).
+# This is the recurring prediction-market-refusal class; the deterministic retry
+# is robust to however the planner phrases the query.
+_PM_MAGNITUDE_TOKEN = re.compile(
+    # $150k, 150k, $1m, 2.5b, $150,000 — a leading optional $, digits (with
+    # optional decimal/thousands separators), an optional k/m/b/t magnitude
+    # suffix. A bare 4-digit 19xx/20xx year is EXCLUDED (kept) via the guard below.
+    r"\$?\d[\d,]*(?:\.\d+)?\s*[kmbt]\b|\$\d[\d,]*(?:\.\d+)?\b",
+    re.IGNORECASE,
+)
+_PM_YEAR_TOKEN = re.compile(r"\b(?:19|20)\d{2}\b")
+
+
+def _broaden_prediction_query(query: str | None) -> str | None:
+    """Return a broadened prediction-market query, or None if none is possible.
+
+    Strips monetary/magnitude tokens (``$150k``, ``150k``, ``$1m``) that
+    over-narrow an ILIKE search, while PRESERVING 4-digit years (``2028``). The
+    result is returned ONLY when it (a) differs from the input and (b) still
+    carries a non-empty search term — otherwise there is nothing useful to retry
+    with and we return None (caller keeps the empty result).
+    """
+    if not query or not query.strip():
+        return None
+    # Protect years from the magnitude stripper by masking them first.
+    years = _PM_YEAR_TOKEN.findall(query)
+    masked = _PM_YEAR_TOKEN.sub("\x00YEAR\x00", query)
+    stripped = _PM_MAGNITUDE_TOKEN.sub(" ", masked)
+    # Restore years in original order.
+    for y in years:
+        stripped = stripped.replace("\x00YEAR\x00", y, 1)
+    # Collapse whitespace and trim trailing connector words left dangling
+    # ("Bitcoin hitting" is fine; a trailing "of"/"at" adds no recall).
+    broadened = re.sub(r"\s+", " ", stripped).strip(" ,.-")
+    if not broadened or broadened.lower() == query.strip().lower():
+        return None
+    return broadened
+
+
 def _parse_iso_datetime(value: Any) -> datetime | None:
     """Parse an ISO-8601 string into a tz-aware UTC datetime, or None.
 
@@ -2546,6 +2595,36 @@ class MarketHandler(ToolHandler):
         except Exception as e:
             log.warning("tool_failed", tool="get_prediction_markets", error=str(e))
             return []
+
+        # BROADEN-ON-EMPTY (2026-07-16 prod-review, pm_bitcoin_150k): an
+        # over-specified query ("Bitcoin 150k") ILIKE-matches nothing even though
+        # a related market ("Will bitcoin hit $1m before GTA VI?") exists. Retry
+        # ONCE with the monetary/magnitude tokens stripped so the entity term
+        # ("Bitcoin") can match — turning a false refusal into "no $150k market,
+        # but here is the closest one". Only fires when the broadened query
+        # genuinely differs (see _broaden_prediction_query).
+        if not markets and query_norm:
+            broadened = _broaden_prediction_query(query_norm)
+            if broadened:
+                log.info(
+                    "tool_retry_broadened",
+                    tool="get_prediction_markets",
+                    original_query=query_norm,
+                    broadened_query=broadened,
+                )
+                try:
+                    markets = await asyncio.wait_for(
+                        self._s3_brief.get_prediction_markets(
+                            query=broadened,
+                            category=category_norm,
+                            status=status_norm,
+                            limit=limit_clamped,
+                        ),
+                        timeout=self._timeout,
+                    )
+                except Exception as e:
+                    log.warning("tool_failed", tool="get_prediction_markets", error=str(e), phase="broaden_retry")
+                    markets = []
 
         if not markets:
             log.info("tool_no_data", tool="get_prediction_markets", query=query_norm, category=category_norm)

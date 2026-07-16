@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from rag_chat.application.pipeline.handlers.market import (
     MarketHandler,
+    _broaden_prediction_query,
     _build_polymarket_url,
 )
 from rag_chat.domain.enums import ItemType
@@ -252,3 +253,75 @@ async def test_handler_no_markets_returns_empty() -> None:
     brief = _FakeS3Brief([])
     items = await _handler(brief)._handle_get_prediction_markets(query="x")
     assert items == []
+
+
+# ── BROADEN-ON-EMPTY retry (2026-07-16 prod-review, pm_bitcoin_150k) ───────────
+
+
+class _QueryAwareBrief:
+    """Returns markets only when the query matches an allowed broad term.
+
+    Emulates the ILIKE catalogue: an over-specified query ("Bitcoin 150k")
+    matches nothing, but the broad entity term ("Bitcoin") returns the related
+    market. Records every query it saw so the retry can be asserted.
+    """
+
+    def __init__(self, hits_for: str, markets: list[dict[str, Any]]) -> None:
+        self._hits_for = hits_for.lower()
+        self._markets = markets
+        self.queries: list[str | None] = []
+
+    async def get_prediction_markets(
+        self, query: str | None, category: str | None, status: str, limit: int
+    ) -> list[dict[str, Any]]:
+        self.queries.append(query)
+        if query and query.strip().lower() == self._hits_for:
+            return self._markets
+        return []
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Bitcoin 150k", "Bitcoin"),
+        ("Bitcoin $150k", "Bitcoin"),
+        ("will bitcoin hit $1m", "will bitcoin hit"),
+        ("Ethereum $10,000", "Ethereum"),
+        # Only $-prefixed or magnitude-suffixed amounts are stripped. A bare
+        # number with neither ("10000") is left alone — it could be a year,
+        # count, or ticker fragment, so stripping it is unsafe.
+        ("Ethereum 10000", None),
+        # 4-digit years are the discriminator for elections — never stripped.
+        ("Trump 2028", None),
+        ("Bitcoin", None),  # single term, nothing to broaden
+        ("", None),
+        (None, None),
+    ],
+)
+def test_broaden_prediction_query(raw: str | None, expected: str | None) -> None:
+    assert _broaden_prediction_query(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_handler_broadens_query_on_empty_first_search() -> None:
+    """pm_bitcoin_150k: over-specified query returns [] then a broadened retry
+    finds the related market instead of a false refusal."""
+    market = _market(question="Will bitcoin hit $1m before GTA VI?", market_slug="btc-1m-gta-vi")
+    brief = _QueryAwareBrief(hits_for="Bitcoin", markets=[market])
+
+    items = await _handler(brief)._handle_get_prediction_markets(query="Bitcoin 150k")
+
+    # First (specific) query missed; the broadened "Bitcoin" query was retried.
+    assert brief.queries == ["Bitcoin 150k", "Bitcoin"]
+    assert len(items) == 1
+    assert items[0].item_type == ItemType.financial
+    assert "bitcoin" in items[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_handler_no_broaden_when_first_search_hits() -> None:
+    """A query that already matches must NOT trigger a second search."""
+    brief = _QueryAwareBrief(hits_for="Bitcoin", markets=[_market()])
+    items = await _handler(brief)._handle_get_prediction_markets(query="Bitcoin")
+    assert brief.queries == ["Bitcoin"]
+    assert len(items) == 1
