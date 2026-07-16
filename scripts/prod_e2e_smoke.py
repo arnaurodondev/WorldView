@@ -91,7 +91,13 @@ DLQ_TOPICS = [
     "nlp.dead-letter.v1",
 ]
 KAFKA_LAG_WARN = 5_000  # per-group total lag above this → WARN (backlog)
-KAFKA_LAG_FAIL = 100_000  # ...above this → FAIL (consumer wedged/dead)
+KAFKA_LAG_FAIL = 100_000  # ...above this → FAIL, but only for DEAD (0-member) groups
+# Ephemeral consumer groups created by test/probe harnesses (prod_qa prober, the
+# batched-consumer probe path). Their members leave but Kafka retains committed
+# offsets for offsets.retention.minutes (~7d), so they linger with 0 members and
+# would be mis-flagged as "dead worldview consumers". They are NOT services — skip
+# them from consumer-group health entirely.
+EPHEMERAL_GROUP_PREFIXES = ("probe", "console-consumer", "kafka-console")
 BACKUP_MAX_AGE_H = 12  # newest pg dump must be younger than this
 
 # ── Migration-drift / stale-image detection (issue classes 2 & 3) ────────────
@@ -295,7 +301,18 @@ def layer0() -> None:
             f"{len(dead)} dead (0 members): {dead[:5]}" if dead else f"all {n_groups} groups have members",
         )
         grp, lag = worst
-        st = FAIL if lag > KAFKA_LAG_FAIL else WARN if lag > KAFKA_LAG_WARN else PASS
+        # A high lag on a LIVE group (members present, offsets advancing) is a
+        # backlog — expected during intentional backfills (news multi-year, OHLCV)
+        # on this single-node cluster — not an incident, so cap it at WARN. Only a
+        # DEAD group (0 members, already FAILed above) with lag warrants a page;
+        # a genuinely stalled-but-member-present consumer surfaces via the Layer
+        # 4/5 freshness checks instead. This stops the every-30m false page.
+        if lag > KAFKA_LAG_FAIL and grp in dead:
+            st = FAIL
+        elif lag > KAFKA_LAG_WARN:
+            st = WARN
+        else:
+            st = PASS
         R.add("0", "kafka consumer lag", st, f"max {grp}={lag}")
 
     # MinIO buckets
@@ -381,7 +398,7 @@ def kafka_group_health() -> tuple[int, list[str], tuple[str, int]]:
     )
     dead: list[str] = []
     worst: tuple[str, int] = ("", 0)
-    names = [g.strip() for g in groups.splitlines() if g.strip()]
+    names = [g.strip() for g in groups.splitlines() if g.strip() and not g.strip().startswith(EPHEMERAL_GROUP_PREFIXES)]
     for g in names:
         _, desc = kubectl(
             f"-n {INFRA_NS} exec kafka-broker-0 -c kafka -- sh -c "
@@ -523,7 +540,7 @@ def check_schema_registry() -> None:
 def layer1() -> None:
     print("\n=== LAYER 1 — public edge (no auth) ===")
 
-    code, _ = sh(f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 -I http://{PUBLIC_HOST}/")
+    _, _ = sh(f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 -I http://{PUBLIC_HOST}/")
     _, redirect = sh(f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 http://{PUBLIC_HOST}/healthz")
     R.add("1", "HTTP :80 → 301 redirect", PASS if redirect.strip() == "301" else FAIL, f"got {redirect.strip()}")
 
@@ -921,7 +938,7 @@ def main() -> int:
     layers = set(args.layer.split(","))
 
     print(f"worldview prod e2e smoke — {PUBLIC_HOST} ({NODE_IP})  {time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime())}")
-    rc, ctx = kubectl("config current-context")
+    _, ctx = kubectl("config current-context")
     print(f"kube-context: {ctx.strip()}")
 
     if "0" in layers:
