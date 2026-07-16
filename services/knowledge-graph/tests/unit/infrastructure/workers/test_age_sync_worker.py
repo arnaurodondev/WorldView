@@ -877,3 +877,70 @@ class TestPrunePhantomRelations:
         asyncio.run(worker.run())
 
         prune.assert_awaited_once()
+
+
+# ── Test: graph_edges materialized-view refresh (PLAN-0113) ────────────────────
+
+
+class TestAgeSyncWorkerGraphEdgesRefresh:
+    """The AGE-sync cycle must refresh the public.graph_edges matview.
+
+    Regression guard for the prod data-quality finding (2026-07-15): migration
+    0063 builds graph_edges WITH DATA once at deploy time and NO code path ever
+    refreshed it, so it stayed frozen (0 rows) in prod forever. age_sync_worker
+    now owns the refresh.
+    """
+
+    def test_refresh_graph_edges_issues_concurrent_refresh_on_autocommit(self) -> None:
+        """_refresh_graph_edges runs REFRESH ... CONCURRENTLY on an AUTOCOMMIT conn."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        # A connection that records the execution options it was opened with and
+        # the SQL it executed.
+        conn = AsyncMock()
+        conn.execute = AsyncMock()
+        session = _make_session()
+        session.connection = AsyncMock(return_value=conn)
+        sf = _make_session_factory(session)
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=_make_valkey(), settings=_make_settings())
+
+        asyncio.run(worker._refresh_graph_edges())
+
+        # Opened the connection in AUTOCOMMIT (REFRESH CONCURRENTLY cannot run in a txn).
+        session.connection.assert_awaited_once()
+        opts = session.connection.call_args.kwargs["execution_options"]
+        assert opts["isolation_level"] == "AUTOCOMMIT"
+        # Issued exactly the concurrent refresh against the public matview.
+        sql = str(conn.execute.call_args.args[0])
+        assert "REFRESH MATERIALIZED VIEW CONCURRENTLY public.graph_edges" in sql
+
+    def test_refresh_graph_edges_fail_open(self) -> None:
+        """A refresh error is swallowed so it never aborts the sync cycle."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        session = _make_session()
+        session.connection = AsyncMock(side_effect=RuntimeError("matview missing"))
+        sf = _make_session_factory(session)
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=_make_valkey(), settings=_make_settings())
+
+        # Must not raise.
+        asyncio.run(worker._refresh_graph_edges())
+
+    def test_graph_edges_refresh_invoked_during_run(self) -> None:
+        """run() wires the graph_edges refresh into the cycle."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        session = _make_session()
+        sf = _make_session_factory(session)
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=_make_valkey(), settings=_make_settings())
+
+        worker._sync_entities = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        worker._sync_relations = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        worker._sync_temporal_events = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        worker._prune_phantom_relations = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        refresh = AsyncMock()
+        worker._refresh_graph_edges = refresh  # type: ignore[method-assign]
+
+        asyncio.run(worker.run())
+
+        refresh.assert_awaited_once()

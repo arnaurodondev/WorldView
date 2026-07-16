@@ -324,6 +324,16 @@ class AgeSyncWorker:
         # sync cycle (the previous degree snapshot stays usable until next run).
         await self._refresh_node_degrees()
 
+        # PLAN-0113 (prod data-quality review 2026-07-15): refresh the
+        # ``public.graph_edges`` materialized view from the just-synced
+        # ``relations`` table.  Migration 0063 builds this matview once WITH DATA
+        # at deploy time and the plan intended age_sync to keep it fresh, but the
+        # refresh call was never implemented — so on prod it stayed frozen at its
+        # deploy-time snapshot (0 rows when relations was empty at init) forever,
+        # regardless of subsequent ingestion.  Same fail-open discipline as the
+        # degree refresh: a matview-refresh error must never abort the sync cycle.
+        await self._refresh_graph_edges()
+
         elapsed = time.monotonic() - start
         s7_age_sync_entities_total.inc(entities_synced)
         s7_age_sync_relations_total.inc(relations_synced)
@@ -385,6 +395,46 @@ class AgeSyncWorker:
         except Exception:
             logger.warning(  # type: ignore[no-any-return]
                 "node_degree_refresh_error",
+                exc_info=True,
+            )
+
+    # ── graph_edges matview refresh (PLAN-0113) ────────────────────────────────
+
+    async def _refresh_graph_edges(self) -> None:
+        """Refresh the ``public.graph_edges`` materialized view from ``relations``.
+
+        ``graph_edges`` (migration 0063) is the flat, both-directions edge
+        projection the ``RelationalGraphPathAdapter`` traverses with a plain
+        recursive CTE.  It is built ``WITH DATA`` exactly once at migration time
+        and has no other refresh path in the codebase, so without this call it
+        stays permanently frozen at its deploy-time contents.
+
+        ``CONCURRENTLY`` avoids an exclusive lock on the matview (the unique index
+        ``uidx_graph_edges_rel_src_dst`` created in 0063 exists precisely to
+        allow this) so concurrent readers are never blocked during the refresh.
+        A ``CONCURRENTLY`` refresh cannot run inside a transaction block, so it is
+        executed with AUTOCOMMIT isolation on its own connection.
+
+        Fail-open: any error (e.g. the matview not yet created on an older DB) is
+        logged and swallowed so a refresh failure never aborts the AGE-sync cycle.
+        """
+        refresh_start = time.monotonic()
+        try:
+            async with self._sf() as session:
+                # REFRESH ... CONCURRENTLY is not allowed inside a transaction;
+                # switch this connection to AUTOCOMMIT so the statement runs on
+                # its own implicit transaction.
+                conn = await session.connection(
+                    execution_options={"isolation_level": "AUTOCOMMIT"},
+                )
+                await conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY public.graph_edges"))
+            logger.info(  # type: ignore[no-any-return]
+                "graph_edges_refresh_complete",
+                duration_s=round(time.monotonic() - refresh_start, 3),
+            )
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "graph_edges_refresh_error",
                 exc_info=True,
             )
 
