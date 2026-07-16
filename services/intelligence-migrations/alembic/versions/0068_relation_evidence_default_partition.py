@@ -41,12 +41,47 @@ WHAT THIS MIGRATION ADDS:
 WHY THIS IS REGRESSION-SAFE (R11 forward-compat):
   A DEFAULT partition only ever claims rows that NO existing monthly partition
   wants; routing of every in-window (2024-2026) date is completely unchanged. It
-  adds no columns, no constraints, and no default values to existing rows. The one
-  operational caveat of DEFAULT partitions — that ADD-ing a new range partition
-  later requires no conflicting rows already sit in DEFAULT — does not apply here
-  because the platform creates monthly partitions statically in migrations, not at
-  runtime; any future backfill of dedicated monthly partitions would be authored as
-  its own migration that moves the matching rows out of DEFAULT first.
+  adds no columns, no constraints, and no default values to existing rows.
+
+  OPERATIONAL CAVEAT — the DEFAULT-partition attach trap (READ THIS):
+  Postgres refuses to CREATE/ATTACH a new range partition whenever the DEFAULT
+  partition already holds a row that would belong in the new range (it raises
+  "updated partition constraint for default partition ... would be violated by
+  some row" and rolls the statement back). This platform DOES create monthly
+  partitions at RUNTIME, not only in migrations: knowledge-graph Workers 13G/13H
+  (``infrastructure/workers/partitions.py``, MonthlyPartitionWorker /
+  YearlyPartitionWorker) run at startup and on a schedule and issue
+  ``CREATE TABLE ... PARTITION OF relation_evidence FOR VALUES FROM ... TO ...``
+  for the current + next 2 months. So the trap is a live code path, not a purely
+  hypothetical one.
+
+  Why it does not fire in practice today: MonthlyPartitionWorker only creates
+  partitions FORWARD (current month + 2) and prunes anything older than 24 months,
+  while the rows that actually land in DEFAULT are historical SEC-EDGAR filing
+  dates (observed 2018-2023, all in the PAST). The worker never attempts to create
+  a 2018-2023 partition, so those DEFAULT rows can never collide with a create.
+  Forward months are always created ~2 months ahead of any row arriving, so their
+  partitions exist before a row could fall into DEFAULT for that month.
+
+  Two residual risks a future maintainer must keep in mind:
+    1. Latent wedge: if a row with a FUTURE evidence_date ever lands in DEFAULT
+       before its monthly partition is created (worker downtime spanning a month
+       boundary, or genuinely future-dated evidence), MonthlyPartitionWorker.run()
+       will fail to create that month's partition and — because it creates 3 months
+       + prunes in ONE transaction — roll back the whole cycle every run, silently
+       wedging partition maintenance (the same poison-batch shape as the original
+       promoter bug). Mitigation if this ever occurs: move the conflicting rows out
+       of DEFAULT into a standalone table first, then let the worker create the
+       partition (or make the worker create each partition in its own transaction
+       and treat the default-conflict as non-fatal).
+    2. Retention leak: ``_prune_old_monthly_partitions`` only drops
+       ``relation_evidence_YYYY_MM`` partitions; it never touches DEFAULT, so the
+       out-of-window historical rows now retained in DEFAULT are exempt from the
+       24-month retention policy and accumulate indefinitely (currently ~374 rows —
+       negligible, but unbounded in principle).
+  Any future backfill of dedicated monthly partitions for a range that DEFAULT
+  already holds MUST move the matching rows out of DEFAULT first (authored as its
+  own migration).
 
 IDEMPOTENT:
   ``CREATE TABLE IF NOT EXISTS ... PARTITION OF ... DEFAULT`` is safe to re-apply.
