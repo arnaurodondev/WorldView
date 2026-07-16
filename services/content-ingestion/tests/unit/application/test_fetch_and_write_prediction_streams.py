@@ -58,6 +58,7 @@ _EVENT_FIELDS = {
     "start_date",
     "end_date",
     "market_count",
+    "member_condition_ids",
     "correlation_id",
 }
 _HISTORY_FIELDS = {
@@ -116,6 +117,7 @@ def _event() -> PredictionEventFetchResult:
         start_date=datetime(2026, 1, 1, tzinfo=UTC),
         end_date=datetime(2028, 11, 7, tzinfo=UTC),
         market_count=42,
+        member_condition_ids=("0xaaa", "0xbbb"),
     )
 
 
@@ -176,6 +178,9 @@ class TestPayloadBuilders:
         assert payload["category"] == "politics"
         assert payload["market_count"] == 42
         assert payload["schema_version"] == 1
+        # PLAN-0056 Wave A3 completion: child conditionIds ride along as a list
+        # (Avro array) so S3 can backfill prediction_markets.event_id.
+        assert payload["member_condition_ids"] == ["0xaaa", "0xbbb"]
 
     def test_history_emits_one_payload_per_datapoint(self) -> None:
         payloads = build_prediction_history_payloads(_history(), is_backfill=True)

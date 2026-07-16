@@ -183,6 +183,14 @@ class PredictionEventConsumer(BaseKafkaConsumer[dict]):
         except (ValueError, TypeError) as exc:
             raise MalformedDataError(f"Invalid start_date/end_date in prediction event message: {exc}") from exc
 
+        # PLAN-0056 Wave A3 completion: the child-market conditionIds. Absent on
+        # legacy/pre-linkage events (Avro default []) → no linkage, no regression.
+        # Coerce defensively: only non-empty string ids survive.
+        raw_member_ids = value.get("member_condition_ids") or []
+        member_condition_ids = tuple(
+            str(cid).strip() for cid in raw_member_ids if isinstance(cid, str) and cid.strip()
+        )
+
         event = PredictionEvent(
             event_id=str(group_id),
             name=str(name),
@@ -190,13 +198,22 @@ class PredictionEventConsumer(BaseKafkaConsumer[dict]):
             start_date=start_date,
             end_date=end_date,
             market_count=int(value.get("market_count") or 0),
+            member_condition_ids=member_condition_ids,
         )
 
         # M-04: do NOT call uow.commit() — the base class owns the single commit.
         await uow.prediction_events.upsert(event)
 
+        # PLAN-0056 Wave A3 completion: stamp prediction_markets.event_id for the
+        # member markets. Same DB (market_data_db) → intra-DB UPDATE in the SAME
+        # transaction as the event upsert (both commit together via the base class),
+        # so the linkage can never half-apply. Idempotent inside link_markets.
+        linked = await uow.prediction_events.link_markets(str(group_id), member_condition_ids)
+
         logger.info(
             "prediction_event_consumer.materialised",
             group_id=str(group_id),
             market_count=event.market_count,
+            member_condition_ids=len(member_condition_ids),
+            markets_linked=linked,
         )

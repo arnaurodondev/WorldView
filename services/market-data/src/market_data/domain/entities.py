@@ -341,3 +341,9 @@ class PredictionEvent:
     start_date: datetime | None = None
     end_date: datetime | None = None
     market_count: int = 0
+    # PLAN-0056 Wave A3 completion: the child-market conditionIds carried on the
+    # ``market.prediction.event.v1`` event. NOT persisted to ``prediction_events``
+    # (which stores only group metadata) — carried transiently so the consumer can
+    # UPDATE ``prediction_markets.event_id`` for these markets after the upsert.
+    # Empty default keeps every existing constructor / test unchanged.
+    member_condition_ids: tuple[str, ...] = ()

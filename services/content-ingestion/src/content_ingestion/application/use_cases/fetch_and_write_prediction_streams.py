@@ -89,6 +89,10 @@ def build_prediction_event_payloads(
             "start_date": ct.to_iso8601(result.start_date) if result.start_date else None,
             "end_date": ct.to_iso8601(result.end_date) if result.end_date else None,
             "market_count": result.market_count,
+            # PLAN-0056 Wave A3 completion: the child-market conditionIds so S3 can
+            # backfill prediction_markets.event_id (market->event linkage). list()
+            # because Avro arrays serialize from a list, not a tuple.
+            "member_condition_ids": list(result.member_condition_ids),
             "correlation_id": None,
         }
     ]

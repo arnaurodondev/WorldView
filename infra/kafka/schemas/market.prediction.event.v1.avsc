@@ -14,6 +14,7 @@
     {"name": "start_date",       "type": ["null", "string"], "default": null, "doc": "ISO-8601 UTC event window start"},
     {"name": "end_date",         "type": ["null", "string"], "default": null, "doc": "ISO-8601 UTC event window end"},
     {"name": "market_count",     "type": "int",              "default": 0, "doc": "Number of child markets in this event group"},
+    {"name": "member_condition_ids", "type": {"type": "array", "items": "string"}, "default": [], "doc": "Polymarket child-market conditionIds belonging to this event group (== prediction_markets.market_id). Consumed by S3 to backfill prediction_markets.event_id (market->event linkage). PLAN-0056 Wave A3 completion."},
     {"name": "correlation_id",   "type": ["null", "string"], "default": null}
   ]
 }

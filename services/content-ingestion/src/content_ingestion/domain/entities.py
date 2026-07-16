@@ -691,6 +691,14 @@ class PredictionEventFetchResult:
     start_date: datetime | None = None
     end_date: datetime | None = None
     market_count: int = 0
+    # PLAN-0056 Wave A3 completion: the Polymarket conditionIds of the child
+    # markets in this event group (== ``prediction_markets.market_id`` in S3).
+    # Threaded verbatim S4 -> ``market.prediction.event.v1`` -> S3 so the event
+    # consumer can backfill ``prediction_markets.event_id`` (the market->event
+    # linkage that was previously declared "set S4-side later" but never wired).
+    # Tuple (not list) so the frozen dataclass stays hashable; empty default keeps
+    # every existing keyword call-site + test unchanged (forward-compatible).
+    member_condition_ids: tuple[str, ...] = ()
     minio_bronze_key: str | None = None
     id: UUID = field(default_factory=common.ids.new_uuid7)
 
@@ -729,7 +737,25 @@ class PredictionEventFetchResult:
                             break
 
         child_markets = raw.get("markets")
-        market_count = len(child_markets) if isinstance(child_markets, list) else 0
+        child_market_list = child_markets if isinstance(child_markets, list) else []
+        market_count = len(child_market_list)
+        # PLAN-0056 Wave A3 completion: capture each child market's Polymarket
+        # conditionId (the same value the /markets adapter stores as market_id).
+        # De-duplicated, order-preserving; skips markets with no conditionId. This
+        # is the ONLY place the market->group mapping is observable (the /events
+        # response embeds its member markets), so it must be threaded downstream.
+        seen_condition_ids: set[str] = set()
+        member_condition_ids: list[str] = []
+        for child in child_market_list:
+            if not isinstance(child, dict):
+                continue
+            raw_condition_id = child.get("conditionId")
+            if not raw_condition_id:
+                continue
+            condition_id = str(raw_condition_id).strip()
+            if condition_id and condition_id not in seen_condition_ids:
+                seen_condition_ids.add(condition_id)
+                member_condition_ids.append(condition_id)
 
         return cls(
             source_type=SourceType.POLYMARKET_GAMMA_EVENTS,
@@ -740,6 +766,7 @@ class PredictionEventFetchResult:
             start_date=_parse_iso_datetime(raw.get("startDate")),
             end_date=_parse_iso_datetime(raw.get("endDate")),
             market_count=market_count,
+            member_condition_ids=tuple(member_condition_ids),
             raw_bytes=json.dumps(raw).encode(),
             fetched_at=fetched_at,
             minio_bronze_key=None,

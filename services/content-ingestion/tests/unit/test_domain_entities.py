@@ -385,3 +385,48 @@ class TestPredictionEventFetchResultTruncation:
         raw = {"id": "evt_3", "name": "2028 Election", "category": "Politics"}
         result = PredictionEventFetchResult.from_gamma_response(raw, _utc_now())
         assert result.title == "2028 Election"
+
+
+# ── PredictionEventFetchResult — market->event linkage (PLAN-0056 Wave A3) ──────
+
+
+class TestPredictionEventFetchResultMemberConditionIds:
+    def test_extracts_member_condition_ids_from_child_markets(self) -> None:
+        from content_ingestion.domain.entities import PredictionEventFetchResult
+
+        raw = {
+            "id": "evt_10",
+            "title": "2028 Election",
+            "markets": [
+                {"conditionId": "0xaaa", "question": "Cand A wins?"},
+                {"conditionId": "0xbbb", "question": "Cand B wins?"},
+            ],
+        }
+        result = PredictionEventFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.member_condition_ids == ("0xaaa", "0xbbb")
+        assert result.market_count == 2
+
+    def test_dedupes_and_skips_blank_condition_ids(self) -> None:
+        from content_ingestion.domain.entities import PredictionEventFetchResult
+
+        raw = {
+            "id": "evt_11",
+            "title": "E",
+            "markets": [
+                {"conditionId": "0xaaa"},
+                {"conditionId": "0xaaa"},  # duplicate
+                {"conditionId": "  "},  # blank
+                {"question": "no condition id"},  # missing
+                {"conditionId": "0xccc"},
+            ],
+        }
+        result = PredictionEventFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.member_condition_ids == ("0xaaa", "0xccc")
+
+    def test_no_markets_field_yields_empty_tuple(self) -> None:
+        from content_ingestion.domain.entities import PredictionEventFetchResult
+
+        raw = {"id": "evt_12", "title": "E"}
+        result = PredictionEventFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.member_condition_ids == ()
+        assert result.market_count == 0

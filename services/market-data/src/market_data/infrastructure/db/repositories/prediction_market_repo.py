@@ -36,6 +36,8 @@ from market_data.infrastructure.db.models.prediction_markets import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -955,6 +957,33 @@ class PgPredictionMarketEventsRepository(PredictionMarketEventsRepository):
             },
         )
         await self._session.execute(stmt)
+
+    async def link_markets(self, event_id: str, market_ids: Sequence[str]) -> int:
+        """Set ``prediction_markets.event_id = event_id`` for ``market_ids``.
+
+        Completes the PLAN-0056 Wave A3 market->event linkage: the ``/events``
+        stream is the only place the group->child-market mapping is observable,
+        so the event consumer carries the member conditionIds here and stamps the
+        FK on the already-ingested market rows. Intra-DB UPDATE (same market_data_db
+        as ``prediction_events``) — NOT a cross-service read (R9-safe).
+
+        Idempotent: ``event_id IS DISTINCT FROM :event_id`` skips rows already
+        linked, so a re-delivered event or a steady-state poll touches nothing.
+        Returns the number of rows actually updated (0 when ``market_ids`` empty).
+        """
+        if not market_ids:
+            return 0
+        result = await self._session.execute(
+            text(
+                "UPDATE prediction_markets "
+                "SET event_id = :event_id, updated_at = now() "
+                "WHERE market_id = ANY(CAST(:market_ids AS TEXT[])) "
+                "AND event_id IS DISTINCT FROM :event_id"
+            ).bindparams(event_id=event_id, market_ids=list(market_ids))
+        )
+        # rowcount is authoritative for UPDATE on asyncpg/psycopg; -1 only for
+        # statements where it is undefined (not this one) → clamp to 0.
+        return max(result.rowcount, 0)
 
     async def find_by_event_id(self, event_id: str) -> PredictionEvent | None:
         result = await self._session.execute(

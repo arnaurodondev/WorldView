@@ -30,6 +30,7 @@ _VALID_EVENT: dict = {
     "start_date": _START.isoformat(),
     "end_date": _END.isoformat(),
     "market_count": 7,
+    "member_condition_ids": ["0xcond1", "0xcond2"],
     "correlation_id": None,
 }
 
@@ -42,6 +43,9 @@ def _make_uow() -> MagicMock:
     uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=True)
     uow.prediction_events = MagicMock()
     uow.prediction_events.upsert = AsyncMock(return_value=None)
+    # PLAN-0056 Wave A3 completion: the consumer awaits link_markets, so it MUST
+    # be an AsyncMock (a bare MagicMock attribute is not awaitable).
+    uow.prediction_events.link_markets = AsyncMock(return_value=0)
     uow.commit = AsyncMock()
     uow.failed_tasks = MagicMock()
     uow.failed_tasks.create = AsyncMock()
@@ -79,6 +83,8 @@ class TestProcessMessageUpsertEvent:
         assert event.start_date == _START
         assert event.end_date == _END
         assert event.market_count == 7
+        # PLAN-0056 Wave A3 completion: child conditionIds are carried onto the entity.
+        assert event.member_condition_ids == ("0xcond1", "0xcond2")
 
     @pytest.mark.asyncio
     async def test_null_dates_map_to_none(self) -> None:
@@ -101,6 +107,42 @@ class TestProcessMessageUpsertEvent:
         await consumer.process_message(key=None, value=_VALID_EVENT, headers={})
 
         uow.commit.assert_not_called()
+
+
+class TestMarketEventLinkage:
+    """PLAN-0056 Wave A3 completion — market->event linkage backfill."""
+
+    @pytest.mark.asyncio
+    async def test_links_member_markets_to_event(self) -> None:
+        uow = _make_uow()
+        consumer = _make_consumer(uow)
+
+        await consumer.process_message(key=None, value=_VALID_EVENT, headers={})
+
+        uow.prediction_events.link_markets.assert_called_once_with("grp_12345", ("0xcond1", "0xcond2"))
+
+    @pytest.mark.asyncio
+    async def test_legacy_event_without_member_ids_links_empty(self) -> None:
+        uow = _make_uow()
+        consumer = _make_consumer(uow)
+        # A pre-linkage event omits member_condition_ids entirely (Avro default []).
+        payload = {k: v for k, v in _VALID_EVENT.items() if k != "member_condition_ids"}
+
+        await consumer.process_message(key=None, value=payload, headers={})
+
+        # Still upserts the event; linkage is a no-op with an empty tuple.
+        uow.prediction_events.upsert.assert_called_once()
+        uow.prediction_events.link_markets.assert_called_once_with("grp_12345", ())
+
+    @pytest.mark.asyncio
+    async def test_blank_and_non_string_member_ids_filtered(self) -> None:
+        uow = _make_uow()
+        consumer = _make_consumer(uow)
+        payload = {**_VALID_EVENT, "member_condition_ids": ["0xok", "  ", "", None, 123, "0xok2"]}
+
+        await consumer.process_message(key=None, value=payload, headers={})
+
+        uow.prediction_events.link_markets.assert_called_once_with("grp_12345", ("0xok", "0xok2"))
 
 
 class TestProcessMessageIdempotent:

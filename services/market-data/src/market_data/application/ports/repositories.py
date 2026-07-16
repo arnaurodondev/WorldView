@@ -21,6 +21,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from market_data.domain.entities import (
         FundamentalsRecord,
         Instrument,
@@ -928,6 +930,17 @@ class PredictionMarketEventsRepository(ABC):
     @abstractmethod
     async def upsert(self, event: PredictionEvent) -> None:
         """Insert or update the event keyed on ``event_id`` (last-write-wins metadata)."""
+
+    @abstractmethod
+    async def link_markets(self, event_id: str, market_ids: Sequence[str]) -> int:
+        """Set ``prediction_markets.event_id = event_id`` for the given market_ids.
+
+        Backfills the market->event linkage (PLAN-0056 Wave A3 completion). Same
+        DB as this repository (market_data_db), so it is a plain intra-DB UPDATE,
+        not a cross-service read (R9-safe). Idempotent: only rows whose event_id
+        differs are touched (``IS DISTINCT FROM``). Returns the number of rows
+        updated. An empty ``market_ids`` is a no-op returning 0.
+        """
 
     @abstractmethod
     async def find_by_event_id(self, event_id: str) -> PredictionEvent | None:

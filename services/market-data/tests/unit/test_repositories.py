@@ -1168,6 +1168,53 @@ class TestPgPredictionMarketEventsRepository:
         assert "on conflict" in sql and "do update" in sql
         assert "event_id" in sql
 
+    async def test_link_markets_updates_only_mismatched_rows(self):
+        # PLAN-0056 Wave A3 completion: market->event linkage backfill.
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+        )
+
+        session = AsyncMock()
+        result = MagicMock()
+        result.rowcount = 2
+        session.execute.return_value = result
+        repo = PgPredictionMarketEventsRepository(session)
+
+        linked = await repo.link_markets("grp_1", ["0xaaa", "0xbbb"])
+        assert linked == 2
+
+        from sqlalchemy.dialects import postgresql
+
+        stmt = session.execute.call_args[0][0]
+        sql = str(stmt.compile(dialect=postgresql.dialect())).lower()
+        assert "update prediction_markets" in sql
+        assert "event_id" in sql
+        # Idempotent: only rows whose event_id differs are touched.
+        assert "is distinct from" in sql
+
+    async def test_link_markets_empty_is_noop(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+        )
+
+        session = AsyncMock()
+        repo = PgPredictionMarketEventsRepository(session)
+        linked = await repo.link_markets("grp_1", [])
+        assert linked == 0
+        session.execute.assert_not_called()
+
+    async def test_link_markets_clamps_negative_rowcount(self):
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketEventsRepository,
+        )
+
+        session = AsyncMock()
+        result = MagicMock()
+        result.rowcount = -1  # undefined rowcount → clamp to 0
+        session.execute.return_value = result
+        repo = PgPredictionMarketEventsRepository(session)
+        assert await repo.link_markets("grp_1", ["0xaaa"]) == 0
+
     async def test_find_by_event_id_maps_and_missing_returns_none(self):
         from types import SimpleNamespace
 
