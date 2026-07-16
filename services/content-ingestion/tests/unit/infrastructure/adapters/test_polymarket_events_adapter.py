@@ -182,3 +182,21 @@ class TestPolymarketEventsAdapter:
 
         assert len(results) == 1
         assert results[0].minio_bronze_key is None
+
+    async def test_bronze_archive_disabled_skips_put(self) -> None:
+        """Inode-exhaustion P0 (2026-07-16): default ``bronze_archive_enabled``
+        False → no bronze object written, but the event still flows to Kafka."""
+        client = MagicMock()
+        client.fetch_events_page = AsyncMock(return_value=GammaEventsPage(events=[_event("evt_off")], next_cursor=None))
+        storage = AsyncMock()
+        storage.put_bytes = AsyncMock()
+        settings = _adapter_settings()
+        settings.bronze_archive_enabled = False
+        adapter = _make_adapter(client, storage=storage, settings=settings)
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source())
+
+        assert len(results) == 1
+        assert results[0].minio_bronze_key is None
+        storage.put_bytes.assert_not_awaited()
