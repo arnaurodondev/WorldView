@@ -94,6 +94,23 @@ class EODHDProviderSettings(BaseModel):
     # CONTENT_INGESTION_EODHD__GENERAL_NEWS_POLL_INTERVAL_SECONDS.
     general_news_poll_interval_seconds: int = Field(default=300, ge=60)
 
+    # ── Multi-year historical backfill of the general feed (2026-07-15) ───────
+    # The forward firehose only walks NEWEST-first with EARLY-EXIT, so it can
+    # never reach the deep historical archive. A separate one-shot / CronJob
+    # backfill (``content_ingestion.scripts.backfill_general_news``) walks
+    # BACKWARD in bounded date windows, paging each window FULLY (no early-exit)
+    # and dedup-writing via the same outbox pipeline. These knobs bound that walk.
+    #
+    # ``general_news_backfill_window_days``: size of each backward date window.
+    # 7d keeps a window's full-paging bounded — historically the general feed is
+    # ~2.7k articles/day (verified 2026-07-15), i.e. ~3 pages/day at page_size
+    # 1000, so a 7-day window is ~19 pages and commits well inside a worker lease.
+    general_news_backfill_window_days: int = Field(default=7, ge=1, le=90)
+    # Defensive per-window page cap (backstop against an ``offset``-ignoring API,
+    # mirrors ``news_max_pages``). At ~2.7k articles/day a 7d window is ~19 pages;
+    # 30 leaves headroom for a busy week without spinning forever.
+    general_news_backfill_max_pages_per_window: int = Field(default=30, ge=1, le=200)
+
 
 class FinnhubProviderSettings(BaseModel):
     """Operational parameters for the Finnhub provider."""
@@ -413,6 +430,23 @@ class Settings(BaseSettings):
     backfill_initial_days: int = 14
     # Hard cap on horizon — runtime clamps INITIAL_DAYS to YEARS * 365.
     backfill_years: int = 3
+
+    # ── General-news historical backfill budget (2026-07-15) ─────────────────
+    # Per-INVOCATION EODHD credit budget for the general-news historical backfill
+    # (``content_ingestion.scripts.backfill_general_news``). The backfill records
+    # every page into the SHARED per-UTC-day EODHD counter, so a single run must
+    # never approach the 100k/day account cap. When a run has spent this many
+    # credits it checkpoints its cursor (Valkey) and exits 0 — a daily CronJob
+    # then resumes the next UTC day, spreading a multi-year backfill across days
+    # with zero risk to the live pipeline. 20k credits ≈ 4k page requests ≈ up to
+    # ~4M articles/run; the whole 3-year archive (~15k credits) fits in one run.
+    # CONTENT_INGESTION_BACKFILL_MAX_CREDITS_PER_RUN
+    backfill_max_credits_per_run: int = 20_000
+    # Safety margin kept free under the daily EODHD cap: the backfill stops before
+    # ``eodhd_daily_quota - backfill_daily_headroom`` credits-used so the live
+    # firehose + fundamentals/OHLCV always retain headroom on the shared account.
+    # CONTENT_INGESTION_BACKFILL_DAILY_HEADROOM
+    backfill_daily_headroom: int = 10_000
 
     # PLAN-0056 Wave B3 — deeper Polymarket-stream backfill horizons. Flat env
     # vars (CONTENT_INGESTION_POLYMARKET_HISTORY_BACKFILL_DAYS /
