@@ -359,6 +359,25 @@ class Settings(BaseSettings):
     # NLP_PIPELINE_DEEP_EXTRACTION_MAX_WORDS.
     deep_extraction_max_words: int = 0  # NLP_PIPELINE_DEEP_EXTRACTION_MAX_WORDS
 
+    # P0-A poison-pill safety bound (prod review 2026-07-15): cap the number of
+    # deep-extraction WINDOWS a single article may consume in one handler call.
+    # A pathological many-mention / very-long article can otherwise run dozens of
+    # sequential 235B extraction windows (each up to ``extraction_timeout_s``)
+    # inside ONE ``_handle_message`` call, monopolising a bounded handler slot for
+    # tens of minutes and starving the consumer group. Beyond the cap the good
+    # windows are PERSISTED and the remainder is skipped with ``degraded=true`` +
+    # ``skipped_windows`` so the loss is visible and the doc stays backfillable
+    # (workers/backfill_entity_mentions.py) — never a silent drop.
+    #
+    # This is a belt to the braces of the per-window liveness heartbeat: the
+    # heartbeat keeps a slow-but-progressing article's ``/healthz`` alive, and this
+    # cap bounds the worst case so no single article can hold a handler slot
+    # indefinitely. Cap chosen (12) from the observed live window distribution; a
+    # typical FULL_PIPELINE article is well under it, so the cap only bites on
+    # outliers. 0 disables the cap (process every window). Env-overridable so ops
+    # can tune without a rebuild. NLP_PIPELINE_EXTRACTION_MAX_WINDOWS_PER_DOC
+    extraction_max_windows_per_doc: int = 12
+
     # GLiNER thresholds (PRD §6.7 Block 4)
     gliner_threshold: float = 0.35  # for routing/novelty signal
     gliner_resolution_threshold: float = 0.45  # for entity resolution cascade

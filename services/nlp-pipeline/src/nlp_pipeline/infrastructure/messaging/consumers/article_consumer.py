@@ -1386,6 +1386,16 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 entailment_client=self._entailment_client,
                 entailment_config=self._entailment_config,
                 _deep_extraction_fn=run_deep_extraction_block,
+                # P0-A poison-pill fix (prod review 2026-07-15): thread the base
+                # consumer's liveness heartbeat down into the sequential window
+                # loop so each completed extraction window refreshes the progress
+                # gauge. Without this, a single heavy article's many-window handler
+                # never returns to the batch poll loop where _record_progress()
+                # normally fires → seconds_since_progress crosses stale_after_s →
+                # /healthz 503 → kubelet SIGTERM → same article reprocessed →
+                # CrashLoopBackOff. A genuinely hung window still trips the probe
+                # (no window completes) — only slow-but-progressing docs survive.
+                on_window_done=self._record_progress,
                 _alias_repo=entity_alias_repo,
                 _profile_emb_repo=entity_profile_emb_repo,
                 _canonical_repo=canonical_entity_repo,

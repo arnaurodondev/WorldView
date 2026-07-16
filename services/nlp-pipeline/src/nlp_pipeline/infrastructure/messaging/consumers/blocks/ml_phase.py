@@ -99,6 +99,13 @@ async def run_ml_phase(
     # article_consumer._run_pipeline passes ``run_deep_extraction_block`` from
     # the article_consumer namespace so unit tests can patch it there.
     _deep_extraction_fn: Any = None,
+    # P0-A liveness heartbeat (prod review 2026-07-15): the article consumer's
+    # ``_record_progress`` bound method, threaded down into Block 10 so each
+    # completed extraction WINDOW refreshes the Kafka liveness gauge. Keeps a
+    # slow-but-progressing article's ``/healthz`` alive during a long in-flight
+    # handler while a truly hung call still goes stale. None (default) = no
+    # heartbeat (the pre-fix behaviour; safe for unit tests that omit it).
+    on_window_done: Any = None,
     # Injected repo instances — constructed in article_consumer._run_pipeline
     # so unit tests can patch them at the article_consumer module namespace.
     _alias_repo: Any = None,
@@ -188,6 +195,9 @@ async def run_ml_phase(
             # BP-719 Mode B: bound the deep-extraction prefix on very large filings
             # so the ML phase fits the 900s watchdog. 0 (default) = no cap.
             max_words=getattr(settings, "deep_extraction_max_words", 0),
+            # P0-A: per-article window budget + per-window liveness heartbeat.
+            max_windows=getattr(settings, "extraction_max_windows_per_doc", 0),
+            on_window_done=on_window_done,
         )
         s6_claims_extracted_total.inc(len(list(extraction_result.get("claims", []))))
         await synthesize_provisional_refs(

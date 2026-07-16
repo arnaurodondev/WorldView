@@ -566,3 +566,227 @@ class TestDeepExtractionTimeouts:
         assert result["timed_out_windows"] == 0
         # Deduplicated to a single event across windows (overlap dedup).
         assert len(list(result["events"])) == 1  # type: ignore[arg-type]
+
+
+class TestLivenessHeartbeatAndWindowBudget:
+    """P0-A poison-pill fix (prod review 2026-07-15).
+
+    The article consumer runs Block 10's window loop inside ONE Kafka handler
+    call; the base liveness heartbeat only ticked between batches, so a heavy
+    many-window article let ``/healthz`` go stale → kubelet SIGTERM → the same
+    article reprocessed → CrashLoopBackOff. Two guarantees are tested here:
+
+      1. ``on_window_done`` fires once per COMPLETED window (slow-but-progressing
+         article stays alive) but NOT for a window that never returns (a truly
+         hung call still lets the probe correctly go stale).
+      2. ``max_windows`` caps a pathological article: the good windows are kept
+         and the remainder is skipped with ``degraded=true`` + ``skipped_windows``.
+    """
+
+    @staticmethod
+    def _long_multi_window_chunk(doc_id: uuid.UUID) -> Chunk:
+        # Force >1 window so heartbeat/cap scenarios are reachable.
+        long_text = " ".join(f"word{i}" for i in range(SINGLE_WINDOW_TOKEN_LIMIT + WINDOW_SIZE_TOKENS + 1000))
+        return _make_chunk(long_text, doc_id=doc_id)
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_fires_once_per_completed_window(self) -> None:
+        """A slow-but-progressing multi-window article refreshes the liveness
+        heartbeat once per completed window — so ``/healthz`` stays fresh while
+        the long handler is still in flight."""
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-not-found]
+
+        doc_id = uuid.uuid4()
+        chunk = self._long_multi_window_chunk(doc_id)
+        out = ExtractionOutput(
+            result={"events": [], "claims": [], "relations": []},
+            raw_response="",
+            model_id="qwen2.5:7b-instruct",
+        )
+        client = MagicMock()
+        client.extract = AsyncMock(return_value=out)
+
+        heartbeats = 0
+
+        def _beat() -> None:
+            nonlocal heartbeats
+            heartbeats += 1
+
+        await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client,
+            model_id="qwen2.5:7b-instruct",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+            on_window_done=_beat,
+        )
+
+        # One heartbeat per window actually run == number of extract() calls.
+        assert heartbeats >= 2
+        assert heartbeats == client.extract.await_count
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_fires_even_when_window_times_out(self) -> None:
+        """A timed-out window still refreshes the heartbeat via the ``finally``
+        branch — a doc that is timing out but still cycling windows is
+        progressing, not hung, and must stay alive."""
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-not-found]
+        from ml_clients.errors import RetryableError  # type: ignore[import-not-found]
+
+        doc_id = uuid.uuid4()
+        chunk = self._long_multi_window_chunk(doc_id)
+        good = ExtractionOutput(
+            result={"events": [], "claims": [], "relations": []},
+            raw_response="",
+            model_id="qwen2.5:7b-instruct",
+        )
+        client = MagicMock()
+        # window 1 ok, window 2 times out, window 3 ok → 3 heartbeats.
+        client.extract = AsyncMock(side_effect=[good, RetryableError("timeout"), good])
+
+        heartbeats = 0
+
+        def _beat() -> None:
+            nonlocal heartbeats
+            heartbeats += 1
+
+        await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client,
+            model_id="qwen2.5:7b-instruct",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+            on_window_done=_beat,
+        )
+
+        assert heartbeats == client.extract.await_count
+
+    @pytest.mark.asyncio
+    async def test_hung_window_does_not_beat_while_in_flight(self) -> None:
+        """A genuinely HUNG window (still in flight, not yet resolved) must NOT
+        beat — the heartbeat only fires AFTER a window resolves. While the call
+        is blocked, ``_record_progress`` is never called, so the base consumer's
+        progress gauge goes stale and the liveness probe correctly trips on a
+        real hang (the exact signal that must survive this fix)."""
+        import asyncio
+
+        doc_id = uuid.uuid4()
+        chunk = self._long_multi_window_chunk(doc_id)
+
+        release = asyncio.Event()
+
+        async def _hang(*_args: object, **_kwargs: object) -> object:
+            await release.wait()  # blocks until the test lets it resolve
+            raise AssertionError("unreachable in this test")
+
+        client = MagicMock()
+        client.extract = AsyncMock(side_effect=_hang)
+
+        heartbeats = 0
+
+        def _beat() -> None:
+            nonlocal heartbeats
+            heartbeats += 1
+
+        task = asyncio.ensure_future(
+            run_deep_extraction_block(
+                doc_id=doc_id,
+                chunks=[chunk],
+                mentions=[],
+                processing_path=ProcessingPath.FULL_PIPELINE,
+                extraction_client=client,
+                model_id="qwen2.5:7b-instruct",
+                published_at=None,
+                extracted_at=datetime.now(tz=UTC),
+                outbox_topic_signal="nlp.signal.detected.v1",
+                on_window_done=_beat,
+            ),
+        )
+        # Let the event loop run; the first window is now blocked in-flight.
+        await asyncio.sleep(0.05)
+
+        # The window has NOT completed → no heartbeat → probe would go stale.
+        assert heartbeats == 0
+        assert not task.done()
+
+        # Cleanup: cancel the hung task.
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    @pytest.mark.asyncio
+    async def test_window_budget_caps_and_marks_degraded(self) -> None:
+        """``max_windows`` bounds a pathological article: only the first N windows
+        run, the rest are skipped, and the result is flagged degraded with
+        ``skipped_windows`` so nothing is silently dropped."""
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-not-found]
+
+        doc_id = uuid.uuid4()
+        chunk = self._long_multi_window_chunk(doc_id)  # builds >=2 windows
+        out = ExtractionOutput(
+            result={"events": [], "claims": [], "relations": []},
+            raw_response="",
+            model_id="qwen2.5:7b-instruct",
+        )
+        client = MagicMock()
+        client.extract = AsyncMock(return_value=out)
+
+        result, _signals = await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client,
+            model_id="qwen2.5:7b-instruct",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+            max_windows=1,
+        )
+
+        # Only the first window was extracted despite the doc having >1 window.
+        assert client.extract.await_count == 1
+        assert result["windows_capped"] is True
+        assert result["skipped_windows"] >= 1
+        assert result["degraded"] is True
+
+    @pytest.mark.asyncio
+    async def test_window_budget_zero_is_no_cap(self) -> None:
+        """``max_windows=0`` (default) processes every window — the pre-fix
+        behaviour is unchanged for normal-sized articles."""
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-not-found]
+
+        doc_id = uuid.uuid4()
+        chunk = self._long_multi_window_chunk(doc_id)
+        out = ExtractionOutput(
+            result={"events": [], "claims": [], "relations": []},
+            raw_response="",
+            model_id="qwen2.5:7b-instruct",
+        )
+        client = MagicMock()
+        client.extract = AsyncMock(return_value=out)
+
+        result, _signals = await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client,
+            model_id="qwen2.5:7b-instruct",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+            max_windows=0,
+        )
+
+        assert client.extract.await_count >= 2
+        assert result["windows_capped"] is False
+        assert result["skipped_windows"] == 0

@@ -551,6 +551,7 @@ All environment variables use the prefix `NLP_PIPELINE_`. Loaded by `pydantic-se
 | `NLP_PIPELINE_EXTRACTION_TIMEOUT_S` | `300.0` | Task #5: per-attempt wall-clock cap (was effectively 90s); 235B p95=179s |
 | `NLP_PIPELINE_EXTRACTION_MAX_ATTEMPTS` | `2` | Task #5: attempts per model (1 initial + retries); fits the 320s budget at a 300s cap |
 | `NLP_PIPELINE_EXTRACTION_TOTAL_BUDGET_S` | `320.0` | Per-model retry wall-time budget (Task #5; passed explicitly to adapter) |
+| `NLP_PIPELINE_EXTRACTION_MAX_WINDOWS_PER_DOC` | `12` | P0-A poison-pill bound: cap deep-extraction windows per article; excess windows skipped with `degraded=true`+`skipped_windows` (backfillable). 0 = no cap |
 | `NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S` | `900` | Article watchdog; fits 300s extraction cap + fallback + NER (Task #5) |
 | `NLP_PIPELINE_EXTRACTION_MODEL_ID` | `qwen2.5:7b-instruct` | Ollama fallback model |
 

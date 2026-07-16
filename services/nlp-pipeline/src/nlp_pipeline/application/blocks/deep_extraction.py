@@ -40,6 +40,8 @@ from nlp_pipeline.application.ports.metrics import NOOP_METRICS, NlpMetricsPort
 from nlp_pipeline.domain.models import SignalEvent
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ml_clients.protocols import ExtractionClient  # type: ignore[import-not-found]
     from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
 
@@ -419,6 +421,8 @@ async def run_deep_extraction_block(
     entailment_config: EntailmentCheckConfig | None = None,
     metrics: NlpMetricsPort = NOOP_METRICS,
     max_words: int = 0,
+    max_windows: int = 0,
+    on_window_done: Callable[[], None] | None = None,
 ) -> tuple[ExtractionResult, list[SignalEvent]]:
     """Run Block 10: Deep LLM extraction for MEDIUM and DEEP tiers.
 
@@ -441,6 +445,19 @@ async def run_deep_extraction_block(
         published_at: Article publication datetime (UTC or None).
         extracted_at: Extraction datetime (UTC).
         outbox_topic_signal: Topic name for nlp.signal.detected.v1.
+        max_words: BP-719 Mode B word cap on the extracted prefix (0 = no cap).
+        max_windows: P0-A per-article window budget. When >0 and the doc builds
+            more than ``max_windows`` windows, only the first ``max_windows`` are
+            extracted; the remainder are skipped, the result is flagged
+            ``degraded=true`` with ``skipped_windows`` set, and no single article
+            can monopolise a handler slot indefinitely. 0 = no cap (process all).
+        on_window_done: Optional liveness heartbeat callback invoked once after
+            EACH extraction window resolves (success, timeout, or failure). The
+            article consumer passes its ``_record_progress`` so a slow-but-
+            progressing article keeps the Kafka liveness gauge fresh while a
+            genuinely hung single call (no window completing for >stale_after_s)
+            still correctly goes stale and trips the probe. Pure ``Callable`` —
+            no infrastructure import, preserving domain/application independence.
 
     Returns:
         (extraction_result, signal_events)
@@ -471,6 +488,30 @@ async def run_deep_extraction_block(
         max_words=max_words,
     )
 
+    # ── P0-A per-article window budget (prod review 2026-07-15) ───────────────
+    # A pathological many-mention / very-long article can build dozens of windows,
+    # each a sequential 235B extraction of up to ``extraction_timeout_s``. Left
+    # unbounded, one article holds a bounded handler slot for tens of minutes and
+    # (before the per-window heartbeat) starved the liveness probe → poison-pill
+    # crashloop. Cap the windows: keep the first ``max_windows`` (the article
+    # prefix, where the lede + most salient claims live), PERSIST them, and skip
+    # the rest with ``degraded=true`` + ``skipped_windows`` so the loss is visible
+    # and the doc stays backfillable — never a silent drop. 0 disables the cap.
+    total_windows = len(windows)
+    skipped_windows = 0
+    windows_capped = False
+    if max_windows and total_windows > max_windows:
+        skipped_windows = total_windows - max_windows
+        windows_capped = True
+        windows = windows[:max_windows]
+        logger.warning(
+            "deep_extraction.windows_capped",
+            doc_id=str(doc_id),
+            total_windows=total_windows,
+            cap=max_windows,
+            skipped_windows=skipped_windows,
+        )
+
     # Run extraction per window.
     #
     # Task #22 (BP-677): we MUST distinguish a transient/timeout failure from a
@@ -491,7 +532,9 @@ async def run_deep_extraction_block(
     #   * After the loop, retry semantics are decided (see below).
     window_results: list[ExtractionResult] = []
     timed_out_windows = 0
-    total_windows = len(windows)
+    # ``total_windows`` was set above to the PRE-cap window count so timeout logs
+    # and the completion event report the true document size; the loop iterates
+    # the (possibly capped) ``windows`` list.
     for window_text in windows:
         try:
             result = await _run_extraction_window(
@@ -534,8 +577,28 @@ async def run_deep_extraction_block(
             # are not caught here.)
             logger.warning("deep_extraction.window_failed", doc_id=str(doc_id), exc_info=True)
             window_results.append({"events": [], "claims": [], "relations": []})
+        finally:
+            # ── P0-A per-window liveness heartbeat (prod review 2026-07-15) ────
+            # Refresh the consumer's liveness gauge after EVERY window resolves —
+            # success, timeout, or failure alike — so a slow-but-progressing
+            # article keeps ``/healthz`` fresh instead of the heartbeat only
+            # ticking between Kafka batches (base.py:_record_progress). A truly
+            # hung single call never reaches this ``finally`` (no window completes
+            # for >stale_after_s), so the probe STILL correctly trips on a real
+            # hang. Fail-safe: the heartbeat must never break extraction.
+            if on_window_done is not None:
+                try:
+                    on_window_done()
+                except Exception:  # heartbeat must never break extraction
+                    logger.debug(
+                        "deep_extraction.heartbeat_failed",
+                        doc_id=str(doc_id),
+                    )
 
-    degraded = timed_out_windows > 0
+    # ``degraded`` is true if any window timed out OR the per-article window
+    # budget skipped windows (P0-A) — either way the persisted result is an
+    # incomplete view of the document and must be re-queueable, not a clean zero.
+    degraded = timed_out_windows > 0 or windows_capped
 
     # Retry semantics (Task #22):
     #   * If EVERY window timed out (no successful window produced a result), there
@@ -633,6 +696,11 @@ async def run_deep_extraction_block(
     # which only ever look up events/claims/relations.
     merged["degraded"] = degraded
     merged["timed_out_windows"] = timed_out_windows
+    # P0-A: surface the window-budget outcome so the persistence path / DLQ logic
+    # and any operator can see that content was intentionally bounded (not lost to
+    # a bug). windows_capped=False, skipped_windows=0 on the uncapped happy path.
+    merged["windows_capped"] = windows_capped
+    merged["skipped_windows"] = skipped_windows
 
     # Build entity_id lookup from resolved mentions
     entity_id_by_ref: dict[str, UUID] = {}
@@ -691,6 +759,11 @@ async def run_deep_extraction_block(
         # logs degraded=false, timed_out_windows=0 (unchanged from before).
         degraded=degraded,
         timed_out_windows=timed_out_windows,
+        # P0-A: windows_capped=true + skipped_windows>0 means the per-article
+        # budget bounded this doc; the persisted result covers the first
+        # ``max_windows`` windows and the rest are backfillable.
+        windows_capped=windows_capped,
+        skipped_windows=skipped_windows,
     )
 
     return merged, signal_events
