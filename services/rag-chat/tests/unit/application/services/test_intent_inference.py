@@ -98,6 +98,23 @@ class TestInferIntent:
     def test_unknown_tool_defaults_to_GENERAL(self) -> None:
         assert infer_intent([_call("some_brand_new_tool")]) is QueryIntent.GENERAL
 
+    def test_get_prediction_markets_implies_SIGNAL_INTEL(self) -> None:
+        """2026-07-15 prod-review: a prediction-market turn is a market signal.
+
+        Previously get_prediction_markets had no mapping, so a prediction-market
+        answer (pm_trump_2028, pm_bitcoin_150k) was labelled GENERAL and lost the
+        SIGNAL_INTEL second-turn addendum + per-intent metrics.
+        """
+        assert infer_intent([_call("get_prediction_markets", query="Trump 2028")]) is QueryIntent.SIGNAL_INTEL
+
+    def test_prediction_markets_priority_over_factual_lookup(self) -> None:
+        """A prediction turn that also tosses in search_documents is SIGNAL_INTEL."""
+        calls = [
+            _call("get_prediction_markets", query="Bitcoin 150k"),
+            _call("search_documents", query="bitcoin"),
+        ]
+        assert infer_intent(calls) is QueryIntent.SIGNAL_INTEL
+
     def test_relationship_priority_over_factual_lookup(self) -> None:
         """When the LLM mixes graph + doc tools, RELATIONSHIP wins.
 

@@ -1015,3 +1015,38 @@ class TestToolUsePromptContract:
         # Addendum-scoped: absent for an unrelated intent.
         other = get_tool_use_system_prompt(intent="MACRO", today_iso="2026-07-09")
         assert "PROJECTION / WHAT-IF SCAFFOLD" not in other
+
+
+class TestProdReview20260715Fixes:
+    """v1.25 (2026-07-15 prod-review) — prediction-market routing + year-honouring."""
+
+    def test_prediction_market_routing_entry_present(self) -> None:
+        """A prediction-market / odds question must route to get_prediction_markets.
+
+        pm_trump_2028 / pm_bitcoin_150k were misrouted to GENERAL and refused
+        generically because the TOOL ROUTING block had no prediction entry.
+        """
+        prompt = get_tool_use_system_prompt(intent="GENERAL", today_iso="2026-07-15")
+        flat = " ".join(prompt.split())
+        assert "PREDICTION MARKETS" in flat
+        assert "get_prediction_markets" in flat
+        # Reporting existing odds is DATA, not an asset-price forecast → must not refuse.
+        assert "NOT A FORECAST — PREDICTION-MARKET ODDS ARE RETRIEVED DATA" in flat
+        assert "NEVER refuse a prediction-market" in flat
+
+    def test_date_anchor_honours_stated_year(self) -> None:
+        """FINANCIAL_DATA addendum must forbid substituting today's year.
+
+        da_msft_fy2024q4 silently rewrote the user's "2024" to "2026" and
+        false-refused.
+        """
+        prompt = get_tool_use_system_prompt(intent="FINANCIAL_DATA", today_iso="2026-07-15")
+        flat = " ".join(prompt.split())
+        assert "HONOUR THE STATED YEAR" in flat
+        assert "NEVER SUBSTITUTE" in flat
+        assert "MUST be the exact year the user named" in flat
+
+    def test_version_bumped_to_1_25(self) -> None:
+        from prompts.chat.tool_use import TOOL_USE_SYSTEM_PROMPT_TEMPLATE
+
+        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version == "1.25"

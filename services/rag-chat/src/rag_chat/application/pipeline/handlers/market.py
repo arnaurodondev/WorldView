@@ -400,6 +400,41 @@ _WINDOW_MAX_PERIODS = 20
 _DAYS_PER_QUARTER = 91
 _DAYS_PER_YEAR = 365
 
+# ── FISCAL-VS-CALENDAR QUARTER-END TOLERANCE (2026-07-15 prod-review) ─────────
+# The window filter below matches a stored period-end against [from_date,
+# to_date]. But a fiscal quarter-end rarely lands on the calendar month-end the
+# user anchors to: Apple's fiscal Q4 2024 ENDED "September 28, 2024" (its 4-4-5
+# retail calendar) yet market-data stores the period as ``2024-09-30`` (the
+# calendar month-end). A user who anchors the question with the true fiscal date
+# ("quarter ending September 28, 2024") makes the LLM set ``to_date=2024-09-28``,
+# and an EXACT ``pe <= to_date`` test then EXCLUDES the stored ``2024-09-30`` row
+# → a false "not available" for data that IS in the store
+# (da_apple_revenue_fy2024q4_precision, prod review 2026-07-15).
+#
+# Fix: pad the UPPER bound only, by a few days, so a stored period-end that sits
+# just AFTER the user's anchor still matches. We do NOT pad the lower bound: a
+# backward pad on a tight single-quarter window ([Jul 1 .. Sep 28]) would risk
+# pulling the PREVIOUS quarter-end (Jun 30) into a single-quarter answer. The
+# forward pad is safe because the next quarter-end after any month-end is ~91
+# days away — far beyond this grace — so no adjacent quarter can leak in. The
+# stored period-end we want always sits at the UPPER edge of the window (the
+# from_date bounds the quarter START, comfortably below the period-end), so an
+# upper-bound-only pad covers both directions of the fiscal-vs-calendar offset.
+_WINDOW_MATCH_GRACE_DAYS = 7
+
+
+def _row_in_window(period_end: date, window_from: date, window_to: date) -> bool:
+    """Return True when ``period_end`` falls inside the anchored window.
+
+    The upper bound is padded by ``_WINDOW_MATCH_GRACE_DAYS`` so a fiscal
+    quarter-end stored a few days after the user's calendar anchor still matches
+    (Apple FY24-Q4: anchor ``2024-09-28`` vs stored ``2024-09-30``). The lower
+    bound is exact — see ``_WINDOW_MATCH_GRACE_DAYS`` for why we never pad it.
+    """
+    from datetime import timedelta as _td
+
+    return window_from <= period_end <= window_to + _td(days=_WINDOW_MATCH_GRACE_DAYS)
+
 
 def _parse_iso_date(value: object) -> date | None:
     """Parse an ISO date (or the date prefix of an ISO datetime) → ``date`` | None.
@@ -1203,7 +1238,7 @@ class MarketHandler(ToolHandler):
             in_window = []
             for row in non_phantom:
                 pe = _row_period_end(row)
-                if pe is not None and window_from <= pe <= window_to:
+                if pe is not None and _row_in_window(pe, window_from, window_to):
                     in_window.append(row)
             if not in_window:
                 log.info(
@@ -1433,7 +1468,7 @@ class MarketHandler(ToolHandler):
                     periods_data = [
                         r
                         for r in periods_data
-                        if (pe := _row_period_end(r)) is not None and window_from <= pe <= window_to
+                        if (pe := _row_period_end(r)) is not None and _row_in_window(pe, window_from, window_to)
                     ]
                     snap_dict = None
                 if not periods_data:

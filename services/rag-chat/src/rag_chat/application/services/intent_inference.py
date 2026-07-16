@@ -180,6 +180,11 @@ _TOOL_TO_INTENT: dict[str, QueryIntent] = {
     "screen_universe": QueryIntent.FINANCIAL_DATA,
     "get_economic_calendar": QueryIntent.MACRO,
     "get_temporal_events": QueryIntent.MACRO,
+    # 2026-07-15 prod-review (pm_trump_2028, pm_bitcoin_150k): a prediction-market
+    # answer was labelled GENERAL because get_prediction_markets had no mapping,
+    # so it lost the SIGNAL_INTEL second-turn addendum + per-intent metrics. Map
+    # it to SIGNAL_INTEL — Polymarket odds are a recency-weighted market signal.
+    "get_prediction_markets": QueryIntent.SIGNAL_INTEL,
     "search_documents": QueryIntent.FACTUAL_LOOKUP,
     "search_claims": QueryIntent.FACTUAL_LOOKUP,
 }
@@ -191,6 +196,10 @@ _PRIORITY_INTENTS: tuple[QueryIntent, ...] = (
     QueryIntent.RELATIONSHIP,
     QueryIntent.FINANCIAL_DATA,
     QueryIntent.MACRO,
+    # SIGNAL_INTEL sits above FACTUAL_LOOKUP so a turn that calls BOTH
+    # get_prediction_markets and a doc-search tool is labelled by the higher-
+    # signal prediction-market intent (2026-07-15 prod-review).
+    QueryIntent.SIGNAL_INTEL,
     QueryIntent.FACTUAL_LOOKUP,
 )
 

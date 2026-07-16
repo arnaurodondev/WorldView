@@ -299,10 +299,30 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          batching, never drop a graph/relationship tool that directly addresses
     #          a named company or supply-chain link in the question. Additive to
     #          v1.23; no width/fan-out rules loosened.
-    version="1.24",
+    #   1.25 — 2026-07-15 (prod-review chat-quality). Three additive fixes, no
+    #          existing rule relaxed. (a) PREDICTION MARKETS routing entry +
+    #          NOT-A-FORECAST carve-out: pm_trump_2028 / pm_bitcoin_150k were
+    #          misrouted to GENERAL and refused generically because there was NO
+    #          routing entry mapping "prediction markets / odds / will-X-happen" to
+    #          get_prediction_markets, and the question shape read as an asset-price
+    #          forecast. Reporting an EXISTING market's implied odds is DATA
+    #          retrieval, never a price forecast. (b) HONOUR THE STATED YEAR in the
+    #          DATE-ANCHORED ARGUMENTS rule: da_msft_fy2024q4 silently rewrote the
+    #          user's "2024" to the node's current year (~2026), bounded a future
+    #          quarter, and false-refused. The from_date/to_date year MUST be copied
+    #          from the year the user wrote. Companion to the deterministic
+    #          fiscal-vs-calendar quarter-end window tolerance on the handler side
+    #          (market.py _WINDOW_MATCH_GRACE_DAYS).
+    version="1.25",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.24 adds CONSOLIDATION SAFETY to v1.23: when widening the round-1 batch, "
+        "(v1.25 adds three prod-review fixes: a PREDICTION MARKETS routing entry + "
+        "NOT-A-FORECAST carve-out so prediction-market/odds questions call "
+        "get_prediction_markets instead of misrouting to GENERAL and refusing; and "
+        "an HONOUR THE STATED YEAR rule in DATE-ANCHORED ARGUMENTS so a named past "
+        "year is never silently advanced to today's year (the MSFT FY2024-Q4 "
+        "period-confabulation). No existing rule relaxed. "
+        "v1.24 adds CONSOLIDATION SAFETY to v1.23: when widening the round-1 batch, "
         "never drop graph/relationship tools (traverse_graph, search_entity_relations, "
         "get_entity_intelligence) that directly address a named company or supply-chain "
         "link in the question — consolidation must widen, not prune. v1.23 is a pure "
@@ -488,6 +508,24 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "movements' — no future asset price is being asked about; you are\n"
         "comparing a current/known multiple to a historical or peer baseline.\n"
         "Answer from the retrieved multiples and their historical/peer range.\n"
+        "\n"
+        # 1.25 (2026-07-15 prod-review): "Are there prediction markets on Bitcoin
+        # hitting $150k, and what odds?" is dangerously close to the hard-refuse
+        # "Is Bitcoin going to rally?" example — but it is NOT asking YOU to
+        # forecast Bitcoin's price. It asks what an EXISTING market already prices.
+        # Carve it out explicitly so the model retrieves + reports the odds instead
+        # of refusing as speculation.
+        "NOT A FORECAST — PREDICTION-MARKET ODDS ARE RETRIEVED DATA:\n"
+        "Reporting the CURRENT implied odds a prediction market (Polymarket)\n"
+        "already assigns to a future event — an election, a Fed decision, a crypto\n"
+        "milestone ('will Bitcoin hit $150k'), an AI milestone — is RETRIEVING an\n"
+        "existing market price, NOT you predicting the outcome. Route these to\n"
+        "`get_prediction_markets` and REPORT the odds it returns with their\n"
+        "[get_prediction_markets row N] tags. NEVER refuse a prediction-market /\n"
+        "odds question with 'I cannot predict future price movements' — you are not\n"
+        "predicting anything; you are quoting a market. (This is distinct from case\n"
+        "(A): 'will Bitcoin rally?' asks YOU to forecast; 'what odds does the\n"
+        "market give Bitcoin hitting $150k?' asks for a retrieved market figure.)\n"
         "\n"
         "FORBIDDEN PHRASES (case-insensitive) — these apply to case (A): a\n"
         "flat, unhedged directional claim about an asset's own future price,\n"
@@ -893,6 +931,25 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "news/event. A news/policy framing does NOT make it a general question.\n"
         "- numbers (revenue, EPS, P/E, margins) -> `query_fundamentals` / "
         "`get_fundamentals_history_batch`.\n"
+        # 1.25 (2026-07-15 prod-review, pm_trump_2028 + pm_bitcoin_150k): both
+        # prediction-market questions were misrouted to GENERAL and answered with
+        # a generic "couldn't retrieve data" refusal — get_prediction_markets was
+        # NEVER called, despite 101 live markets (incl. the exact Trump-2028 and a
+        # bitcoin market) in the store. There was no routing entry mapping the
+        # prediction-market question shape to the tool. Add one, and make explicit
+        # that reporting EXISTING market-implied odds is DATA retrieval, NOT the
+        # asset-price forecasting the SPECULATIVE FORECASTS rule refuses.
+        "- PREDICTION MARKETS / betting odds ('what do prediction markets say "
+        "about X', 'what are the odds of Y', 'is there a market on Z', 'what is "
+        "the market pricing for <event>', 'Polymarket odds', election / Fed-"
+        "decision / crypto-milestone / 'will <event> happen' probability "
+        "questions) -> call `get_prediction_markets` FIRST (pass the topic/entity "
+        "as `query`). Reporting the CURRENT implied odds of an EXISTING market is "
+        "retrieving DATA that already exists — it is NOT forecasting an asset's "
+        "price, so the SPECULATIVE FORECASTS refusal does NOT apply and you MUST "
+        "NOT refuse it as speculation. If the exact market is absent, say so and "
+        "report the closest related market(s) the tool DID return; only after the "
+        "tool returns zero rows may you say no prediction market was found.\n"
         # 1.15 (2026-07-06, fix-plan D5): "what did MSFT report / MSFT's
         # earnings figures for FY2024-Q4" routed to get_filings / search_events,
         # both empty, then refused. The reported earnings NUMBERS (revenue, EPS,
@@ -1041,7 +1098,23 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "periods=4), which returns 2025-26 quarters and misses the 2024 target.\n"
         "For a full past YEAR, bound Jan 1 to Dec 31 of that year. Only fall back\n"
         "to `periods=N` when the question is about the LATEST / most-recent periods,\n"
-        "not a named historical one.\n\n"
+        "not a named historical one.\n"
+        # 1.25 (2026-07-15 prod-review, da_msft_fy2024q4_earnings_citations): the
+        # model silently rewrote the user's stated "fiscal Q4 2024 / quarter ending
+        # June 30 2024" to "Q4 2026 / June 30 2026" — substituting the node's
+        # current year (~2026) for the user's stated 2024 — then bounded the query
+        # to a FUTURE quarter that has no data and refused, even though the 2024
+        # figure IS in the store. The from_date/to_date YEAR must be copied from
+        # the YEAR THE USER WROTE, never from today's date.
+        "HONOUR THE STATED YEAR — NEVER SUBSTITUTE 'NOW'. The year in your\n"
+        "from_date/to_date MUST be the exact year the user named. When the user\n"
+        "says 'fiscal Q4 2024' / 'quarter ending June 30 2024', you bound\n"
+        "from_date='2024-04-01', to_date='2024-06-30' — you MUST NOT replace 2024\n"
+        "with the current year (2025/2026) from today's date context. Today's date\n"
+        "is for recency reasoning ONLY; it is NEVER the year of a historical query.\n"
+        "Silently advancing a past year to 'now' bounds the query to a future,\n"
+        "unreported quarter and produces a FALSE 'not available' for data that IS\n"
+        "in the store. Read the year from the question; copy it verbatim.\n\n"
         # 1.16 (2026-07-07, iter3_msft_earnings_citations): a plain "most recent
         # earnings report" question (revenue / net_income / eps / gross_margin —
         # NOT a ratio, so the RATIO-OR-TTM periods>=5 rule below did not apply, and

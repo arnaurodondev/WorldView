@@ -88,6 +88,56 @@ def test_output_news_citation_carries_url_source_published(processor: OutputProc
 
 
 @pytest.mark.unit
+def test_grounded_prediction_and_news_answer_carries_clickable_urls(processor: OutputProcessor) -> None:
+    """2026-07-15 prod-review (empty source-links): a grounded news + prediction-
+    market answer must ship citations that carry real, clickable source URLs.
+
+    Fundamentals legitimately have no url, but news (article link), SEC filings
+    (EDGAR link), and prediction markets (Polymarket event link) DO. This guards
+    the end-to-end path: when the handler set a url on the item, it must survive
+    into the Citation both tools' answers cite.
+    """
+    prediction_item = RetrievedItem.create(
+        item_id="tool:prediction_market:trump-2028",
+        item_type=ItemType.financial,
+        text="Will Donald Trump win the 2028 US Presidential Election? — 28%",
+        score=0.8,
+        trust_weight=0.85,
+        citation_meta=CitationMeta(
+            title="Will Donald Trump win the 2028 US Presidential Election?",
+            url="https://polymarket.com/event/trump-2028-president",
+            source_name="Polymarket",
+            published_at=datetime(2026, 7, 14, tzinfo=UTC),
+            entity_name="Donald Trump",
+        ),
+    )
+    news_item = RetrievedItem.create(
+        item_id="tool:entity_news:abc",
+        item_type=ItemType.chunk,
+        text="Apple unveils new chip",
+        score=0.7,
+        trust_weight=0.85,
+        citation_meta=CitationMeta(
+            title="Apple unveils new chip",
+            url="https://news.example.com/apple-chip",
+            source_name="eodhd_news",
+            published_at=datetime(2026, 7, 10, tzinfo=UTC),
+            entity_name="AAPL",
+        ),
+    )
+
+    raw = "Markets give Trump 28% [1]. Separately, Apple unveiled a new chip [2]."
+    _, citations = processor.process(raw, [prediction_item, news_item])
+
+    assert len(citations) == 2
+    by_ref = {c.ref: c for c in citations}
+    assert by_ref[1].url == "https://polymarket.com/event/trump-2028-president"
+    assert by_ref[2].url == "https://news.example.com/apple-chip"
+    # Every grounded citation is clickable — no null urls on a linkable source.
+    assert all(c.url for c in citations)
+
+
+@pytest.mark.unit
 def test_output_empty_string_url_source_normalised_to_none(processor: OutputProcessor) -> None:
     """Empty-string url/source_name/title from upstream collapse to None.
 

@@ -149,6 +149,87 @@ async def test_window_with_no_matching_rows_returns_coverage_gap_sentinel() -> N
 
 
 @pytest.mark.asyncio
+async def test_fiscal_quarter_end_just_after_anchor_still_matches() -> None:
+    """2026-07-15 prod-review (da_apple_revenue_fy2024q4_precision).
+
+    Apple's fiscal Q4 2024 ENDED "September 28, 2024" (its 4-4-5 retail calendar)
+    but is STORED as the calendar month-end ``2024-09-30``. When the user anchors
+    with the true fiscal date the LLM sets ``to_date=2024-09-28`` — an EXACT
+    ``pe <= to_date`` test excluded the stored ``2024-09-30`` row and produced a
+    FALSE "not available" for the $94.930B revenue that IS in the store. The
+    upper-bound grace makes the stored quarter-end match the anchor.
+    """
+    s3 = AsyncMock()
+    s3.get_fundamentals_history.return_value = [
+        # Apple FY24-Q4 stored at the calendar month-end, 2 days after the anchor.
+        _row("Q4 2024", "2024-09-30", 94_930_000_000.0),
+        _row("Q3 2024", "2024-06-30", 85_777_000_000.0),
+    ]
+
+    handler = _make_handler(s3)
+    result = await handler._handle_get_fundamentals_history(
+        ticker="AAPL",
+        periods=4,
+        # The user's fiscal anchor: quarter ending September 28, 2024.
+        from_date="2024-06-29",
+        to_date="2024-09-28",
+    )
+
+    assert result is not None
+    assert result.item_id != "tool:fundamentals:AAPL:not_covered"
+    assert "94.930B" in result.text  # the anchored quarter's revenue survives
+    assert "Q4 2024" in result.text
+
+
+@pytest.mark.asyncio
+async def test_grace_does_not_pull_the_next_quarter() -> None:
+    """The upper-bound grace is a few days — it can NEVER pull an adjacent quarter.
+
+    The next quarter-end after any month-end is ~91 days away, far beyond the
+    grace, so a single-quarter anchor cannot leak the following quarter in.
+    """
+    s3 = AsyncMock()
+    s3.get_fundamentals_history.return_value = [
+        _row("Q1 2025", "2024-12-31", 124_300_000_000.0),  # next quarter — must NOT match
+        _row("Q4 2024", "2024-09-30", 94_930_000_000.0),  # anchored quarter — must match
+    ]
+
+    handler = _make_handler(s3)
+    result = await handler._handle_get_fundamentals_history(
+        ticker="AAPL",
+        periods=4,
+        from_date="2024-06-29",
+        to_date="2024-09-28",
+    )
+
+    assert result is not None
+    assert "94.930B" in result.text
+    assert "124.300B" not in result.text  # December quarter did NOT leak in
+    assert "Q1 2025" not in result.text
+
+
+def test_row_in_window_upper_bound_grace_and_exact_lower_bound() -> None:
+    """Unit: the helper pads the UPPER bound only (fiscal-vs-calendar tolerance)."""
+    from datetime import date, timedelta
+
+    from rag_chat.application.pipeline.handlers.market import (
+        _WINDOW_MATCH_GRACE_DAYS,
+        _row_in_window,
+    )
+
+    wf, wt = date(2024, 7, 1), date(2024, 9, 28)
+    # Stored quarter-end 2 days after the anchor upper bound → within grace.
+    assert _row_in_window(date(2024, 9, 30), wf, wt) is True
+    # Exactly at the grace edge is inclusive.
+    assert _row_in_window(wt + timedelta(days=_WINDOW_MATCH_GRACE_DAYS), wf, wt) is True
+    # One day past the grace edge is excluded.
+    assert _row_in_window(wt + timedelta(days=_WINDOW_MATCH_GRACE_DAYS + 1), wf, wt) is False
+    # The lower bound is EXACT — a row before from_date never matches (no backward
+    # pad, so a tight single-quarter window can't pull the previous quarter-end).
+    assert _row_in_window(date(2024, 6, 30), wf, wt) is False
+
+
+@pytest.mark.asyncio
 async def test_row_with_unparseable_period_end_dropped_under_active_window() -> None:
     """Rows we cannot date-verify must NOT leak into a year-anchored answer."""
     s3 = AsyncMock()

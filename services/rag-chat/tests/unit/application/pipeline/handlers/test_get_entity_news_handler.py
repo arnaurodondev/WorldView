@@ -110,6 +110,37 @@ class TestGetEntityNewsHandler:
         assert len(items) == 2
 
     @pytest.mark.asyncio
+    async def test_article_url_read_from_alternate_keys(self) -> None:
+        """2026-07-15 prod-review (empty source-links): recover the article link
+        when the upstream keys it as ``link`` (or ``article_url`` /
+        ``canonical_url``) rather than ``url`` — a real link must not be dropped
+        just because it arrived under a different key.
+        """
+        published = (datetime.now(tz=UTC) - timedelta(days=1)).isoformat()
+        s6 = AsyncMock()
+        s6._get = AsyncMock(
+            return_value={
+                "articles": [
+                    {
+                        "article_id": "018f0000-0000-7000-8000-0000000000a1",
+                        "title": "Apple headline via link key",
+                        "url": "",  # empty primary key — must fall through
+                        "link": "https://alt.example.com/apple",
+                        "published_at": published,
+                        "source_name": "ExampleWire",
+                        "display_relevance_score": 0.6,
+                    }
+                ]
+            }
+        )
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_entity_news(entity_id=str(_AAPL_ID))
+
+        assert len(items) == 1
+        assert items[0].citation_meta.url == "https://alt.example.com/apple"
+
+    @pytest.mark.asyncio
     async def test_max_results_cap_is_honoured(self) -> None:
         """max_results=2 → only 2 items returned even if upstream gives more."""
         s6 = AsyncMock()

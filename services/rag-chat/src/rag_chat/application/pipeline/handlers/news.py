@@ -499,7 +499,15 @@ class NewsHandler(ToolHandler):
             article_id = a.get("article_id") or a.get("id") or a.get("doc_id") or ""
             title = str(a.get("title") or "(untitled)")
             source_name = a.get("source_name") or "news"
-            url = a.get("url")
+            # 2026-07-15 prod-review (empty source-links): the /briefing-articles
+            # feed carries the article link under ``url`` but coerces a missing
+            # value to "" (documented in output_processor._clean_optional_str);
+            # some upstreams also key it as ``link`` / ``article_url`` /
+            # ``canonical_url``. Read the first NON-EMPTY of those aliases so a
+            # real source link is never dropped just because it arrived under a
+            # different key (an "" here still normalises to None downstream, which
+            # is correct — we only recover a link that genuinely exists).
+            url = a.get("url") or a.get("link") or a.get("article_url") or a.get("canonical_url") or None
             display_score = float(a.get("display_relevance_score") or 0.0)
             # The briefing-articles endpoint does not return a snippet; the
             # title carries most of the recall signal for chat answers, and
