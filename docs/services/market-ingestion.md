@@ -1,7 +1,7 @@
 # Market Ingestion Service (S2)
 
 > **Owner**: Ingestion domain · **Database**: `ingestion_db` (PostgreSQL 16) · **Port**: 8002
-> **Status**: Production-ready (migrations 0001–0024 shipped)
+> **Status**: Production-ready (migrations 0001–0025 shipped)
 
 ---
 
@@ -277,7 +277,8 @@ CREATE TABLE symbol_tiers (
 | `0021` | Add a partial index on `outbox_events` for unpublished rows |
 | `0022` | Seed Tier-1-US tickerless-company polling policies (derived-bar-aware) |
 | `0023` | Poll daily (1d) OHLCV from Alpaca; disable redundant EODHD 1d polling |
-| `0024` | Slow Alpaca 1d OHLCV polling to once-daily (was 6h) — **current head** |
+| `0024` | Slow Alpaca 1d OHLCV polling to once-daily (was 6h) |
+| `0025` | Seed Alpaca 1d OHLCV policies for the full US+CC universe (86→541); disable redundant EODHD 1d for US+CC (INDX/FOREX/SHG stay on EODHD) — **current head** |
 
 ---
 
@@ -409,6 +410,7 @@ the per-policy cadence and provider mix:
 | `0020` | Weekly (1w) + monthly (1mo) OHLCV polling disabled — derived on-read in S3 |
 | `0022` | Tier-1-US tickerless-company policies seeded |
 | `0023`/`0024` | Daily (1d) OHLCV now polled from Alpaca (once-daily) instead of EODHD 6-hourly |
+| `0025` | Alpaca 1d policies expanded to the full US+CC universe (86→541); redundant EODHD 1d disabled for US+CC (INDX/FOREX/SHG stay on EODHD) |
 
 **Current steady-state per-symbol policies** (after the 0020/0023/0024 cleanup):
 
