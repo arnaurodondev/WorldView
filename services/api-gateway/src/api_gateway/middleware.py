@@ -253,9 +253,39 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in _AUTH_SKIP_PATHS:
             return cast("Response", await call_next(request))
 
+        # 1. Real user: a Zitadel ``Authorization: Bearer`` access token always
+        #    takes precedence and is validated first.
+        await self._authenticate_oidc_bearer(request, oidc_config)
+
+        # 2. Service-to-service: if NO real user was established, accept the
+        #    gateway's OWN internal JWT (``X-Internal-JWT``, RS256, verified
+        #    against the gateway's own signing key) as a trusted service
+        #    principal (S2S-AUTH, fix/gateway-s2s-auth). Backend services
+        #    (rag-chat tool calls, etc.) forward the gateway-issued internal
+        #    JWT on S9-proxied routes; without this every such call 401'd
+        #    because those routes gate on ``request.state.user``. This NEVER
+        #    overrides a real user (only runs when user is still None) and
+        #    grants no more than the identity encoded in the signed token.
+        if request.state.user is None:
+            self._authenticate_internal_service_jwt(request)
+
+        return cast("Response", await call_next(request))
+
+    async def _authenticate_oidc_bearer(
+        self,
+        request: Request,
+        oidc_config: OIDCProviderConfig,
+    ) -> None:
+        """Validate a Zitadel RS256 Bearer token and populate ``request.state.user``.
+
+        Leaves ``request.state.user`` as ``None`` on any missing/invalid token
+        (routes enforce 401 via dependencies). Extracted from ``dispatch`` so
+        the internal-JWT service-principal fallback can run afterwards without
+        the previous early-``return`` short-circuits swallowing it.
+        """
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
-            return cast("Response", await call_next(request))
+            return
 
         token = auth[7:]
         settings = request.app.state.settings
@@ -277,7 +307,10 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                     public_key = oidc_config.public_keys.get(kid) if kid else None
 
             if public_key is None:
-                return cast("Response", await call_next(request))
+                # Not a resolvable Zitadel key — this may be the gateway's own
+                # internal JWT forwarded as a Bearer (FIX-LIVE-S shim). Leave
+                # user=None; the internal-JWT fallback in dispatch handles it.
+                return
 
             payload = jwt.decode(
                 token,
@@ -340,7 +373,84 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
             logger.debug("oidc_auth_unexpected_error", exc_info=True)
             request.state.user = None
 
-        return cast("Response", await call_next(request))
+    def _authenticate_internal_service_jwt(self, request: Request) -> None:
+        """Accept the gateway's OWN internal JWT as a trusted service principal.
+
+        S2S-AUTH (fix/gateway-s2s-auth). Backend services proxy user requests
+        back through S9 (e.g. rag-chat's chat tools calling
+        ``/v1/signals/prediction-markets``, screener, top-movers, calendars,
+        S7 intelligence). They forward the gateway-issued internal JWT in the
+        ``X-Internal-JWT`` header. Those gateway routes gate on
+        ``request.state.user``; before this fix the OIDC middleware only
+        populated it from a Zitadel Bearer, so every S2S call 401'd and the
+        chat tools silently returned ``[]``.
+
+        Verification (STRICT — reuses the gateway's own signer/verifier so it
+        cannot drift from what ``jwt_utils`` mints):
+
+          * signature: RS256 against the gateway's own public key
+            (``app.state.rsa_public_key`` — the private half is the ONLY key
+            that mints internal JWTs, so a forged token cannot pass).
+          * ``iss`` == ``worldview-gateway`` (validated by ``decode_internal_jwt``).
+          * ``aud`` == ``worldview-internal`` (validated) — a token minted for a
+            different audience, or one omitting ``aud`` entirely (the known
+            DEF-002 minter gap), is REJECTED. This is deliberate: every
+            gateway-minted token carries ``aud`` (see ``jwt_utils``), so S2S
+            callers forwarding gateway tokens are unaffected, while any
+            aud-omitting minter is correctly refused rather than silently
+            trusted.
+          * ``exp`` (+ ``iat`` + ``jti``) required and validated → expired
+            tokens are rejected.
+
+        Only algorithm ``RS256`` is accepted, so ``alg=none`` / HS256-confusion
+        forgeries are rejected. On ANY failure ``request.state.user`` stays
+        ``None`` and the route returns its normal 401 — no fail-open.
+
+        No privilege escalation: the resulting principal carries exactly the
+        ``sub`` / ``tenant_id`` / ``role`` the gateway itself signed into the
+        token (a forwarded user JWT re-authenticates that same user with that
+        user's own role; a service JWT carries ``role="system"``, never
+        ``admin``). It never grants more than the signed identity.
+        """
+        token = request.headers.get("X-Internal-JWT")
+        if not token:
+            return
+        public_key = getattr(request.app.state, "rsa_public_key", None)
+        if public_key is None:
+            return
+        try:
+            from api_gateway.jwt_utils import decode_internal_jwt
+
+            payload = decode_internal_jwt(token, public_key)
+        except jwt.InvalidTokenError:
+            # Expected: forged / expired / wrong-aud / wrong-iss internal JWT.
+            # Leave user=None so the route emits its normal 401.
+            logger.debug("internal_service_jwt_rejected", exc_info=True)
+            return
+        except Exception:
+            logger.debug("internal_service_jwt_unexpected_error", exc_info=True)
+            return
+
+        sub = payload.get("sub", "")
+        # Build a service principal in the SAME shape OIDCAuthMiddleware uses so
+        # downstream (InternalJWTIssuerMiddleware / route _auth_headers) re-issues
+        # a fresh internal JWT that preserves this identity + role.
+        request.state.user = {
+            # ``oidc_sub`` links back to the originating Zitadel subject on a
+            # forwarded user JWT; falls back to ``sub`` for service tokens.
+            "sub": payload.get("oidc_sub", sub),
+            # User JWTs encode the user id in ``sub``; service JWTs have no
+            # ``user_id`` claim → fall back to ``sub`` (e.g. "service:<name>").
+            "user_id": payload.get("user_id") or sub,
+            "tenant_id": payload.get("tenant_id", ""),
+            "email": "",
+            "email_verified": False,
+            # Trust the signed role verbatim — only the gateway can mint it.
+            "role": payload.get("role", "user"),
+            # Marker so downstream code / logs can distinguish an S2S principal
+            # from a real interactive user (no behavioural effect today).
+            "service_principal": True,
+        }
 
 
 # ── Internal JWT Issuance ─────────────────────────────────

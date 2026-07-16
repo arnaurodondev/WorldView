@@ -1167,3 +1167,312 @@ async def test_rate_limit_user_non_dict_value_falls_through_to_ip() -> None:
     assert captured_keys[0].startswith(
         "rl:v1:ip:"
     ), f"Non-dict user must fall through to IP bucket, got {captured_keys[0]!r}"
+
+
+# ── S2S-AUTH: gateway accepts its OWN internal JWT as a service principal ──────
+# fix/gateway-s2s-auth. Backend services (rag-chat tool calls, etc.) proxy user
+# requests back through S9 and forward the gateway-issued internal JWT in the
+# ``X-Internal-JWT`` header. The OIDC middleware must accept that RS256 token —
+# verified against the gateway's OWN public key (iss=worldview-gateway,
+# aud=worldview-internal, exp/iat/jti required) — as a trusted principal so the
+# user-gated proxy routes stop 401'ing every service-to-service call.
+
+
+def _s2s_app_with_internal_jwt(rsa_keypair):
+    """Build a minimal gateway app on the REAL-OIDC path (oidc_config set) with
+    the gateway's RSA public key wired, capturing request.state.user."""
+    from datetime import datetime
+
+    from api_gateway.domain import OIDCProviderConfig
+    from api_gateway.middleware import OIDCAuthMiddleware
+    from api_gateway.oidc import rsa_key_id
+
+    _private_key, public_key = rsa_keypair
+    kid = rsa_key_id(public_key)
+
+    class FakeSettings:
+        oidc_audience = "client-id"
+
+    oidc_config = OIDCProviderConfig(
+        issuer="https://example.zitadel.cloud",
+        authorization_endpoint="https://example.zitadel.cloud/oauth/v2/authorize",
+        token_endpoint="https://example.zitadel.cloud/oauth/v2/token",
+        end_session_endpoint="https://example.zitadel.cloud/oidc/v1/end_session",
+        jwks_uri="https://example.zitadel.cloud/oauth/v2/keys",
+        public_keys={kid: public_key},
+        last_refreshed_at=datetime.now(tz=UTC),
+    )
+
+    captured_user: list = []
+
+    app = FastAPI()
+    app.state.settings = FakeSettings()
+    app.state.oidc_config = oidc_config
+    app.state.valkey = None
+    # The gateway's OWN internal-JWT verification key (real-OIDC path).
+    app.state.rsa_public_key = public_key
+    app.add_middleware(OIDCAuthMiddleware)
+
+    @app.get("/v1/signals/ai")
+    async def protected(request: Request):
+        captured_user.append(request.state.user)
+        return {"ok": True}
+
+    @app.get("/v1/auth/login")
+    async def public_login(request: Request):
+        captured_user.append(request.state.user)
+        return {"url": "x"}
+
+    return app, captured_user, kid
+
+
+@pytest.mark.asyncio
+async def test_s2s_valid_internal_jwt_authenticates(rsa_keypair) -> None:
+    """A valid gateway-signed internal JWT → request.state.user is populated
+    as a service principal (route no longer 401s S2S calls)."""
+    from api_gateway.jwt_utils import issue_user_jwt
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    token = issue_user_jwt(
+        user_id="user-123",
+        tenant_id="tenant-abc",
+        oidc_sub="zitadel-sub-9",
+        private_key=private_key,
+        kid=kid,
+        role="user",
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/signals/ai", headers={"X-Internal-JWT": token})
+
+    assert resp.status_code == 200
+    assert captured_user[0] is not None
+    assert captured_user[0]["user_id"] == "user-123"
+    assert captured_user[0]["tenant_id"] == "tenant-abc"
+    assert captured_user[0]["sub"] == "zitadel-sub-9"
+    assert captured_user[0]["service_principal"] is True
+
+
+@pytest.mark.asyncio
+async def test_s2s_service_jwt_role_is_not_escalated(rsa_keypair) -> None:
+    """A service-account internal JWT carries role=system — never admin."""
+    from api_gateway.jwt_utils import issue_service_jwt
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    token = issue_service_jwt("rag-chat-brief-scheduler", private_key, kid)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/signals/ai", headers={"X-Internal-JWT": token})
+
+    assert resp.status_code == 200
+    assert captured_user[0] is not None
+    assert captured_user[0]["role"] == "system"
+
+
+@pytest.mark.asyncio
+async def test_s2s_forged_internal_jwt_rejected(rsa_keypair) -> None:
+    """A token signed by a DIFFERENT (attacker) RSA key → user stays None."""
+    import jwt as pyjwt
+    from api_gateway.jwt_utils import _ISSUER
+
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    # Attacker key — not the gateway's signing key.
+    attacker_key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
+    now = int(time.time())
+    forged = pyjwt.encode(
+        {
+            "iss": _ISSUER,
+            "aud": "worldview-internal",
+            "sub": "user-evil",
+            "tenant_id": "t",
+            "oidc_sub": "x",
+            "role": "admin",
+            "jti": "00000000-0000-0000-0000-000000000000",
+            "iat": now,
+            "exp": now + 300,
+        },
+        attacker_key,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/signals/ai", headers={"X-Internal-JWT": forged})
+
+    assert resp.status_code == 200  # route itself returns 200; user must be None
+    assert captured_user[0] is None, "Forged internal JWT must NOT authenticate"
+
+
+@pytest.mark.asyncio
+async def test_s2s_expired_internal_jwt_rejected(rsa_keypair) -> None:
+    """An expired (but correctly-signed) internal JWT → user stays None."""
+    import jwt as pyjwt
+    from api_gateway.jwt_utils import _ISSUER
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    now = int(time.time())
+    expired = pyjwt.encode(
+        {
+            "iss": _ISSUER,
+            "aud": "worldview-internal",
+            "sub": "user-1",
+            "tenant_id": "t",
+            "oidc_sub": "x",
+            "role": "user",
+            "jti": "00000000-0000-0000-0000-000000000001",
+            "iat": now - 600,
+            "exp": now - 300,
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/v1/signals/ai", headers={"X-Internal-JWT": expired})
+
+    assert captured_user[0] is None, "Expired internal JWT must NOT authenticate"
+
+
+@pytest.mark.asyncio
+async def test_s2s_missing_aud_internal_jwt_rejected(rsa_keypair) -> None:
+    """The known aud-omission gap: a correctly-signed token WITHOUT ``aud`` is
+    REJECTED (decode_internal_jwt requires + validates aud)."""
+    import jwt as pyjwt
+    from api_gateway.jwt_utils import _ISSUER
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    now = int(time.time())
+    no_aud = pyjwt.encode(
+        {
+            "iss": _ISSUER,
+            # aud deliberately omitted
+            "sub": "user-1",
+            "tenant_id": "t",
+            "oidc_sub": "x",
+            "role": "user",
+            "jti": "00000000-0000-0000-0000-000000000002",
+            "iat": now,
+            "exp": now + 300,
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/v1/signals/ai", headers={"X-Internal-JWT": no_aud})
+
+    assert captured_user[0] is None, "aud-less internal JWT must NOT authenticate"
+
+
+@pytest.mark.asyncio
+async def test_s2s_wrong_aud_internal_jwt_rejected(rsa_keypair) -> None:
+    """A correctly-signed token with a DIFFERENT audience is rejected."""
+    import jwt as pyjwt
+    from api_gateway.jwt_utils import _ISSUER
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    now = int(time.time())
+    wrong_aud = pyjwt.encode(
+        {
+            "iss": _ISSUER,
+            "aud": "some-other-service",
+            "sub": "user-1",
+            "tenant_id": "t",
+            "oidc_sub": "x",
+            "role": "user",
+            "jti": "00000000-0000-0000-0000-000000000003",
+            "iat": now,
+            "exp": now + 300,
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/v1/signals/ai", headers={"X-Internal-JWT": wrong_aud})
+
+    assert captured_user[0] is None, "Wrong-aud internal JWT must NOT authenticate"
+
+
+@pytest.mark.asyncio
+async def test_s2s_real_zitadel_bearer_takes_precedence(rsa_keypair) -> None:
+    """A real Zitadel Bearer must win — the internal-JWT fallback never overrides
+    it (real-user OIDC path unchanged)."""
+    import jwt as pyjwt
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    now = int(time.time())
+    zitadel = pyjwt.encode(
+        {
+            "iss": "https://example.zitadel.cloud",
+            "sub": "zitadel-real-user",
+            "aud": "client-id",
+            "exp": now + 300,
+            "iat": now,
+            "email": "real@example.com",
+            "email_verified": True,
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+    # Also present an internal JWT — must be ignored in favour of the real user.
+    from api_gateway.jwt_utils import issue_service_jwt
+
+    svc = issue_service_jwt("rag-chat-brief-scheduler", private_key, kid)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/signals/ai",
+            headers={"Authorization": f"Bearer {zitadel}", "X-Internal-JWT": svc},
+        )
+
+    assert resp.status_code == 200
+    assert captured_user[0]["sub"] == "zitadel-real-user"
+    assert "service_principal" not in captured_user[0]
+
+
+@pytest.mark.asyncio
+async def test_s2s_public_route_stays_unauthenticated(rsa_keypair) -> None:
+    """A public (auth-skip) route stays user=None even with a valid internal JWT
+    — the S2S path never runs on skip paths."""
+    from api_gateway.jwt_utils import issue_service_jwt
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    svc = issue_service_jwt("rag-chat-brief-scheduler", private_key, kid)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/auth/login", headers={"X-Internal-JWT": svc})
+
+    assert resp.status_code == 200
+    assert captured_user[0] is None, "Public skip path must stay unauthenticated"
+
+
+@pytest.mark.asyncio
+async def test_s2s_no_internal_jwt_stays_none(rsa_keypair) -> None:
+    """No Bearer and no X-Internal-JWT → user stays None (route enforces 401)."""
+    app, captured_user, _kid = _s2s_app_with_internal_jwt(rsa_keypair)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/v1/signals/ai")
+
+    assert captured_user[0] is None

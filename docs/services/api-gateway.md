@@ -456,6 +456,54 @@ S9 signs every proxied request with an RS256 internal JWT:
 }
 ```
 
+### Service-to-Service Auth — gateway accepts its OWN internal JWT (2026-07-16, fix/gateway-s2s-auth)
+
+Backend services proxy user requests **back through S9** (e.g. rag-chat's chat
+tools calling `/v1/signals/prediction-markets`, screener, top-movers, economic/
+earnings calendars, S7 intelligence, S10). They forward the gateway-issued
+internal JWT in the `X-Internal-JWT` header. Those gateway routes gate on
+`request.state.user`, but `OIDCAuthMiddleware` historically populated it **only**
+from a real Zitadel `Authorization: Bearer` token — so every such S2S call
+returned **401** and the chat data tools silently degraded to `[]` (the
+`FIX-LIVE-S` Bearer shim was a documented prod no-op).
+
+`OIDCAuthMiddleware` now runs a **second, lower-precedence** step: if no real
+Zitadel user was established, it accepts the gateway's **own** internal JWT as a
+trusted service principal.
+
+**Verification (strict — reuses `jwt_utils.decode_internal_jwt`, the gateway's
+own signer/verifier, so it cannot drift from what S9 mints):**
+
+- **Signature**: RS256 against the gateway's own public key
+  (`app.state.rsa_public_key`). The private half is the ONLY key that mints
+  internal JWTs → a forged token cannot pass. `alg=none` / HS256-confusion are
+  rejected (algorithm list is `["RS256"]` only).
+- **`iss`** must equal `worldview-gateway`.
+- **`aud`** must equal `worldview-internal` — **required and validated**. A token
+  minted for a different audience, or one that **omits `aud` entirely** (the
+  known DEF-002 minter gap), is **rejected**. Every gateway-minted token carries
+  `aud`, so S2S callers forwarding gateway tokens are unaffected; any
+  aud-omitting minter is correctly refused rather than silently trusted.
+- **`exp`** (plus `iat` + `jti`) required and validated → expired tokens rejected.
+
+**Safety properties:**
+
+- **Precedence**: only runs when `request.state.user is None` after the Zitadel
+  path → the real-user OIDC path is unchanged.
+- **No fail-open**: on ANY verification failure `request.state.user` stays `None`
+  and the route returns its normal 401.
+- **No privilege escalation**: the principal carries exactly the `sub` /
+  `tenant_id` / `role` the gateway itself signed. A forwarded user JWT
+  re-authenticates that same user with that user's own role; a service JWT
+  carries `role="system"` (never `admin`). The resulting `request.state.user`
+  dict is flagged `service_principal: true` for observability.
+- **Public paths** (`_AUTH_SKIP_PATHS`) short-circuit before this step, so they
+  stay unauthenticated even when a valid `X-Internal-JWT` is present.
+
+Coexists with any direct backend→backend paths (e.g. rag-chat's direct
+market-data prediction call): this restores the **gateway-proxied** path
+generally for all user-gated routes.
+
 ### Legacy Header Removal (2026-04-18)
 
 The `_auth_headers()` helper in `routes/helpers.py` no longer forwards `X-Tenant-Id` or `X-User-Id` headers to downstream services. All backends now extract identity exclusively from the `X-Internal-JWT` token (verified via `InternalJWTMiddleware`). This eliminates the header-spoofing attack vector (see BP-161).
