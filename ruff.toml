@@ -41,6 +41,10 @@ unfixable = ["F841"]  # don't auto-remove unused variables
 "libs/*/src/*/settings.py" = ["S105"]
 "**/alembic/**/*.py" = ["E501", "TCH003", "S608"]
 "scripts/**/*.py" = ["T20", "N802", "N815", "N806", "B023", "SIM", "DTZ", "S603", "S607", "E501"]
+# prod-QA harness: `H`/`T`/`R`/`SVC` are deliberate module/param aliases, SQL is
+# built only from module constants (no user input), and Ctx is used at runtime in
+# signatures under `from __future__ import annotations`.
+"scripts/prod_qa/**/*.py" = ["N803", "N806", "N812", "TCH001", "UP038", "S608"]
 # FastAPI, Pydantic, and SQLAlchemy call get_type_hints() at runtime, so
 # runtime-annotated imports cannot be moved into TYPE_CHECKING blocks.
 "services/*/src/*/app.py" = ["TCH001", "TCH002", "TCH003"]
