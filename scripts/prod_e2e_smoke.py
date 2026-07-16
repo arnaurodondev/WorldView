@@ -11,12 +11,21 @@ round-trip (create → delete) used to prove the alerts write-path.
 
     LAYER 0  platform/infra   (kubectl)  pods ready, DLQs empty, kafka lag,
                                           MinIO buckets, TLS cert, backups,
-                                          entity-embedding backfill progress
+                                          entity-embedding backfill progress,
+                                          MIGRATION DRIFT (stale image / pending
+                                          migrate), DB dead-letter tables,
+                                          schema-registry FULL-compat
     LAYER 1  public edge      (curl)     80→301, HTTPS 200, unauth→401,
                                           internal routes→403, valid LE cert
     LAYER 2  data plane        (in-pod)  every backend domain returns REAL data
     LAYER 3  async processes    (mixed)  description generation, chat grounding,
                                           alert CRUD round-trip
+    LAYER 4  async workers      (mixed)  outbox drain, retry ceilings, synthetic
+                                          embed injection, pipeline freshness
+    LAYER 5  external APIs      (sql)    upstream-feed freshness as liveness proxy
+    LAYER 6  data quality       (sql)    description/embedding coverage, KG
+                                          relation density, news volume, NER
+                                          liveness — regression FLOORS
 
 WHY THE ODD AUTH PATH (layer 2/3)
 ---------------------------------
@@ -84,6 +93,83 @@ DLQ_TOPICS = [
 KAFKA_LAG_WARN = 5_000  # per-group total lag above this → WARN (backlog)
 KAFKA_LAG_FAIL = 100_000  # ...above this → FAIL (consumer wedged/dead)
 BACKUP_MAX_AGE_H = 12  # newest pg dump must be younger than this
+
+# ── Migration-drift / stale-image detection (issue classes 2 & 3) ────────────
+# Expected Alembic head per service DB == the head revision on the RELEASE ref
+# (git main). A prod DB whose alembic_version < this head means either the
+# migrate Job never re-ran (pending migration) OR the deployed image is stale
+# (predates the migration). We disambiguate by ALSO reading the head baked into
+# the running image (`alembic heads` inside the owning Deployment pod):
+#   image_head  < EXPECTED (git head)   → STALE IMAGE (pod predates the merge)
+#   db_current  < image_head            → migrate Job PENDING (DB behind image)
+#   no owner pod (Job-run migrator,     → compare db_current vs EXPECTED only
+#     e.g. intelligence-migrations)
+#
+# This single check would have caught prediction migrations 043/044 (market_data)
+# and content-ingestion 0011 sources the moment the migrate Job was skipped.
+#
+# REGENERATE on every migration merge (a CI freshness gate — see the companion
+# spec — should assert this map == `alembic heads` for each service):
+#   for s in services/*/; do
+#     echo "$(basename $s) $(cd $s 2>/dev/null && alembic heads 2>/dev/null)"; done
+EXPECTED_ALEMBIC_HEADS: dict[str, str] = {
+    "alert_db": "0011",
+    # revision ids are whatever the migration file declares as `revision=`; some
+    # services use bare numbers ("0011"), others the full slug — match EXACTLY.
+    "content_ingestion_db": "0011_seed_pm_wave2_sources",
+    "content_store_db": "0006",
+    "ingestion_db": "0024",  # market-ingestion
+    "intelligence_db": "0067",  # intelligence-migrations (Job-run, no owner pod)
+    "market_data_db": "044",
+    "nlp_db": "0024",
+    "portfolio_db": "0027",
+    "rag_db": "0010",
+}
+# DB → owning Deployment's `app.kubernetes.io/name` label, for reading the
+# image-baked alembic head. DBs whose migrator is a one-off Job (no long-running
+# pod) map to None → compared against EXPECTED only.
+DB_TO_DEPLOYMENT: dict[str, str | None] = {
+    "alert_db": "alert",
+    "content_ingestion_db": "content-ingestion",
+    "content_store_db": "content-store",
+    "ingestion_db": "market-ingestion",
+    "intelligence_db": None,  # intelligence-migrations runs as a Job
+    "market_data_db": "market-data",
+    "nlp_db": "nlp-pipeline",
+    "portfolio_db": "portfolio",
+    "rag_db": "rag-chat",
+}
+
+# ── DB-level dead-letter tables (issue classes 1 & 5) ────────────────────────
+# The Kafka DLQ-TOPIC check (DLQ_TOPICS) MISSES services that dead-letter into a
+# Postgres `dead_letter_queue` table (the libs/messaging persistent-retry path).
+# A silently-growing table here is the exact signature of the 82%-docs-dead-
+# lettered schema-skew incident — invisible to the Kafka-topic check. We alert on
+# UNRESOLVED backlog and on a fast recent arrival RATE (fills in minutes).
+DLQ_DB_TABLES = ["nlp_db", "content_store_db", "content_ingestion_db", "alert_db", "intelligence_db"]
+DLQ_DB_BACKLOG_WARN = 50  # unresolved rows → WARN
+DLQ_DB_BACKLOG_FAIL = 500  # unresolved rows → FAIL (mass dead-lettering)
+DLQ_DB_RATE_FAIL = 20  # UNRESOLVED rows that arrived in the last 1h → FAIL (skew storm)
+
+# ── Schema Registry (issue class 1 root misconfig) ───────────────────────────
+SCHEMA_REGISTRY_URL = "http://schema-registry.infra.svc:8081"
+# The registry MUST enforce FULL/FULL_TRANSITIVE so a forward-INCOMPATIBLE schema
+# (a NEW reader that cannot read OLD bytes) is REJECTED at register time. The
+# default BACKWARD level permits exactly the append-without-safe-resolution change
+# that dead-lettered prod (the .avsc doc-strings wrongly assumed additive-trailing
+# is always safe — it is NOT for a new reader on old data). Weaker than these → FAIL.
+SCHEMA_REGISTRY_SAFE_COMPAT = {"FULL", "FULL_TRANSITIVE"}
+
+# ── Data-quality thresholds (issue class 4) ──────────────────────────────────
+# Absolute floors (the harness is stateless — no historical baseline), chosen to
+# catch the KNOWN-bad regressions (undescribed entities, sparse relations, news
+# under-fetch) while tolerating a young/still-backfilling DB. Coverage floors are
+# WARN (a slow backfill should not page ops); near-zero liveness is FAIL.
+DQ_DESC_COVERAGE_WARN = 60.0  # % canonical entities carrying a description
+DQ_EMBED_COVERAGE_WARN = 50.0  # % entities embedded
+DQ_RELATIONS_FLOOR = 100  # active KG relations (below → sparse/regressed)
+DQ_NEWS_24H_WARN = 200  # docs ingested in last 24h (below → under-fetch)
+DQ_MENTIONS_24H_FAIL = 50  # entity mentions in last 24h (near-zero → NER stalled)
 
 # ── Result plumbing ──────────────────────────────────────────────────────────
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
@@ -259,6 +345,12 @@ def layer0() -> None:
         pct = round(100 * int(emb) / max(int(tot), 1), 1)
         R.add("0", "entity embedding coverage", PASS if pct >= 30 else WARN, f"{emb}/{tot} ({pct}%)")
 
+    # migration drift (stale image / pending migrate), DB-level DLQ backlog, and
+    # schema-registry compatibility level — see the module constants for rationale.
+    check_migration_drift()
+    check_db_dead_letter()
+    check_schema_registry()
+
 
 def kafka_offsets(topics: list[str]) -> dict[str, int]:
     out_map: dict[str, int] = {}
@@ -308,6 +400,123 @@ def kafka_group_health() -> tuple[int, list[str], tuple[str, int]]:
         if lag > worst[1]:
             worst = (g, lag)
     return len(names), dead, worst
+
+
+# ── LAYER 0 add-ons — migration drift, DB-DLQ tables, schema-registry compat ──
+def _deployment_pod(name: str) -> str:
+    """First Running pod for a Deployment's canonical name label ('' if none)."""
+    _, out = kubectl(f"-n {NS} get pods -l app.kubernetes.io/name={name} --no-headers")
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 3 and f[2] == "Running":
+            return f[0]
+    return ""
+
+
+def _alembic_image_head(pod: str) -> str:
+    """Read the alembic head BAKED INTO a running image (`alembic heads`).
+
+    Reflects the migration head the DEPLOYED code knows about — distinct from the
+    DB's applied head (alembic_version) and from the git-release head. Empty if
+    the pod has no alembic CLI / non-standard layout (→ best-effort skip).
+    """
+    if not pod:
+        return ""
+    _, out = kubectl(f"-n {NS} exec {pod} -- sh -c 'cd /app 2>/dev/null && alembic heads 2>/dev/null'")
+    for ln in out.splitlines():
+        tok = ln.strip().split()
+        if tok and "(head)" in ln:
+            return tok[0]
+    return ""
+
+
+def check_migration_drift() -> None:
+    """Flag prod DBs whose applied migration != the release head (issue 2 & 3)."""
+    for db, expected in sorted(EXPECTED_ALEMBIC_HEADS.items()):
+        current = _psql(db, "SELECT version_num FROM alembic_version")
+        if not current:
+            R.add("0", f"migrations {db}", WARN, "no alembic_version row (skipped)")
+            continue
+        if current == expected:
+            R.add("0", f"migrations {db}", PASS, f"@ {current} (head)")
+            continue
+        # Drift — disambiguate STALE IMAGE vs PENDING MIGRATE via the image head.
+        dep = DB_TO_DEPLOYMENT.get(db)
+        image_head = _alembic_image_head(_deployment_pod(dep)) if dep else ""
+        if image_head and image_head != expected:
+            detail = f"STALE IMAGE: pod bundles {image_head}, release head {expected} (db@{current})"
+        elif image_head and current != image_head:
+            detail = f"migrate Job PENDING: db@{current} but image bundles {image_head}"
+        else:
+            detail = f"db@{current}, release head {expected} (migrate Job pending or migrator image stale)"
+        R.add("0", f"migrations {db}", FAIL, detail)
+
+
+def check_db_dead_letter() -> None:
+    """Alert on Postgres `dead_letter_queue` backlog + arrival rate (issue 1 & 5).
+
+    Complements the Kafka DLQ-TOPIC check: services on the persistent-retry path
+    dead-letter into a DB table the topic check never sees.
+    """
+    total_unresolved, total_recent, worst = 0, 0, ""
+    for db in DLQ_DB_TABLES:
+        n = _psql(db, "SELECT count(*) FROM dead_letter_queue WHERE resolved_at IS NULL")
+        if not n.isdigit():
+            continue  # table absent for this DB → skip
+        un = int(n)
+        # RATE = rows that arrived in the last hour AND are STILL unresolved. Gross
+        # arrivals include transient errors the retry loop recovers (healthy churn);
+        # only unresolved-and-recent signals an ACTIVE, non-recovering skew storm.
+        recent = _psql(
+            db,
+            "SELECT count(*) FROM dead_letter_queue WHERE resolved_at IS NULL AND created_at > now() - interval '1 hour'",
+        )
+        rn = int(recent) if recent.isdigit() else 0
+        total_unresolved += un
+        total_recent += rn
+        if un and un > (int(worst.split("=")[1].split()[0]) if worst else 0):
+            worst = f"{db}={un} unresolved (+{rn}/h)"
+    status = (
+        FAIL
+        if (total_unresolved >= DLQ_DB_BACKLOG_FAIL or total_recent >= DLQ_DB_RATE_FAIL)
+        else WARN
+        if total_unresolved >= DLQ_DB_BACKLOG_WARN
+        else PASS
+    )
+    R.add(
+        "0",
+        "DB dead-letter tables",
+        status,
+        f"{total_unresolved} unresolved (+{total_recent}/h); worst {worst}"
+        if total_unresolved
+        else "all DB DLQ tables drained",
+    )
+
+
+def check_schema_registry() -> None:
+    """Assert the registry enforces FULL compat so forward-skew is rejected (issue 1)."""
+    code, out = sh(f"curl -s --max-time 10 {SCHEMA_REGISTRY_URL}/config")
+    if code != 0 or not out or "compatibilityLevel" not in out:
+        # Unreachable from the harness pod (or curl absent locally) — non-fatal.
+        R.add("0", "schema-registry compat", WARN, f"could not read /config ({out[:60]})")
+        return
+    try:
+        level = json.loads(out).get("compatibilityLevel", "?")
+    except json.JSONDecodeError:
+        level = "?"
+    safe = level in SCHEMA_REGISTRY_SAFE_COMPAT
+    R.add(
+        "0",
+        "schema-registry compat FULL",
+        PASS if safe else FAIL,
+        f"global={level}" + ("" if safe else " — forward-INCOMPAT schemas can register → dead-letter risk"),
+    )
+    _, subs = sh(f"curl -s --max-time 10 {SCHEMA_REGISTRY_URL}/subjects")
+    try:
+        n_subjects = len(json.loads(subs))
+        R.add("0", "schema-registry subjects", PASS if n_subjects else WARN, f"{n_subjects} registered")
+    except (json.JSONDecodeError, TypeError):
+        pass
 
 
 # ── LAYER 1 — public edge (no auth) ──────────────────────────────────────────
@@ -626,13 +835,86 @@ def layer5() -> None:
     )
 
 
+# ── LAYER 6 — data-quality regressions ───────────────────────────────────────
+# The failures that hit prod this week (81% entities undescribed, sparse KG
+# relations, ~14x news under-fetch) were NOT crashes — every service was "up".
+# Only absolute data-quality FLOORS catch them. These are stateless thresholds
+# (no historical baseline in the harness); see DQ_* constants for the rationale.
+def _coverage_check(name: str, row: str, warn_pct: float) -> None:
+    if "/" not in row:
+        R.add("6", name, WARN, "no data")
+        return
+    num, den = row.split("/")[:2]
+    try:
+        n, d = int(num), int(den)
+    except ValueError:
+        R.add("6", name, WARN, f"unparseable: {row}")
+        return
+    pct = round(100 * n / max(d, 1), 1)
+    R.add("6", name, PASS if pct >= warn_pct else WARN, f"{n}/{d} ({pct}%, floor {warn_pct}%)")
+
+
+def layer6() -> None:
+    print("\n=== LAYER 6 — data-quality regressions ===")
+
+    # 1. Entity description coverage (the 81%-undescribed regression).
+    _coverage_check(
+        "entity description coverage",
+        _psql(
+            "intelligence_db",
+            "SELECT count(*) FILTER (WHERE description IS NOT NULL AND length(description)>0)||'/'||count(*) FROM canonical_entities",
+        ),
+        DQ_DESC_COVERAGE_WARN,
+    )
+
+    # 2. Entity embedding coverage.
+    _coverage_check(
+        "entity embedding coverage (DQ)",
+        _psql(
+            "intelligence_db",
+            "SELECT count(*) FILTER (WHERE embedding IS NOT NULL)||'/'||count(*) FROM entity_embedding_state",
+        ),
+        DQ_EMBED_COVERAGE_WARN,
+    )
+
+    # 3. KG relation density floor (sparse-relations regression).
+    rel = _psql("intelligence_db", "SELECT count(*) FROM relations WHERE valid_to IS NULL")
+    n = int(rel) if rel.isdigit() else -1
+    R.add(
+        "6",
+        "KG active relations",
+        PASS if n >= DQ_RELATIONS_FLOOR else WARN,
+        f"{n if n >= 0 else '?'} active (floor {DQ_RELATIONS_FLOOR})",
+    )
+
+    # 4. News ingest volume over 24h (the ~14x under-fetch regression).
+    nd = _psql("content_store_db", "SELECT count(*) FROM documents WHERE ingested_at > now() - interval '24 hours'")
+    n = int(nd) if nd.isdigit() else -1
+    R.add(
+        "6",
+        "news docs / 24h",
+        PASS if n >= DQ_NEWS_24H_WARN else WARN,
+        f"{n if n >= 0 else '?'} docs/24h (floor {DQ_NEWS_24H_WARN})",
+    )
+
+    # 5. Entity-mention pipeline liveness (near-zero → NER stalled, e.g. GLiNER OOM).
+    em = _psql("nlp_db", "SELECT count(*) FROM entity_mentions WHERE created_at > now() - interval '24 hours'")
+    n = int(em) if em.isdigit() else -1
+    R.add(
+        "6",
+        "entity mentions / 24h",
+        PASS if n >= DQ_MENTIONS_24H_FAIL else FAIL,
+        f"{n if n >= 0 else '?'} mentions/24h (floor {DQ_MENTIONS_24H_FAIL})",
+    )
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser(description="worldview prod e2e smoke harness")
     ap.add_argument(
         "--layer",
-        default="0,1,2,3,4,5",
-        help="comma list of layers (0 infra,1 edge,2 data,3 async,4 workers,5 external-apis)",
+        default="0,1,2,3,4,5,6",
+        help="comma list of layers (0 infra,1 edge,2 data,3 async,4 workers,5 external-apis,6 data-quality)",
     )
     ap.add_argument("--json", help="write full report JSON to this path")
     args = ap.parse_args()
@@ -654,6 +936,8 @@ def main() -> int:
             layer4(res)
     if "5" in layers:
         layer5()
+    if "6" in layers:
+        layer6()
 
     c = R.counts()
     print("\n" + "=" * 60)
