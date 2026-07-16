@@ -1,0 +1,110 @@
+# One-shot K8s Job: 2-year daily (1d) OHLCV backfill from the EODHD EOD feed.
+#
+# WHY A JOB (not `kubectl exec`): a detached exec dies when the pod rolls; a Job
+# survives pod eviction and reports completion. Run this to repair the D2/F1 prod
+# gap (only ~1 daily bar/instrument → returns/price-levels/movers/heatmap null).
+#
+# Mirrors the market-ingestion-worker Deployment (image, secret, infra endpoints)
+# so the backfill has the same DB / Kafka / MinIO / Valkey / EODHD wiring. The
+# script is resumable (Valkey cursor), budget-capped, idempotent, and dry-runnable.
+#
+# USAGE (operator runs; do NOT run against prod automatically):
+#   # 1. Dry-run first — prints the instrument plan + credit estimate, fetches nothing:
+#   #    edit args below to `--years 2 --dry-run`, then:
+#   kubectl -n worldview apply -f infra/k8s/backfill-daily-ohlcv-job.yaml
+#   kubectl -n worldview logs -f job/market-ingestion-backfill-daily-ohlcv
+#   # 2. Real run — set args to `--years 2 --resume`, bump the name suffix, re-apply.
+#   # 3. Re-run daily (or as a CronJob) with --resume to drain the whole universe.
+#
+# CREDIT COST: EOD = 1 credit/request, one request per instrument covers the full
+# range → ~1 credit/instrument → ~550 credits for ~550 instruments (2yr). The
+# per-run cap (--max-credits) and shared daily headroom (--daily-headroom) bound it.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: market-ingestion-backfill-daily-ohlcv
+  namespace: worldview
+  labels:
+    app.kubernetes.io/name: market-ingestion-backfill-daily-ohlcv
+    app.kubernetes.io/instance: market-ingestion
+    app.kubernetes.io/component: backfill
+spec:
+  # A backfill run can take a while (HTTP latency × ~550 instruments); give it room.
+  activeDeadlineSeconds: 7200
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: market-ingestion-backfill-daily-ohlcv
+        app.kubernetes.io/instance: market-ingestion
+        app.kubernetes.io/component: backfill
+    spec:
+      restartPolicy: Never
+      serviceAccountName: market-ingestion
+      imagePullSecrets:
+        - name: ghcr-credentials
+      containers:
+        - name: backfill
+          image: ghcr.io/arnaurodondev/worldview-market-ingestion:latest
+          imagePullPolicy: Always
+          command:
+            - python
+            - -m
+            - market_ingestion.scripts.backfill_daily_ohlcv
+          # ── EDIT THESE ARGS ──────────────────────────────────────────────
+          # Start with --dry-run; switch to --resume for the real run.
+          args:
+            - --years
+            - "2"
+            - --resume
+            - --max-credits
+            - "5000"
+            - --daily-headroom
+            - "5000"
+          # ── Same infra wiring as the market-ingestion-worker Deployment ──
+          env:
+            - name: APP_ENV
+              value: production
+            - name: MARKET_INGESTION_DATABASE_URL
+              value: postgresql+asyncpg://postgres:$(POSTGRES_PASSWORD)@postgres.infra.svc:5432/ingestion_db
+            - name: MARKET_INGESTION_DATABASE_URL_READ
+              value: postgresql+asyncpg://postgres:$(POSTGRES_PASSWORD)@postgres.infra.svc:5432/ingestion_db
+            - name: MARKET_INGESTION_KAFKA_BOOTSTRAP_SERVERS
+              value: kafka.infra.svc:9092
+            - name: MARKET_INGESTION_SCHEMA_REGISTRY_URL
+              value: http://schema-registry.infra.svc:8081
+            - name: MARKET_INGESTION_STORAGE_ENDPOINT
+              value: http://minio.infra.svc:9000
+            - name: MARKET_INGESTION_STORAGE_BUCKET
+              value: market-ingestion
+            - name: MARKET_INGESTION_BRONZE_BUCKET
+              value: market-bronze
+            - name: MARKET_INGESTION_CANONICAL_BUCKET
+              value: market-canonical
+            - name: MARKET_INGESTION_VALKEY_URL
+              value: redis://valkey.infra.svc:6379/0
+            - name: MARKET_INGESTION_EODHD_BASE_URL
+              value: https://eodhd.com/api
+            - name: MARKET_INGESTION_EODHD_DAILY_QUOTA
+              value: "100000"
+            - name: MARKET_INGESTION_EODHD_MONTHLY_QUOTA
+              value: "145000"
+            - name: MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS
+              value: "30.0"
+            - name: MARKET_INGESTION_LOG_LEVEL
+              value: INFO
+            - name: MARKET_INGESTION_LOG_JSON
+              value: "true"
+          # Provides POSTGRES_PASSWORD, MARKET_INGESTION_EODHD_API_KEY,
+          # MARKET_INGESTION_STORAGE_ACCESS_KEY / _SECRET_KEY, etc.
+          envFrom:
+            - secretRef:
+                name: market-ingestion-secrets
+          resources:
+            requests:
+              cpu: 200m
+              memory: 320Mi
+            limits:
+              cpu: "1000m"
+              memory: 1Gi
