@@ -137,11 +137,17 @@ class GraphPathEngine(ABC):
         max_hops: int,
         prune_membership: bool,
         limit: int,
+        min_hops: int = 2,
     ) -> list[RawPath]:
         """Return up to ``limit`` paths radiating from a single anchor.
 
         The source end is bound to ``entity_id``; the target end is left free
         (open discovery).  Membership-pruned when ``prune_membership`` is True.
+
+        ``min_hops`` (default 2) is the shortest hop length emitted; it is
+        clamped to >= 2 by implementations because PathInsight enforces
+        ``2 <= hop_count <= 5``.  Exposed for the data-coverage tuning
+        (2026-07-16) so the worker can pass ``Settings.path_min_hops``.
         """
         raise NotImplementedError
 

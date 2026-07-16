@@ -144,8 +144,39 @@ class TestPathInsightWorker:
 
         asyncio.run(worker._process_job(job))
         call = path_engine.find_paths_from_anchor.await_args
+        # Backward-compat: the ctor default keeps the historical hard-prune.
         assert call.kwargs["prune_membership"] is True
         assert call.kwargs["max_hops"] == 4
+
+    def test_worker_forwards_relaxed_membership_and_min_hops(self) -> None:
+        """Data-coverage fix 2026-07-16: the worker forwards the (relaxed)
+        ``prune_membership`` and ``path_min_hops`` it was constructed with to the
+        engine, instead of the old hard-coded ``prune_membership=True``. Prod
+        main wires these from ``Settings.path_prune_membership`` (default False)
+        so the star-graph path_insights feed stops coming back empty."""
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        job = _make_job()
+        session_factory, _session = _make_session_factory()
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=[])
+
+        worker = PathInsightWorker(
+            session_factory=session_factory,
+            path_engine=path_engine,
+            scorer=MagicMock(),
+            template_matcher=AsyncMock(),
+            instance_uuid=uuid4(),
+            path_max_hops=3,
+            prune_membership=False,
+            path_min_hops=2,
+        )
+
+        asyncio.run(worker._process_job(job))
+        call = path_engine.find_paths_from_anchor.await_args
+        assert call.kwargs["prune_membership"] is False
+        assert call.kwargs["min_hops"] == 2
+        assert call.kwargs["max_hops"] == 3
 
     def test_worker_filters_self_loops(self) -> None:
         """Paths whose endpoints are the same entity are dropped before scoring."""

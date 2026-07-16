@@ -357,6 +357,24 @@ class TestStagedProbe:
         assert len(pairwise_paths) == 1
         assert pairwise_paths[0].hop_count == 1
 
+    def test_anchor_min_hops_clamped_to_two(self) -> None:
+        """Data-coverage fix 2026-07-16: ``min_hops`` is now a parameter, but a
+        value below 2 must be clamped to 2 so anchor discovery never issues a
+        ``*1..1`` probe (PathInsight enforces hop_count >= 2)."""
+        from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine
+
+        a = str(uuid4())
+        session, _ = _make_session(rows_per_depth=[[], [], []])
+        engine = AgeGraphPathEngine(_make_factory(session))
+        asyncio.run(
+            engine.find_paths_from_anchor(
+                __import__("uuid").UUID(a), max_hops=3, prune_membership=False, limit=5, min_hops=1
+            ),
+        )
+        traversals = [s for s in session._executed_sql if "nodes_col" in s and "cypher" in s]
+        assert all("*1..1" not in s for s in traversals)
+        assert any("*2..2" in s for s in traversals)
+
     def test_path_exists_returns_first_hop(self) -> None:
         """path_exists returns the shortest hop count where a row appears."""
         from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine

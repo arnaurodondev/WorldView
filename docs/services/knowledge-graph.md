@@ -199,6 +199,21 @@ seq-scan all ~30 edge-label tables — **18.4 s for one 1-hop fetch** vs **0.24 
 > + `SET max_parallel_workers_per_gather = 0` (NOT `SET LOCAL` — that evaporated before the
 > traversal transaction, which was the original Postgres-flood bug).
 
+> **Data-coverage fix 2026-07-16 (`path_insights = 0` on the live star graph).** On the production
+> graph (~5.4k edges, ~42% membership edges, ~254 tractable hubs at degree 5–60 + ~11 mega-hubs at
+> degree >60) anchor discovery returned **zero** insights. Root cause: moderate hubs *are* seeded and
+> traversed, but almost every 2–3 hop path from a company routes through a shared category hub, so the
+> **post-hoc membership prune dropped 100%** of the `LIMIT`-N slice AGE returned; the ~11 mega-hubs
+> additionally blow the 25 s statement timeout and fail permanently (BP-690). Fix — the discovery
+> knobs are now tunable via `Settings` and relaxed by default:
+> `KNOWLEDGE_GRAPH_PATH_PRUNE_MEMBERSHIP` (default **False** — no longer hard-drop membership paths;
+> the `WeirdnessScorer` config-model surprise term down-ranks category-sharing paths instead, so the
+> top-K still favours the non-obvious links while the feed is non-empty),
+> `KNOWLEDGE_GRAPH_PATH_MIN_HOPS` (default 2, clamped ≥2 by the domain invariant), and
+> `PATH_INSIGHT_HUB_MAX_RELATIONS` (default **60**, `0`=disabled — the seeder now excludes the
+> mega-hubs that always time out so the queue is not starved). `find_paths_from_anchor` takes an
+> explicit `min_hops` (default 2) across both the AGE and relational engines.
+
 **`WeirdnessScorer`** (`application/services/weirdness_scorer.py`) — pure application service (no
 infra imports). Scores each `RawPath` independently of sibling paths (replaces the saturated,
 locally-normalised `surprise_score`, old p50 ≈ 0.95):

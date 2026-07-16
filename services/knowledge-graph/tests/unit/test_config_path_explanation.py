@@ -81,3 +81,28 @@ class TestPathExplanationEnvOverride:
     def test_concurrency_env_override_applies(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("KNOWLEDGE_GRAPH_PATH_EXPLANATION_CONCURRENCY", "10")
         assert _make_settings().path_explanation_concurrency == 10
+
+
+class TestPathDiscoveryTuning:
+    """Data-coverage fix 2026-07-16 (WARN: path_insights = 0).
+
+    Pin the relaxed anchor-discovery defaults so a silent regression back to the
+    empty-feed behaviour (hard membership prune) is caught at CI time.
+    """
+
+    def test_prune_membership_default_is_false(self) -> None:
+        # Hard post-hoc membership pruning emptied the star-graph feed; default
+        # OFF so paths surface and the WeirdnessScorer down-ranks boring ones.
+        assert _make_settings().path_prune_membership is False
+
+    def test_min_hops_default_is_two(self) -> None:
+        # PathInsight enforces 2 <= hop_count <= 5; anchor discovery starts at 2.
+        assert _make_settings().path_min_hops == 2
+
+    def test_prune_membership_env_override_applies(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("KNOWLEDGE_GRAPH_PATH_PRUNE_MEMBERSHIP", "true")
+        assert _make_settings().path_prune_membership is True
+
+    def test_min_hops_env_override_applies(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("KNOWLEDGE_GRAPH_PATH_MIN_HOPS", "3")
+        assert _make_settings().path_min_hops == 3

@@ -305,11 +305,11 @@ def _edge_is_forward(edge: dict[str, Any], node_graphids: list[str | None], idx:
         return True
     if str(start_id) == from_gid:
         return True
-    if str(end_id) == from_gid:
-        return False
-    # Neither endpoint matches the leaving node (should not happen for a valid
-    # path) — default forward to avoid spuriously inverting a hop.
-    return True
+    # An edge is REVERSE-walked iff its ``end_id`` is the node we are leaving.
+    # Otherwise (start matches, or — for a valid path — neither endpoint matches)
+    # default forward to avoid spuriously inverting a hop.  Expressed as the
+    # negated condition per ruff SIM103 (behaviour-preserving).
+    return str(end_id) != from_gid
 
 
 # ── Adapter ────────────────────────────────────────────────────────────────────
@@ -395,24 +395,32 @@ class AgeGraphPathEngine(GraphPathEngine):
         max_hops: int,
         prune_membership: bool,
         limit: int,
+        min_hops: int = 2,
     ) -> list[RawPath]:
         """Return up to ``limit`` paths radiating from a single anchor.
 
-        Anchor discovery is membership-pruned by default (FR-3): the source end
-        is bound and the target end is free.  Unlike the old PathDiscovery (which
-        ran a 2-hop AND a 3-hop query and unioned them), we probe each depth in
-        ascending order and accumulate paths until we hit ``limit`` — keeping the
-        full multi-hop neighbourhood while never enumerating an explosive
-        untyped frontier.
+        The source end is bound and the target end is free.  Unlike the old
+        PathDiscovery (which ran a 2-hop AND a 3-hop query and unioned them), we
+        probe each depth in ascending order and accumulate paths until we hit
+        ``limit`` — keeping the full multi-hop neighbourhood while never
+        enumerating an explosive untyped frontier.
+
+        ``prune_membership`` and ``min_hops`` are caller-supplied so the
+        PathInsightWorker can tune them via ``Settings`` (data-coverage fix
+        2026-07-16): hard membership pruning empties the result set on a sparse
+        star graph, so it now defaults OFF at the worker.  ``min_hops`` stays at
+        2 by default because PathInsight enforces ``hop_count >= 2`` — a 1-hop
+        result would be rejected by the domain entity.
         """
         src = _validate_uuid(entity_id)
-        # Discovery wants multi-hop INSIGHTS, never a trivial 1-hop direct edge
-        # (which is just a known relation). PathInsight enforces hop_count >= 2,
-        # so probing must start at depth 2 here.
+        # Clamp min_hops to >= 2: a 1-hop path is a trivial direct edge and is
+        # rejected by PathInsight's ``2 <= hop_count <= 5`` invariant, so we must
+        # never emit one from anchor discovery even if misconfigured.
+        effective_min_hops = max(2, min_hops)
         return await self._staged_discover(
             source_id=src,
             target_id=None,
-            min_hops=2,
+            min_hops=effective_min_hops,
             max_hops=max_hops,
             prune_membership=prune_membership,
             limit=limit,
@@ -521,6 +529,6 @@ class AgeGraphPathEngine(GraphPathEngine):
 
 
 __all__ = [
-    "AgeGraphPathEngine",
     "TRAVERSABLE_RELATIONS",
+    "AgeGraphPathEngine",
 ]

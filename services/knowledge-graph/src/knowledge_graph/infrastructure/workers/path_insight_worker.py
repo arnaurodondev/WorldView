@@ -137,9 +137,19 @@ class PathInsightWorker:
         path_max_hops: int = _DEFAULT_PATH_MAX_HOPS,
         node_degree_repo_factory: Callable[[AsyncSession], NodeDegreeRepositoryPort] | None = None,
         settings: Settings | None = None,
+        prune_membership: bool = True,
+        path_min_hops: int = 2,
     ) -> None:
         self._sf = session_factory
         self._path_engine = path_engine
+        # Data-coverage fix 2026-07-16: membership pruning + hop window are now
+        # caller-supplied (from Settings via main).  The ctor DEFAULTS preserve
+        # the historical behaviour (hard prune, min 2 hops) so existing tests and
+        # any legacy wiring are unchanged; production main passes the relaxed
+        # ``settings.path_prune_membership`` (False) so the star-graph feed is no
+        # longer emptied by the post-hoc membership drop.
+        self._prune_membership = prune_membership
+        self._path_min_hops = path_min_hops
         # PathScorer kept for back-compat (W6 removal) but no longer used for
         # scoring: PLAN-0112 W3 swaps in WeirdnessScorer (T-3-04).
         self._scorer = scorer
@@ -213,7 +223,8 @@ class PathInsightWorker:
             raw_paths = await self._path_engine.find_paths_from_anchor(
                 job.entity_id,
                 max_hops=self._path_max_hops,
-                prune_membership=True,
+                prune_membership=self._prune_membership,
+                min_hops=self._path_min_hops,
                 limit=_DISCOVERY_LIMIT,
             )
 

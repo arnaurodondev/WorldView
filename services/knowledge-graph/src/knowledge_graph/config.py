@@ -437,6 +437,29 @@ class Settings(BaseSettings):
     # Env override: KNOWLEDGE_GRAPH_PATH_MAX_HOPS.
     path_max_hops: int = 3
 
+    # ── Data-coverage fix 2026-07-16 (WARN: path_insights = 0) ────────────────
+    # On the live star-topology graph (~5.4k edges, ~42% of them membership
+    # edges: IS_IN_SECTOR / LISTED_ON / OPERATES_IN_COUNTRY / HEADQUARTERED_IN /
+    # …), anchor discovery returned ZERO path_insights.  Root cause: the moderate
+    # hubs (degree 5-60) ARE seeded and traversed, but almost every 2-3 hop path
+    # from a company routes through a shared category hub, so the POST-HOC
+    # membership prune (``_path_has_membership``) dropped 100% of the LIMIT-N
+    # slice AGE returned → ``paths_found=0``.  (The handful of mega-hubs at
+    # degree >60 additionally blow the 25 s AGE statement timeout — those are
+    # excluded by the seeder degree cap ``PATH_INSIGHT_HUB_MAX_RELATIONS``.)
+    #
+    # ``path_prune_membership`` — when False (the new default) the engine no
+    # longer HARD-DROPS membership-containing paths.  We instead let them through
+    # and rely on the downstream WeirdnessScorer (config-model surprise term) to
+    # rank category-sharing paths LOW, so the top-K still surfaces the genuinely
+    # non-obvious links while the feed is no longer empty.  Set True to restore
+    # the strict FR-3 hard prune.  Env: KNOWLEDGE_GRAPH_PATH_PRUNE_MEMBERSHIP.
+    path_prune_membership: bool = False
+    # ``path_min_hops`` — shortest hop length anchor discovery emits.  Kept at 2
+    # (PathInsight enforces ``2 <= hop_count <= 5``); exposed so the depth window
+    # is tunable without a code change.  Env: KNOWLEDGE_GRAPH_PATH_MIN_HOPS.
+    path_min_hops: int = 2
+
     # ── PLAN-0112 W3 (T-3-03) — WeirdnessScorer knobs ─────────────────────────
     # weirdness = reliability x (w_U*unexpectedness + w_S*semantic_distance + w_N*novelty)
     # Weights default to (0.45, 0.40, 0.15) per §6.5; tuned in the metric-validation

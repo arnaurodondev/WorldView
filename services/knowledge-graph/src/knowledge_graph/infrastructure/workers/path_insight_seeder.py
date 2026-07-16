@@ -56,6 +56,15 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # PLAN-0112 T-1-02 (2026-06-12): raised 2 → 5 (production value); env-overridable.
 _HUB_MIN_RELATIONS = int(os.environ.get("PATH_INSIGHT_HUB_MIN_RELATIONS", "5"))
 
+# Maximum outgoing relation count for a hub to REMAIN eligible (data-coverage
+# fix 2026-07-16).  On the live graph ~11 mega-hubs (subject-degree >60, e.g.
+# NVIDIA/Apple/Oracle) explode the untyped 2-3 hop AGE VLE past the 25 s
+# statement timeout, so their discovery jobs always fail (BP-690) and produce no
+# ``path_insights`` — while starving the queue.  Capping the upper degree keeps
+# the 254 tractable moderate hubs (degree 5-60) flowing.  ``0`` disables the cap
+# (restores the historical unbounded behaviour).  Env: PATH_INSIGHT_HUB_MAX_RELATIONS.
+_HUB_MAX_RELATIONS = int(os.environ.get("PATH_INSIGHT_HUB_MAX_RELATIONS", "60"))
+
 # Skip seeding a job if the hub already has fresh insights younger than this.
 _FRESHNESS_HOURS = 23
 
@@ -115,8 +124,9 @@ WHERE EXISTS (
 )
 GROUP BY r.subject_entity_id
 HAVING COUNT(*) > :min_relations
+   AND (:max_relations = 0 OR COUNT(*) <= :max_relations)
 """),
-                {"min_relations": _HUB_MIN_RELATIONS},
+                {"min_relations": _HUB_MIN_RELATIONS, "max_relations": _HUB_MAX_RELATIONS},
             )
             qualifying_ids = {UUID(str(row[0])) for row in qualifying_result.fetchall()}
 
@@ -136,8 +146,13 @@ AND NOT EXISTS (
 )
 GROUP BY r.subject_entity_id
 HAVING COUNT(*) > :min_relations
+   AND (:max_relations = 0 OR COUNT(*) <= :max_relations)
 """),
-                {"min_relations": _HUB_MIN_RELATIONS, "max_retries": _MAX_RETRIES},
+                {
+                    "min_relations": _HUB_MIN_RELATIONS,
+                    "max_relations": _HUB_MAX_RELATIONS,
+                    "max_retries": _MAX_RETRIES,
+                },
             )
             hub_rows = hub_result.fetchall()
 

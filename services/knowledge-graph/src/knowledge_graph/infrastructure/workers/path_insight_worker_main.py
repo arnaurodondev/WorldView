@@ -75,7 +75,7 @@ async def main() -> None:
     # Build GraphPathEngine (typed-VLE adapter, PLAN-0112 T-2-04 — replaces the
     # deprecated PathDiscovery), PathScorer, PathTemplateMatcher.
     from knowledge_graph.application.ports.graph_path_engine import (
-        GraphPathEngine,  # noqa: TCH001 — runtime annotation below
+        GraphPathEngine,  # noqa: TC001 — runtime annotation below
     )
     from knowledge_graph.application.services.path_scorer import PathScorer
     from knowledge_graph.application.services.path_template_matcher import PathTemplateMatcher
@@ -115,6 +115,11 @@ async def main() -> None:
         path_max_hops=settings.path_max_hops,
         node_degree_repo_factory=NodeDegreeRepository,
         settings=settings,
+        # Data-coverage fix 2026-07-16: relaxed membership pruning (default OFF)
+        # + tunable min-hops so the star-graph path_insights feed stops coming
+        # back empty.  Both sourced from Settings (env-overridable).
+        prune_membership=settings.path_prune_membership,
+        path_min_hops=settings.path_min_hops,
     )
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.

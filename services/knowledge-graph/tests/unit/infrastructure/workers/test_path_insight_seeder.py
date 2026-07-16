@@ -206,3 +206,12 @@ class TestPathInsightSeeder:
         from knowledge_graph.infrastructure.workers import path_insight_seeder
 
         assert path_insight_seeder._HUB_MIN_RELATIONS == 5
+
+    def test_hub_max_relations_default_is_60(self) -> None:
+        """Data-coverage fix 2026-07-16: an UPPER degree cap excludes the ~11
+        mega-hubs (subject-degree >60) whose untyped 2-3 hop AGE VLE blows the
+        25 s statement timeout — those jobs always failed and produced no
+        path_insights.  ``0`` disables the cap."""
+        from knowledge_graph.infrastructure.workers import path_insight_seeder
+
+        assert path_insight_seeder._HUB_MAX_RELATIONS == 60

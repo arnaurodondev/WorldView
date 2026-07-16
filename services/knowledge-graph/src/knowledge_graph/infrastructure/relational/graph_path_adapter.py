@@ -219,7 +219,7 @@ _RESOLVE_EDGES_SQL = text(
 
 
 class _NodeInfo:
-    __slots__ = ("name", "etype")
+    __slots__ = ("etype", "name")
 
     def __init__(self, name: str, etype: str) -> None:
         self.name = name
@@ -227,7 +227,7 @@ class _NodeInfo:
 
 
 class _EdgeInfo:
-    __slots__ = ("typ", "confidence", "subject_entity_id")
+    __slots__ = ("confidence", "subject_entity_id", "typ")
 
     def __init__(self, typ: str, confidence: float, subject_entity_id: str) -> None:
         self.typ = typ
@@ -320,13 +320,19 @@ class RelationalGraphPathAdapter(GraphPathEngine):
         max_hops: int,
         prune_membership: bool,
         limit: int,
+        min_hops: int = 2,
     ) -> list[RawPath]:
-        """Up to ``limit`` insight paths radiating from one anchor (>=2 hops)."""
+        """Up to ``limit`` insight paths radiating from one anchor (>=2 hops).
+
+        ``min_hops`` is clamped to >= 2 (PathInsight enforces hop_count >= 2);
+        exposed for the data-coverage tuning (2026-07-16) parity with the AGE
+        engine.
+        """
         src = _validate_uuid(entity_id)
         return await self._discover(
             source_id=src,
             target_id=None,
-            min_hops=2,
+            min_hops=max(2, min_hops),
             max_hops=max_hops,
             prune_membership=prune_membership,
             limit=limit,
