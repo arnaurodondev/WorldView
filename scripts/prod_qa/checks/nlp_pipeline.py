@@ -35,6 +35,7 @@ def _db(ctx: Ctx) -> None:
             "tiers": "SELECT string_agg(final_routing_tier||':'||c, ',') FROM (SELECT final_routing_tier, count(*) c FROM routing_decisions GROUP BY 1) t",
             "dsm": "SELECT count(*) FROM document_source_metadata",
             "dsm_rel": "SELECT count(*) FILTER (WHERE llm_relevance_score IS NOT NULL) FROM document_source_metadata",
+            "dsm_rel_24h": "SELECT count(*) FILTER (WHERE llm_scored_at > now() - interval '24 hours') FROM document_source_metadata",
             "src_types": "SELECT string_agg(DISTINCT source_type, ',') FROM document_source_metadata",
             "stuck_embed": "SELECT count(*) FROM embedding_pending WHERE retry_count >= 5",
         },
@@ -58,7 +59,17 @@ def _db(ctx: Ctx) -> None:
         f"tiers: {q['tiers']}",
         soft=True,
     )
+    # Coverage % is diluted by backfill/dedup docs that legitimately bypass
+    # scoring (a 195k-doc news backfill drove it to ~17%), so it is only a loose
+    # drift floor. The real signal that the LLM relevance scorer is ALIVE is a
+    # non-trivial recent scoring RATE, which is immune to backfill dilution.
     R.floor(SVC, "relevance-scoring coverage %", H.pct(q["dsm_rel"], q["dsm"]), T.NLP_RELEVANCE_COVERAGE_WARN, unit="%")
+    R.floor(
+        SVC,
+        "relevance scorer active (scored/24h)",
+        H.as_int(q["dsm_rel_24h"], 0),
+        T.NLP_RELEVANCE_SCORED_24H_FLOOR,
+    )
 
     src = set((q["src_types"] or "").split(","))
     missing = T.NLP_EXPECTED_SOURCE_TYPES - src

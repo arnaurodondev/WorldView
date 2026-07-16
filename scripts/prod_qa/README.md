@@ -5,7 +5,7 @@ platform (Hetzner single-node k3s). It extends the philosophy of the single-file
 `scripts/prod_e2e_smoke.py` with **granular, per-service functional assertions**
 so any small regression is detectable on a re-run — not just "is it up?".
 
-~151 checks across 8 layers, every one PASS / WARN / FAIL with an actionable
+~161 checks across 8 layers, every one PASS / WARN / FAIL with an actionable
 message. **Nothing writes to prod**: DB access is `SELECT`-only, the API prober
 only reads (plus one idempotent, rate-limited description-refresh trigger, and
 a read-only internal-JWT auth probe), and no cluster state is mutated.
@@ -17,6 +17,33 @@ a read-only internal-JWT auth probe), and no cluster state is mutated.
 > gliner OOM + nlp poison-pill restart storms, missing `*-secrets`, and the chat
 > false-refusal / no-citation defects — is caught on a re-run. See
 > **v2 regression checks** below for each check and the regression it guards.
+
+> **v3 (2026-07-16 edge-case hardening).** +11 checks closing gaps the byte-only /
+> presence-only guards missed, plus flakiness recalibration:
+>
+> | New check (layer) | Regression it guards |
+> |-------------------|----------------------|
+> | `inodes free {vol}` — df **-i** on each state PVC (coarse) | Inode exhaustion from the tiny-object polymarket firehose — MinIO can hit its inode cap (75% used) with bytes only 41% full, halting all writes. The byte-check saw nothing. |
+> | `MinIO lifecycle expiry on re-fetchable buckets` (coarse) | bronze/silver grow unbounded without an expiry rule → re-exhaust inodes. Catches `worldview-silver` having **no** rule (bronze got a 7-day one after the P0). |
+> | `referenced *-secrets stable across two samples` (coarse) | A helm-secrets / GC prune deleting a secret still referenced by running pods — invisible to a single presence snapshot; caught by re-sampling and diffing. |
+> | `internal-JWT signing keys non-empty (all signers)` (coarse) | The D1 empty-key 401 class generalised beyond KG→market-data: scans **every** signer pod's `*_INTERNAL_JWT_PRIVATE_KEY` for an empty/placeholder value. |
+> | `schema-registry compat FULL_TRANSITIVE` (coarse) | Now reached from **inside** the gateway pod (was an always-WARN host-side curl that never verified). Asserts global compat + subject count. |
+> | `intraday OHLCV per-timeframe fresh` (market_data) | A stalled resampler for ONE intraday timeframe — the aggregate freshness check hides it behind a fresh 1m bar. Judges the stalest intraday tf on its own clock. |
+> | `daily OHLCV bar fresh (weekend-tolerant)` (market_data) | A dead daily feed, judged on a weekend-tolerant clock (daily closes once/session). |
+> | `relevance scorer active (scored/24h)` (nlp_pipeline) | The LLM relevance scorer stalling — a backfill-dilution-proof liveness signal (recent scoring RATE) replacing the flappy coverage-% floor. |
+> | `relation_evidence DEFAULT partition bounded` (knowledge_graph) | Rows falling through every monthly range into the DEFAULT partition (retention/partition-worker failure). |
+> | `monthly-partition worker provisioned current+next month` (knowledge_graph) | The month-ahead partition worker wedging → next month's evidence lands in DEFAULT. |
+>
+> **Recalibrations (flakiness / miscalibration fixes):**
+> - `consumer lag bounded` is now **member-aware**: a group WITH live members and a
+>   large lag is a draining backfill → WARN, not FAIL (the 195k-doc news backfill
+>   drove nlp-pipeline-group to ~187k while consuming healthily). FAIL only when the
+>   worst group has **0 members** and real lag, or lag exceeds `KAFKA_LAG_FAIL_HARD`.
+> - `relevance-scoring coverage %` floor 60→10 (structurally low; backfill/dedup docs
+>   legitimately bypass scoring). The liveness signal moved to `scored/24h` above.
+> - `intraday staleness` WARN 4h→6h (clears the 4h timeframe's own bar interval so it
+>   doesn't flap at the boundary); `evidence promoter drain` floor 20→15 (its steady
+>   state is ~18%, so 20 hugged the boundary and permanently WARNed).
 
 ## Running it
 

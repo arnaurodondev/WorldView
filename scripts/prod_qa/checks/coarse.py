@@ -28,8 +28,10 @@ def run(ctx: Ctx) -> None:
     _schema_registry(R)
     _edge_and_tls(R)
     _minio(R)
+    _minio_lifecycle(R)
     _pvc_free_space(R)
     _referenced_secrets_exist(R)
+    _internal_jwt_signing_keys(R)
     _synthetic_monitor(R)
 
 
@@ -154,22 +156,34 @@ def _consumer_groups(R: H.Report) -> None:
 
     # Describe only the core expected groups present (each describe is a
     # tunnelled kubectl exec — bounding the set keeps the run tractable).
-    dead, worst = [], ("", 0)
+    dead, worst = [], ("", 0, 0)  # (group, lag, members)
     for g in [g for g in T.EXPECTED_CONSUMER_GROUPS if g in real]:
         rows, lag, members = H.kafka_group_describe(g)
         if rows > 0 and members == 0:
             dead.append(g)
         if lag > worst[1]:
-            worst = (g, lag)
+            worst = (g, lag, members)
     R.check(
         "infra",
         "consumer groups have live members",
         not dead,
         f"{len(dead)} dead (0 members): {dead[:5]}" if dead else f"all {len(real)} groups have members",
     )
-    grp, lag = worst
-    status = H.FAIL if lag > T.KAFKA_LAG_FAIL else H.WARN if lag > T.KAFKA_LAG_WARN else H.PASS
-    R.add("infra", "consumer lag bounded", status, f"max {grp}={lag}")
+    # Member-aware lag verdict: a group WITH live members and a large lag is a
+    # draining backfill (the 195k-doc news backfill drove nlp-pipeline-group to
+    # ~187k while consuming healthily) → WARN, not FAIL. FAIL only when the worst
+    # group has NO members and real lag (a stopped consumer — a true regression),
+    # or when lag is so extreme even a backfill can't explain it.
+    grp, lag, members = worst
+    if members == 0 and lag > T.KAFKA_LAG_FAIL:
+        status = H.FAIL  # wedged/stopped consumer with a real backlog
+    elif lag > T.KAFKA_LAG_FAIL_HARD:
+        status = H.FAIL  # pathological even for a backfill
+    elif lag > T.KAFKA_LAG_WARN:
+        status = H.WARN
+    else:
+        status = H.PASS
+    R.add("infra", "consumer lag bounded", status, f"max {grp}={lag} (members={members})")
 
 
 def _outbox_dispatchers(R: H.Report) -> None:
@@ -229,16 +243,37 @@ def _outbox_dispatchers(R: H.Report) -> None:
 
 
 def _schema_registry(R: H.Report) -> None:
-    code, out = H.sh("curl -s --max-time 10 http://schema-registry.infra.svc:8081/config")
-    if code != 0 or "compatibilityLevel" not in (out or ""):
-        # Not reachable from the harness host (curl runs locally) — non-fatal.
-        R.warn("infra", "schema-registry compat", f"could not read /config ({str(out)[:60]})")
+    """Global compatibility must be FULL_TRANSITIVE (forward+backward, all versions).
+
+    schema-registry has no external Ingress, so a local `curl` cannot reach it —
+    the previous host-side curl always WARNed 'unreachable' and never actually
+    verified the invariant. We reach the ClusterIP from INSIDE the gateway pod (the
+    same trust path producers use) and assert both /config and the subject count.
+    """
+    gw = H.gateway_pod()
+    if not gw:
+        R.warn("infra", "schema-registry compat FULL_TRANSITIVE", "no gateway pod to reach ClusterIP")
         return
-    try:
-        level = json.loads(out).get("compatibilityLevel", "?")
-    except ValueError:
-        level = "?"
-    R.check("infra", "schema-registry compat FULL", level in T.SCHEMA_REGISTRY_SAFE_COMPAT, f"global={level}")
+    py = (
+        "import urllib.request,json;"
+        "b='http://schema-registry.infra.svc.cluster.local:8081';"
+        "c=json.loads(urllib.request.urlopen(b+'/config',timeout=8).read());"
+        "s=json.loads(urllib.request.urlopen(b+'/subjects',timeout=8).read());"
+        "print('PQA_SR',c.get('compatibilityLevel','?'),len(s))"
+    )
+    _, out = H.kubectl(f'-n {H.NS} exec {gw} -- python3 -c "{py}"', timeout=40)
+    line = next((ln for ln in out.splitlines() if ln.startswith("PQA_SR")), "")
+    parts = line.split()
+    if len(parts) < 3:
+        R.warn("infra", "schema-registry compat FULL_TRANSITIVE", f"unreadable ({(line or out)[:60]})")
+        return
+    level, n_subjects = parts[1], H.as_int(parts[2], 0)
+    R.check(
+        "infra",
+        "schema-registry compat FULL_TRANSITIVE",
+        level in T.SCHEMA_REGISTRY_SAFE_COMPAT and n_subjects > 0,
+        f"global={level}, {n_subjects} subjects",
+    )
 
 
 def _edge_and_tls(R: H.Report) -> None:
@@ -260,14 +295,12 @@ def _edge_and_tls(R: H.Report) -> None:
     R.check("edge", "TLS cert (api-tls) issued", cert.strip() == "True", f"ready={cert.strip()}")
 
 
+def _minio_pod() -> str:
+    return H.running_pod("app=minio", H.INFRA_NS) or H.pod_by_prefix(H.INFRA_NS, "minio-")
+
+
 def _minio(R: H.Report) -> None:
-    mp = H.running_pod("app=minio", H.INFRA_NS) or ""
-    if not mp:
-        _, out = H.kubectl(f"-n {H.INFRA_NS} get pods --no-headers")
-        for ln in out.splitlines():
-            if ln.startswith("minio-") and "Running" in ln:
-                mp = ln.split()[0]
-                break
+    mp = _minio_pod()
     if not mp:
         R.warn("infra", "MinIO buckets", "minio pod not found")
         return
@@ -283,6 +316,87 @@ def _minio(R: H.Report) -> None:
         "MinIO core buckets present",
         not missing,
         f"missing: {missing}" if missing else f"{len(present)} buckets",
+    )
+
+
+def _minio_lifecycle(R: H.Report) -> None:
+    """Re-fetchable buckets MUST carry a lifecycle expiry rule (inode durability).
+
+    bronze (raw firehose) + silver (canonical bodies) are derivable; without an
+    expiry rule they grow unbounded and re-exhaust the inodes/bytes the P0 fix just
+    reclaimed. `mc ilm ls` exits non-zero / prints 'does not exist' when a bucket
+    has NO rule (silver was in exactly this state — the byte-check could never see
+    it). Missing rule → WARN (a durability gap, not an active outage).
+    """
+    mp = _minio_pod()
+    if not mp:
+        R.warn("infra", "MinIO lifecycle rules", "minio pod not found")
+        return
+    buckets = " ".join(T.MINIO_LIFECYCLE_BUCKETS)
+    _, out = H.kubectl(
+        f"-n {H.INFRA_NS} exec {mp} -- sh -c "
+        f'\'mc alias set l http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; '
+        f'for b in {buckets}; do echo "PQA_ILM $b"; mc ilm ls l/$b 2>&1; done\'',
+        timeout=40,
+    )
+    # A bucket section that shows an 'Enabled' rule row has expiry configured; one
+    # whose section is empty or errors ('does not exist') has none.
+    sections: dict[str, list[str]] = {}
+    cur = ""
+    for ln in out.splitlines():
+        if ln.startswith("PQA_ILM "):
+            cur = ln.split(None, 1)[1].strip()
+            sections[cur] = []
+        elif cur:
+            sections[cur].append(ln)
+    without = []
+    for b in T.MINIO_LIFECYCLE_BUCKETS:
+        body = "\n".join(sections.get(b, []))
+        has_rule = "Enabled" in body or "Expiration" in body
+        if not has_rule:
+            without.append(b)
+    R.check(
+        "infra",
+        "MinIO lifecycle expiry on re-fetchable buckets",
+        not without,
+        f"NO expiry rule (unbounded growth): {without}" if without else f"expiry set on {T.MINIO_LIFECYCLE_BUCKETS}",
+        soft=True,
+    )
+
+
+def _internal_jwt_signing_keys(R: H.Report) -> None:
+    """Every internal-JWT SIGNER pod must hold a non-empty signing key.
+
+    An empty `*_INTERNAL_JWT_PRIVATE_KEY` makes every downstream call 401 silently
+    (the D1 class). The KG→market-data mint probe proves ONE pair end-to-end; this
+    generalises across ALL signers: scan each worldview pod's env for a
+    `*_INTERNAL_JWT_PRIVATE_KEY` var and assert it is a real PEM (len ≥ floor), not
+    empty / a placeholder. Auto-covers a new signer the day it ships.
+    """
+    empty: list[str] = []
+    signers = 0
+    # One Running pod per expected workload; check its signing-key env vars.
+    for dep in T.EXPECTED_WORLDVIEW_WORKLOADS:
+        pod = H.running_pod(f"app.kubernetes.io/name={dep}")
+        if not pod:
+            continue
+        _, ev = H.kubectl(
+            f"-n {H.NS} exec {pod} -- sh -c "
+            f'\'for v in $(env | grep -oE "[A-Z_]*INTERNAL_JWT_PRIVATE_KEY" | sort -u); do '
+            f'printf "%s %s\\n" "$v" "$(printenv "$v" | wc -c)"; done\'',
+            timeout=30,
+        )
+        for row in ev.splitlines():
+            f = row.split()
+            if len(f) == 2 and f[0].endswith("INTERNAL_JWT_PRIVATE_KEY"):
+                signers += 1
+                if H.as_int(f[1], 0) < T.JWT_SIGNING_KEY_MIN_LEN:
+                    empty.append(f"{dep}:{f[0]}={f[1]}B")
+    R.check(
+        "infra",
+        "internal-JWT signing keys non-empty (all signers)",
+        not empty and signers > 0,
+        f"EMPTY/placeholder signing key(s): {empty}" if empty else f"{signers} signer key(s) present + non-empty",
     )
 
 
@@ -312,6 +426,29 @@ def _pvc_free_space(R: H.Report) -> None:
             else H.PASS
         )
         R.add("infra", f"disk free {prefix.rstrip('-')} ({mount})", st, f"{avail_gib} GiB free = {free_pct}%")
+
+        # INODE headroom on the same volume — the P0 the byte-check missed. A tiny-
+        # object firehose exhausts inodes long before bytes (bronze: 41% bytes but
+        # 75% inodes used), and inode exhaustion halts writes exactly like a full
+        # disk. df -i on the identical mount.
+        i_total, i_used, i_free = H.df_inodes(ns, pod, container, mount)
+        if i_total <= 0 or i_free < 0:
+            R.warn("infra", f"inodes free {prefix.rstrip('-')}", f"df -i unreadable on {mount}")
+            continue
+        ifree_pct = round(100 * i_free / i_total, 1)
+        ist = (
+            H.FAIL
+            if ifree_pct < T.PVC_FREE_INODE_PCT_FAIL
+            else H.WARN
+            if ifree_pct < T.PVC_FREE_INODE_PCT_WARN
+            else H.PASS
+        )
+        R.add(
+            "infra",
+            f"inodes free {prefix.rstrip('-')} ({mount})",
+            ist,
+            f"{i_free:,} inodes free = {ifree_pct}% ({i_used:,}/{i_total:,} used)",
+        )
 
 
 def _referenced_secrets_exist(R: H.Report) -> None:
@@ -346,8 +483,12 @@ def _referenced_secrets_exist(R: H.Report) -> None:
             sec = v.get("secret")
             if sec and not sec.get("optional", False):
                 required.setdefault(sec["secretName"], set()).add(wl)
-    _, sec_out = H.kubectl(f"-n {H.NS} get secrets --no-headers -o custom-columns=NAME:.metadata.name")
-    present = {ln.strip() for ln in sec_out.splitlines() if ln.strip()}
+
+    def _secret_names() -> set[str]:
+        _, so = H.kubectl(f"-n {H.NS} get secrets --no-headers -o custom-columns=NAME:.metadata.name")
+        return {ln.strip() for ln in so.splitlines() if ln.strip()}
+
+    present = _secret_names()
     missing = sorted(n for n in required if n not in present)
     R.check(
         "infra",
@@ -356,6 +497,22 @@ def _referenced_secrets_exist(R: H.Report) -> None:
         f"MISSING (pods run now, next roll fails): {missing}"
         if missing
         else f"all {len(required)} referenced secrets exist",
+    )
+
+    # Stability across TWO samples: an ephemeral / pruned secret (helm-secrets or a
+    # GC sweep deleting a secret still referenced by running pods) is the roll-
+    # fragility trap the single presence-snapshot above cannot see if it happens to
+    # exist at sample time. Re-list and assert no REFERENCED secret disappeared
+    # between the two reads — a vanished ref is a latent next-roll failure.
+    present2 = _secret_names()
+    vanished = sorted(n for n in required if n in present and n not in present2)
+    R.check(
+        "infra",
+        "referenced *-secrets stable across two samples",
+        not vanished,
+        f"VANISHED mid-run (prune/GC deleting live-referenced secret): {vanished}"
+        if vanished
+        else f"{len(required)} referenced secrets stable across 2 samples",
     )
 
 

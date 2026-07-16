@@ -21,6 +21,7 @@ SVC = "knowledge-graph"
 def run(ctx: Ctx) -> None:
     _db(ctx)
     _age(ctx)
+    _evidence_partitions(ctx)
     _prediction_linking(ctx)
     _internal_jwt_probe(ctx)
     _api(ctx)
@@ -179,6 +180,60 @@ def _stamped_but_empty(R: H.Report, encoded: str) -> None:
         else "all view_types write source_text where stamped"
     )
     R.add(SVC, "no stamped-but-empty embedding view (worker persists text)", st, detail)
+
+
+def _evidence_partitions(ctx: Ctx) -> None:
+    """relation_evidence monthly-partition health (retention worker liveness).
+
+    relation_evidence is RANGE-partitioned by month with a DEFAULT catch-all.
+    (1) Rows in the DEFAULT partition escaped every monthly range (NULL / out-of-
+        range evidence_date). Bounded is normal (2026-07-16: 746); a spike means
+        the monthly-partition worker stopped creating current partitions and rows
+        are falling through — bounded-count guard.
+    (2) The worker must keep provisioning ahead: a partition covering the CURRENT
+        and NEXT month must exist, else the next month's evidence lands in DEFAULT.
+    """
+    import datetime
+
+    R = ctx.report
+    q = H.psql_many(
+        "intelligence_db",
+        {
+            "default_rows": "SELECT count(*) FROM relation_evidence_default",
+            "parts": "SELECT string_agg(c.relname,',') FROM pg_inherits i "
+            "JOIN pg_class c ON c.oid=i.inhrelid JOIN pg_class p ON p.oid=i.inhparent "
+            "WHERE p.relname='relation_evidence'",
+        },
+    )
+    if q["default_rows"] == "" and not q["parts"]:
+        R.warn(SVC, "relation_evidence partitioning", "table not partitioned / not present (skipped)")
+        return
+    drows = H.as_int(q["default_rows"], -1)
+    if drows < 0:
+        R.warn(SVC, "relation_evidence DEFAULT partition bounded", "no relation_evidence_default (skipped)")
+    else:
+        st = (
+            H.FAIL
+            if drows >= T.KG_EVIDENCE_DEFAULT_PARTITION_FAIL
+            else H.WARN
+            if drows >= T.KG_EVIDENCE_DEFAULT_PARTITION_WARN
+            else H.PASS
+        )
+        R.add(SVC, "relation_evidence DEFAULT partition bounded", st, f"{drows} rows in relation_evidence_default")
+
+    parts = set((q["parts"] or "").split(","))
+    now = datetime.datetime.now(datetime.UTC)
+    nxt = (now.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
+    want = {f"relation_evidence_{now:%Y_%m}", f"relation_evidence_{nxt:%Y_%m}"}
+    missing = sorted(want - parts)
+    R.check(
+        SVC,
+        "monthly-partition worker provisioned current+next month",
+        not missing,
+        f"MISSING partitions (worker wedged → DEFAULT fall-through): {missing}"
+        if missing
+        else f"current+next month partitions exist ({sorted(want)})",
+    )
 
 
 def _prediction_linking(ctx: Ctx) -> None:

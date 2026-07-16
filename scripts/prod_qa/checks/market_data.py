@@ -34,6 +34,8 @@ def _db(ctx: Ctx) -> None:
             "bars_fresh_h": "SELECT round(extract(epoch from now()-max(bar_date))/3600,1) FROM ohlcv_bars",
             "derived": "SELECT count(*) FILTER (WHERE is_derived) FROM ohlcv_bars",
             "timeframes": "SELECT string_agg(DISTINCT timeframe,',') FROM ohlcv_bars",
+            "tf_age": "SELECT string_agg(timeframe||':'||round(extract(epoch from now()-mx)/3600,1),',') "
+            "FROM (SELECT timeframe, max(bar_date) mx FROM ohlcv_bars GROUP BY timeframe) t",
             "d1_dates": "SELECT count(DISTINCT bar_date) FROM ohlcv_bars WHERE timeframe='1d'",
             "d1_bars": "SELECT count(*) FROM ohlcv_bars WHERE timeframe='1d'",
             "d1_insts": "SELECT count(DISTINCT instrument_id) FROM ohlcv_bars WHERE timeframe='1d'",
@@ -79,6 +81,34 @@ def _db(ctx: Ctx) -> None:
         H.as_int(q["partial_invariant"], 0) == 0,
         f"{q['partial_invariant']} violating rows",
     )
+
+    # Per-timeframe staleness: the aggregate freshness check above uses the newest
+    # bar across ALL timeframes, so a fresh 1m bar hides a stalled 15m resampler or
+    # a dead daily feed. Judge the STALEST intraday timeframe and the daily
+    # timeframe on their own clocks (intraday near-live; daily weekend-tolerant).
+    ages: dict[str, float] = {}
+    for part in (q["tf_age"] or "").split(","):
+        if ":" in part:
+            tf, _, ah = part.partition(":")
+            ages[tf] = H.as_float(ah)
+    intraday = {tf: a for tf, a in ages.items() if tf in T.MD_INTRADAY_TIMEFRAMES and a == a}
+    if intraday:
+        stalest_tf = max(intraday, key=lambda k: intraday[k])
+        stalest = intraday[stalest_tf]
+        st = (
+            H.FAIL
+            if stalest > T.MD_INTRADAY_STALE_FAIL_H
+            else H.WARN
+            if stalest > T.MD_INTRADAY_STALE_WARN_H
+            else H.PASS
+        )
+        R.add(SVC, "intraday OHLCV per-timeframe fresh", st, f"stalest {stalest_tf}={stalest}h old")
+    else:
+        R.warn(SVC, "intraday OHLCV per-timeframe fresh", "no intraday timeframes present")
+    d1_age = ages.get("1d", float("nan"))
+    if d1_age == d1_age:
+        st = H.FAIL if d1_age > T.MD_DAILY_STALE_FAIL_H else H.WARN if d1_age > T.MD_DAILY_STALE_WARN_H else H.PASS
+        R.add(SVC, "daily OHLCV bar fresh (weekend-tolerant)", st, f"newest 1d bar {d1_age}h old")
 
     # Daily OHLCV history coverage (F1/D2: 1d held ~1 bar/instrument over 3 dates
     # → returns/price-levels/heatmap all null). Assert real multi-day history.
@@ -138,7 +168,7 @@ def _api(ctx: Ctx) -> None:
     ok, body = assert_api_ok(ctx, SVC, "quotes latest (AAPL)", "md_quotes")
     if ok and isinstance(body, dict):
         quotes = body.get("quotes") or {}
-        one = next(iter(quotes.values()), {}) if isinstance(quotes, dict) else {}
+        one: dict = next(iter(quotes.values()), {}) if isinstance(quotes, dict) else {}
         R.check(
             SVC,
             "quote carries last/volume",

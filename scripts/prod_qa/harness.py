@@ -145,13 +145,11 @@ def psql_many(db: str, queries: dict[str, str], timeout: int = 90) -> dict[str, 
         q = _bash_sq(sql)
         # Print KEY, sep, then the query result with newlines stripped, then a real newline.
         parts.append(
-            f"printf '%s' '{name}{sep}'; "
-            f"psql -U postgres -d {db} -tAc '{q}' 2>/dev/null | tr -d '\\n'; "
-            f"printf '\\n'"
+            f"printf '%s' '{name}{sep}'; psql -U postgres -d {db} -tAc '{q}' 2>/dev/null | tr -d '\\n'; printf '\\n'"
         )
     script = _bash_sq(" ; ".join(parts))
     _, out = kubectl(f"-n {INFRA_NS} exec {POSTGRES_POD} -c {POSTGRES_CONTAINER} -- bash -c '{script}'", timeout)
-    result: dict[str, str] = {name: "" for name in queries}
+    result: dict[str, str] = dict.fromkeys(queries, "")
     for ln in out.splitlines():
         if sep in ln:
             k, _, v = ln.partition(sep)
@@ -275,6 +273,24 @@ def df_bytes(ns: str, pod: str, container: str, mount: str) -> tuple[int, int, i
     for ln in reversed(out.splitlines()):
         f = ln.split()
         # df output: FS 1B-blocks Used Avail Use% Mounted — total/used/avail are the last-4-before-mount ints.
+        nums = [x for x in f if x.isdigit()]
+        if len(nums) >= 3:
+            return int(nums[0]), int(nums[1]), int(nums[2])
+    return -1, -1, -1
+
+
+def df_inodes(ns: str, pod: str, container: str, mount: str) -> tuple[int, int, int]:
+    """Return (inodes_total, inodes_used, inodes_free) for `mount` inside a pod.
+
+    Uses `df -i`. Inode exhaustion (millions of tiny objects) halts writes long
+    before byte-space does, so this complements df_bytes. Returns (-1,-1,-1) on any
+    failure so the caller can WARN-skip rather than crash.
+    """
+    cflag = f"-c {container} " if container else ""
+    _, out = kubectl(f"-n {ns} exec {pod} {cflag}-- df -i {mount}", timeout=30)
+    for ln in reversed(out.splitlines()):
+        f = ln.split()
+        # df -i: FS Inodes IUsed IFree IUse% Mounted — take the first 3 ints on the data line.
         nums = [x for x in f if x.isdigit()]
         if len(nums) >= 3:
             return int(nums[0]), int(nums[1]), int(nums[2])

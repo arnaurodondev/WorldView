@@ -43,7 +43,14 @@ DB_TO_DEPLOYMENT: dict[str, str | None] = {
 # ── Platform / infra (coarse) ────────────────────────────────────────────────
 POD_RESTART_WARN = 5  # restart count above this on a long-running pod → WARN (crashloop-ish)
 KAFKA_LAG_WARN = 5_000  # per-group total lag above this → WARN (backlog)
-KAFKA_LAG_FAIL = 100_000  # ...above this → FAIL (consumer wedged/dead)
+KAFKA_LAG_FAIL = 100_000  # ...above this → FAIL for a group with NO live members (wedged/dead)
+# Member-aware backstop: a group WITH live members and a large lag is a draining
+# backfill, not a wedge — the 2026-07-16 195k-doc news backfill legitimately drove
+# nlp-pipeline-group to ~187k lag while consuming healthily. Only FAIL a
+# live-member group when lag is so extreme (>this hard ceiling) that even a
+# backfill can't explain it; otherwise WARN. A 0-member group FAILs at
+# KAFKA_LAG_FAIL (a stopped consumer is a real regression regardless of size).
+KAFKA_LAG_FAIL_HARD = 1_000_000  # live-member group above this → FAIL (pathological)
 DLQ_DB_BACKLOG_WARN = 50  # unresolved dead_letter_queue rows → WARN
 DLQ_DB_BACKLOG_FAIL = 500  # ...→ FAIL (mass dead-lettering)
 DLQ_DB_RATE_FAIL = 20  # unresolved rows arrived in last 1h → FAIL (skew storm)
@@ -101,6 +108,19 @@ EXPECTED_WORLDVIEW_WORKLOADS = [
 PVC_FREE_PCT_WARN = 20.0  # data volume free % below this → WARN (fill trend)
 PVC_FREE_PCT_FAIL = 8.0  # ...→ FAIL (near MinIO min-free guard / write-halt)
 PVC_FREE_BYTES_FAIL = 1_500_000_000  # absolute 1.5 GiB floor regardless of %
+# INODE headroom (the P0 that byte-checks missed entirely): the polymarket bronze
+# firehose writes millions of tiny objects, so the MinIO PVC can exhaust INODES
+# long before bytes (2026-07-16: 41% bytes used but 75% inodes used). df -i on the
+# same data volumes. Calibrated under observed-good (25% inodes free) so a slow
+# small-object leak trips WARN with room to expand/expire before writes halt.
+PVC_FREE_INODE_PCT_WARN = 20.0  # inode-free % below this → WARN (small-object growth)
+PVC_FREE_INODE_PCT_FAIL = 8.0  # ...→ FAIL (inode exhaustion imminent → write-halt)
+# Re-fetchable object buckets that MUST carry a lifecycle expiry rule: their
+# contents are derivable (bronze = raw firehose payloads, silver = canonical
+# bodies) so without expiry they grow unbounded and exhaust inodes/bytes. bronze
+# got a 7-day expiry after the P0; silver had NONE (this guard would have caught
+# the durability gap the byte-check missed).
+MINIO_LIFECYCLE_BUCKETS = ["worldview-bronze", "worldview-silver"]
 # df targets: (namespace, pod name-prefix, container-or-'', mountpoint). Each is
 # the volume that carries irreplaceable state (article bodies, DBs, event log).
 PVC_DF_TARGETS = [
@@ -178,6 +198,21 @@ MD_INSIDER_FLOOR = 200  # insider_transactions rows
 # state so an incomplete daily backfill is flagged while it fills in.
 MD_OHLCV_1D_DATES_WARN = 30  # distinct 1d bar_dates (was 3 — no daily history)
 MD_OHLCV_1D_BARS_PER_INST_WARN = 60  # avg 1d bars/instrument (was ~2)
+# Per-timeframe staleness: the aggregate "OHLCV freshness" check uses the newest
+# bar across ALL timeframes, so a fresh 1m bar masks a stalled intraday timeframe
+# (e.g. 15m resampler wedged) or a dead daily feed. Judge the STALEST intraday
+# timeframe and the daily timeframe independently. Intraday must be near-live
+# (2026-07-16: 15m/5m/30m all <1.1h). Daily closes once/session, so up to a long
+# weekend of staleness is normal (observed 15.6h).
+MD_INTRADAY_TIMEFRAMES = {"1m", "5m", "15m", "30m", "1h", "4h"}
+# WARN ceiling must clear the LARGEST intraday interval (4h): a 4h bar is normally
+# up to one interval + resampling lag old (observed 3.9h), so a 4.0h floor would
+# flap on it. 6h stays well under a genuinely dead intraday pipeline while not
+# firing on the 4h timeframe's normal age.
+MD_INTRADAY_STALE_WARN_H = 6.0  # stalest intraday timeframe newest bar → WARN
+MD_INTRADAY_STALE_FAIL_H = 24.0  # ...→ FAIL (a resampler/feed for that tf is dead)
+MD_DAILY_STALE_WARN_H = 48.0  # newest 1d bar older than this → WARN (weekend-tolerant)
+MD_DAILY_STALE_FAIL_H = 120.0  # ...→ FAIL (daily feed dead >5 days)
 # Prediction market→event linkage (D6: every one of 101 markets had event_id
 # NULL despite a populated prediction_events table). % markets with event_id set.
 MD_PRED_EVENT_LINK_WARN = 50.0
@@ -191,7 +226,10 @@ KG_RELATIONS_FLOOR = 300  # active relations (valid_to IS NULL)
 KG_RELATION_TYPES_FLOOR = 10  # distinct canonical_type in relations
 KG_TEMPORAL_EVENTS_FLOOR = 100  # temporal_events rows
 KG_AGE_VERTEX_FLOOR = 500  # AGE worldview_graph vertices (shadow sync alive)
-KG_EVIDENCE_PROMOTED_WARN = 20.0  # % relation_evidence_raw promoted (promoter drain)
+# Promoter drain sits at a low steady state (~18%: most raw evidence is corroborating
+# duplicates that never promote), so a 20% floor flapped a permanent, boundary-hugging
+# WARN. Recalibrated just under the observed-good band so it only fires on a real drop.
+KG_EVIDENCE_PROMOTED_WARN = 15.0  # % relation_evidence_raw promoted (promoter drain)
 # Grounded-entity golden facts (deterministic — Apple is a stable megacap anchor).
 KG_GOLDEN_TICKER = "AAPL"
 KG_GOLDEN_NAME_SUBSTR = "Apple"
@@ -223,13 +261,35 @@ KG_PREDICTION_LAG_FAIL = 100_000
 # call, silently deferring all fundamentals_ohlcv embeddings. The probe mints the
 # worker's exact token and asserts a 200, not a 401.
 JWT_PROBE_DEV_SECRET = "dev-skip-verification-key-for-kg-fundamentals"  # noqa: S105 (public dev HS256 fallback, not a credential)
+# Every workload that MINTS an internal JWT carries a `*_INTERNAL_JWT_PRIVATE_KEY`
+# env var; an empty one silently 401s every downstream call (the D1 class, but for
+# ANY signer not just KG). We scan all worldview pods for such a var and assert it
+# is non-empty — generic across signers (currently api-gateway + knowledge-graph),
+# auto-covering a new signer the day it ships. A real RSA PEM is ~1.7 KB.
+JWT_SIGNING_KEY_MIN_LEN = 200  # a real PEM private key is >>200 chars; empty/placeholder is short
+# relation_evidence is RANGE-partitioned by month with a DEFAULT catch-all. Rows
+# landing in DEFAULT escaped every monthly range (NULL/out-of-range evidence_date)
+# — bounded is fine (2026-07-16: 746), a spike means the monthly-partition worker
+# stopped creating current partitions and everything falls through. The worker
+# health is also asserted directly: a partition covering the CURRENT and NEXT
+# month must exist (2026-07-16: partitions pre-created through 2026_12).
+KG_EVIDENCE_DEFAULT_PARTITION_WARN = 3_000  # rows in relation_evidence_default → WARN
+KG_EVIDENCE_DEFAULT_PARTITION_FAIL = 50_000  # ...→ FAIL (monthly worker wedged, mass fall-through)
 
 # ── NLP pipeline (S6 / nlp_db) ───────────────────────────────────────────────
 NLP_CHUNKS_FLOOR = 3_000  # chunks
 NLP_EMBED_READY_WARN = 90.0  # % chunk_embeddings embedding_status='ready'
 NLP_MENTIONS_24H_FAIL = 50  # entity_mentions in last 24h (near-zero → NER stalled)
 NLP_ROUTING_FLOOR = 300  # routing_decisions rows
-NLP_RELEVANCE_COVERAGE_WARN = 60.0  # % document_source_metadata with llm_relevance_score
+# Relevance-coverage % over ALL document_source_metadata is structurally low and
+# NOT a regression signal: most news rows are dedup/corroboration/backfill docs
+# that legitimately bypass LLM relevance scoring (a 195k-doc news backfill drove
+# coverage to ~17%). The old 60% floor flapped a permanent WARN. Recalibrated to a
+# realistic drift floor AND paired with a direct liveness signal (scored/24h) that
+# is immune to backfill dilution — the scorer being ALIVE is what we actually care
+# about (2026-07-16: 1700 scored/24h, 550/6h, coverage ~17%).
+NLP_RELEVANCE_COVERAGE_WARN = 10.0  # % dsm with a relevance score → WARN (drift floor)
+NLP_RELEVANCE_SCORED_24H_FLOOR = 200  # rows relevance-scored in last 24h → WARN if below (scorer stalled)
 NLP_STUCK_EMBED_WARN = 5  # embedding_pending rows at retry_count>=5
 NLP_EXPECTED_SOURCE_TYPES = {"eodhd", "sec_edgar", "polymarket"}
 
