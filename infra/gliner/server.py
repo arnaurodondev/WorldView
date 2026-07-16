@@ -43,11 +43,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
+import ctypes.util
 import hashlib
 import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -90,6 +93,69 @@ _MODEL_PATH = os.environ.get("GLINER_MODEL_PATH", "urchade/gliner_large-v2.1")
 #                         add for near-full batches under the ~48-concurrent load.
 GLINER_MAX_BATCH = int(os.environ.get("GLINER_MAX_BATCH", "16"))
 GLINER_BATCH_WAIT_MS = float(os.environ.get("GLINER_BATCH_WAIT_MS", "25"))
+
+# ── Bounded-memory knobs (gliner OOM fix, 2026-07-16) ──────────────────────────
+# Root cause of the recurring OOMKill (anon-rss ramps to the cap over hours even
+# with GLINER_MAX_BATCH already halved to 8) is NOT a single activation spike but
+# slow glibc-allocator RETENTION under a variable-length CPU-tensor workload:
+# every forward pass allocates transient tensors whose size depends on the padded
+# sequence length of the batch; glibc keeps freed blocks in per-arena free lists
+# and, with variable-length allocations, the RSS high-water mark ratchets upward
+# (fragmentation) and is never returned to the OS. Three complementary bounds:
+#
+#   1. GLINER_MAX_INPUT_CHARS — hard server-side cap on per-text length before
+#      inference. Defence-in-depth: bounds the PEAK padded activation regardless
+#      of what any caller sends (the news backfill floods long documents). The
+#      nlp-pipeline already truncates to ~450 *words*, but that is a loose proxy
+#      for subword tokens and is caller-side only; this enforces a firm ceiling.
+#   2. A dedicated SINGLE-thread inference executor (see _INFERENCE_EXECUTOR):
+#      pins every forward pass to ONE OS thread so tensor allocations come from a
+#      single glibc arena instead of one-per-executor-thread — the dominant
+#      fragmentation source. Inference is already serialised by the collector, so
+#      one worker costs no throughput.
+#   3. malloc_trim(0) after each flush (see _malloc_trim) — actively returns the
+#      freed arena pages to the OS, flattening the ramp instead of letting the
+#      working set ratchet to the cap.
+#
+# GLINER_MAX_INFERENCES is an optional backstop: recycle the process after N
+# forward passes so k8s restarts it with a fresh heap. Disabled by default (0);
+# the three bounds above should hold the working set flat on their own.
+GLINER_MAX_INPUT_CHARS = int(os.environ.get("GLINER_MAX_INPUT_CHARS", "4000"))
+GLINER_MAX_INFERENCES = int(os.environ.get("GLINER_MAX_INFERENCES", "0"))
+
+# Single-thread pool: all model forward passes run here so their (variable-length)
+# CPU tensors are allocated from ONE glibc malloc arena. run_in_executor(None,...)
+# used the default pool, which can grow to multiple threads over the process
+# lifetime → multiple arenas → compounding fragmentation. thread_name_prefix keeps
+# the OOM-killer's task name (pt_main_thread) legible in dmesg.
+_INFERENCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gliner-infer")
+
+# libc handle for malloc_trim(0). Best-effort: None on non-glibc (musl/alpine) or
+# if resolution fails — the trim then simply no-ops.
+try:
+    _LIBC: ctypes.CDLL | None = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+except OSError:  # pragma: no cover — platform without a resolvable libc
+    _LIBC = None
+
+
+def _malloc_trim() -> None:
+    """Return free heap pages to the OS (glibc ``malloc_trim(0)``).
+
+    Best-effort: no-ops when libc/malloc_trim is unavailable (musl, macOS). Cheap
+    relative to a GLiNER forward pass, so it is safe to call after every flush."""
+    if _LIBC is None:
+        return
+    try:
+        _LIBC.malloc_trim(0)
+    except (AttributeError, OSError):  # pragma: no cover — malloc_trim missing (musl)
+        pass
+
+
+def _truncate_input(text: str) -> str:
+    """Hard char-cap on a single inference input (bounds peak activation)."""
+    if GLINER_MAX_INPUT_CHARS > 0 and len(text) > GLINER_MAX_INPUT_CHARS:
+        return text[:GLINER_MAX_INPUT_CHARS]
+    return text
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
@@ -173,8 +239,24 @@ _collector_task: asyncio.Task[None] | None = None
 
 
 def _predict_batch(model: Any, texts: list[str], labels: list[str], threshold: float) -> list[list[dict[str, Any]]]:
-    """One padded forward pass over N texts sharing (labels, threshold)."""
-    return model.batch_predict_entities(texts, labels, threshold=threshold)  # type: ignore[no-any-return]
+    """One padded forward pass over N texts sharing (labels, threshold).
+
+    Wrapped in ``torch.inference_mode`` (a no-op if torch is unavailable) so no
+    autograd graph / grad buffers are ever allocated or retained for inference —
+    a further guard against per-request tensor accumulation. Freed pages are
+    returned to the OS via malloc_trim after the pass completes."""
+    try:
+        import torch  # type: ignore[import-not-found]
+
+        with torch.inference_mode():
+            out = model.batch_predict_entities(texts, labels, threshold=threshold)
+    except ImportError:  # pragma: no cover — torch always present in the image
+        out = model.batch_predict_entities(texts, labels, threshold=threshold)
+    finally:
+        # Runs on the single inference thread, right after the transient tensors
+        # for this pass go out of scope — the ideal point to hand pages back.
+        _malloc_trim()
+    return out  # type: ignore[no-any-return]
 
 
 async def _flush_group(model: Any, loop: asyncio.AbstractEventLoop, items: list[_QueueItem], wait_ms: float) -> None:
@@ -189,7 +271,9 @@ async def _flush_group(model: Any, loop: asyncio.AbstractEventLoop, items: list[
     try:
         # batch_predict_entities is correct for N>=1 (single-item batch is not
         # slower than predict_entities and yields identical spans — verified).
-        results = await loop.run_in_executor(None, _predict_batch, model, texts, labels, threshold)
+        # Pinned single-thread executor (one glibc arena) instead of the default
+        # pool — see _INFERENCE_EXECUTOR. Inference is already serialised here.
+        results = await loop.run_in_executor(_INFERENCE_EXECUTOR, _predict_batch, model, texts, labels, threshold)
         for it, res in zip(items, results, strict=True):
             if not it.future.done():
                 it.future.set_result(res)
@@ -208,6 +292,25 @@ async def _flush_group(model: Any, loop: asyncio.AbstractEventLoop, items: list[
         wait_ms=round(wait_ms, 2),
         group_key_hash=key_hash,
     )
+    _maybe_recycle()
+
+
+def _maybe_recycle() -> None:
+    """Optional backstop: exit the process after GLINER_MAX_INFERENCES forward
+    passes so the orchestrator restarts it with a fresh heap.
+
+    Disabled by default (GLINER_MAX_INFERENCES=0). This is a *bound*, not the
+    primary fix (arena-pinning + malloc_trim + input cap keep the working set
+    flat); enable it only if a residual slow creep is observed in prod. The exit
+    is graceful from the pod's view — replicas>1 or a rollout keep NER available;
+    with replicas=1 the readiness probe drains it and k8s restarts within seconds.
+    """
+    if GLINER_MAX_INFERENCES <= 0:
+        return
+    if _METRICS["flushed_total"] % GLINER_MAX_INFERENCES == 0:
+        _log("gliner_worker_recycle", flushed_total=_METRICS["flushed_total"], reason="max_inferences")
+        # os._exit avoids running atexit/finalizers mid-inference; kubelet restarts.
+        os._exit(0)  # noqa: S606
 
 
 async def _collector() -> None:
@@ -272,7 +375,9 @@ async def _submit(text: str, labels: list[str], threshold: float) -> list[dict[s
     """Enqueue one text and await its batched result."""
     loop = asyncio.get_event_loop()
     future: asyncio.Future[list[dict[str, Any]]] = loop.create_future()
-    await _queue.put(_QueueItem(text, labels, threshold, future))
+    # Enforce the hard input cap here so EVERY path (/ner and /ner/batch) is
+    # bounded before the text ever reaches a padded forward pass.
+    await _queue.put(_QueueItem(_truncate_input(text), labels, threshold, future))
     return await future
 
 
@@ -316,7 +421,14 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     global _collector_task
     await _get_model()
     _collector_task = asyncio.create_task(_collector())
-    _log("gliner_started", max_batch=GLINER_MAX_BATCH, batch_wait_ms=GLINER_BATCH_WAIT_MS)
+    _log(
+        "gliner_started",
+        max_batch=GLINER_MAX_BATCH,
+        batch_wait_ms=GLINER_BATCH_WAIT_MS,
+        max_input_chars=GLINER_MAX_INPUT_CHARS,
+        max_inferences=GLINER_MAX_INFERENCES,
+        malloc_trim=_LIBC is not None,
+    )
     try:
         yield
     finally:
@@ -324,6 +436,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             _collector_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await _collector_task
+        _INFERENCE_EXECUTOR.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(title="GLiNER Server", lifespan=lifespan)

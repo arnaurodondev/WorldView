@@ -18,6 +18,16 @@ COPY validate_batch.py .
 ARG GLINER_MODEL_PATH=urchade/gliner_large-v2.1
 ENV GLINER_MODEL_PATH=${GLINER_MODEL_PATH}
 
+# gliner OOM fix (2026-07-16): cap glibc malloc arenas. Under the variable-length
+# CPU-tensor NER workload the default arena count (up to 8×nproc) let freed blocks
+# accumulate in many per-arena free lists — RSS ratcheted to the memory cap over
+# hours (leak-LIKE fragmentation) and OOMKilled the pod ~2.7×/hour. Two arenas
+# bounds that retention with negligible contention (inference is pinned to a
+# single thread in server.py). MUST be an env baked into the image: glibc reads it
+# once at process init, so setting it from Python would be too late. The k8s
+# manifest also sets it (belt-and-braces) but this covers docker-compose / local.
+ENV MALLOC_ARENA_MAX=2
+
 # CI fix: actually pre-download the model into the image layer. The previous
 # version only declared the ARG but never ran the download — so the first
 # request at runtime had to fetch ~1.5 GB from HuggingFace, which on
