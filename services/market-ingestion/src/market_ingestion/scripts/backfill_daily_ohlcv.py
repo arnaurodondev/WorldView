@@ -410,6 +410,24 @@ async def run_backfill(settings: Settings, args: argparse.Namespace) -> int:
                 await enqueue_uow.tasks.add_many([task])
                 await enqueue_uow.commit()
 
+            # ── Transition the synthetic task PENDING → RUNNING ──────────────
+            # ``add_many`` persists the task as PENDING. The live worker path only
+            # ever hands ``execute_with_prefetched_result`` a task it has already
+            # CLAIMED via ``claim_batch`` (status=RUNNING); its terminal
+            # ``commit_transaction`` calls ``task.succeed()``, which REQUIRES the
+            # task to be RUNNING. Without claiming here the synthetic task stays
+            # PENDING, ``succeed()`` raises ``InvalidStateTransition`` AFTER the
+            # ``MarketDatasetFetched`` outbox event is staged, and the whole Step-5
+            # ``async with uow`` transaction rolls back — so the backfill produced
+            # NOTHING downstream while still (a) spending an EODHD credit per
+            # symbol and (b) failing to advance the Valkey resume cursor, i.e. an
+            # unbounded credit-burning re-run that never makes progress. Claiming
+            # in-memory (the DB row keeps its NULL lease, which ``tasks.save``'s
+            # ``locked_by IS NULL`` guard still matches) is the fix. Re-runs stay
+            # idempotent: the OHLCV upsert is keyed + provider-priority-guarded and
+            # ``add_many`` is ``ON CONFLICT DO NOTHING``.
+            task.claim(_SERVICE_NAME)
+
             use_case = ExecuteTaskUseCase(
                 uow=_uow(),
                 provider_registry=registry,

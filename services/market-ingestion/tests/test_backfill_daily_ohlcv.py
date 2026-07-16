@@ -17,6 +17,7 @@ pytestmark = pytest.mark.unit
 from market_ingestion.domain.entities.polling_policy import PollingPolicy
 from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.scripts.backfill_daily_ohlcv import (
+    CURSOR_KEY,
     RunBudget,
     dedupe_ohlcv_instruments,
     remaining_instruments,
@@ -140,6 +141,119 @@ class TestDryRunFetchesNothing:
         valkey.get.assert_awaited_once()  # cursor read (resume)
         valkey.set.assert_not_awaited()  # dry-run writes no checkpoint
         valkey.close.assert_awaited_once()
+
+
+class _AsyncCM:
+    """Minimal async context manager wrapper around a value."""
+
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    async def __aenter__(self) -> object:
+        return self._value
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class TestProducePathClaimsTask:
+    """Regression (2026-07-16 prod review): the synthetic backfill task must be
+    CLAIMED (PENDING → RUNNING) before ``execute_with_prefetched_result``.
+
+    Root cause found live: run1 produced 0/96 with
+    ``Cannot succeed task in status PENDING; must be RUNNING`` — the terminal
+    ``task.succeed()`` in ``commit_transaction`` raised, rolling back the whole
+    Step-5 transaction incl. the ``MarketDatasetFetched`` outbox event, so the
+    backfill spent an EODHD credit per symbol and advanced no cursor while
+    materialising nothing downstream. This test pins the task's status at the
+    moment it is handed to the produce path.
+    """
+
+    def test_task_is_running_when_produced_and_cursor_checkpointed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from market_ingestion.domain.enums import IngestionTaskStatus
+        from market_ingestion.scripts import backfill_daily_ohlcv as mod
+
+        universe = [("AAPL", "US")]
+
+        valkey = MagicMock()
+        valkey.get = AsyncMock(return_value=None)
+        valkey.set = AsyncMock()
+        valkey.close = AsyncMock()
+
+        # A fake unit-of-work: the enqueue path calls tasks.add_many + commit.
+        fake_uow = MagicMock()
+        fake_uow.tasks.add_many = AsyncMock()
+        fake_uow.commit = AsyncMock()
+        fake_uow.rollback = AsyncMock()
+
+        # ExecuteTaskUseCase is imported *inside* run_backfill from its source
+        # module — patch it there. The stub records the task status at call time,
+        # which is exactly what the fix guarantees is RUNNING (not PENDING).
+        seen_status: list[IngestionTaskStatus] = []
+
+        class _StubUseCase:
+            def __init__(self, **_kw: object) -> None:
+                pass
+
+            async def execute_with_prefetched_result(self, task: object, _fr: object) -> None:
+                seen_status.append(task.status)  # type: ignore[attr-defined]
+
+        monkeypatch.setattr(
+            "market_ingestion.application.use_cases.execute_task.ExecuteTaskUseCase",
+            _StubUseCase,
+        )
+        # SqlaUnitOfWork() (the enqueue uow) and the write_factory lock session.
+        monkeypatch.setattr(
+            "market_ingestion.infrastructure.db.unit_of_work.SqlaUnitOfWork",
+            lambda *_a, **_k: _AsyncCM(fake_uow),
+        )
+        write_factory = MagicMock(return_value=_AsyncCM(MagicMock()))
+        monkeypatch.setattr(
+            "market_ingestion.infrastructure.db.session._build_factories",
+            lambda _s=None: (write_factory, MagicMock()),
+        )
+        monkeypatch.setattr(mod, "create_valkey_client_from_url", lambda _u: valkey)
+        monkeypatch.setattr(mod, "_list_ohlcv_instruments", AsyncMock(return_value=universe))
+        monkeypatch.setattr(mod, "_build_object_store", lambda *_a, **_k: MagicMock())
+        # Advisory lock: acquired.
+        monkeypatch.setattr(mod, "pg_advisory_lock", lambda *_a, **_k: _AsyncCM(True))
+
+        quota = MagicMock()
+        quota.get_daily_credits_used = AsyncMock(return_value=0)
+        quota.record_usage = AsyncMock()
+        monkeypatch.setattr(mod, "EodhdQuotaService", lambda **_k: quota)
+
+        eodhd_adapter = MagicMock()
+        eodhd_adapter.fetch_ohlcv = AsyncMock(return_value=SimpleNamespace(bars_returned=1, provider=Provider.EODHD))
+        registry = MagicMock()
+        registry.get = MagicMock(return_value=eodhd_adapter)
+        registry.aclose = AsyncMock()
+        monkeypatch.setattr(
+            "market_ingestion.infrastructure.adapters.providers.build_provider_registry",
+            lambda *_a, **_k: registry,
+        )
+
+        settings = SimpleNamespace(
+            valkey_url="redis://x",
+            eodhd_daily_quota=100_000,
+            eodhd_monthly_quota=100_000,
+            provider_http_timeout_seconds=30.0,
+            bronze_bucket="b",
+            canonical_bucket="c",
+        )
+        args = mod._parse_cli(["--years", "2"])
+
+        produced = asyncio.run(mod.run_backfill(settings, args))  # type: ignore[arg-type]
+
+        assert produced == 1
+        # The core regression guard: the task was RUNNING (claimed), never PENDING.
+        assert seen_status == [IngestionTaskStatus.RUNNING]
+        # Progress was checkpointed so --resume advances (no infinite credit burn).
+        valkey.set.assert_any_await(CURSOR_KEY, symbol_sort_key("AAPL", "US"))
 
 
 class TestRunBudget:
