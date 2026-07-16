@@ -280,15 +280,24 @@ LIMIT 1
         # definition, shared verbatim with the cleanup migration.  Only entity
         # identifiers (column names) are interpolated — from module constants,
         # never user input — so this is injection-safe (S608 suppressed).
+        #
+        # ``:ticker`` is CAST to text everywhere it appears.  When the incoming
+        # ORG has no ticker the bind value is ``None``; asyncpg then cannot infer
+        # the parameter's type from ``:ticker IS NOT NULL`` / ``UPPER(:ticker)``
+        # alone and raises ``AmbiguousParameterError: could not determine data
+        # type of parameter $N`` — which aborts provisional enrichment for every
+        # ticker-less org.  ``CAST(:ticker AS text)`` pins the type so a NULL bind
+        # is legal (regression: null-ticker lookup must not raise).
         sql = (  # — identifiers are module constants, values are bound params
             "WITH incoming AS (SELECT " + _normalized_name_sql(":canonical_name") + " AS nkey) "
             "SELECT c.entity_id FROM canonical_entities c, incoming "
             "WHERE c.entity_type = 'financial_instrument' AND ("
-            "(:ticker IS NOT NULL AND UPPER(c.ticker) = UPPER(:ticker)) "
+            "(CAST(:ticker AS text) IS NOT NULL AND UPPER(c.ticker) = UPPER(CAST(:ticker AS text))) "
             "OR (incoming.nkey <> '' AND " + _normalized_name_sql("c.canonical_name") + " = incoming.nkey)) "
             # Prefer a ticker match over a name-only match; then lowest entity_id
             # (deterministic tie-break, matches the migration's FI selection).
-            "ORDER BY (CASE WHEN :ticker IS NOT NULL AND UPPER(c.ticker) = UPPER(:ticker) THEN 0 ELSE 1 END), "
+            "ORDER BY (CASE WHEN CAST(:ticker AS text) IS NOT NULL "
+            "AND UPPER(c.ticker) = UPPER(CAST(:ticker AS text)) THEN 0 ELSE 1 END), "
             "c.entity_id LIMIT 1"
         )
         result = await self._session.execute(
