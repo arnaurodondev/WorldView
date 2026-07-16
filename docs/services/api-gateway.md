@@ -499,6 +499,21 @@ own signer/verifier, so it cannot drift from what S9 mints):**
   dict is flagged `service_principal: true` for observability.
 - **Public paths** (`_AUTH_SKIP_PATHS`) short-circuit before this step, so they
   stay unauthenticated even when a valid `X-Internal-JWT` is present.
+- **System principals are read-only** (least-privilege guard, security review
+  2026-07-16): a `role="system"` service-account token (minted by
+  `issue_service_jwt` for background/machine callers) is refused on **mutating
+  methods** (`POST`/`PUT`/`PATCH`/`DELETE`) against the sensitive
+  financial/account mutation prefixes in `_S2S_SYSTEM_MUTATION_PREFIXES`
+  (`/v1/transactions`, `/v1/brokerage-connections`, `/v1/portfolios`,
+  `/v1/watchlists`, `/v1/alerts`, `/v1/alert-rules`, `/v1/email/preferences`,
+  `/v1/documents`) → `request.state.user` stays `None` (route 401s). A machine
+  identity gets **read-only** access at the gateway. This does NOT affect POST
+  *read* endpoints (screener/batch-quotes/search — different prefixes), GET
+  reads on those prefixes, brief-generation workers (`/v1/briefings/*` is not
+  listed), or a **forwarded user** token (`role="user"`/`"admin"`), which keeps
+  the user's own authority (e.g. rag-chat's user-initiated create-alert). Real
+  writes always arrive with a Zitadel Bearer (frontend → S9 only) which takes
+  precedence and is never a service principal.
 
 Coexists with any direct backend→backend paths (e.g. rag-chat's direct
 market-data prediction call): this restores the **gateway-proxied** path

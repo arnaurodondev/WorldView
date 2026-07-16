@@ -834,7 +834,7 @@ async def test_rate_limit_ip_bucket_malformed_jwt(rsa_keypair) -> None:
     from api_gateway.middleware import OIDCAuthMiddleware, RateLimitMiddleware
     from api_gateway.oidc import rsa_key_id
 
-    private_key, public_key = rsa_keypair
+    _private_key, public_key = rsa_keypair
     kid = rsa_key_id(public_key)
 
     # Forge a token signed with a DIFFERENT key (bad signature)
@@ -1223,6 +1223,24 @@ def _s2s_app_with_internal_jwt(rsa_keypair):
         captured_user.append(request.state.user)
         return {"url": "x"}
 
+    # Mutation routes used by the S2S least-privilege guard tests. They only
+    # capture request.state.user so the assertions can check whether the
+    # principal was established (None ⇒ the route's own 401 would fire).
+    @app.post("/v1/transactions")
+    async def create_txn(request: Request):
+        captured_user.append(request.state.user)
+        return {"ok": True}
+
+    @app.delete("/v1/portfolios/{pid}")
+    async def delete_pf(pid: str, request: Request):
+        captured_user.append(request.state.user)
+        return {"ok": True}
+
+    @app.post("/v1/alerts")
+    async def create_alert(request: Request):
+        captured_user.append(request.state.user)
+        return {"ok": True}
+
     return app, captured_user, kid
 
 
@@ -1476,3 +1494,85 @@ async def test_s2s_no_internal_jwt_stays_none(rsa_keypair) -> None:
         await client.get("/v1/signals/ai")
 
     assert captured_user[0] is None
+
+
+# ── S2S-AUTH least-privilege guard: system service principals are read-only ────
+# A ``role="system"`` service-account token must NOT be able to mutate user-owned
+# financial/account resources through S9. It stays read-only; a forwarded *user*
+# token keeps the user's own authority (create-alert etc.).
+
+
+@pytest.mark.asyncio
+async def test_s2s_system_principal_cannot_create_transaction(rsa_keypair) -> None:
+    """role=system service JWT + POST /v1/transactions → user stays None (401)."""
+    from api_gateway.jwt_utils import issue_service_jwt
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    svc = issue_service_jwt("rag-chat-brief-scheduler", private_key, kid)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/v1/transactions", headers={"X-Internal-JWT": svc})
+
+    assert captured_user[0] is None, "system principal must NOT authenticate on a financial mutation"
+
+
+@pytest.mark.asyncio
+async def test_s2s_system_principal_cannot_delete_portfolio(rsa_keypair) -> None:
+    """role=system service JWT + DELETE /v1/portfolios/{id} → user stays None."""
+    from api_gateway.jwt_utils import issue_service_jwt
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    svc = issue_service_jwt("rag-chat-brief-scheduler", private_key, kid)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.delete("/v1/portfolios/abc", headers={"X-Internal-JWT": svc})
+
+    assert captured_user[0] is None, "system principal must NOT authenticate on a portfolio delete"
+
+
+@pytest.mark.asyncio
+async def test_s2s_system_principal_still_reads(rsa_keypair) -> None:
+    """The guard is write-only: a system principal still authenticates on GET
+    read routes (the whole point of the S2S fix)."""
+    from api_gateway.jwt_utils import issue_service_jwt
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    svc = issue_service_jwt("rag-chat-brief-scheduler", private_key, kid)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/v1/signals/ai", headers={"X-Internal-JWT": svc})
+
+    assert captured_user[0] is not None
+    assert captured_user[0]["role"] == "system"
+
+
+@pytest.mark.asyncio
+async def test_s2s_forwarded_user_can_still_create_alert(rsa_keypair) -> None:
+    """A forwarded *user* token (role=user) retains the user's own authority: it
+    is NOT blocked by the system-principal write guard (create-alert must work)."""
+    from api_gateway.jwt_utils import issue_user_jwt
+
+    private_key, _ = rsa_keypair
+    app, captured_user, kid = _s2s_app_with_internal_jwt(rsa_keypair)
+    token = issue_user_jwt(
+        user_id="user-123",
+        tenant_id="tenant-abc",
+        oidc_sub="zitadel-sub-9",
+        private_key=private_key,
+        kid=kid,
+        role="user",
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/v1/alerts", headers={"X-Internal-JWT": token})
+
+    assert captured_user[0] is not None, "forwarded user token must retain write authority"
+    assert captured_user[0]["user_id"] == "user-123"
+    assert captured_user[0]["role"] == "user"

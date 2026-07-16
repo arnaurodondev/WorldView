@@ -117,6 +117,34 @@ _AUTH_SKIP_PATHS: frozenset[str] = frozenset(
 )
 
 
+# S2S-AUTH least-privilege guard (fix/gateway-s2s-auth). A ``role="system"``
+# service-account principal (minted by ``issue_service_jwt`` for background
+# workers / machine callers) has NO legitimate reason to MUTATE user-owned
+# financial or account data through S9. Accepting the gateway's own internal
+# JWT as a principal (below) authenticates it on every user-gated route,
+# including these writes — so we deny-list the sensitive mutation prefixes for
+# system principals specifically. This does NOT affect:
+#   * read tools (screener/batch-quotes/search are different prefixes, and GET
+#     on ``/v1/portfolios`` / ``/v1/watchlists`` is still allowed);
+#   * a forwarded *user* token (``role="user"``/``"admin"``), which retains the
+#     user's own authority — e.g. rag-chat's ``create_alert`` POST /v1/alerts is
+#     an explicit user action carried on that user's forwarded token;
+#   * brief-generation workers (``/v1/briefings/*`` is not in this list).
+# Real writes always arrive with a Zitadel Bearer (frontend → S9 only), which
+# takes precedence and is never flagged ``service_principal``.
+_S2S_SYSTEM_MUTATION_PREFIXES: tuple[str, ...] = (
+    "/v1/transactions",
+    "/v1/brokerage-connections",
+    "/v1/portfolios",
+    "/v1/watchlists",
+    "/v1/alerts",
+    "/v1/alert-rules",
+    "/v1/email/preferences",
+    "/v1/documents",
+)
+_MUTATING_METHODS: frozenset[str] = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
 def _extract_role(payload: dict[str, Any]) -> str:
     """Resolve the role claim from a Zitadel-shaped OIDC access token.
 
@@ -432,6 +460,29 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
             return
 
         sub = payload.get("sub", "")
+        role = payload.get("role", "user")
+
+        # S2S-AUTH least-privilege guard: a system service principal must not be
+        # able to MUTATE user-owned financial/account resources through S9. If a
+        # ``role="system"`` token targets a sensitive mutation prefix with a
+        # write method, leave ``request.state.user = None`` so the route returns
+        # its normal 401 — a machine identity gets read-only access here. A
+        # forwarded *user* token (role != "system") is unaffected and keeps the
+        # user's own authority (e.g. create-alert). See
+        # ``_S2S_SYSTEM_MUTATION_PREFIXES``.
+        if (
+            role == "system"
+            and request.method.upper() in _MUTATING_METHODS
+            and request.url.path.startswith(_S2S_SYSTEM_MUTATION_PREFIXES)
+        ):
+            logger.warning(
+                "s2s_system_principal_mutation_denied",
+                path=str(request.url.path),
+                method=request.method,
+                sub=sub,
+            )
+            return
+
         # Build a service principal in the SAME shape OIDCAuthMiddleware uses so
         # downstream (InternalJWTIssuerMiddleware / route _auth_headers) re-issues
         # a fresh internal JWT that preserves this identity + role.
@@ -446,7 +497,7 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
             "email": "",
             "email_verified": False,
             # Trust the signed role verbatim — only the gateway can mint it.
-            "role": payload.get("role", "user"),
+            "role": role,
             # Marker so downstream code / logs can distinguish an S2S principal
             # from a real interactive user (no behavioural effect today).
             "service_principal": True,
