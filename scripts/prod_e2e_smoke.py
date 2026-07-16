@@ -92,6 +92,17 @@ DLQ_TOPICS = [
 ]
 KAFKA_LAG_WARN = 5_000  # per-group total lag above this → WARN (backlog)
 KAFKA_LAG_FAIL = 100_000  # ...above this → FAIL, but only for DEAD (0-member) groups
+# Absolute catastrophe ceiling for a LIVE group (members present). A legitimate
+# backfill on this single-node cluster tops out well under this (observed live
+# peak ~187k for the multi-year news/nlp backfill); a live group ABOVE it is not
+# "a backlog draining" — it is a consumer that is up but wedged/too-slow to ever
+# catch up (the poison-pill / can't-keep-up class we have hit before, e.g. the
+# nlp-pipeline stall and the prediction-throughput regression). Those never trip
+# the 0-member "dead" check and only reach the Layer 4/5 freshness FAILs 24-48h
+# later (and NOT AT ALL for kg/alert/portfolio groups, whose downstream has no
+# FAIL-capable freshness check) — so without this ceiling a runaway live consumer
+# would never page. This restores that page while keeping normal backfill at WARN.
+KAFKA_LAG_HARD_FAIL = 1_000_000  # LIVE-group lag above this → FAIL (wedged, not backlog)
 # Ephemeral consumer groups created by test/probe harnesses (prod_qa prober, the
 # batched-consumer probe path). Their members leave but Kafka retains committed
 # offsets for offsets.retention.minutes (~7d), so they linger with 0 members and
@@ -303,11 +314,16 @@ def layer0() -> None:
         grp, lag = worst
         # A high lag on a LIVE group (members present, offsets advancing) is a
         # backlog — expected during intentional backfills (news multi-year, OHLCV)
-        # on this single-node cluster — not an incident, so cap it at WARN. Only a
-        # DEAD group (0 members, already FAILed above) with lag warrants a page;
-        # a genuinely stalled-but-member-present consumer surfaces via the Layer
-        # 4/5 freshness checks instead. This stops the every-30m false page.
-        if lag > KAFKA_LAG_FAIL and grp in dead:
+        # on this single-node cluster — so cap it at WARN, NOT the old static-100k
+        # FAIL that false-paged every 30m. Two cases still FAIL: (a) a DEAD group
+        # (0 members, already FAILed above) carrying real backlog, and (b) a LIVE
+        # group whose lag has blown past the catastrophe ceiling — a consumer that
+        # is up but wedged/too-slow to ever catch up, which the 0-member check
+        # never sees and the Layer 4/5 freshness FAILs only reach 24-48h later
+        # (or never, for kg/alert/portfolio). See KAFKA_LAG_HARD_FAIL.
+        if lag > KAFKA_LAG_HARD_FAIL:
+            st = FAIL
+        elif lag > KAFKA_LAG_FAIL and grp in dead:
             st = FAIL
         elif lag > KAFKA_LAG_WARN:
             st = WARN
