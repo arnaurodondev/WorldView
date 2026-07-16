@@ -34,6 +34,9 @@ def _db(ctx: Ctx) -> None:
             "bars_fresh_h": "SELECT round(extract(epoch from now()-max(bar_date))/3600,1) FROM ohlcv_bars",
             "derived": "SELECT count(*) FILTER (WHERE is_derived) FROM ohlcv_bars",
             "timeframes": "SELECT string_agg(DISTINCT timeframe,',') FROM ohlcv_bars",
+            "d1_dates": "SELECT count(DISTINCT bar_date) FROM ohlcv_bars WHERE timeframe='1d'",
+            "d1_bars": "SELECT count(*) FROM ohlcv_bars WHERE timeframe='1d'",
+            "d1_insts": "SELECT count(DISTINCT instrument_id) FROM ohlcv_bars WHERE timeframe='1d'",
             "partial_invariant": "SELECT count(*) FROM ohlcv_bars WHERE is_partial AND NOT is_derived",
             "pred_markets": "SELECT count(*) FROM prediction_markets",
             "pred_snaps": "SELECT count(*) FROM prediction_market_snapshots",
@@ -42,6 +45,8 @@ def _db(ctx: Ctx) -> None:
             "pred_trades": "SELECT count(*) FROM prediction_market_trades",
             "pred_oi": "SELECT count(*) FROM prediction_market_oi",
             "pred_events": "SELECT count(*) FROM prediction_events",
+            "pm_total": "SELECT count(*) FROM prediction_markets",
+            "pm_linked": "SELECT count(event_id) FROM prediction_markets",
             "insider": "SELECT count(*) FROM insider_transactions",
             "earnings_cal": "SELECT count(*) FROM earnings_calendar",
         },
@@ -75,6 +80,13 @@ def _db(ctx: Ctx) -> None:
         f"{q['partial_invariant']} violating rows",
     )
 
+    # Daily OHLCV history coverage (F1/D2: 1d held ~1 bar/instrument over 3 dates
+    # → returns/price-levels/heatmap all null). Assert real multi-day history.
+    R.floor(SVC, "daily OHLCV distinct dates", H.as_int(q["d1_dates"]), T.MD_OHLCV_1D_DATES_WARN)
+    d1_insts = H.as_int(q["d1_insts"], 0)
+    bars_per = round(H.as_int(q["d1_bars"], 0) / d1_insts, 1) if d1_insts else 0.0
+    R.floor(SVC, "daily OHLCV bars/instrument", bars_per, T.MD_OHLCV_1D_BARS_PER_INST_WARN)
+
     # Prediction-market deeper streams (PLAN-0056 A1-A4).
     R.floor(SVC, "prediction_markets", H.as_int(q["pred_markets"]), T.MD_PRED_MARKETS_FLOOR)
     R.floor(SVC, "prediction snapshots", H.as_int(q["pred_snaps"]), T.MD_PRED_SNAPSHOTS_FLOOR)
@@ -83,6 +95,14 @@ def _db(ctx: Ctx) -> None:
     R.check(SVC, "prediction OI rows present", H.as_int(q["pred_oi"], 0) > 0, f"{q['pred_oi']} rows", soft=True)
     R.check(
         SVC, "prediction events rows present", H.as_int(q["pred_events"], 0) > 0, f"{q['pred_events']} rows", soft=True
+    )
+    # Market→event linkage (D6: 0/101 markets carried event_id despite 100 events).
+    R.floor(
+        SVC,
+        f"prediction market→event linkage % ({q['pm_linked']}/{q['pm_total']})",
+        H.pct(q["pm_linked"], q["pm_total"]),
+        T.MD_PRED_EVENT_LINK_WARN,
+        unit="%",
     )
 
     snap_fresh = H.as_float(q["pred_snap_fresh_h"])

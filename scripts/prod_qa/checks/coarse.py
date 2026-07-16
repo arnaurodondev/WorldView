@@ -19,6 +19,7 @@ from ..harness import Ctx
 def run(ctx: Ctx) -> None:
     R = ctx.report
     _pods_and_workloads(R)
+    _restart_rates(R)
     _migrations(R)
     _dlq_topics(R)
     _dlq_db_tables(R)
@@ -27,6 +28,9 @@ def run(ctx: Ctx) -> None:
     _schema_registry(R)
     _edge_and_tls(R)
     _minio(R)
+    _pvc_free_space(R)
+    _referenced_secrets_exist(R)
+    _synthetic_monitor(R)
 
 
 def _pods_and_workloads(R: H.Report) -> None:
@@ -169,33 +173,58 @@ def _consumer_groups(R: H.Report) -> None:
 
 
 def _outbox_dispatchers(R: H.Report) -> None:
+    """Outbox drain health — aggregate AND per-table (with oldest-undispatched age).
+
+    The aggregate sum can mask a single wedged service (content-ingestion hit
+    111k undispatched in this session), and a low count of VERY OLD undispatched
+    rows is a wedged dispatcher a >10m count-only check would miss — so each
+    outbox table is judged on both its backlog size and its oldest-row age.
+    """
     stuck, worst = 0, ""
-    for db in (
-        "portfolio_db",
-        "intelligence_db",
-        "nlp_db",
-        "market_data_db",
-        "content_store_db",
-        "alert_db",
-        "content_ingestion_db",
-        "ingestion_db",
-    ):
-        n = H.as_int(
-            H.psql_scalar(
-                db,
-                "SELECT count(*) FROM outbox_events WHERE dispatched_at IS NULL AND created_at < now() - interval '10 minutes'",
-            ),
-            -1,
+    per_table_status = H.PASS
+    per_table_detail: list[str] = []
+    for db in T.OUTBOX_DBS:
+        res = H.psql_many(
+            db,
+            {
+                "aged": "SELECT count(*) FROM outbox_events WHERE dispatched_at IS NULL "
+                "AND created_at < now() - interval '10 minutes'",
+                "undispatched": "SELECT count(*) FROM outbox_events WHERE dispatched_at IS NULL",
+                "oldest_min": "SELECT coalesce(round(extract(epoch from "
+                "now()-min(created_at) FILTER (WHERE dispatched_at IS NULL))/60,1),0) FROM outbox_events",
+            },
+            timeout=40,
         )
-        if n > 0:
-            stuck += n
-            worst = f"{db}={n}"
+        if res["undispatched"] == "":
+            continue  # no outbox_events table in this DB → skip
+        aged = H.as_int(res["aged"], 0)
+        if aged > 0:
+            stuck += aged
+            worst = f"{db}={aged}"
+        # Per-table: judge backlog size + oldest-undispatched age independently.
+        undis = H.as_int(res["undispatched"], 0)
+        age = H.as_float(res["oldest_min"], 0.0)
+        st = H.PASS
+        if undis >= T.OUTBOX_TABLE_BACKLOG_FAIL or age >= T.OUTBOX_AGE_FAIL_MIN:
+            st = H.FAIL
+        elif undis >= T.OUTBOX_TABLE_BACKLOG_WARN or age >= T.OUTBOX_AGE_WARN_MIN:
+            st = H.WARN
+        if st != H.PASS:
+            per_table_detail.append(f"{db}={undis} rows/{age}m old")
+            if st == H.FAIL or per_table_status != H.FAIL:
+                per_table_status = st
     status = H.FAIL if stuck > T.OUTBOX_STUCK_FAIL else H.WARN if stuck else H.PASS
     R.add(
         "infra",
-        "outbox dispatchers draining",
+        "outbox dispatchers draining (aggregate)",
         status,
         f"{stuck} undispatched >10m ({worst})" if stuck else "all outboxes drained",
+    )
+    R.add(
+        "infra",
+        "outbox per-table backlog + age bounded",
+        per_table_status,
+        "; ".join(per_table_detail) if per_table_detail else f"all {len(T.OUTBOX_DBS)} outbox tables within floors",
     )
 
 
@@ -255,3 +284,194 @@ def _minio(R: H.Report) -> None:
         not missing,
         f"missing: {missing}" if missing else f"{len(present)} buckets",
     )
+
+
+def _pvc_free_space(R: H.Report) -> None:
+    """Free-space floors on the irreplaceable-state volumes (P0-B: MinIO full).
+
+    A data volume near its free-space floor halts writes: MinIO trips its
+    minimum-free-drive guard and refuses every PutObject; a full Postgres/Kafka
+    volume corrupts or wedges the platform. Alerts BEFORE the wedge.
+    """
+    for ns, prefix, container, mount in T.PVC_DF_TARGETS:
+        pod = H.pod_by_prefix(ns, prefix)
+        if not pod:
+            R.warn("infra", f"disk free {prefix.rstrip('-')}", "pod not found")
+            continue
+        total, _used, avail = H.df_bytes(ns, pod, container, mount)
+        if total <= 0 or avail < 0:
+            R.warn("infra", f"disk free {prefix.rstrip('-')}", f"df unreadable on {mount}")
+            continue
+        free_pct = round(100 * avail / total, 1)
+        avail_gib = round(avail / 1_073_741_824, 1)
+        st = (
+            H.FAIL
+            if (free_pct < T.PVC_FREE_PCT_FAIL or avail < T.PVC_FREE_BYTES_FAIL)
+            else H.WARN
+            if free_pct < T.PVC_FREE_PCT_WARN
+            else H.PASS
+        )
+        R.add("infra", f"disk free {prefix.rstrip('-')} ({mount})", st, f"{avail_gib} GiB free = {free_pct}%")
+
+
+def _referenced_secrets_exist(R: H.Report) -> None:
+    """Every NON-optional Secret referenced by a workload must exist right now.
+
+    Roll-fragility guard: a pod created while a secret existed keeps running after
+    that secret is deleted (the value is already injected), so a missing secret is
+    invisible until the next roll fails to start the pod. We diff live refs
+    (envFrom / secretKeyRef / volume, optional=false only) against present
+    secrets.
+    """
+    _, refs_out = H.kubectl(f"-n {H.NS} get deploy,statefulset -o json", timeout=60)
+    try:
+        objs = json.loads(refs_out).get("items", [])
+    except ValueError:
+        R.warn("infra", "referenced secrets exist", "could not read workload specs")
+        return
+    required: dict[str, set[str]] = {}  # secret name → workloads that require it
+    for it in objs:
+        wl = it.get("metadata", {}).get("name", "?")
+        spec = it.get("spec", {}).get("template", {}).get("spec", {})
+        for c in spec.get("containers", []) + spec.get("initContainers", []):
+            for ef in c.get("envFrom", []):
+                sr = ef.get("secretRef")
+                if sr and not sr.get("optional", False):
+                    required.setdefault(sr["name"], set()).add(wl)
+            for e in c.get("env", []):
+                skr = (e.get("valueFrom") or {}).get("secretKeyRef")
+                if skr and not skr.get("optional", False):
+                    required.setdefault(skr["name"], set()).add(wl)
+        for v in spec.get("volumes", []):
+            sec = v.get("secret")
+            if sec and not sec.get("optional", False):
+                required.setdefault(sec["secretName"], set()).add(wl)
+    _, sec_out = H.kubectl(f"-n {H.NS} get secrets --no-headers -o custom-columns=NAME:.metadata.name")
+    present = {ln.strip() for ln in sec_out.splitlines() if ln.strip()}
+    missing = sorted(n for n in required if n not in present)
+    R.check(
+        "infra",
+        "referenced *-secrets all present (roll-safe)",
+        not missing,
+        f"MISSING (pods run now, next roll fails): {missing}"
+        if missing
+        else f"all {len(required)} referenced secrets exist",
+    )
+
+
+def _synthetic_monitor(R: H.Report) -> None:
+    """prod-smoke CronJob: recent runs must succeed, and the monitor must be live.
+
+    A KubeJobFailed on the synthetic monitor means an end-to-end freshness /
+    ingestion assertion is red — the earliest external signal of a data-plane
+    regression. Individual Jobs are GC'd quickly (small history limits), so when
+    no Jobs remain we fall back to the CronJob's own status: a suspended monitor
+    or a stale lastSuccessfulTime is itself a finding (a silenced watchdog).
+    """
+    _, out = H.kubectl(
+        f"-n {H.MON_NS} get jobs --no-headers "
+        f"-o custom-columns=NAME:.metadata.name,SUCCEEDED:.status.succeeded,FAILED:.status.failed,"
+        f"START:.status.startTime"
+    )
+    jobs = []
+    for ln in out.splitlines():
+        f = ln.split()
+        if len(f) >= 4 and f[0].startswith(T.PROD_SMOKE_CRONJOB):
+            jobs.append((f[3], f[0], f[1], f[2]))  # (start, name, succeeded, failed)
+    if jobs:
+        jobs.sort(reverse=True)  # newest start first
+        window = jobs[: T.PROD_SMOKE_LOOKBACK]
+        failed = [n for _s, n, succ, fail in window if H.as_int(fail, 0) > 0 or succ in ("", "<none>", "0")]
+        st = H.FAIL if len(failed) > T.PROD_SMOKE_MAX_FAILED else H.WARN if failed else H.PASS
+        R.add(
+            "monitoring",
+            f"prod-smoke last {len(window)} jobs succeeded",
+            st,
+            f"{len(failed)}/{len(window)} failed: {failed[:4]}"
+            if failed
+            else f"all {len(window)} recent runs Complete",
+        )
+        return
+
+    # No Jobs retained → judge the CronJob status directly (durable signal).
+    _, js = H.kubectl(
+        f"-n {H.MON_NS} get cronjob {T.PROD_SMOKE_CRONJOB} "
+        f"-o jsonpath='{{.spec.suspend}}|{{.status.lastScheduleTime}}|{{.status.lastSuccessfulTime}}'"
+    )
+    parts = js.strip().strip("'").split("|")
+    if len(parts) < 3:
+        R.warn("monitoring", "prod-smoke CronJob status", f"unreadable ({js[:60]})")
+        return
+    suspend, last_sched, last_success = parts[0], parts[1], parts[2]
+    if suspend == "true":
+        R.fail(
+            "monitoring",
+            "prod-smoke monitor active",
+            f"CronJob SUSPENDED — synthetic monitor silenced (last success {last_success or 'never'})",
+        )
+        return
+    # Not suspended: last success must not lag last schedule (recent runs failing).
+    import datetime
+
+    def _age_h(ts: str) -> float:
+        try:
+            dt = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return (datetime.datetime.now(datetime.UTC) - dt).total_seconds() / 3600
+        except ValueError:
+            return -1.0
+
+    succ_age = _age_h(last_success)
+    st = H.FAIL if (succ_age < 0 or succ_age > 2.0) else H.PASS  # */30 schedule → >2h stale = failing
+    R.add(
+        "monitoring",
+        "prod-smoke recent run succeeded",
+        st,
+        f"last success {round(succ_age, 1)}h ago (last schedule {last_sched or '?'})",
+    )
+
+
+def _restart_rates(R: H.Report) -> None:
+    """Restart-RATE (restarts/hour) on liveness-sensitive pods.
+
+    Catches the recurring gliner OOM (P1-A, ~3/h at 12Gi cap) and the nlp
+    article-consumer poison-pill (P0-A, restarts on a many-mention article) — a
+    restart-COUNT check misses a pod that was recently recreated (count reset)
+    but is still storming.
+    """
+    import datetime
+
+    now = datetime.datetime.now(datetime.UTC)
+    for ns, prefix in T.RESTART_RATE_TARGETS:
+        _, out = H.kubectl(
+            f"-n {ns} get pods --no-headers "
+            f"-o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp,"
+            f"RESTARTS:.status.containerStatuses[0].restartCount"
+        )
+        worst_rate, worst_detail = -1.0, ""
+        found = False
+        for ln in out.splitlines():
+            f = ln.split()
+            if len(f) < 3 or not f[0].startswith(prefix):
+                continue
+            found = True
+            try:
+                created = datetime.datetime.fromisoformat(f[1].replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            age_h = max((now - created).total_seconds() / 3600, 0.1)
+            restarts = H.as_int(f[2], 0)
+            rate = restarts / age_h
+            if rate > worst_rate:
+                worst_rate = rate
+                worst_detail = f"{f[0]} {restarts} restarts / {age_h:.1f}h = {rate:.2f}/h"
+        if not found:
+            R.warn("infra", f"restart-rate {prefix}", "no matching pod")
+            continue
+        st = (
+            H.FAIL
+            if worst_rate >= T.POD_RESTART_RATE_FAIL
+            else H.WARN
+            if worst_rate >= T.POD_RESTART_RATE_WARN
+            else H.PASS
+        )
+        R.add("infra", f"restart-rate bounded ({prefix})", st, worst_detail)

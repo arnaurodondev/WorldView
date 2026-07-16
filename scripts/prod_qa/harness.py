@@ -253,6 +253,34 @@ def running_pod(label: str, ns: str = NS) -> str:
     return ""
 
 
+def pod_by_prefix(ns: str, prefix: str) -> str:
+    """First Running pod in `ns` whose name starts with `prefix` (or exact match)."""
+    _, out = kubectl(f"-n {ns} get pods --no-headers")
+    for ln in out.splitlines():
+        f = ln.split()
+        if len(f) >= 3 and f[2] == "Running" and (f[0] == prefix or f[0].startswith(prefix)):
+            return f[0]
+    return ""
+
+
+def df_bytes(ns: str, pod: str, container: str, mount: str) -> tuple[int, int, int]:
+    """Return (total, used, avail) bytes for `mount` inside a pod's filesystem.
+
+    Uses `df -B1` (1-byte blocks) and takes the last data line so a wrapped
+    Filesystem column does not desync the field offsets. Returns (-1,-1,-1) on
+    any failure so the caller can WARN-skip rather than crash.
+    """
+    cflag = f"-c {container} " if container else ""
+    _, out = kubectl(f"-n {ns} exec {pod} {cflag}-- df -B1 {mount}", timeout=30)
+    for ln in reversed(out.splitlines()):
+        f = ln.split()
+        # df output: FS 1B-blocks Used Avail Use% Mounted — total/used/avail are the last-4-before-mount ints.
+        nums = [x for x in f if x.isdigit()]
+        if len(nums) >= 3:
+            return int(nums[0]), int(nums[1]), int(nums[2])
+    return -1, -1, -1
+
+
 def gateway_pod() -> str:
     return running_pod(GATEWAY_LABEL)
 

@@ -47,6 +47,31 @@ def run(ctx: Ctx) -> None:
             f"price-token present={has_price}; {answer[:90]!r}",
             soft=True,
         )
+        # Grounded answers must carry citation URLs, not just titles (F3: every
+        # answer returned citations:[] or {title,url:null} — grounding links lost).
+        cites = parsed.get("citations") if isinstance(parsed, dict) else None
+        cites = cites if isinstance(cites, list) else []
+        with_url = [c for c in cites if isinstance(c, dict) and c.get("url")]
+        R.check(
+            SVC,
+            "grounded answer carries citation URLs",
+            bool(with_url),
+            f"{len(with_url)}/{len(cites)} citations have a url",
+            soft=True,
+        )
+
+    _golden_no_false_refusal(
+        ctx,
+        "chat_fund",
+        "date-anchored fundamentals returns stored value",
+        T.RAG_DATE_ANCHOR_MUST_CONTAIN_ANY,
+    )
+    _golden_no_false_refusal(
+        ctx,
+        "chat_pred",
+        "prediction-market question invokes the tool",
+        T.RAG_PREDICTION_MUST_CONTAIN_ANY,
+    )
 
     # rag_db persistence schema present (tables exist; row counts informational).
     q = H.psql_many(
@@ -62,6 +87,37 @@ def run(ctx: Ctx) -> None:
         "rag_db persistence schema present",
         have_schema,
         f"threads={q['threads'] or '?'} messages={q['messages'] or '?'}",
+    )
+
+
+def _golden_no_false_refusal(ctx: Ctx, key: str, name: str, must_contain_any: list[str]) -> None:
+    """Assert a chat answer whose ground truth IS in the store did not falsely
+    refuse (audit FAIL class) and engages the subject.
+
+    A refusal-template phrase + no expected keyword = a false "not available" or
+    an un-routed tool (both FAILs in the 2026-07-15 chat-quality audit). A -1 /
+    timeout status → WARN (cold-start hang, not a correctness verdict).
+    """
+    R = ctx.report
+    row = ctx.api_row(key)
+    if not row:
+        R.warn(SVC, name, "not probed")
+        return
+    status = row.get("status")
+    if status != 200:
+        # -1 (timeout/cold-hang) is a known latency hazard, not a correctness FAIL.
+        R.warn(SVC, name, f"HTTP {status} {str(row.get('error') or row.get('body', ''))[:80]}")
+        return
+    _, parsed = _json(row)
+    answer = str(parsed.get("answer") or parsed.get("message") or "") if isinstance(parsed, dict) else ""
+    alow = answer.lower()
+    refused = any(p in alow for p in T.RAG_REFUSAL_PATTERNS)
+    engaged = any(k.lower() in alow for k in must_contain_any)
+    R.check(
+        SVC,
+        name,
+        engaged and not refused,
+        f"engaged={engaged} refused={refused}: {answer[:110]!r}",
     )
 
 

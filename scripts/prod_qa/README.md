@@ -5,10 +5,18 @@ platform (Hetzner single-node k3s). It extends the philosophy of the single-file
 `scripts/prod_e2e_smoke.py` with **granular, per-service functional assertions**
 so any small regression is detectable on a re-run — not just "is it up?".
 
-131 checks across 8 layers, every one PASS / WARN / FAIL with an actionable
+~151 checks across 8 layers, every one PASS / WARN / FAIL with an actionable
 message. **Nothing writes to prod**: DB access is `SELECT`-only, the API prober
-only reads (plus one idempotent, rate-limited description-refresh trigger), and
-no cluster state is mutated.
+only reads (plus one idempotent, rate-limited description-refresh trigger, and
+a read-only internal-JWT auth probe), and no cluster state is mutated.
+
+> **v2 (2026-07-15 session regressions).** 20 checks were added so every P0/P1/
+> HIGH issue this session surfaced — MinIO-full write-halt, the content-ingestion
+> outbox backlog, empty `fundamentals_ohlcv` embeddings, the KG→market-data
+> internal-JWT rejection, absent daily OHLCV, unlinked prediction markets, the
+> gliner OOM + nlp poison-pill restart storms, missing `*-secrets`, and the chat
+> false-refusal / no-citation defects — is caught on a re-run. See
+> **v2 regression checks** below for each check and the regression it guards.
 
 ## Running it
 
@@ -57,6 +65,34 @@ traffic (`401` on `/v1/...`, `403` on `/metrics`).
 | `rag_chat` (S8) | grounded chat | golden Q → answer names the company + grounds a `$` price; `rag_db` persistence schema present |
 | `portfolio` (S1+S2) | tenant + upstream ingest | schema present, `/readyz`, instrument-cache populated, S2 ingestion throughput + no stuck leases |
 | `alert` (S10+S9) | alerts + gateway contract | alert schema + rule-type CHECK includes `PREDICTION`, worker pods up, **N backend families reachable via the prober** (BFF proxy wired), gateway `/healthz` |
+
+## v2 regression checks (2026-07-15 session)
+
+Each of these was **added to catch a specific issue this session surfaced** — it
+FAILs (or WARNs) on the broken state and PASSes once fixed. They are wired into
+the existing layers/runner, so `python3 -m scripts.prod_qa.run` includes them.
+
+| Layer | Check | Guards against |
+|-------|-------|----------------|
+| `coarse` | `disk free {minio,postgres,kafka}` | **P0-B**: MinIO `/export` filled its PVC → `XMinioStorageFull` halted every PutObject and stalled the 88k content-store backlog. Free-% + absolute-bytes floors alert before a data volume wedges. |
+| `coarse` | `outbox per-table backlog + age bounded` | content-ingestion hit **111k** undispatched outbox rows; a global sum can mask one wedged service, and a few *very old* undispatched rows signal a stuck dispatcher a `>10m`-count check misses. Judges every outbox table on backlog size **and** oldest-undispatched age. |
+| `coarse` | `referenced *-secrets all present (roll-safe)` | roll-fragility: a running pod keeps its injected Secret in memory, so a deleted `*-secrets` is invisible until the next roll fails to start the pod. Diffs live non-optional refs vs present secrets. |
+| `coarse` | `prod-smoke last N jobs succeeded` | the `monitoring/prod-smoke` synthetic CronJob was flapping `Failed 0/1`; asserts the most-recent N Jobs are all Complete (`KubeJobFailed` = earliest data-plane regression signal). |
+| `coarse` | `restart-rate bounded ({gliner, nlp/content article-consumers})` | **P1-A** gliner OOM (~3/h at the 12Gi cap) and **P0-A** nlp article-consumer poison-pill. Uses restarts/pod-age-hours so a recently-recreated (count-reset) pod that is still storming is still caught. |
+| `market_data` | `daily OHLCV distinct dates` / `bars/instrument` | **F1/D2**: `1d` held ~1 bar/instrument over 3 dates → returns/price-levels/heatmap all null. Asserts real multi-day daily history. |
+| `market_data` | `prediction market→event linkage %` | **D6**: every one of 101 `prediction_markets` had `event_id` NULL despite a populated `prediction_events`. Asserts the market→event FK is set. |
+| `knowledge_graph` | `fundamentals_ohlcv embedding coverage %` | **D1**: the view was 100% empty (NULL embedding + empty `source_text`) while `last_refreshed_at` was current. |
+| `knowledge_graph` | `no stamped-but-empty embedding view` | generic form of D1: any `view_type` whose worker stamped `last_refreshed_at` on many rows but wrote `source_text` on almost none = "reports success, persists nothing". Applies across all view_types so a *new* view regressing the same way is caught. |
+| `knowledge_graph` | `prediction consumer live+bounded ({kg-prediction-enriched,-move}-group)` | PLAN-0056 entity-linking: if these two Kafka consumers are absent/lagging, prediction temporal events + exposure polarity never populate. Asserts both present, with members, bounded lag. |
+| `knowledge_graph` | `internal-JWT KG→market-data signs+verifies` | **D1 root cause / empty-key class**: mints the FundamentalsRefreshWorker's exact `X-Internal-JWT` inside the KG pod and calls market-data; a **401** means the signing key is empty and market-data rejects every call — silently deferring all fundamentals_ohlcv embeddings. |
+| `rag_chat` | `grounded answer carries citation URLs` | **F3**: answers returned `citations:[]` / `{url:null}` — grounding source-links lost. |
+| `rag_chat` | `date-anchored fundamentals returns stored value` | chat falsely refused ("not available") **and confabulated the period to Q4 2026** for MSFT FY-Q4-2024 revenue that IS in the store. Asserts no false refusal + the value appears. |
+| `rag_chat` | `prediction-market question invokes the tool` | Trump-2028 markets are live but chat routed GENERAL and gave a generic "data unavailable" refusal. Asserts the answer engages the market rather than refusing. |
+
+The chat golden questions are templated into the in-pod prober from
+`thresholds.py` (single source of truth). Chat calls that time out on a
+cold-start hang return `-1` → the check **WARNs** (a latency hazard, not a
+correctness verdict) rather than crashing the run.
 
 ## Tuning
 

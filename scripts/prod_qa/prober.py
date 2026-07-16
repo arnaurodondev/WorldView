@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 
 from . import harness as H
+from . import thresholds as T
 
 # The script executed inside the gateway pod. Kept as plain text (no f-string) so
 # the backend code's own braces survive; the date window is templated at the top.
@@ -125,9 +126,14 @@ call("nlp_embed_cjk", NLP + "/embed", "POST",
 # ── alert (S10) ──────────────────────────────────────────────────────────────
 call("al_rules", AL + "/alert-rules")
 
-# ── rag-chat (S8) golden Q (non-stream full generation can take 15-40s) ──────
+# ── rag-chat (S8) golden set (non-stream full generation can take 15-40s; the
+# FIRST call per fresh session can cold-hang >150s, so the warm-up 'chat' call
+# goes first and the two regression questions follow while the orchestrator is
+# warm). Each returns status -1 on timeout → the check WARNs, never crashes. ──
 call("chat", RC + "/chat", "POST",
      {"message": "What was AAPL's most recent closing price?"}, timeout=90)
+call("chat_fund", RC + "/chat", "POST", {"message": "__CHAT_FUND_Q__"}, timeout=90)
+call("chat_pred", RC + "/chat", "POST", {"message": "__CHAT_PRED_Q__"}, timeout=90)
 
 print("PQA_JSON_START" + json.dumps(R) + "PQA_JSON_END")
 """
@@ -139,8 +145,13 @@ def run_prober(report: H.Report) -> tuple[dict, str]:
     if not gw:
         report.fail("gateway", "in-pod prober", "no Running api-gateway pod found")
         return {}, ""
-    cmd = f"kubectl -n {H.NS} exec -i {gw} -- python3 - <<'PYEOF'\n{_PROBER}\nPYEOF"
-    _, out = H.sh(cmd, timeout=240)
+    # Template the golden chat questions in from thresholds (single source of
+    # truth) so the assertion keywords and the asked questions never drift.
+    prober_src = _PROBER.replace("__CHAT_FUND_Q__", T.RAG_DATE_ANCHOR_QUESTION).replace(
+        "__CHAT_PRED_Q__", T.RAG_PREDICTION_QUESTION
+    )
+    cmd = f"kubectl -n {H.NS} exec -i {gw} -- python3 - <<'PYEOF'\n{prober_src}\nPYEOF"
+    _, out = H.sh(cmd, timeout=360)
     if "PQA_JSON_START" not in out:
         report.fail("gateway", "in-pod prober", f"prober did not return JSON: {out[-240:]}")
         return {}, ""

@@ -21,6 +21,8 @@ SVC = "knowledge-graph"
 def run(ctx: Ctx) -> None:
     _db(ctx)
     _age(ctx)
+    _prediction_linking(ctx)
+    _internal_jwt_probe(ctx)
     _api(ctx)
 
 
@@ -36,6 +38,13 @@ def _db(ctx: Ctx) -> None:
             "rel_types": "SELECT count(DISTINCT canonical_type) FROM relations",
             "emb_num": "SELECT count(*) FILTER (WHERE embedding IS NOT NULL) FROM entity_embedding_state",
             "emb_den": "SELECT count(*) FROM entity_embedding_state",
+            "fund_emb_num": "SELECT count(*) FILTER (WHERE embedding IS NOT NULL) "
+            "FROM entity_embedding_state WHERE view_type='fundamentals_ohlcv'",
+            "fund_emb_den": "SELECT count(*) FROM entity_embedding_state WHERE view_type='fundamentals_ohlcv'",
+            "view_stamped": "SELECT string_agg(view_type||':'||stamped||':'||wtext,',') FROM "
+            "(SELECT view_type, count(*) FILTER (WHERE last_refreshed_at IS NOT NULL) stamped, "
+            "count(*) FILTER (WHERE source_text IS NOT NULL AND source_text!='') wtext "
+            "FROM entity_embedding_state GROUP BY view_type) t",
             "temporal": "SELECT count(*) FROM temporal_events",
             "pred_events": "SELECT count(*) FROM temporal_events WHERE event_type='prediction'",
             "exposures": "SELECT count(*) FROM entity_event_exposures",
@@ -50,6 +59,19 @@ def _db(ctx: Ctx) -> None:
     R.floor(SVC, "financial_instrument entities", H.as_int(q["fin"]), T.KG_FIN_INSTRUMENTS_FLOOR)
     R.floor(SVC, "description coverage %", H.pct(q["desc"], q["entities"]), T.KG_DESC_COVERAGE_WARN, unit="%")
     R.floor(SVC, "embedding coverage %", H.pct(q["emb_num"], q["emb_den"]), T.KG_EMBED_COVERAGE_WARN, unit="%")
+
+    # D1: fundamentals_ohlcv view was 100% empty (NULL embedding + empty
+    # source_text) while last_refreshed_at was current — the KG→market-data
+    # internal-JWT was rejected (see _internal_jwt_probe), so no fundamentals text
+    # was ever built. Assert this specific view is actually embedded.
+    R.floor(
+        SVC,
+        "fundamentals_ohlcv embedding coverage %",
+        H.pct(q["fund_emb_num"], q["fund_emb_den"]),
+        T.KG_FUND_OHLCV_EMBED_WARN,
+        unit="%",
+    )
+    _stamped_but_empty(R, q["view_stamped"])
     R.floor(SVC, "active relations", H.as_int(q["rel_active"]), T.KG_RELATIONS_FLOOR)
     R.floor(SVC, "distinct relation types", H.as_int(q["rel_types"]), T.KG_RELATION_TYPES_FLOOR)
     R.floor(SVC, "temporal_events", H.as_int(q["temporal"]), T.KG_TEMPORAL_EVENTS_FLOOR)
@@ -121,6 +143,112 @@ def _age(ctx: Ctx) -> None:
     # A real 1-hop path query returns edges — proves the graph is traversable.
     edges = _age_count("MATCH ()-[r]->()", "r")
     R.check(SVC, "AGE graph has edges", edges > 0, f"{edges} edges", soft=True)
+
+
+def _stamped_but_empty(R: H.Report, encoded: str) -> None:
+    """Generic silent-worker anti-pattern across ALL embedding view_types.
+
+    Encoded as `view_type:stamped:with_text,...`. A view_type whose worker
+    stamped last_refreshed_at on many rows but left source_text empty on most of
+    them is the "reports success, persists nothing" failure (D1's signature). We
+    flag any such view_type, not just fundamentals_ohlcv, so a NEW view that
+    regresses the same way is caught automatically.
+    """
+    offenders: list[str] = []
+    for part in (encoded or "").split(","):
+        bits = part.split(":")
+        if len(bits) != 3:
+            continue
+        vt, stamped_s, wtext_s = bits
+        stamped, wtext = H.as_int(stamped_s, 0), H.as_int(wtext_s, 0)
+        if stamped < T.KG_STAMPED_MIN_ROWS:
+            continue
+        empty_frac = 1 - (wtext / stamped)
+        if empty_frac > T.KG_STAMPED_EMPTY_FRACTION_FAIL:
+            offenders.append(f"{vt}={wtext}/{stamped} have text ({round(empty_frac * 100)}% empty)")
+    R.check(
+        SVC,
+        "no stamped-but-empty embedding view (worker persists text)",
+        not offenders,
+        "; ".join(offenders) if offenders else "all view_types write source_text where stamped",
+    )
+
+
+def _prediction_linking(ctx: Ctx) -> None:
+    """PLAN-0056 prediction entity-linking consumer liveness.
+
+    The bullish/bearish-against-a-company signal depends on two Kafka consumers
+    (`kg-prediction-enriched-group`, `kg-prediction-move-group`). If they are
+    absent or lagging, prediction temporal events + exposure polarity never
+    populate (D6). Assert both groups exist, have members, and are not backed up.
+    """
+    R = ctx.report
+    groups = set(H.kafka_groups())
+    for g in T.KG_PREDICTION_GROUPS:
+        if g not in groups:
+            R.warn(SVC, f"prediction consumer group present ({g})", "group not registered")
+            continue
+        rows, lag, members = H.kafka_group_describe(g)
+        alive = members > 0
+        st = (
+            H.FAIL
+            if lag > T.KG_PREDICTION_LAG_FAIL
+            else H.WARN
+            if (lag > T.KG_PREDICTION_LAG_WARN or not alive)
+            else H.PASS
+        )
+        R.add(SVC, f"prediction consumer live+bounded ({g})", st, f"members={members} lag={lag} rows={rows}")
+
+
+def _internal_jwt_probe(ctx: Ctx) -> None:
+    """Service→service internal-JWT signing works (D1 empty-key class).
+
+    Reproduces the exact call the FundamentalsRefreshWorker makes: mint an
+    X-Internal-JWT inside the KG pod with the worker's own key/dev-secret and hit
+    market-data's authed screener. A 200 proves the trust path; a 401 means the
+    signing key (KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY) is empty/mis-set and
+    market-data is rejecting every call — which silently defers all
+    fundamentals_ohlcv embeddings (the D1 root cause).
+    """
+    R = ctx.report
+    pod = H.running_pod("app.kubernetes.io/name=knowledge-graph")
+    if not pod:
+        R.warn(SVC, "internal-JWT KG→market-data", "no Running knowledge-graph pod")
+        return
+    script = (
+        "import os,json,urllib.request,urllib.error\n"
+        "from observability.internal_jwt import mint_internal_jwt\n"
+        "pem=os.environ.get('KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY','')\n"
+        "base=os.environ.get('KNOWLEDGE_GRAPH_MARKET_DATA_BASE_URL','http://market-data:8003').rstrip('/')\n"
+        f"tok=mint_internal_jwt(sub='system:prod-qa-jwt-probe',ttl_seconds=120,private_key_pem=pem,dev_hs256_secret='{T.JWT_PROBE_DEV_SECRET}')\n"
+        "req=urllib.request.Request(base+'/api/v1/fundamentals/screen',"
+        "data=json.dumps({'filters':[],'limit':1}).encode(),method='POST',"
+        "headers={'X-Internal-JWT':tok,'Content-Type':'application/json'})\n"
+        "try:\n"
+        "    import urllib.request as u\n"
+        "    r=u.urlopen(req,timeout=15)\n"
+        "    print('PQA_JWT',r.status,bool(pem))\n"
+        "except urllib.error.HTTPError as e:\n"
+        "    print('PQA_JWT',e.code,bool(pem))\n"
+        "except Exception as e:\n"
+        "    print('PQA_JWT',-1,bool(pem),type(e).__name__)\n"
+    )
+    cmd = f"kubectl -n {H.NS} exec -i {pod} -- python3 - <<'PYEOF'\n{script}\nPYEOF"
+    _, out = H.sh(cmd, timeout=60)
+    line = next((ln for ln in out.splitlines() if ln.startswith("PQA_JWT")), "")
+    parts = line.split()
+    status = H.as_int(parts[1], -1) if len(parts) >= 2 else -1
+    key_present = parts[2] if len(parts) >= 3 else "?"
+    if status == 200:
+        R.ok(SVC, "internal-JWT KG→market-data signs+verifies", f"200 (key_present={key_present})")
+    elif status in (401, 403):
+        R.fail(
+            SVC,
+            "internal-JWT KG→market-data signs+verifies",
+            f"HTTP {status} — signing key empty/mis-set, market-data rejects (D1 embed-defer)",
+        )
+    else:
+        R.warn(SVC, "internal-JWT KG→market-data signs+verifies", f"probe inconclusive: {line[:80] or out[-80:]}")
 
 
 def _api(ctx: Ctx) -> None:

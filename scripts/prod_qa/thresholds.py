@@ -92,6 +92,71 @@ EXPECTED_WORLDVIEW_WORKLOADS = [
     "alert",
 ]
 
+# ── Disk / PVC free-space floors (P0-B: MinIO full → write-halt regression) ───
+# The 2026-07-15 P0 was worldview-silver filling its 20Gi MinIO PVC to the
+# minimum-free-drive guard, halting ALL PutObject and stalling the 88k
+# content-store backlog. These floors alert BEFORE a volume wedges. Calibrated
+# under observed-good (2026-07-16: minio /export 50% free, postgres 66% free,
+# kafka 98% free) so a slow leak trips WARN with headroom to act.
+PVC_FREE_PCT_WARN = 20.0  # data volume free % below this → WARN (fill trend)
+PVC_FREE_PCT_FAIL = 8.0  # ...→ FAIL (near MinIO min-free guard / write-halt)
+PVC_FREE_BYTES_FAIL = 1_500_000_000  # absolute 1.5 GiB floor regardless of %
+# df targets: (namespace, pod name-prefix, container-or-'', mountpoint). Each is
+# the volume that carries irreplaceable state (article bodies, DBs, event log).
+PVC_DF_TARGETS = [
+    ("infra", "minio-", "", "/export"),  # article bodies — the P0 volume
+    ("infra", "postgres-0", "postgres", "/var/lib/postgresql/data"),  # all service DBs
+    ("infra", "kafka-broker-0", "kafka", "/bitnami/kafka"),  # event log
+]
+
+# ── Ephemeral-secret guard (roll-fragility class) ────────────────────────────
+# Every non-optional Secret a workload references (envFrom / secretKeyRef /
+# volume) MUST exist NOW. A running pod keeps its injected secret in memory, so a
+# secret deleted after pod-create is invisible until the next roll — when the pod
+# fails to start. This guard catches that latent trap by comparing live refs vs
+# present secrets. No threshold: any missing non-optional ref is a FAIL.
+
+# ── Synthetic monitor (prod-smoke CronJob) ───────────────────────────────────
+PROD_SMOKE_CRONJOB = "prod-smoke"  # */30 monitoring CronJob
+PROD_SMOKE_LOOKBACK = 5  # inspect the most-recent N Jobs
+PROD_SMOKE_MAX_FAILED = 1  # more than this many Failed in the window → FAIL
+
+# ── Pod restart-rate (gliner OOM P1-A + nlp poison-pill P0-A regressions) ─────
+# restarts / pod-age-hours on liveness-sensitive pods. gliner OOMs ~3/h when its
+# 12Gi cap is undersized; the nlp article-consumer poison-pills on a many-mention
+# article. A healthy pod restarts rarely, so a low rate floor is sensitive.
+POD_RESTART_RATE_WARN = 0.5  # restarts/hour → WARN
+POD_RESTART_RATE_FAIL = 2.0  # ...→ FAIL (OOM / poison-pill storm)
+# (namespace, pod name-prefix) for the liveness-sensitive workloads.
+RESTART_RATE_TARGETS = [
+    ("infra", "gliner"),
+    ("worldview", "nlp-pipeline-article-consumer"),
+    ("worldview", "content-store-article-consumer"),
+]
+
+# ── Outbox per-table backlog + age (content-ingestion 111k miss regression) ──
+# The existing aggregate outbox check sums undispatched>10m across DBs. This adds
+# a PER-TABLE floor plus an OLDEST-UNDISPATCHED-AGE dimension: a small number of
+# very OLD undispatched rows signals a wedged dispatcher even when the total is
+# low, and a per-table count catches a single service (content-ingestion hit
+# 111k) that a global sum could mask. All observed 0-age on 2026-07-16.
+OUTBOX_TABLE_BACKLOG_WARN = 500  # undispatched rows in one table → WARN
+OUTBOX_TABLE_BACKLOG_FAIL = 10_000  # ...→ FAIL (mass un-dispatch, 111k class)
+OUTBOX_AGE_WARN_MIN = 10.0  # oldest undispatched older than this → WARN
+OUTBOX_AGE_FAIL_MIN = 60.0  # ...→ FAIL (dispatcher wedged, not just slow)
+OUTBOX_DBS = [
+    "portfolio_db",
+    "intelligence_db",
+    "nlp_db",
+    "market_data_db",
+    "content_store_db",
+    "alert_db",
+    "content_ingestion_db",
+    "ingestion_db",
+    "rag_db",
+    "gateway_db",
+]
+
 # ── Market-data (S3) ─────────────────────────────────────────────────────────
 MD_INSTRUMENTS_FLOOR = 400  # instruments row count
 MD_HAS_FUNDAMENTALS_FLOOR = 400  # instruments with has_fundamentals=true
@@ -108,6 +173,14 @@ MD_PRED_TRADES_FLOOR = 500  # prediction_market_trades
 MD_PRED_FRESH_WARN_H = 6.0
 MD_PRED_FRESH_FAIL_H = 48.0
 MD_INSIDER_FLOOR = 200  # insider_transactions rows
+# Daily OHLCV history coverage (F1/D2: 1d held ~1 bar/instrument, 3 dates → the
+# entire returns/levels/heatmap surface was null). Floors sit above the broken
+# state so an incomplete daily backfill is flagged while it fills in.
+MD_OHLCV_1D_DATES_WARN = 30  # distinct 1d bar_dates (was 3 — no daily history)
+MD_OHLCV_1D_BARS_PER_INST_WARN = 60  # avg 1d bars/instrument (was ~2)
+# Prediction market→event linkage (D6: every one of 101 markets had event_id
+# NULL despite a populated prediction_events table). % markets with event_id set.
+MD_PRED_EVENT_LINK_WARN = 50.0
 
 # ── Knowledge-graph (S7 / intelligence_db) ───────────────────────────────────
 KG_ENTITIES_FLOOR = 1_500  # canonical_entities
@@ -123,6 +196,25 @@ KG_EVIDENCE_PROMOTED_WARN = 20.0  # % relation_evidence_raw promoted (promoter d
 KG_GOLDEN_TICKER = "AAPL"
 KG_GOLDEN_NAME_SUBSTR = "Apple"
 KG_GOLDEN_ISIN = "US0378331005"
+# fundamentals_ohlcv embedding coverage (D1: all 713 rows NULL embedding + empty
+# source_text while last_refreshed_at was current — "stamps success, writes
+# nothing"). Root cause: KG→market-data internal-JWT rejected (see JWT probe).
+KG_FUND_OHLCV_EMBED_WARN = 50.0  # % fundamentals_ohlcv rows with an embedding
+# Generic "stamped-but-empty" anti-pattern: for a view_type with many rows
+# stamped last_refreshed_at, at most this fraction may have empty source_text
+# before it reads as a silent-failure worker. Applied per view_type, data-driven.
+KG_STAMPED_EMPTY_FRACTION_FAIL = 0.5
+KG_STAMPED_MIN_ROWS = 50  # only judge view_types with at least this many stamped rows
+# PLAN-0056 prediction entity-linking Kafka groups (must exist + bounded lag).
+KG_PREDICTION_GROUPS = ["kg-prediction-enriched-group", "kg-prediction-move-group"]
+KG_PREDICTION_LAG_WARN = 5_000
+KG_PREDICTION_LAG_FAIL = 100_000
+# Internal-JWT service→service signing (D1 empty-key class). KG mints an
+# X-Internal-JWT to reach market-data; an empty KNOWLEDGE_GRAPH_INTERNAL_JWT_
+# PRIVATE_KEY makes market-data (skip_verification=false) return 401 for every
+# call, silently deferring all fundamentals_ohlcv embeddings. The probe mints the
+# worker's exact token and asserts a 200, not a 401.
+JWT_PROBE_DEV_SECRET = "dev-skip-verification-key-for-kg-fundamentals"  # noqa: S105 (public dev HS256 fallback, not a credential)
 
 # ── NLP pipeline (S6 / nlp_db) ───────────────────────────────────────────────
 NLP_CHUNKS_FLOOR = 3_000  # chunks
@@ -153,3 +245,32 @@ MI_RUNNING_STUCK_WARN = 100  # tasks in RUNNING (possible stuck leases)
 RAG_GOLDEN_QUESTION = "What was AAPL's most recent closing price?"
 RAG_GOLDEN_MUST_CONTAIN_ANY = ["apple", "aapl"]  # case-insensitive
 RAG_MIN_ANSWER_LEN = 20
+
+# ── rag-chat golden regression set (chat-quality audit 2026-07-15) ───────────
+# Phrases that signal a (possibly false) refusal / tool-failure template. A
+# question whose ground truth IS in the store must NOT trip these.
+RAG_REFUSAL_PATTERNS = [
+    "not available",
+    "no data",
+    "couldn't retrieve",
+    "could not retrieve",
+    "not present",
+    "no records",
+    "unable to",
+    "data source may be unavailable",
+    "try again",
+]
+# Date-anchored fundamentals: MSFT FY-Q4-2024 revenue for the quarter ending
+# 2024-06-30 = $64.727B IS in market_data_db.fundamental_metrics, yet chat
+# falsely refused AND confabulated the period to "Q4 2026" (audit FAIL). The
+# answer must NOT refuse and should surface the revenue magnitude.
+RAG_DATE_ANCHOR_QUESTION = (
+    "What was Microsoft's total revenue for its fiscal quarter ending June 30, 2024? Give the dollar figure."
+)
+RAG_DATE_ANCHOR_MUST_CONTAIN_ANY = ["64", "$64"]  # $64.727B — tolerant to rounding
+# Prediction-market routing: markets for "Donald Trump win the 2028 US
+# Presidential Election" are live, but chat routed GENERAL and refused (audit
+# FAIL — tool not invoked). Answer must engage the market, not give a generic
+# refusal.
+RAG_PREDICTION_QUESTION = "What do prediction markets say about Donald Trump winning the 2028 US Presidential Election?"
+RAG_PREDICTION_MUST_CONTAIN_ANY = ["trump", "2028", "market", "odds", "probability", "%"]
