@@ -58,6 +58,12 @@ def _make_uow() -> MagicMock:
     uow.commit = AsyncMock()
     uow.failed_tasks = MagicMock()
     uow.failed_tasks.create = AsyncMock()
+    # Batched-path bulk methods (2026-07-15 throughput fix).
+    uow.ingestion_events.create_many_if_not_exists = AsyncMock(
+        side_effect=lambda events: {eid for eid, _t, _s in events}
+    )
+    uow.prediction_markets.bulk_upsert = AsyncMock()
+    uow.prediction_market_snapshots.bulk_insert_if_not_exists = AsyncMock(return_value=0)
     return uow
 
 
@@ -205,3 +211,64 @@ class TestProcessMessageMalformedData:
 
         with pytest.raises(MalformedDataError, match="occurred_at"):
             await consumer.process_message(key=None, value=bad_event, headers={})
+
+
+class TestProcessBatch:
+    """2026-07-15 throughput fix: batched consume path writes correctly + is idempotent."""
+
+    @pytest.mark.asyncio
+    async def test_batch_bulk_upserts_new_events(self) -> None:
+        uow = _make_uow()
+        consumer = _make_consumer(uow)
+        e2 = {**_VALID_EVENT, "event_id": "01900000-0000-7000-8000-000000000002", "market_id": "0xdef456"}
+        items = [(None, _VALID_EVENT, {}), (None, e2, {})]
+
+        await consumer.process_batch(items)
+
+        # One bulk dedup, one bulk upsert, one bulk snapshot insert — no per-row calls.
+        uow.ingestion_events.create_many_if_not_exists.assert_called_once()
+        uow.prediction_markets.bulk_upsert.assert_called_once()
+        uow.prediction_market_snapshots.bulk_insert_if_not_exists.assert_called_once()
+        uow.prediction_markets.upsert.assert_not_called()
+        # Both markets forwarded to the bulk upsert.
+        markets = uow.prediction_markets.bulk_upsert.call_args[0][0]
+        assert {m.market_id for m in markets} == {"0xabc123", "0xdef456"}
+        # M-04: process_batch must NOT commit — the base owns the single commit.
+        uow.commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_idempotent_all_duplicates_skipped(self) -> None:
+        uow = _make_uow()
+        # Dedup returns NO new ids → whole batch already materialised.
+        uow.ingestion_events.create_many_if_not_exists = AsyncMock(return_value=set())
+        consumer = _make_consumer(uow)
+
+        await consumer.process_batch([(None, _VALID_EVENT, {})])
+
+        uow.prediction_markets.bulk_upsert.assert_not_called()
+        uow.prediction_market_snapshots.bulk_insert_if_not_exists.assert_not_called()
+        uow.commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_only_new_events_written(self) -> None:
+        uow = _make_uow()
+        e2 = {**_VALID_EVENT, "event_id": "01900000-0000-7000-8000-000000000002", "market_id": "0xdef456"}
+        # Only the second event is new.
+        uow.ingestion_events.create_many_if_not_exists = AsyncMock(return_value={e2["event_id"]})
+        consumer = _make_consumer(uow)
+
+        await consumer.process_batch([(None, _VALID_EVENT, {}), (None, e2, {})])
+
+        markets = uow.prediction_markets.bulk_upsert.call_args[0][0]
+        assert [m.market_id for m in markets] == ["0xdef456"]
+
+    @pytest.mark.asyncio
+    async def test_batch_malformed_record_skipped_not_fatal(self) -> None:
+        uow = _make_uow()
+        consumer = _make_consumer(uow)
+        bad = {**_VALID_EVENT, "event_id": "01900000-0000-7000-8000-000000000003", "market_id": None}
+        # One good, one malformed → good one still written, no raise.
+        await consumer.process_batch([(None, _VALID_EVENT, {}), (None, bad, {})])
+
+        markets = uow.prediction_markets.bulk_upsert.call_args[0][0]
+        assert [m.market_id for m in markets] == ["0xabc123"]
