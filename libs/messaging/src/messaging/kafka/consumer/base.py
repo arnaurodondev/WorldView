@@ -266,6 +266,17 @@ class ConsumerConfig:
     max_poll_interval_ms: int = 600_000
     max_poll_records: int = 500
     poll_timeout_seconds: float = 1.0
+    # 2026-07-15 batch-consumption (throughput fix for high-volume snapshot
+    # streams, e.g. market.prediction.v1). Default 1 ⇒ the historical
+    # one-message-per-iteration path runs BYTE-FOR-BYTE unchanged for every
+    # existing consumer. When > 1, run() takes an opt-in batched branch that
+    # calls ``consume(num_messages=consume_batch_size, timeout=poll_timeout)``
+    # and dispatches the whole batch to ``process_batch`` under a SINGLE
+    # unit-of-work + a SINGLE offset commit, amortising the fixed per-iteration
+    # loop overhead by the batch size. Subclasses opting in MUST override
+    # ``process_batch`` and use bulk (multi-row ON CONFLICT) writes to preserve
+    # idempotency.
+    consume_batch_size: int = 1
     max_retries: int = 5
     initial_backoff_seconds: float = 1.0
     max_backoff_seconds: float = 60.0
@@ -542,6 +553,25 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             value: Avro-deserialized message value dict.
             headers: Message headers as a string-to-string dict.
         """
+
+    async def process_batch(
+        self,
+        items: list[tuple[str | None, dict[str, Any], dict[str, str]]],
+    ) -> None:
+        """Process a batch of deserialized messages under a SINGLE unit-of-work.
+
+        Only invoked when ``ConsumerConfig.consume_batch_size > 1`` (opt-in).
+        The active unit of work is committed ONCE by :meth:`_handle_batch` after
+        this returns — implementations MUST NOT commit. Implementations MUST own
+        their own idempotency (bulk dedup + multi-row ``ON CONFLICT`` writes),
+        because the batched path does NOT call :meth:`is_duplicate` per message.
+
+        Args:
+            items: List of ``(key, value, headers)`` tuples, one per message.
+        """
+        raise NotImplementedError(
+            "process_batch must be overridden when consume_batch_size > 1",
+        )
 
     @abstractmethod
     async def is_duplicate(self, event_id: str) -> bool:
@@ -1094,6 +1124,156 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             topic=topic,
             consumer_group=self._config.group_id,
         ).inc()
+
+    # ── 2026-07-15 opt-in batched dispatch (consume_batch_size > 1) ────────────
+    async def _handle_batch(self, msgs: list[Any]) -> None:
+        """Deserialize a batch and dispatch it to :meth:`process_batch`.
+
+        Opens a SINGLE unit of work for the whole batch and commits ONCE, so N
+        messages cost one transaction + (in the run loop) one offset commit +
+        one lag sample — amortising the fixed per-iteration overhead by N.
+
+        Malformed messages are skipped individually (logged) so one bad record
+        never fails the whole batch. A DB/handler error rolls the batch back and
+        re-raises; the run loop then seeks the batch partitions back so the
+        uncommitted batch is redelivered (idempotency is the subclass's job via
+        bulk ``ON CONFLICT`` writes).
+        """
+        items: list[tuple[str | None, dict[str, Any], dict[str, str]]] = []
+        for msg in msgs:
+            topic: str = msg.topic()
+            try:
+                value = self.deserialize_value(msg.value(), self.get_schema_path(topic))
+            except Exception as exc:
+                # Skip poison/malformed records rather than fail the batch.
+                logger.warning("kafka_batch_deserialize_skipped", topic=topic, error=str(exc))
+                continue
+            key_raw = msg.key()
+            key = key_raw.decode() if isinstance(key_raw, bytes) else key_raw
+            headers_raw = msg.headers() or []
+            headers = {k: v.decode() if isinstance(v, bytes) else v for k, v in headers_raw}
+            items.append((key, value, headers))
+
+        if items:
+            async with await self.get_unit_of_work() as uow:
+                try:
+                    await self.process_batch(items)
+                    await uow.commit()
+                except Exception:
+                    await uow.rollback()
+                    raise
+
+        # Count every raw message consumed (including skipped ones — they are
+        # committed past, matching the single-message malformed semantics).
+        for msg in msgs:
+            self._metrics.kafka_messages_consumed_total.labels(
+                topic=msg.topic(),
+                consumer_group=self._config.group_id,
+            ).inc()
+            KAFKA_CONSUMER_MESSAGES.labels(
+                service=self._metrics.service_name if self._metrics is not None else self._config.group_id,
+                topic=msg.topic(),
+                consumer_group=self._config.group_id,
+            ).inc()
+
+    def _seek_back_batch(self, msgs: list[Any]) -> None:
+        """Seek every partition in *msgs* back to its lowest offset in the batch.
+
+        On a batch failure the offsets were NOT committed, but librdkafka's
+        in-memory position has already advanced past the batch. Without this
+        seek the next successful commit would skip the failed batch. Mirrors the
+        single-message :meth:`_seek_back` but for a multi-partition batch.
+        """
+        from confluent_kafka import TopicPartition
+
+        lowest: dict[tuple[str, int], int] = {}
+        for msg in msgs:
+            tp_key = (msg.topic(), msg.partition())
+            off = msg.offset()
+            if tp_key not in lowest or off < lowest[tp_key]:
+                lowest[tp_key] = off
+        for (topic, partition), offset in lowest.items():
+            try:
+                self._consumer.seek(TopicPartition(topic, partition, offset))
+            except Exception as exc:
+                # Partition may have been revoked in a rebalance — the
+                # uncommitted offset is redelivered on reassignment anyway.
+                logger.warning(
+                    "consumer.batch.seek_back_failed",
+                    topic=topic,
+                    partition=partition,
+                    offset=offset,
+                    error=str(exc),
+                )
+
+    async def _run_batch_iteration(self, loop: Any) -> bool:
+        """Run one batched poll→process→commit cycle. Returns True to continue.
+
+        Mirrors the single-message branch of :meth:`run` (transient-error
+        reconnect, progress heartbeat, lag sampling) but consumes up to
+        ``consume_batch_size`` messages per iteration and commits them under a
+        single unit of work + a single offset commit.
+        """
+        from confluent_kafka import KafkaError
+
+        try:
+            msgs = await loop.run_in_executor(
+                None,
+                self._consumer.consume,
+                self._config.consume_batch_size,
+                self._config.poll_timeout_seconds,
+            )
+        except Exception as poll_exc:
+            if self._is_transient_broker_error(poll_exc):
+                logger.warning(
+                    "kafka_batch_transient_error_reconnecting",
+                    group_id=self._config.group_id,
+                    error=str(poll_exc),
+                )
+                await self._reconnect_with_backoff()
+            else:
+                logger.exception("kafka_batch_unexpected_error", error=str(poll_exc))
+            return True
+
+        # Healthy cycle (idle or messages) → heartbeat + reset reconnect budget.
+        self._record_progress()
+        self._reconnect_attempts = 0
+        if not msgs:
+            return True
+
+        good: list[Any] = []
+        for m in msgs:
+            err = m.error()
+            if err is not None:
+                if err.code() != KafkaError._PARTITION_EOF:
+                    logger.error("kafka_batch_poll_error", error=str(err))
+                continue
+            good.append(m)
+        if not good:
+            return True
+
+        try:
+            try:
+                await self._handle_batch(good)
+            except _ASYNCPG_CONN_ERRORS as conn_exc:
+                logger.warning(
+                    "consumer_db_connection_lost_retrying_batch",
+                    error=str(conn_exc),
+                    error_type=type(conn_exc).__name__,
+                )
+                await asyncio.sleep(1.0)
+                await self._handle_batch(good)
+            # One offset commit for the whole batch: commit the CURRENT positions
+            # (advanced by consume()) for all assigned partitions.
+            if not self._config.enable_auto_commit:
+                await loop.run_in_executor(None, self._consumer.commit)
+            await loop.run_in_executor(None, self._record_consumer_lag)
+        except Exception as exc:
+            # Batch failed AFTER the position advanced — seek back so the
+            # uncommitted batch redelivers (idempotent via ON CONFLICT).
+            self._seek_back_batch(good)
+            logger.exception("kafka_batch_handle_error", error=str(exc))
+        return True
 
     # ── F-2 / Fix-3: persistent attempt-count hooks (opt-in) ──────────────────
     #
@@ -1852,6 +2032,14 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 # bounded-backoff reconnect before polling again.
                 if self._consumer is None and not await self._reconnect_with_backoff():
                     continue
+                # 2026-07-15: opt-in batched consumption. Only taken when a
+                # consumer sets consume_batch_size > 1 — every other consumer
+                # falls through to the historical single-message path below,
+                # byte-for-byte unchanged.
+                if self._config.consume_batch_size > 1:
+                    if await self._run_batch_iteration(loop):
+                        continue
+                    break
                 try:
                     msg = await loop.run_in_executor(
                         None,
