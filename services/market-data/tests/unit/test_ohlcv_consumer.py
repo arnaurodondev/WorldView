@@ -463,6 +463,131 @@ async def test_ohlcv_consumer_dead_letters_unknown_timeframe() -> None:
     mock_uow.ohlcv.bulk_upsert_with_priority.assert_not_called()
 
 
+# ── OHLCV-DUP-BARS: non-intraday bar_date normalized to UTC midnight ───────────
+#
+# Root cause of the ~50k excess 1d rows in prod: providers stamp their DAILY bars
+# at different wall-clock times (EODHD @ 00:00Z, Yahoo @ 04:00/05:00Z, Alpaca @
+# 04:00Z).  ``bar_date`` (a timestamptz) is part of the PK, so each provider's
+# copy of the SAME trading day was a distinct row and the provider-priority ON
+# CONFLICT guard never collided → duplicates coexisted.  Fix: truncate
+# non-intraday bar_dates to UTC midnight at ingest so all providers land on ONE
+# conflict target; intraday keeps its full timestamp (the time IS the identity).
+
+
+def _make_daily_bar_jsonl(*, hour: int, source: str) -> bytes:
+    """Single 1d bar whose ``date`` carries the provider's wall-clock ``hour``."""
+    bar = {
+        "symbol": "AAPL",
+        "exchange": "US",
+        "date": f"2024-10-04T{hour:02d}:00:00+00:00",
+        "open": 246.69,
+        "high": 251.0,
+        "low": 245.0,
+        "close": 250.08,
+        "volume": 86_573_200,
+        "adjusted_close": 250.08,
+        "source": source,
+    }
+    return json.dumps(bar).encode()
+
+
+@pytest.mark.asyncio
+async def test_daily_bars_from_different_providers_collide_on_utc_midnight() -> None:
+    """A 1d bar stamped 04:00Z (Alpaca) and one stamped 00:00Z (EODHD) share a key.
+
+    Both must be stored at ``bar_date`` = UTC midnight so they collide on the
+    ``(instrument_id, timeframe, bar_date)`` conflict target — the precondition
+    for the provider-priority upsert to resolve them to ONE row per day.
+    """
+    from market_data.domain.enums import Timeframe
+
+    stored_dates: list[datetime] = []
+    for hour, provider in ((0, "eodhd"), (4, "alpaca")):
+        instrument = _make_instrument()
+        mock_uow = AsyncMock()
+        mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+        mock_uow.ohlcv.bulk_upsert_with_priority = AsyncMock()
+        mock_storage = AsyncMock()
+        mock_storage.get_bytes = AsyncMock(return_value=_make_daily_bar_jsonl(hour=hour, source=provider))
+
+        consumer = _make_consumer(mock_uow, mock_storage)
+        msg = _make_message()
+        msg["provider"] = provider
+        msg["timeframe"] = "1d"
+        msg["event_id"] = f"evt-{provider}"
+        await consumer.process_message(None, msg, {})
+
+        bars = mock_uow.ohlcv.bulk_upsert_with_priority.call_args[0][0]
+        assert len(bars) == 1
+        assert bars[0].timeframe == Timeframe.ONE_DAY
+        # Truncated to UTC midnight regardless of the provider's wall-clock offset.
+        assert bars[0].bar_date == datetime(2024, 10, 4, tzinfo=UTC)
+        stored_dates.append(bars[0].bar_date)
+
+    # Both providers' daily bars now share the SAME conflict key.
+    assert stored_dates[0] == stored_dates[1]
+
+
+@pytest.mark.asyncio
+async def test_intraday_bar_date_keeps_full_timestamp() -> None:
+    """Intraday (1m) bars must retain their full wall-clock timestamp (not truncated)."""
+    from market_data.domain.enums import Timeframe
+
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.ohlcv.bulk_upsert_with_priority = AsyncMock()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_daily_bar_jsonl(hour=14, source="alpaca"))
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    msg = _make_message()
+    msg["provider"] = "alpaca"
+    msg["timeframe"] = "1m"
+    await consumer.process_message(None, msg, {})
+
+    bars = mock_uow.ohlcv.bulk_upsert_with_priority.call_args[0][0]
+    assert bars[0].timeframe == Timeframe.ONE_MIN
+    # Intraday keeps the full 14:00Z timestamp — NOT truncated to midnight.
+    assert bars[0].bar_date == datetime(2024, 10, 4, 14, 0, tzinfo=UTC)
+
+
+def test_alpaca_daily_supersedes_eodhd_on_collided_key() -> None:
+    """Once daily bars collide on the conflict key, priority resolves to ONE winner.
+
+    Mirrors the DB ``ON CONFLICT ... WHERE EXCLUDED.provider_priority >=
+    ohlcv_bars.provider_priority`` guard via ``_dedupe_by_conflict_key`` (whose
+    docstring guarantees it reproduces the upsert's final state): an Alpaca 04:00
+    daily bar (priority 110) supersedes an EODHD 00:00 bar (priority 60) once both
+    are normalized to UTC midnight — exactly one row survives and Alpaca wins.
+    """
+    from market_data.infrastructure.db.repositories.ohlcv_repo import _dedupe_by_conflict_key
+
+    midnight = datetime(2024, 10, 4, tzinfo=UTC)
+    eodhd_row = {
+        "instrument_id": "instr-123",
+        "timeframe": "1d",
+        "bar_date": midnight,  # EODHD 00:00Z, truncated → midnight
+        "provider_priority": 60,
+        "source": "eodhd",
+        "close": 250.08,
+    }
+    alpaca_row = {
+        "instrument_id": "instr-123",
+        "timeframe": "1d",
+        "bar_date": midnight,  # Alpaca 04:00Z, truncated → SAME midnight key
+        "provider_priority": 110,
+        "source": "alpaca",
+        "close": 251.10,
+    }
+
+    winners = _dedupe_by_conflict_key([eodhd_row, alpaca_row], priority_guarded=True)
+
+    assert len(winners) == 1
+    assert winners[0]["source"] == "alpaca"
+    assert winners[0]["provider_priority"] == 110
+
+
 # ── Option B: consumer-local micro-batching (run()/_process_batch) ─────────────
 #
 # These tests exercise the batched consume path directly via ``_process_batch``

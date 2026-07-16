@@ -95,6 +95,35 @@ _TIMEFRAME_ALIASES: dict[str, Timeframe] = {
 }
 
 
+# Non-intraday timeframes carry ONE bar per calendar day/week/month.  Providers
+# stamp their daily bars at DIFFERENT wall-clock times (EODHD @ 00:00Z, Yahoo @
+# 04:00/05:00Z, Alpaca @ 04:00Z), and because ``bar_date`` is a ``timestamptz``
+# that participates in the primary key ``(instrument_id, timeframe, bar_date)``,
+# those per-provider offsets made each provider's copy of the SAME trading day a
+# distinct row — the priority-guarded ON CONFLICT upsert never collided, so
+# duplicates coexisted (~50k excess 1d rows / ~15% inflation in prod, and the
+# weekly/monthly derivation summed volume across the duplicate copies).  Truncate
+# non-intraday bar_dates to UTC midnight so every provider's daily bar lands on
+# the SAME conflict target and the existing ``provider_priority`` guard resolves
+# them to ONE row per day.  Intraday bars (1m..4h) MUST keep their full timestamp
+# — the time-of-day IS the bar identity there.
+_NON_INTRADAY_TIMEFRAMES: frozenset[Timeframe] = frozenset({Timeframe.ONE_DAY, Timeframe.ONE_WEEK, Timeframe.ONE_MONTH})
+
+
+def _normalize_bar_date(raw_date: datetime, tf: Timeframe) -> datetime:
+    """Return the storage ``bar_date`` for a bar, UTC-aware.
+
+    Always coerces a naive datetime to UTC.  For NON-intraday timeframes it
+    additionally truncates to UTC midnight so cross-provider daily bars collide
+    on the ``(instrument_id, timeframe, bar_date)`` conflict key (see
+    :data:`_NON_INTRADAY_TIMEFRAMES`).  Intraday bars keep their full timestamp.
+    """
+    aware = raw_date if raw_date.tzinfo is not None else raw_date.replace(tzinfo=UTC)
+    if tf in _NON_INTRADAY_TIMEFRAMES:
+        return aware.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    return aware
+
+
 def _resolve_consumer_timeframe(timeframe_str: str) -> Timeframe:
     """Resolve a provider timeframe string to a canonical Timeframe.
 
@@ -474,7 +503,7 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             OHLCVBar(
                 instrument_id=instrument.id,
                 timeframe=tf,
-                bar_date=(bar.date if bar.date.tzinfo is not None else bar.date.replace(tzinfo=UTC)),
+                bar_date=_normalize_bar_date(bar.date, tf),
                 open=Decimal(str(bar.open)),
                 high=Decimal(str(bar.high)),
                 low=Decimal(str(bar.low)),
@@ -755,7 +784,7 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             OHLCVBar(
                 instrument_id=instrument.id,
                 timeframe=tf,
-                bar_date=(bar.date if bar.date.tzinfo is not None else bar.date.replace(tzinfo=UTC)),
+                bar_date=_normalize_bar_date(bar.date, tf),
                 open=Decimal(str(bar.open)),
                 high=Decimal(str(bar.high)),
                 low=Decimal(str(bar.low)),

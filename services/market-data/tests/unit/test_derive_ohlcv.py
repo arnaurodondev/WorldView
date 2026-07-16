@@ -405,3 +405,50 @@ async def test_get_or_derive_triggers_derivation_on_miss() -> None:
     uow.ohlcv.bulk_upsert_derived.assert_awaited_once()
     # Final result is the re-fetched refreshed bars
     assert len(result) == 5
+
+
+# ── OHLCV-DUP-BARS: derive volume must not multiply across duplicate daily rows ──
+#
+# Before the ingest-normalization + dedup fix, each provider (EODHD/Yahoo/Alpaca)
+# stored its OWN copy of the SAME trading day (distinct bar_date times of day).
+# ``derive_bars_in_memory`` buckets by calendar week/month and SUMS volume across
+# the daily input, so a day present N times contributed N x its true volume — the
+# weekly/monthly volume double/triple-counted.  Once daily bars are deduped to ONE
+# row per day, the derivation sums each day exactly once.  These tests pin that
+# invariant (Part 3: no derive change is needed once dedup holds).
+
+
+@pytest.mark.unit
+def test_derive_weekly_volume_sums_each_day_once_when_deduped() -> None:
+    """With ONE bar per day (post-dedup) weekly volume = sum of the distinct days."""
+    from market_data.application.use_cases.derive_ohlcv import derive_bars_in_memory
+
+    # Mon..Wed of the same ISO week, one bar each, 1_000 volume per day.
+    daily = [_make_daily_bar("instr-001", datetime(2024, 1, d, tzinfo=UTC), volume=1_000) for d in (1, 2, 3)]
+
+    weekly = derive_bars_in_memory("instr-001", Timeframe.ONE_WEEK, daily)
+
+    assert len(weekly) == 1
+    # 3 distinct days x 1_000 — summed exactly once each.
+    assert weekly[0].volume == 3_000
+
+
+@pytest.mark.unit
+def test_derive_weekly_volume_double_counts_when_duplicate_daily_rows_present() -> None:
+    """Regression witness: duplicate same-day rows (the prod bug) inflate volume.
+
+    This documents WHY the ingest-normalization + dedup migration is the fix: feed
+    the SAME calendar day twice (as EODHD @ 00:00Z and Yahoo @ 04:00Z did) and the
+    derived weekly volume is DOUBLED.  Dedup (one row/day) is what eliminates it.
+    """
+    from market_data.application.use_cases.derive_ohlcv import derive_bars_in_memory
+
+    day = datetime(2024, 1, 1, tzinfo=UTC)
+    eodhd_copy = _make_daily_bar("instr-001", day, volume=1_000)
+    yahoo_copy = _make_daily_bar("instr-001", day.replace(hour=4), volume=1_000)
+
+    weekly = derive_bars_in_memory("instr-001", Timeframe.ONE_WEEK, [eodhd_copy, yahoo_copy])
+
+    assert len(weekly) == 1
+    # Both copies of the SAME day summed → 2_000 (the double-count bug).
+    assert weekly[0].volume == 2_000
