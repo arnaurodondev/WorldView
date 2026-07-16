@@ -51,7 +51,7 @@ EXPECTED_FIELD_COUNTS: dict[str, int] = {
     "market.dataset.fetched": 27,  # Existing mature schema: 27 fields (claim-check pattern)
     # PLAN-0056 Wave Z1 — prediction-market Wave 2 topics (6 new). Envelope(4) + payload.
     "market.prediction.history.v1": 13,
-    "market.prediction.event.v1": 11,
+    "market.prediction.event.v1": 12,  # PLAN-0056 Wave A3: +member_condition_ids (appended last)
     "market.prediction.trade.v1": 12,
     "market.prediction.oi.v1": 9,
     "market.prediction.move.v1": 17,
@@ -528,6 +528,7 @@ class TestPredictionWave2Schemas:
             "end_date": None,
             "market_count": 0,
             "correlation_id": None,
+            "member_condition_ids": [],  # PLAN-0056 Wave A3: default [] applies when omitted (fwd-compat)
         },
         "market.prediction.trade.v1": {"correlation_id": None},
         "market.prediction.oi.v1": {"correlation_id": None},

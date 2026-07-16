@@ -982,8 +982,9 @@ class PgPredictionMarketEventsRepository(PredictionMarketEventsRepository):
             ).bindparams(event_id=event_id, market_ids=list(market_ids))
         )
         # rowcount is authoritative for UPDATE on asyncpg/psycopg; -1 only for
-        # statements where it is undefined (not this one) → clamp to 0.
-        return max(result.rowcount, 0)
+        # statements where it is undefined (not this one) → clamp to 0. int() so
+        # the declared -> int return type holds (SQLAlchemy types rowcount as Any).
+        return max(int(result.rowcount), 0)
 
     async def find_by_event_id(self, event_id: str) -> PredictionEvent | None:
         result = await self._session.execute(
