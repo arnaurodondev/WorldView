@@ -444,6 +444,10 @@ def _make_persist_session() -> tuple[AsyncMock, MagicMock]:
     # (no existing canonical owns the ticker) so existing tests fall through to
     # create_or_get exactly as before.
     repos.canonical_find_by_ticker = AsyncMock(return_value=None)
+    # 2026-07 org↔FI fold guard: for an ``organization`` provisional the promotion
+    # path looks up the FI that already owns this company (by ticker OR normalized
+    # name) and reuses it.  Default None so non-org tests fall through unchanged.
+    repos.canonical_find_fi_for_company = AsyncMock(return_value=None)
     # FR-11 token-superset fallback: get_by_id is consulted to confirm the
     # superset alias match is the SAME entity_type before reuse; default None so
     # the (default find_exact=None) path never reaches it.
@@ -475,6 +479,8 @@ class _PersistRepoPatches:
         canonical_repo.create_or_get = repos.canonical_create_or_get
         # BP-459 ticker dedup (PLAN-0111): expose find_by_ticker pre-lookup.
         canonical_repo.find_by_ticker = repos.canonical_find_by_ticker
+        # 2026-07 org↔FI fold guard: expose the cross-type FI lookup.
+        canonical_repo.find_financial_instrument_for_company = repos.canonical_find_fi_for_company
         # FR-11: expose get_by_id for the token-superset entity_type guard.
         canonical_repo.get_by_id = repos.canonical_get_by_id
 
@@ -672,6 +678,80 @@ class TestPersistEnrichment:
         # No alias inserts, no outbox emission — dedup short-circuit fired.
         repos.alias_insert.assert_not_awaited()
         repos.outbox_append.assert_not_awaited()
+
+    async def test_organization_folds_into_existing_financial_instrument(self) -> None:
+        """Resolver-leak guard (2026-07 KG dedup audit).
+
+        An ``organization``-classed provisional for a company that already has a
+        ``financial_instrument`` canonical MUST fold into the FI — reuse its
+        entity_id and short-circuit — instead of minting a duplicate ORG node.
+        This is the leak the FI-only guards (M-017, BP-459 ticker pre-lookup)
+        never caught because they are gated on
+        ``entity_type == 'financial_instrument'``.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        # The FI "Apple Inc." (AAPL) already owns this company.
+        repos.canonical_find_fi_for_company = AsyncMock(return_value=_EXISTING_OTHER_ID)
+        # GLiNER tags the mention as organization — the exact duplicate class.
+        profile = {
+            "canonical_name": "Apple",
+            "entity_type": "organization",
+            "ticker": None,
+            "isin": None,
+            "aliases": ["Apple"],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Apple",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Folded into the FI canonical — no new ORG row created.
+        assert result == _EXISTING_OTHER_ID
+        repos.canonical_find_fi_for_company.assert_awaited_once()
+        # The FI lookup was consulted with the incoming name (no ticker on the org).
+        fold_kwargs = repos.canonical_find_fi_for_company.await_args.kwargs
+        assert fold_kwargs["canonical_name"] == "Apple"
+        assert fold_kwargs["ticker"] is None
+        # Short-circuit: no canonical INSERT, no aliases, no outbox event.
+        repos.canonical_create_or_get.assert_not_awaited()
+        repos.alias_insert.assert_not_awaited()
+        repos.outbox_append.assert_not_awaited()
+
+    async def test_non_organization_does_not_trigger_fi_fold(self) -> None:
+        """The fold guard is scoped to ``organization`` only.
+
+        A ``person`` / ``product`` / ``financial_instrument`` provisional must
+        NEVER be routed through the org→FI fold (that would collapse unrelated
+        entity types into an instrument).  The guard method must not be called.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {
+            "canonical_name": "Tim Cook",
+            "entity_type": "person",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Tim Cook",
+                profile=profile,
+                embedding=None,
+            )
+
+        repos.canonical_find_fi_for_company.assert_not_awaited()
         # ``create`` (legacy direct path) must never have been awaited.
         repos.canonical_create.assert_not_awaited()
 

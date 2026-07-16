@@ -497,6 +497,47 @@ async def persist_enrichment(
             )
             return reused_id
 
+    # ── ORG→FI fold — resolver leak guard (2026-07 KG dedup audit) ───────────
+    # ROOT CAUSE: every FI-dedup guard above is gated on
+    # ``entity_type == 'financial_instrument'`` (M-017 anchoring, the BP-459
+    # ticker pre-lookup).  GLiNER tags public companies (Apple/Tesla/Nvidia) as
+    # ``organization``, and the design intent (nlp-pipeline
+    # ``entity_resolution.py``) is that the ``financial_instrument`` row IS the
+    # canonical for a public company — an org-class mention must resolve TO it,
+    # never mint a second canonical.  But an ``organization``-classed provisional
+    # promotes straight past those guards: the fuzzy pre-lookup below scores
+    # "Apple" vs alias "apple inc." at ~0.55 (< 0.75), the FR-11 fold only reuses
+    # a SAME-``entity_type`` match, and ``create_or_get``'s partial unique index
+    # excludes financial_instrument rows — so a fresh ORG canonical is inserted
+    # alongside the FI, splitting relations across two nodes (audit: 65 org↔FI
+    # duplicates; ~16% of relations hung off the wrong node).
+    #
+    # FIX: for an ``organization`` provisional, look up the FI that already owns
+    # this company by exact ticker OR exact normalized canonical_name and REUSE
+    # its entity_id.  This is the symmetric cross-type guard the FI paths never
+    # had.  We run it AFTER the FI-only ticker pre-lookup (so a genuine FI still
+    # dedups against FIs) and BEFORE the fuzzy/name folds (an FI identity match
+    # is stronger than a trigram guess).  Only ``organization`` is folded — the
+    # exact duplicate class — so we never collapse a person/place/product/sector
+    # into an instrument.  The normalization SQL is shared verbatim with the
+    # cleanup migration so the guard and the backfill can never disagree.
+    if entity_type == "organization":
+        fi_entity_id = await CanonicalEntityRepository(session).find_financial_instrument_for_company(
+            ticker=ticker,
+            canonical_name=canonical_name,
+        )
+        if fi_entity_id is not None:
+            logger.info(  # type: ignore[no-any-return]
+                "provisional_org_folded_into_financial_instrument",
+                mention_text=mention_text,
+                canonical_name=canonical_name,
+                ticker=ticker,
+                matched_fi_entity_id=str(fi_entity_id),
+            )
+            # Reuse the FI canonical — skip all DB writes and return early. The
+            # caller updates provisional_entity_queue.assigned_entity_id to the FI.
+            return fi_entity_id
+
     # ── Fuzzy pre-lookup — BP-459 provisional entity deduplication ───────────
     # ``create_or_get`` handles exact-name conflicts atomically via ON CONFLICT,
     # but the unique index only triggers when ``lower(canonical_name)`` matches

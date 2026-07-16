@@ -18,6 +18,28 @@ if TYPE_CHECKING:
     from knowledge_graph.domain.models import CanonicalEntity
 
 
+# Corporate-suffix + punctuation stripper — kept VERBATIM in sync with the
+# cleanup migration (``scripts/kg_merge_org_fi_duplicates.py`` ``_NORM_SQL``) so
+# the runtime org→FI fold guard and the backfill can never disagree on what
+# counts as the same company name (``Apple`` == ``Apple Inc.``).
+_ENTITY_SUFFIX_RE = (
+    r"\y(inc|incorporated|corp|corporation|company|co|plc|ltd|limited"
+    r"|group|holdings|holding|nv|sa|ag|the|class [abc])\y"
+)
+
+
+def _normalized_name_sql(col: str) -> str:
+    """Return a SQL expression normalizing ``col`` to a suffix/punctuation-free key.
+
+    ``col`` is always a hardcoded column reference or a bound-param placeholder
+    (``:canonical_name``), never user input.
+    """
+    return (
+        f"btrim(regexp_replace(regexp_replace(regexp_replace(lower({col}), "
+        f"'[^a-z0-9]+', ' ', 'g'), '{_ENTITY_SUFFIX_RE}', ' ', 'g'), '\\s+', ' ', 'g'))"
+    )
+
+
 class CanonicalEntityRepository(CanonicalEntityRepositoryPort):
     """Read-only repository for ``canonical_entities`` in intelligence_db."""
 
@@ -214,6 +236,67 @@ LIMIT 1
             "exchange": row[5],
             "metadata": row[6],
         }
+
+    async def find_financial_instrument_for_company(
+        self,
+        *,
+        ticker: str | None,
+        canonical_name: str,
+    ) -> UUID | None:
+        """Return the ``financial_instrument`` canonical that IS this company, if any.
+
+        Design intent (nlp-pipeline ``entity_resolution.py``): for a *public*
+        company the ``financial_instrument`` row is the canonical — an
+        ``organization`` mention of the same company is meant to resolve TO it,
+        never to mint a second canonical.  Every existing dedup guard in the
+        provisional-promotion path is gated on
+        ``entity_type == 'financial_instrument'`` (M-017 anchoring, the BP-459
+        ticker pre-lookup, the FR-11 token-superset fold), so an
+        ``organization``-classed company (GLiNER tags Apple/Tesla/Nvidia as
+        ``organization``) slips past all of them and creates a duplicate ORG
+        canonical alongside the FI — fragmenting relations across two nodes
+        (2026-07 KG dedup audit: 65 org↔FI duplicates, ~16% of relations hung
+        off the wrong node).
+
+        This is the missing cross-type lookup used by the promotion guard: given
+        the incoming ORG's ticker and/or name, find the FI that already owns the
+        same company by, in priority order:
+          1. exact ticker (case-insensitive) — the strongest identity key; and
+          2. exact NORMALIZED canonical_name — strips corporate suffixes
+             (Inc / Corp / Company / plc / Ltd / Group / Holdings / Class A …)
+             and punctuation so ``Apple`` == ``Apple Inc.`` and
+             ``NVIDIA Corporation`` == ``Nvidia``.
+
+        The normalization SQL below is intentionally IDENTICAL to the cleanup
+        migration (``scripts/kg_merge_org_fi_duplicates.py`` ``_NORM_SQL``) so a
+        row this guard would fold is exactly a row the migration would merge —
+        guard and backfill can never diverge.  Returns the FI ``entity_id`` (the
+        canonical to reuse) or ``None`` when no financial_instrument matches.
+        """
+        # Normalized-name equality: apply the SAME normalization
+        # (``_normalized_name_sql``) to the stored FI canonical_name and to the
+        # incoming name so suffix/punctuation variants collapse.  Normalization
+        # happens in SQL (not Python) on both sides so there is one deterministic
+        # definition, shared verbatim with the cleanup migration.  Only entity
+        # identifiers (column names) are interpolated — from module constants,
+        # never user input — so this is injection-safe (S608 suppressed).
+        sql = (  # — identifiers are module constants, values are bound params
+            "WITH incoming AS (SELECT " + _normalized_name_sql(":canonical_name") + " AS nkey) "
+            "SELECT c.entity_id FROM canonical_entities c, incoming "
+            "WHERE c.entity_type = 'financial_instrument' AND ("
+            "(:ticker IS NOT NULL AND UPPER(c.ticker) = UPPER(:ticker)) "
+            "OR (incoming.nkey <> '' AND " + _normalized_name_sql("c.canonical_name") + " = incoming.nkey)) "
+            # Prefer a ticker match over a name-only match; then lowest entity_id
+            # (deterministic tie-break, matches the migration's FI selection).
+            "ORDER BY (CASE WHEN :ticker IS NOT NULL AND UPPER(c.ticker) = UPPER(:ticker) THEN 0 ELSE 1 END), "
+            "c.entity_id LIMIT 1"
+        )
+        result = await self._session.execute(
+            text(sql),
+            {"ticker": ticker, "canonical_name": canonical_name},
+        )
+        row = result.fetchone()
+        return UUID(str(row[0])) if row else None
 
     async def create_or_get(
         self,
