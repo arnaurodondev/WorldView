@@ -180,6 +180,60 @@ WHERE canonical_name = :canonical_name AND entity_type = :entity_type
         row = result.fetchone()
         return UUID(str(row[0])) if row else None
 
+    async def list_unknown_entities(self, limit: int) -> list[dict[str, object]]:
+        """Fetch canonical entities stuck at ``entity_type='unknown'`` (re-typing sweep).
+
+        Worker 13K (``EntityRetypeWorker``) reads this batch on the read replica,
+        runs the extraction LLM to infer a real type, and writes the result back
+        via :meth:`retype_unknown_entity`.  Ordered by ``created_at`` so the
+        oldest stuck rows drain first; ``limit`` bounds the per-cycle LLM spend.
+
+        Returns the fields the LLM profiler needs as context (name + any
+        identifiers + the existing description).  Read-only — no lock taken, the
+        write-phase UPDATE is guarded on ``entity_type='unknown'`` so a
+        concurrently-typed row is never clobbered.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT entity_id, canonical_name, ticker, isin, description
+FROM canonical_entities
+WHERE entity_type = 'unknown'
+ORDER BY created_at
+LIMIT :limit
+"""),
+            {"limit": limit},
+        )
+        return [
+            {
+                "entity_id": UUID(str(row[0])),
+                "canonical_name": row[1],
+                "ticker": row[2],
+                "isin": row[3],
+                "description": row[4],
+            }
+            for row in result.fetchall()
+        ]
+
+    async def retype_unknown_entity(self, entity_id: UUID, new_type: str) -> bool:
+        """Set ``entity_type`` for a row CURRENTLY typed ``unknown``. Returns rows-affected>0.
+
+        The ``AND entity_type = 'unknown'`` guard makes this a no-op (returns
+        ``False``) when the row was already re-typed by another path since the
+        read phase — so the sweep can never overwrite a better classification.
+        Does NOT commit; the caller owns the transaction (it batches the UPDATE
+        with the ``entity_embedding_state`` row-seeding in one unit of work).
+        """
+        result = await self._session.execute(
+            text("""
+UPDATE canonical_entities
+SET entity_type = :new_type
+WHERE entity_id = :entity_id
+  AND entity_type = 'unknown'
+"""),
+            {"entity_id": str(entity_id), "new_type": new_type},
+        )
+        return int(getattr(result, "rowcount", 0) or 0) > 0
+
     async def patch_metadata(self, entity_id: UUID, patch: dict[str, object]) -> None:
         """Shallow-merge ``patch`` into ``canonical_entities.metadata`` (JSONB).
 

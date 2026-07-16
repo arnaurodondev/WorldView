@@ -32,6 +32,9 @@ def _make_settings() -> MagicMock:
     s.worker_partition_interval_s = 3600
     s.worker_age_sync_interval_s = 60
     s.worker_provisional_enrichment_interval_s = 600  # PLAN-0061 T-A-1
+    # Worker 13K — entity re-typing sweep (2026-07-16 KG deep-quality audit).
+    s.retype_enabled = True
+    s.worker_retype_interval_s = 1800
     return s
 
 
@@ -124,6 +127,44 @@ class TestProvisionalEnrichmentInterval:
             "The job must use worker_provisional_enrichment_interval_s, not "
             "worker_embedding_refresh_interval_s."
         )
+
+
+    def test_entity_retype_job_registered_when_enabled(self) -> None:
+        """Worker 13K registers 'worker_13k_entity_retype' at its interval when enabled."""
+        s = _make_settings()
+        s.retype_enabled = True
+        s.worker_retype_interval_s = 1800
+
+        scheduler = _make_scheduler(workers={})
+        scheduler._settings = s
+        captured: list[dict] = []
+
+        def _capture_add_job(fn, trigger, *args, id, max_instances, coalesce, **kwargs):  # noqa: A002
+            captured.append({"trigger": trigger, "id": id, **kwargs})
+
+        with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
+            scheduler._register_jobs()
+
+        job = next((c for c in captured if c["id"] == "worker_13k_entity_retype"), None)
+        assert job is not None, "worker_13k_entity_retype must be registered when retype_enabled"
+        assert job.get("seconds") == 1800
+
+    def test_entity_retype_job_absent_when_disabled(self) -> None:
+        """Worker 13K is NOT registered when retype_enabled=False."""
+        s = _make_settings()
+        s.retype_enabled = False
+
+        scheduler = _make_scheduler(workers={})
+        scheduler._settings = s
+        captured: list[dict] = []
+
+        def _capture_add_job(fn, trigger, *args, id, max_instances, coalesce, **kwargs):  # noqa: A002
+            captured.append({"id": id})
+
+        with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
+            scheduler._register_jobs()
+
+        assert not any(c["id"] == "worker_13k_entity_retype" for c in captured)
 
 
 class TestEmbeddingRefreshRegistration:

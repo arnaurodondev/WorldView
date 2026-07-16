@@ -209,6 +209,43 @@ def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated",
     )
 
 
+def resolve_canonical_entity_type(
+    raw_type: str | None,
+    *,
+    ticker: str | None = None,
+    tickerless_company_fallback: str = "unknown",
+) -> str:
+    """Normalise an LLM/GLiNER-emitted type string to a canonical entity_type.
+
+    Shared, side-effect-free type-resolution logic extracted so both the
+    provisional-enrichment persist path and the periodic re-typing sweep
+    (Worker 13K — ``EntityRetypeWorker``) apply IDENTICAL rules and can never
+    diverge on what a raw type maps to.
+
+    Rules (mirrors the inline logic in :func:`persist_enrichment`):
+      1. lower/strip/underscore-normalise ``raw_type``.
+      2. remap via :data:`_ENTITY_TYPE_ALIASES`.
+      3. any value not in :data:`_VALID_ENTITY_TYPES` collapses to ``"unknown"``.
+      4. FR-12 tickerless-company hardening: a coarse ``company``-class value
+         (company/corp/firm/…) that resolved to ``financial_instrument`` but
+         carries NO ticker is almost never a tradable instrument.  In the
+         provisional path such rows are downgraded to ``"unknown"``; the
+         re-typing sweep passes ``tickerless_company_fallback="organization"``
+         because these are already-named entities we are explicitly trying to
+         TYPE (leaving them ``unknown`` would be a no-op), and a tickerless
+         company IS an ``organization`` (FR-12 canonical type).
+
+    ``ticker`` should already be normalised (bare symbol) by the caller.
+    """
+    _norm_type = (raw_type or "unknown").lower().strip().replace(" ", "_")
+    entity_type = _ENTITY_TYPE_ALIASES.get(_norm_type, _norm_type)
+    if entity_type not in _VALID_ENTITY_TYPES:
+        entity_type = "unknown"
+    if entity_type == "financial_instrument" and not ticker and _norm_type in _COMPANY_CLASS_ALIASES:
+        entity_type = tickerless_company_fallback
+    return entity_type
+
+
 async def extract_entity_profile(
     llm_client: FallbackChainClient,
     mention_text: str,

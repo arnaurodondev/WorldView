@@ -144,6 +144,19 @@ class KnowledgeGraphScheduler:
             ("embedding_refresh", s.worker_embedding_refresh_interval_s, "worker_13f_embedding"),
             ("partition_management", s.worker_partition_interval_s, "worker_13f_partition"),
         ]
+        # Worker 13K — entity re-typing sweep (2026-07-16 KG deep-quality audit).
+        # Deferred (no immediate first-tick): draining the ``unknown`` bucket can
+        # wait one interval. Gated on ``retype_enabled`` so ops can disable the
+        # LLM sweep without a redeploy. Registered as a stub when the worker is
+        # absent (no LLM configured), so the scheduler topology is stable.
+        # ``is True`` + ``isinstance(int)`` guards keep partial-mock settings in
+        # unit tests (which auto-return Mock attributes) from registering a job
+        # with a non-numeric interval; a real ``Settings`` always satisfies both.
+        _retype_interval = getattr(s, "worker_retype_interval_s", 1800)
+        if getattr(s, "retype_enabled", True) is True and isinstance(_retype_interval, int):
+            deferred_jobs.append(
+                ("entity_retype", _retype_interval, "worker_13k_entity_retype"),
+            )
         for name, interval, job_id in deferred_jobs:
             fn = self._resolve_job(name)
             self._scheduler.add_job(
@@ -312,6 +325,7 @@ def build_workers(
     from knowledge_graph.infrastructure.workers.contradiction_batch import ContradictionBatchWorker
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
     from knowledge_graph.infrastructure.workers.embedding_refresh import EmbeddingRefreshWorker
+    from knowledge_graph.infrastructure.workers.entity_retype import EntityRetypeWorker
     from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
     from knowledge_graph.infrastructure.workers.narrative_generation_worker import NarrativeGenerationWorker
     from knowledge_graph.infrastructure.workers.narrative_refresh import NarrativeRefreshWorker
@@ -505,6 +519,16 @@ def build_workers(
                     # outage does not cause every retry sweep to re-hit the API.
                     base_retry_minutes=settings.provisional_enrichment_base_retry_minutes,
                     max_retry_minutes=settings.provisional_enrichment_max_retry_minutes,
+                    read_session_factory=_read_factory,
+                ),
+                # Worker 13K — re-typing sweep for entity_type='unknown' rows.
+                # Requires the extraction LLM (no LLM → no type inference), so it
+                # lives inside this ``llm_client is not None`` block; when absent
+                # the scheduler falls back to a no-op stub for the job.
+                "entity_retype": EntityRetypeWorker(
+                    write_session_factory,
+                    llm_client,
+                    batch_limit=settings.worker_retype_batch_size,
                     read_session_factory=_read_factory,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(

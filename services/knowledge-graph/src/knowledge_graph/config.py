@@ -220,6 +220,15 @@ class Settings(BaseSettings):
     worker_provisional_enrichment_concurrency: int = 5  # concurrent LLM calls
     worker_provisional_enrichment_max_retries: int = 5  # terminal 'failed' after N failures
 
+    # Worker 13K — entity re-typing sweep (2026-07-16 KG deep-quality audit).
+    # Periodically re-classifies canonical entities stuck at entity_type='unknown'
+    # (audit: ~150 clearly-typable rows with no re-typing path). Read-replica
+    # SELECT → extraction LLM → guarded UPDATE. Interval 1800s = 30 min; batch 100
+    # bounds per-cycle LLM spend. Set retype_enabled=false to disable the sweep.
+    retype_enabled: bool = True  # KNOWLEDGE_GRAPH_RETYPE_ENABLED
+    worker_retype_interval_s: int = 1800  # 30 min
+    worker_retype_batch_size: int = 100  # unknown rows per cycle
+
     # Embedding worker batch controls (PLAN perf-fix)
     # 0 = all due entities per cycle (drain the full queue in one cycle).
     # FIX-LIVE-GG (2026-05-25): default raised from 0->200 alongside the new
