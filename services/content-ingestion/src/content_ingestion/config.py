@@ -199,6 +199,19 @@ class PolymarketEventsProviderSettings(BaseModel):
     backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
     # Poll cadence (PRD-0033 §4.2): events groups change slowly — hourly.
     poll_interval_seconds: float = Field(default=3600.0, ge=60.0)
+    # ── MinIO bronze raw-archive kill-switch (inode-exhaustion P0, 2026-07-16) ──
+    # The deeper-stream adapters write ONE bronze object per record on every poll.
+    # A prod review confirmed NOTHING reads these ``polymarket-{events,clob,trades,
+    # oi}`` objects back — the live materialisation path consumes the Kafka event
+    # payloads (``market.prediction.*``) and the deeper-stream outbox payloads do
+    # NOT even carry ``minio_bronze_key``. The per-record puts (~1k inodes/min via
+    # MinIO's XL layout, ~2-4 inodes/object) exhausted the fixed-inode ext4 volume
+    # in hours. Default OFF so no per-record object is written; the Kafka/outbox
+    # path (the live data flow) is untouched. Flip ON per env ONLY if a raw
+    # replay/audit archive is genuinely needed — and batch it first, or the P0
+    # returns. Env override:
+    # CONTENT_INGESTION_POLYMARKET_EVENTS__BRONZE_ARCHIVE_ENABLED
+    bronze_archive_enabled: bool = False
 
 
 class PolymarketClobProviderSettings(BaseModel):
@@ -247,6 +260,12 @@ class PolymarketClobProviderSettings(BaseModel):
     # cadence at 1h fidelity) a market accrues only a handful of points, so the cap
     # is a safety backstop that also lets a deep backfill drain over cycles.
     max_points_per_market_per_cycle: int = Field(default=2000, ge=1, le=100000)
+    # MinIO bronze raw-archive kill-switch — default OFF (inode-exhaustion P0,
+    # 2026-07-16). CLOB price-history is the highest-rate firehose (one bronze
+    # object per token per market per cycle) and nothing reads it back. See
+    # ``PolymarketEventsProviderSettings.bronze_archive_enabled`` for the full
+    # rationale. Env: CONTENT_INGESTION_POLYMARKET_CLOB__BRONZE_ARCHIVE_ENABLED
+    bronze_archive_enabled: bool = False
 
 
 class PolymarketTradesProviderSettings(BaseModel):
@@ -284,6 +303,11 @@ class PolymarketTradesProviderSettings(BaseModel):
     # backfill, NOT the full historical depth. In steady state (hourly cadence) a
     # market rarely accrues this many trades, so the cap is a safety backstop.
     max_trades_per_market_per_cycle: int = Field(default=500, ge=1, le=50000)
+    # MinIO bronze raw-archive kill-switch — default OFF (inode-exhaustion P0,
+    # 2026-07-16). Trades are high-churn (one bronze object per fill) and nothing
+    # reads them back. See ``PolymarketEventsProviderSettings`` for the rationale.
+    # Env: CONTENT_INGESTION_POLYMARKET_TRADES__BRONZE_ARCHIVE_ENABLED
+    bronze_archive_enabled: bool = False
 
 
 class PolymarketOIProviderSettings(BaseModel):
@@ -294,6 +318,12 @@ class PolymarketOIProviderSettings(BaseModel):
     backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
     # Poll cadence (PRD-0033 §4.2): open-interest is a daily roll-up.
     poll_interval_seconds: float = Field(default=86400.0, ge=60.0)
+    # MinIO bronze raw-archive kill-switch — default OFF (inode-exhaustion P0,
+    # 2026-07-16). Lower-rate than CLOB/trades (one object per market per day) but
+    # still unread; disabled for consistency. See
+    # ``PolymarketEventsProviderSettings`` for the rationale.
+    # Env: CONTENT_INGESTION_POLYMARKET_OI__BRONZE_ARCHIVE_ENABLED
+    bronze_archive_enabled: bool = False
 
 
 class HTTPClientSettings(BaseModel):

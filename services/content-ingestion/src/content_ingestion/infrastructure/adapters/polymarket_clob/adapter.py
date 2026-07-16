@@ -357,18 +357,28 @@ class PolymarketClobHistoryAdapter:
             return None
 
         # Store raw bytes to MinIO bronze (non-fatal on failure).
-        minio_key = _build_bronze_key(token_id, fetched_at)
-        try:
-            raw_payload = json.dumps(raw).encode("utf-8")
-            await self._storage.put_bytes(
-                self._bucket,
-                minio_key,
-                raw_payload,
-                content_type="application/json",
-            )
-            result = dataclasses.replace(result, minio_bronze_key=minio_key)
-        except Exception:
-            logger.warning("polymarket_clob_minio_store_failed", token_id=token_id, exc_info=True)
-            # minio_bronze_key stays None — non-fatal.
+        #
+        # Inode-exhaustion P0 (2026-07-16): this write is one bronze object PER
+        # token PER cycle — the CLOB firehose that burned the volume's inodes.
+        # Nothing reads these objects back (the live path materialises from the
+        # ``market.prediction.history.v1`` Kafka payload, which does not even
+        # carry ``minio_bronze_key``), so the archive is gated OFF by default via
+        # ``bronze_archive_enabled``. When disabled we skip the put entirely and
+        # leave ``minio_bronze_key`` None — identical to the existing put-failure
+        # branch, so downstream is unaffected.
+        if self._settings.bronze_archive_enabled:
+            minio_key = _build_bronze_key(token_id, fetched_at)
+            try:
+                raw_payload = json.dumps(raw).encode("utf-8")
+                await self._storage.put_bytes(
+                    self._bucket,
+                    minio_key,
+                    raw_payload,
+                    content_type="application/json",
+                )
+                result = dataclasses.replace(result, minio_bronze_key=minio_key)
+            except Exception:
+                logger.warning("polymarket_clob_minio_store_failed", token_id=token_id, exc_info=True)
+                # minio_bronze_key stays None — non-fatal.
 
         return result

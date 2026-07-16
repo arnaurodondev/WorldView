@@ -212,3 +212,43 @@ class TestPolymarketClobHistoryAdapter:
 
         assert len(results) == 1
         assert results[0].minio_bronze_key is None
+
+    async def test_bronze_archive_disabled_skips_put(self) -> None:
+        """Inode-exhaustion P0 (2026-07-16): when ``bronze_archive_enabled`` is
+        False (the production default) NO bronze object is written — the CLOB
+        firehose stops burning inodes — yet the fetch-results (the live Kafka
+        path) are still returned with ``minio_bronze_key`` left None."""
+        client = MagicMock()
+        client.fetch_price_history = AsyncMock(return_value=_history(3))
+        storage = AsyncMock()
+        storage.put_bytes = AsyncMock()
+        settings = _adapter_settings()
+        settings.bronze_archive_enabled = False
+        adapter = _make_adapter(client, storage=storage, settings=settings)
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source(["tok_off"]))
+
+        # Data still flows (results returned), but zero bronze objects written.
+        assert len(results) == 1
+        assert len(results[0].points) == 3
+        assert results[0].minio_bronze_key is None
+        storage.put_bytes.assert_not_awaited()
+
+    async def test_bronze_archive_enabled_writes_put(self) -> None:
+        """With the archive explicitly enabled the bronze object IS written and
+        the key is stamped onto the result (opt-in replay/audit path)."""
+        client = MagicMock()
+        client.fetch_price_history = AsyncMock(return_value=_history(2))
+        storage = AsyncMock()
+        storage.put_bytes = AsyncMock()
+        settings = _adapter_settings()
+        settings.bronze_archive_enabled = True
+        adapter = _make_adapter(client, storage=storage, settings=settings)
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source(["tok_on"]))
+
+        assert len(results) == 1
+        assert results[0].minio_bronze_key is not None
+        storage.put_bytes.assert_awaited_once()

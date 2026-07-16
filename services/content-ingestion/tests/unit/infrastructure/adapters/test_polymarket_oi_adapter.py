@@ -130,6 +130,29 @@ class TestPolymarketOIAdapter:
         assert len(results) == 1
         assert results[0].minio_bronze_key is None
 
+    async def test_bronze_archive_disabled_skips_put(self) -> None:
+        """Inode-exhaustion P0 (2026-07-16): default ``bronze_archive_enabled``
+        False → no bronze object written, but the OI snapshot still flows."""
+        client = MagicMock()
+        client.fetch_open_interest = AsyncMock(return_value=_oi_body())
+        storage = AsyncMock()
+        storage.put_bytes = AsyncMock()
+        settings = MagicMock()
+        settings.bronze_archive_enabled = False
+        adapter = PolymarketOIAdapter(
+            client=client,  # type: ignore[arg-type]
+            fetch_log_exists_fn=AsyncMock(return_value=False),  # type: ignore[arg-type]
+            settings=settings,  # type: ignore[arg-type]
+            storage=storage,  # type: ignore[arg-type]
+        )
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source(["cond_off"]))
+
+        assert len(results) == 1
+        assert results[0].minio_bronze_key is None
+        storage.put_bytes.assert_not_awaited()
+
     async def test_no_condition_ids_returns_empty(self) -> None:
         client = MagicMock()
         client.fetch_open_interest = AsyncMock()

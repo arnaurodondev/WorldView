@@ -281,6 +281,25 @@ class TestPolymarketTradesAdapter:
         assert len(results) == 1
         assert results[0].minio_bronze_key is None
 
+    async def test_bronze_archive_disabled_skips_put(self) -> None:
+        """Inode-exhaustion P0 (2026-07-16): the production default
+        ``bronze_archive_enabled=False`` writes NO per-trade bronze object, yet
+        the trade fetch-results (the live Kafka path) still flow."""
+        client = MagicMock()
+        client.fetch_trades_page = AsyncMock(return_value=TradesPage(trades=[_trade("0xoff")], has_more=False))
+        storage = AsyncMock()
+        storage.put_bytes = AsyncMock()
+        settings = _adapter_settings()
+        settings.bronze_archive_enabled = False
+        adapter = _make_adapter(client, storage=storage, settings=settings)
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source(["cond_off"]))
+
+        assert len(results) == 1
+        assert results[0].minio_bronze_key is None
+        storage.put_bytes.assert_not_awaited()
+
     async def test_no_condition_ids_returns_empty(self) -> None:
         client = MagicMock()
         client.fetch_trades_page = AsyncMock()

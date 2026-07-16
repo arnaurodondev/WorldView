@@ -465,18 +465,25 @@ class PolymarketTradesAdapter:
             return None
 
         # Store raw bytes to MinIO bronze (non-fatal on failure).
-        minio_key = _build_bronze_key(trade_id, fetched_at)
-        try:
-            raw_payload = json.dumps(trade).encode("utf-8")
-            await self._storage.put_bytes(
-                self._bucket,
-                minio_key,
-                raw_payload,
-                content_type="application/json",
-            )
-            result = dataclasses.replace(result, minio_bronze_key=minio_key)
-        except Exception:
-            logger.warning("polymarket_trades_minio_store_failed", trade_id=trade_id, exc_info=True)
-            # minio_bronze_key stays None — non-fatal.
+        #
+        # Inode-exhaustion P0 (2026-07-16): one bronze object PER trade fill —
+        # gated OFF by default (``bronze_archive_enabled``) because nothing reads
+        # these objects back (the live path materialises from the
+        # ``market.prediction.trade.v1`` Kafka payload). When disabled we skip the
+        # put and leave ``minio_bronze_key`` None (same as the put-failure branch).
+        if self._settings.bronze_archive_enabled:
+            minio_key = _build_bronze_key(trade_id, fetched_at)
+            try:
+                raw_payload = json.dumps(trade).encode("utf-8")
+                await self._storage.put_bytes(
+                    self._bucket,
+                    minio_key,
+                    raw_payload,
+                    content_type="application/json",
+                )
+                result = dataclasses.replace(result, minio_bronze_key=minio_key)
+            except Exception:
+                logger.warning("polymarket_trades_minio_store_failed", trade_id=trade_id, exc_info=True)
+                # minio_bronze_key stays None — non-fatal.
 
         return result
