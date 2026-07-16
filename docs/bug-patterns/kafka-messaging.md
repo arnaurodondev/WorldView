@@ -1399,3 +1399,35 @@ docker restart worldview-market-data-fundamentals-consumer-1 \
 - Consider setting `session.timeout.ms=90000` and `heartbeat.interval.ms=15000` in confluent_kafka consumer config to give more headroom on slow broker connections at startup
 
 **Regression test**: N/A (infrastructure resilience issue)
+
+---
+
+## BP outbox-dispatcher-throughput — Per-record flush + always-sleep run loop can't keep up with a firehose producer
+
+**Category**: Outbox dispatcher / throughput
+**Severity**: HIGH — silent, unbounded outbox growth → downstream (KG/chat) starvation and data-freshness loss
+**Affected areas**: `BaseOutboxDispatcher` (`libs/messaging`) and every service using its base `run()` / `_dispatch_batch` — chiefly content-ingestion under the Polymarket CLOB history/trades firehose
+**First seen**: 2026-07-15 (prod review — `content_ingestion_db.outbox_events` ~111k undispatched and growing)
+
+**Symptoms**:
+- `outbox_events` pending count grows monotonically while the dispatcher is healthy (no errors, no dead-letters).
+- Kafka produce rate for the outbox topics is far below the insert rate.
+- The dispatcher process is mostly idle (low CPU) despite a large backlog.
+
+**Root Cause** (two compounding defects in the base dispatcher):
+1. **Per-record flush.** `_dispatch_batch` produced → `flush()` → awaited the delivery ACK for **each** record individually, so a batch of N rows paid N sequential broker round-trips. Kafka pipelining was entirely defeated.
+2. **Always-sleep run loop.** After every batch the run loop slept `poll_interval_seconds` (5s) even when a *full* batch came back — capping steady-state throughput at `batch_size / poll_interval` (≈20 rows/s at defaults) regardless of backlog depth.
+
+**Fix**:
+- **Pipelined batch dispatch** (`_dispatch_records_pipelined`): produce the whole leased batch, then issue **one** `flush()`; finalize each record from its delivery callback. Ordering preserved (FIFO produce order; `partition_key` → same partition); at-least-once preserved (only ACKed rows are `mark_published`; produce-time raises / flush failures / never-ACKed rows all `increment_attempts` → retry / dead-letter). A wedged producer (any `TimeoutError`) is reset once per batch.
+- **Drain-when-full** (`DispatcherConfig.continue_when_batch_full`, default `True`): when `len(results) >= batch_size` the run loop re-polls immediately instead of sleeping.
+- Raise `batch_size` for firehose services (content-ingestion `100 → 500`) to amortise the per-batch DB fetch/commit + flush.
+
+Net effect: steady-state throughput moves from `~batch_size / poll_interval` to broker/DB-bound (hundreds → >1k rows/s), enough to drain a six-figure backlog in minutes and then keep pace.
+
+**Prevention**:
+- Never flush-per-record in a batch loop — produce the batch, flush once.
+- Any poll-loop worker draining a queue MUST re-poll immediately when it fetched a *full* page (drain-until-empty), and only idle-sleep when it drained the queue.
+- Alert on outbox pending-count slope (`increase(<ns>_outbox_pending / rate)` trending up over 30 min), not just on dead-letters — a backlog that never errors is invisible otherwise.
+
+**Regression test**: `libs/messaging/tests/test_dispatcher_batch_pipeline.py` (single-flush-per-batch, ordering/keys preserved, mixed success/failure, never-ACKed retried-not-lost, produce-time error resets once, drain-when-full run loop).

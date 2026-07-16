@@ -381,7 +381,14 @@ class Settings(BaseSettings):
     worker_polymarket_task_timeout_seconds: float = 900.0
 
     # ── Outbox / dispatcher ────────────────────────────────────────────────
-    outbox_batch_size: int = 100
+    # Raised 100 -> 500 (BP outbox-dispatcher-throughput). The dispatcher now
+    # pipelines a whole batch through ONE Kafka flush() instead of one flush per
+    # record, so a larger batch amortises the DB fetch/commit + flush round-trip
+    # over more rows — essential to drain the high-volume Polymarket CLOB
+    # firehose backlog. 500 is well under librdkafka's default local queue cap
+    # (queue.buffering.max.messages=100000). Operators can tune via
+    # CONTENT_INGESTION_OUTBOX_BATCH_SIZE.
+    outbox_batch_size: int = 500
     outbox_poll_interval_seconds: float = 5.0
     outbox_lease_seconds: int = 30
     # Raised from 5->20: 5 attempts with 60 s max backoff exhausts in ~5 min,

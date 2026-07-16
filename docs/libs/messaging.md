@@ -421,8 +421,8 @@ the reconnect logic.
 
 | Symbol | Purpose |
 |--------|---------|
-| `BaseOutboxDispatcher` | Lease-based outbox publisher. Hybrid: `dispatch_now()` inline + background `run()` poll loop. Marks records published only after Kafka ACK. Dead-letters records exceeding `max_attempts`. |
-| `DispatcherConfig` | All knobs: `poll_interval_seconds`, `idle_poll_interval_seconds`, `lease_seconds`, `batch_size`, `max_attempts`, `initial_backoff_seconds`/`max_backoff_seconds`/`backoff_multiplier`, `delivery_timeout_seconds`, `immediate_dispatch`, `worker_id` (auto-generated `<hostname>-<uuid8>` when empty). |
+| `BaseOutboxDispatcher` | Lease-based outbox publisher. Hybrid: `dispatch_now()` inline + background `run()` poll loop. **Pipelined batch dispatch**: a batch is produced in full, then a single `flush()` awaits all ACKs (not one flush/ACK per record), and the run loop re-polls immediately after a *full* batch (drain-when-full) instead of sleeping — both are required to keep up with high-volume producers (the Polymarket CLOB firehose). Marks records published only after Kafka ACK; a never-ACKed record is retried, never lost. Dead-letters records exceeding `max_attempts`. |
+| `DispatcherConfig` | All knobs: `poll_interval_seconds`, `idle_poll_interval_seconds`, `lease_seconds`, `batch_size`, `max_attempts`, `initial_backoff_seconds`/`max_backoff_seconds`/`backoff_multiplier`, `delivery_timeout_seconds`, `immediate_dispatch`, `continue_when_batch_full` (default `True` — re-poll immediately after a full batch), `worker_id` (auto-generated `<hostname>-<uuid8>` when empty). |
 | `DeliveryResult` | Outcome of one dispatch: `record_id`, `success`, `topic`, `error`. |
 | `OutboxRecordProtocol` | Structural type for outbox table rows: `id`, `event_type`, `topic`, `payload`, `attempts`, `leased_until`, and optional `partition_key` (when set, used as the Kafka message key for per-aggregate ordering — F-DATA-06; read via `getattr` so legacy rows without it still work). |
 | `OutboxRepositoryProtocol` | Port for outbox table: `fetch_pending`, `mark_published`, `increment_attempts`, `move_to_dead_letter`. |
@@ -465,6 +465,24 @@ CREATE TRIGGER outbox_events_notify
 The default `register_notify_listener` returns `None`, so services that have not
 opted in keep the 5s poll. A `LISTEN` failure (e.g. SQLite in tests) is caught
 and the dispatcher falls back to polling.
+
+**Throughput / draining a backlog (BP outbox-dispatcher-throughput).** The base
+`_dispatch_batch` uses `_dispatch_records_pipelined`: it produces the whole
+leased batch (in FIFO `created_at` order, forwarding `partition_key` as the Kafka
+key) and then issues **one** `flush()` for the batch. The historical path
+produced→flushed→awaited each record individually, so a batch of N rows paid N
+sequential broker round-trips — under the Polymarket CLOB history/trades firehose
+the single FIFO dispatcher could not keep up and `content_ingestion_db.outbox_events`
+grew unbounded (~111k rows). Guarantees are unchanged: **ordering** is preserved
+(librdkafka keeps per-partition produce order; same-`partition_key` rows share a
+partition), and **at-least-once** holds (a row is `mark_published` only when its
+delivery callback fires success; produce-time raises, flush failures, and
+never-ACKed rows all `increment_attempts` → retry / dead-letter). Combined with
+drain-when-full (`continue_when_batch_full`, the run loop skips the
+`poll_interval` sleep after a full batch) this lifts steady-state throughput from
+`~batch_size / poll_interval` rows/s to broker/DB-bound (hundreds→>1k rows/s).
+Services can raise `batch_size` (content-ingestion defaults to `500`) to amortise
+the per-batch DB fetch/commit + flush over more rows.
 
 ### Valkey Client (`messaging.valkey`)
 

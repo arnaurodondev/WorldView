@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import random
 import socket
 import time
@@ -232,6 +233,15 @@ class DispatcherConfig:
         backoff_multiplier: Exponential multiplier.
         delivery_timeout_seconds: Max wait for Kafka delivery ack.
         immediate_dispatch: Attempt dispatch immediately on record creation.
+        continue_when_batch_full: When the run loop fetches a *full* batch
+            (``len(results) >= batch_size``) there is almost certainly more
+            pending work, so loop again immediately instead of sleeping
+            ``poll_interval_seconds``. This is what lets a single dispatcher
+            drain a large backlog (e.g. the Polymarket CLOB firehose) —
+            without it, steady-state throughput is capped at
+            ``batch_size / poll_interval_seconds`` regardless of how much is
+            pending. Defaults to ``True``; set ``False`` to restore the
+            legacy always-sleep-between-batches cadence.
         worker_id: Unique dispatcher instance ID (auto-generated if empty).
     """
 
@@ -245,6 +255,7 @@ class DispatcherConfig:
     backoff_multiplier: float = 2.0
     delivery_timeout_seconds: float = 10.0
     immediate_dispatch: bool = True
+    continue_when_batch_full: bool = True
     worker_id: str = ""
 
     def __post_init__(self) -> None:
@@ -462,19 +473,14 @@ class BaseOutboxDispatcher(ABC):
         ceiling = min(cap, base * (mult ** (attempt - 1)))
         return random.uniform(0, ceiling)  # noqa: S311
 
-    async def _dispatch_record(
-        self,
-        record: OutboxRecordProtocol,
-        uow: UnitOfWorkWithOutboxProtocol,
-    ) -> DeliveryResult:
-        """Attempt to publish a single *record* to Kafka.
+    async def _produce_and_await(self, record: OutboxRecordProtocol) -> BaseException | None:
+        """Produce a single *record* and wait for its Kafka delivery ack.
 
-        Args:
-            record: The outbox record to publish.
-            uow: Active unit of work with outbox repository.
-
-        Returns:
-            A :class:`DeliveryResult` describing the outcome.
+        Returns the delivery error (``None`` on success). This is the
+        one-record-at-a-time path kept for subclasses (market-data, portfolio)
+        whose ``_dispatch_batch`` override dispatches records individually. The
+        base run-loop path uses :meth:`_dispatch_records_pipelined`, which
+        produces the whole batch before a single ``flush()`` for throughput.
         """
         delivery_error: BaseException | None = None
         delivery_event = asyncio.Event()
@@ -512,7 +518,55 @@ class BaseOutboxDispatcher(ABC):
             )
         except Exception as exc:
             delivery_error = exc
+        return delivery_error
 
+    async def _dispatch_record(
+        self,
+        record: OutboxRecordProtocol,
+        uow: UnitOfWorkWithOutboxProtocol,
+    ) -> DeliveryResult:
+        """Publish a single *record* and persist the outcome (single-record path).
+
+        Behaviour is identical to the historical inline implementation:
+        produce → flush → await ack; reset a wedged producer on a broken-producer
+        error; then mark_published / increment_attempts / dead-letter. Kept for
+        subclasses whose ``_dispatch_batch`` override dispatches one record at a
+        time. Does NOT call :meth:`on_delivery_failure` — that remains the
+        caller's responsibility (unchanged contract).
+
+        Args:
+            record: The outbox record to publish.
+            uow: Active unit of work with outbox repository.
+
+        Returns:
+            A :class:`DeliveryResult` describing the outcome.
+        """
+        delivery_error = await self._produce_and_await(record)
+        # Producer recovery (BP outbox-dispatcher-wedged-producer): a delivery
+        # TimeoutError is the signature of a cached producer stuck in an
+        # unrecoverable broken state. Discard it so the next attempt rebuilds a
+        # fresh producer and reconnects — without this, every subsequent
+        # produce() times out forever.
+        if delivery_error is not None and self._is_broken_producer_error(delivery_error):
+            self._reset_producer()
+        return await self._finalize_delivery(record, uow, delivery_error)
+
+    async def _finalize_delivery(
+        self,
+        record: OutboxRecordProtocol,
+        uow: UnitOfWorkWithOutboxProtocol,
+        delivery_error: BaseException | None,
+    ) -> DeliveryResult:
+        """Persist the outcome of a delivery attempt for *record*.
+
+        Shared by the single-record path (:meth:`_dispatch_record`) and the
+        pipelined batch path (:meth:`_dispatch_records_pipelined`). Marks the
+        record published on success, or increments attempts / dead-letters on
+        failure. Does NOT reset the producer or call
+        :meth:`on_delivery_failure` — those are the caller's responsibility so a
+        batch can reset the shared producer at most once after finalizing the
+        whole batch.
+        """
         success = delivery_error is None
 
         if success:
@@ -523,8 +577,6 @@ class BaseOutboxDispatcher(ABC):
             # data.  Matches the dashboard query name
             # ``<namespace>_kafka_messages_produced_total{topic=...}``.
             # Fail-open: a metric increment must never break dispatch.
-            import contextlib
-
             with contextlib.suppress(Exception):
                 self._metrics.kafka_messages_produced_total.labels(topic=record.topic).inc()
             # P3 staleness signal (BP outbox-dispatcher-wedged-producer): record
@@ -543,13 +595,6 @@ class BaseOutboxDispatcher(ABC):
                 topic=record.topic,
             )
         else:
-            # Producer recovery (BP outbox-dispatcher-wedged-producer): a
-            # delivery TimeoutError is the signature of a cached producer stuck
-            # in an unrecoverable broken state. Discard it so the next attempt
-            # rebuilds a fresh producer and reconnects to the broker — without
-            # this, every subsequent produce() times out forever.
-            if self._is_broken_producer_error(delivery_error):
-                self._reset_producer()
             await uow.outbox.increment_attempts(record.id)
             new_attempts = record.attempts + 1
             # Surface the exception *type name* (not just ``str``, which is empty
@@ -593,10 +638,119 @@ class BaseOutboxDispatcher(ABC):
             error=delivery_error,
         )
 
+    async def _dispatch_records_pipelined(
+        self,
+        records: list[OutboxRecordProtocol],
+        uow: UnitOfWorkWithOutboxProtocol,
+    ) -> list[DeliveryResult]:
+        """Produce a whole batch, ``flush()`` once, then finalize each record.
+
+        This is the throughput-critical path (BP outbox-dispatcher-throughput).
+        The historical implementation produced-then-flushed-then-awaited each
+        record individually, so a batch of *N* records paid *N* sequential Kafka
+        round-trips; under a high-volume producer (the Polymarket CLOB firehose)
+        the single FIFO dispatcher could not keep up and the outbox backlog grew
+        unbounded (~111k rows). Producing the entire batch before ONE ``flush()``
+        pipelines the produces into a handful of TCP round-trips.
+
+        Guarantees preserved:
+
+        * **Ordering** — records are produced in ``fetch_pending`` (FIFO
+          ``created_at``) order, and librdkafka maintains per-partition order in
+          produce-call order, so same-``partition_key`` records keep their
+          relative order. Keyless records have no ordering invariant (unchanged).
+        * **At-least-once / no loss** — a record is only ``mark_published`` when
+          its delivery callback fires success. Produce-time raises, flush
+          failures, and never-acked records are all recorded as errors →
+          ``increment_attempts`` / dead-letter → retried on a later cycle.
+        * **Producer recovery** — if any failure looks like a wedged producer
+          (a ``TimeoutError``), the shared producer is reset ONCE after the
+          batch so the next cycle rebuilds and reconnects.
+        """
+        producer = self.get_producer()
+        loop = asyncio.get_event_loop()
+
+        # Per-record delivery state. ``errors`` holds produce-time or delivery
+        # failures keyed by record id; ``fired`` is the set of record ids whose
+        # delivery callback the broker invoked. ``produced_ids`` preserves the
+        # produce order for the never-acked sweep.
+        errors: dict[Any, BaseException] = {}
+        fired: set[Any] = set()
+        produced_ids: list[Any] = []
+
+        def _make_callback(record_id: Any) -> Callable[[Any, Any], None]:
+            def _callback(err: Any, _msg: Any) -> None:
+                fired.add(record_id)
+                if err is not None:
+                    # Match the single-record path: surface a RuntimeError so the
+                    # DLQ error_detail is populated (str(err) is non-empty here).
+                    errors[record_id] = RuntimeError(str(err))
+
+            return _callback
+
+        # 1. Produce the whole batch in FIFO order (preserves per-key ordering).
+        for record in records:
+            try:
+                value = OutboxKafkaValue(event_type=record.event_type, payload=record.payload)
+                partition_key = getattr(record, "partition_key", None)
+                kafka_key = partition_key.encode("utf-8") if partition_key else None
+                callback = _make_callback(record.id)
+                # ``functools.partial`` binds the per-record args at call-build
+                # time (no late-binding closure bug) and keeps the executor call
+                # keyword-correct for confluent's ``produce`` signature.
+                produce_call = functools.partial(
+                    producer.produce,
+                    topic=record.topic,
+                    value=value,
+                    key=kafka_key,
+                    on_delivery=callback,
+                )
+                await loop.run_in_executor(None, produce_call)
+                produced_ids.append(record.id)
+            except Exception as exc:
+                # A produce-time raise (a wedged producer's TimeoutError, or a
+                # local-queue BufferError) fails just this record; the rest of the
+                # batch is still produced and flushed.
+                errors[record.id] = exc
+
+        # 2. A single flush drains the whole batch's produce queue. Delivery
+        #    callbacks fire during this call (on the executor thread).
+        try:
+            await loop.run_in_executor(None, producer.flush, self._config.delivery_timeout_seconds)
+        except Exception as exc:
+            # A flush failure means every not-yet-acked produced record is
+            # undelivered — record the error so they are retried, never lost.
+            for record_id in produced_ids:
+                if record_id not in fired:
+                    errors.setdefault(record_id, exc)
+
+        # 3. Any produced record whose callback never fired within the flush
+        #    window is an undelivered timeout (the wedged-producer signature).
+        for record_id in produced_ids:
+            if record_id not in fired:
+                errors.setdefault(record_id, TimeoutError())
+
+        # 4. Finalize each record IN ORDER; reset the shared producer at most
+        #    once if any failure signals it is wedged.
+        results: list[DeliveryResult] = []
+        producer_wedged = False
+        for record in records:
+            delivery_error = errors.get(record.id)
+            if delivery_error is not None and self._is_broken_producer_error(delivery_error):
+                producer_wedged = True
+            result = await self._finalize_delivery(record, uow, delivery_error)
+            results.append(result)
+            if not result.success:
+                await self.on_delivery_failure(result)
+        if producer_wedged:
+            self._reset_producer()
+        return results
+
     async def _dispatch_batch(self) -> list[DeliveryResult]:
         """Fetch and dispatch one batch of pending outbox records.
 
-        Returns:
+        Uses the pipelined batch path (produce-all → single flush → finalize)
+        for throughput. Returns:
             List of :class:`DeliveryResult` for each dispatched record.
         """
         async with await self.get_unit_of_work() as uow:
@@ -605,12 +759,10 @@ class BaseOutboxDispatcher(ABC):
                 lease_seconds=self._config.lease_seconds,
                 batch_size=self._config.batch_size,
             )
-            results: list[DeliveryResult] = []
-            for record in records:
-                result = await self._dispatch_record(record, uow)
-                results.append(result)
-                if not result.success:
-                    await self.on_delivery_failure(result)
+            if not records:
+                await uow.commit()
+                return []
+            results = await self._dispatch_records_pipelined(list(records), uow)
             await uow.commit()
             return results
 
@@ -674,6 +826,7 @@ class BaseOutboxDispatcher(ABC):
         )
         try:
             while not self._stop_event.is_set():
+                batch_full = False
                 try:
                     results = await self._dispatch_batch()
                     if results:
@@ -683,11 +836,21 @@ class BaseOutboxDispatcher(ABC):
                             success=sum(1 for r in results if r.success),
                             failed=sum(1 for r in results if not r.success),
                         )
+                    # Drain-when-full (BP outbox-dispatcher-throughput): a full
+                    # batch almost certainly means more pending rows, so loop
+                    # again immediately instead of sleeping ``poll_interval``.
+                    # Without this the dispatcher can never catch up on a large
+                    # backlog — throughput is capped at ``batch_size /
+                    # poll_interval`` no matter how much is pending.
+                    batch_full = self._config.continue_when_batch_full and len(results) >= self._config.batch_size
                 except Exception as exc:
                     logger.error("outbox_dispatch_cycle_error", error=str(exc))
 
                 if self._stop_event.is_set():
                     break
+                if batch_full:
+                    # More work is waiting; skip the idle sleep and re-poll now.
+                    continue
                 # Race the wake-up sources: either a NOTIFY landed in the
                 # queue (sub-millisecond latency on a healthy connection)
                 # or the timeout expires (safety net poll).
