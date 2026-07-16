@@ -313,10 +313,25 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #          from the year the user wrote. Companion to the deterministic
     #          fiscal-vs-calendar quarter-end window tolerance on the handler side
     #          (market.py _WINDOW_MATCH_GRACE_DAYS).
-    version="1.25",
+    #   1.26 — 2026-07-16 (prod-review deep pass). The HONOUR-THE-STATED-YEAR +
+    #          named-past-period DATE-ANCHORED rules lived ONLY in the
+    #          FINANCIAL_DATA per-intent addendum, but intent is GENERAL on the
+    #          PLANNING turn (it is inferred only AFTER the first tool batch), so
+    #          the rule never reached the turn that actually picks from_date/
+    #          to_date. da_msft_fy2024q4 still confabulated "2024"->"2026" and
+    #          refused; cmp_nvda_amd_q3 pulled Q1 2024 instead of Q3 2024. Hoist a
+    #          compact form of the rule into the ALWAYS-PRESENT "TOOL DATE
+    #          DISCIPLINE" block so it governs the planning turn regardless of
+    #          inferred intent. Additive; no existing rule relaxed.
+    version="1.26",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.25 adds three prod-review fixes: a PREDICTION MARKETS routing entry + "
+        "(v1.26 hoists HONOUR-THE-STATED-YEAR + named-past-period DATE-ANCHORED "
+        "bounding into the always-present TOOL DATE DISCIPLINE block so it governs "
+        "the GENERAL planning turn — the MSFT year-confabulation and NVDA/AMD "
+        "wrong-quarter miss both happened because the rule was addendum-only and "
+        "the planning turn is always GENERAL. "
+        "v1.25 adds three prod-review fixes: a PREDICTION MARKETS routing entry + "
         "NOT-A-FORECAST carve-out so prediction-market/odds questions call "
         "get_prediction_markets instead of misrouting to GENERAL and refusing; and "
         "an HONOUR THE STATED YEAR rule in DATE-ANCHORED ARGUMENTS so a named past "
@@ -827,7 +842,29 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "TOOL DATE DISCIPLINE:\n"
         "When you call tools that take dates (price history, earnings calendar, economic "
         "events, news search), use {today_iso} as the reference point — never use dates "
-        "from your pre-training cutoff.\n\n"
+        "from your pre-training cutoff.\n"
+        # 1.26 (2026-07-16 prod-review deep pass, da_msft_fy2024q4 + cmp_nvda_amd_q3):
+        # the year/quarter confabulation and the wrong-quarter comparison both
+        # happen on the PLANNING turn, where the per-intent style addendum is
+        # still GENERAL (intent is only inferred AFTER the first tool batch). The
+        # DATE-ANCHORED / HONOUR-THE-STATED-YEAR rules were previously ONLY in the
+        # FINANCIAL_DATA addendum, so they never reached the turn that actually
+        # picks from_date/to_date. Hoist the core rule into this always-present
+        # block so it governs the first tool-call. (Full elaboration remains in the
+        # FINANCIAL_DATA addendum for the synthesis turn.)
+        "HONOUR THE STATED YEAR AND PERIOD — NEVER SUBSTITUTE 'NOW'. When the "
+        "question names a specific past period ('fiscal Q4 2024', 'quarter ending "
+        "June 30 2024', 'Q3 2024', 'in 2023'), the year in your from_date/to_date "
+        "MUST be the exact year the user wrote — copy it verbatim. {today_iso} is "
+        "for recency reasoning ONLY; it is NEVER the year of a named historical "
+        "query. Bound the window to that exact period IN THAT YEAR (e.g. 'fiscal "
+        "Q4 2024 / quarter ending June 30 2024' -> from_date='2024-04-01', "
+        "to_date='2024-06-30'; 'Q3 2024' -> from_date='2024-07-01', "
+        "to_date='2024-09-30'). Silently advancing a past year to today's year, or "
+        "leaving the window on the latest quarters, bounds the query to the wrong "
+        "period and produces a FALSE 'not available' for data that IS in the "
+        "store. Read the period and year from the question; do not infer them from "
+        "today's date.\n\n"
         "CITATIONS:\n"
         "When the tools you call return documents, articles, or chunks with identifiers, "
         "cite them inline using [N1], [N2], … markers — one marker per claim that is "

@@ -1046,7 +1046,26 @@ class TestProdReview20260715Fixes:
         assert "NEVER SUBSTITUTE" in flat
         assert "MUST be the exact year the user named" in flat
 
-    def test_version_bumped_to_1_25(self) -> None:
+    def test_version_bumped_to_1_26(self) -> None:
         from prompts.chat.tool_use import TOOL_USE_SYSTEM_PROMPT_TEMPLATE
 
-        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version == "1.25"
+        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version == "1.26"
+
+    def test_date_anchor_rule_present_on_general_planning_turn(self) -> None:
+        """v1.26: the honour-the-stated-year + named-past-period bounding rule
+        MUST be present even under intent=GENERAL.
+
+        Root cause of the residual da_msft_fy2024q4 confabulation and the
+        cmp_nvda_amd_q3 wrong-quarter miss: the tool-CALL happens on the PLANNING
+        turn, where intent is ALWAYS GENERAL (it is inferred only after the first
+        tool batch). The rule previously lived only in the FINANCIAL_DATA
+        addendum, so the turn that actually picks from_date/to_date never saw it.
+        It must now render on the always-present path regardless of intent.
+        """
+        for intent in ("GENERAL", "FINANCIAL_DATA", "RELATIONSHIP", "MACRO"):
+            flat = " ".join(get_tool_use_system_prompt(intent=intent, today_iso="2026-07-16").split())
+            assert "HONOUR THE STATED YEAR AND PERIOD" in flat, intent
+            assert "NEVER SUBSTITUTE 'NOW'" in flat, intent
+            # The concrete Q3-2024 bounding example anchors the rule for the
+            # comparison miss (cmp_nvda_amd_q3 pulled Q1 instead of Q3).
+            assert "2024-09-30" in flat, intent
