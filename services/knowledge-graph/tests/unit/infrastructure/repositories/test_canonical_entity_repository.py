@@ -75,12 +75,12 @@ class TestCreateOrGetNewEntity:
         # the WHERE clause OR drops the conflict target fires this test.
         call_args = session.execute.call_args_list[0]
         sql_text = str(call_args.args[0])
-        assert (
-            "ON CONFLICT (lower(canonical_name))" in sql_text
-        ), f"Expected ON CONFLICT (lower(canonical_name)) target; got SQL:\n{sql_text}"
-        assert (
-            "WHERE entity_type != 'financial_instrument'" in sql_text
-        ), f"Expected partial-index predicate in ON CONFLICT specifier; got SQL:\n{sql_text}"
+        assert "ON CONFLICT (lower(canonical_name))" in sql_text, (
+            f"Expected ON CONFLICT (lower(canonical_name)) target; got SQL:\n{sql_text}"
+        )
+        assert "WHERE entity_type != 'financial_instrument'" in sql_text, (
+            f"Expected partial-index predicate in ON CONFLICT specifier; got SQL:\n{sql_text}"
+        )
         assert "DO NOTHING" in sql_text, f"Expected DO NOTHING; got SQL:\n{sql_text}"
         params = call_args.args[1]
         assert params["canonical_name"] == "Apple Inc."
@@ -132,9 +132,9 @@ class TestCreateOrGetExistingEntity:
         assert session.execute.await_count == 2
         # Second call MUST be the recovery SELECT keyed on lower(canonical_name).
         select_sql = str(session.execute.call_args_list[1].args[0])
-        assert (
-            "lower(canonical_name) = lower(:canonical_name)" in select_sql
-        ), f"Expected case-insensitive SELECT recovery; got:\n{select_sql}"
+        assert "lower(canonical_name) = lower(:canonical_name)" in select_sql, (
+            f"Expected case-insensitive SELECT recovery; got:\n{select_sql}"
+        )
 
     async def test_raises_when_conflict_but_select_finds_nothing(self) -> None:
         """If ON CONFLICT fired but the existing row vanished (concurrent DELETE),
@@ -219,9 +219,9 @@ class TestConcurrentCreateOrGet:
 
         # All five callers see the SAME entity_id (no duplicate row created).
         entity_ids = {r[0] for r in results}
-        assert entity_ids == {
-            _NEW_ENTITY_ID
-        }, f"Concurrent callers diverged: {entity_ids}.  Expected exactly one entity_id."
+        assert entity_ids == {_NEW_ENTITY_ID}, (
+            f"Concurrent callers diverged: {entity_ids}.  Expected exactly one entity_id."
+        )
         # Exactly one caller reports was_created=True; the rest report False.
         was_created_flags = [r[1] for r in results]
         assert was_created_flags.count(True) == 1, f"Expected exactly one winner, got was_created={was_created_flags}"
@@ -249,9 +249,9 @@ class TestPatchMetadata:
         assert session.execute.await_count == 1
         sql_text = str(session.execute.call_args_list[0].args[0])
         # JSONB shallow-merge — preserves keys not present in the patch.
-        assert (
-            "metadata = COALESCE(metadata, '{}'::jsonb) || cast(:patch AS jsonb)" in sql_text
-        ), f"Expected JSONB shallow-merge UPDATE; got:\n{sql_text}"
+        assert "metadata = COALESCE(metadata, '{}'::jsonb) || cast(:patch AS jsonb)" in sql_text, (
+            f"Expected JSONB shallow-merge UPDATE; got:\n{sql_text}"
+        )
         assert "WHERE entity_id = :entity_id" in sql_text
         params = session.execute.call_args_list[0].args[1]
         assert params["entity_id"] == str(_EXISTING_ENTITY_ID)
@@ -267,3 +267,58 @@ class TestPatchMetadata:
         await repo.patch_metadata(_EXISTING_ENTITY_ID, {})
 
         session.execute.assert_not_awaited()
+
+
+class TestFindFinancialInstrumentForCompany:
+    """Cross-type ORG->FI lookup used by the provisional-promotion dedup guard.
+
+    Regression (2026-07 KG, commit a6bf179be): a ticker-less ``organization``
+    mention binds ``:ticker`` as ``None``.  Because the bind appears only in
+    ``:ticker IS NOT NULL`` / ``UPPER(:ticker)`` positions, asyncpg cannot infer
+    the parameter type and raised ``AmbiguousParameterError`` — aborting
+    provisional enrichment for ~800 ticker-less orgs every 2h.  The fix casts the
+    bind (``CAST(:ticker AS text)``); these tests pin that the SQL carries the
+    cast and that a null-ticker lookup executes without raising.
+    """
+
+    async def test_null_ticker_lookup_does_not_raise_and_binds_none(self) -> None:
+        """A ticker-less org (name-only match) must execute cleanly with ticker=None."""
+        session = AsyncMock()
+        # No FI matches -> fetchone returns None -> function returns None.
+        session.execute = AsyncMock(return_value=_make_result_with_row(None))
+
+        repo = CanonicalEntityRepository(session)
+        result = await repo.find_financial_instrument_for_company(ticker=None, canonical_name="Some Private Company")
+
+        assert result is None
+        # The None ticker is passed straight through as a bound param (never
+        # inlined) so the CAST is what makes the NULL bind legal.
+        params = session.execute.call_args_list[0].args[1]
+        assert params["ticker"] is None
+        assert params["canonical_name"] == "Some Private Company"
+
+    async def test_ticker_bind_is_cast_to_text_in_sql(self) -> None:
+        """Every ``:ticker`` occurrence must be wrapped in ``CAST(:ticker AS text)``."""
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=_make_result_with_row(None))
+
+        repo = CanonicalEntityRepository(session)
+        await repo.find_financial_instrument_for_company(ticker=None, canonical_name="X")
+
+        sql_text = str(session.execute.call_args_list[0].args[0])
+        assert "CAST(:ticker AS text)" in sql_text
+        # No bare ``:ticker`` left un-cast (would re-introduce the ambiguity).
+        assert ":ticker IS NOT NULL" not in sql_text
+        assert "UPPER(:ticker)" not in sql_text
+
+    async def test_returns_matching_fi_entity_id(self) -> None:
+        """When an FI matches by ticker, its entity_id is returned as a UUID."""
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=_make_result_with_row((_EXISTING_ENTITY_ID,)))
+
+        repo = CanonicalEntityRepository(session)
+        result = await repo.find_financial_instrument_for_company(ticker="AAPL", canonical_name="Apple")
+
+        assert result == _EXISTING_ENTITY_ID
+        params = session.execute.call_args_list[0].args[1]
+        assert params["ticker"] == "AAPL"
