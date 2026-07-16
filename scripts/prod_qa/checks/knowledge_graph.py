@@ -37,6 +37,12 @@ def _db(ctx: Ctx) -> None:
             "desc": "SELECT count(*) FILTER (WHERE description IS NOT NULL AND length(description)>0) FROM canonical_entities",
             "rel_active": "SELECT count(*) FROM relations WHERE valid_to IS NULL",
             "rel_types": "SELECT count(DISTINCT canonical_type) FROM relations",
+            "self_loops": "SELECT count(*) FROM relations WHERE valid_to IS NULL AND subject_entity_id=object_entity_id",
+            "rel_prec": f"SELECT count(*) FROM relations WHERE valid_to IS NULL AND confidence>{T.KG_RELATION_CONF_MIN}",
+            "rel_eligible": "SELECT count(*) FROM relations WHERE valid_to IS NULL "
+            f"AND confidence>{T.KG_RELATION_CONF_MIN} AND subject_entity_id<>object_entity_id",
+            "aapl_desc": "SELECT lower(left(coalesce(description,''),600)) FROM canonical_entities "
+            f"WHERE ticker='{T.KG_GOLDEN_TICKER}' AND entity_type='financial_instrument' LIMIT 1",
             "emb_num": "SELECT count(*) FILTER (WHERE embedding IS NOT NULL) FROM entity_embedding_state",
             "emb_den": "SELECT count(*) FROM entity_embedding_state",
             "fund_emb_num": "SELECT count(*) FILTER (WHERE embedding IS NOT NULL) "
@@ -100,6 +106,52 @@ def _db(ctx: Ctx) -> None:
         soft=True,
     )
 
+    # Relation-quality invariants (extraction/promoter regressions):
+    #  * self-loops (subject==object) are meaningless edges the pipeline must drop.
+    #  * precision floor: active relations should overwhelmingly clear the
+    #    confidence gate — a flood of sub-floor relations = a precision regression.
+    R.check(
+        SVC,
+        "no active self-loop relations",
+        H.as_int(q["self_loops"], -1) <= T.KG_SELF_LOOP_FAIL,
+        f"{q['self_loops']} self-loops (subject==object)",
+    )
+    R.floor(
+        SVC,
+        f"relation precision (conf>{T.KG_RELATION_CONF_MIN}) %",
+        H.pct(q["rel_prec"], q["rel_active"]),
+        T.KG_RELATION_PRECISION_FLOOR,
+        unit="%",
+        soft=True,
+    )
+    # graph_edges matview emits both directions of each eligible relation → ≈2x.
+    # A ratio outside the band means the matview is stale or the relation set
+    # diverged from what the matview was built on.
+    eligible = H.as_int(q["rel_eligible"], 0)
+    matview = H.as_int(q["graph_edges"], 0)
+    ratio = round(matview / eligible, 2) if eligible > 0 else -1.0
+    R.check(
+        SVC,
+        "graph_edges matview vs relations parity",
+        eligible > 0 and T.KG_MATVIEW_PARITY_LO <= ratio <= T.KG_MATVIEW_PARITY_HI,
+        f"{matview} edges / {eligible} eligible = {ratio}x (band {T.KG_MATVIEW_PARITY_LO}-{T.KG_MATVIEW_PARITY_HI})",
+        soft=True,
+    )
+
+    # Anti-fabrication spot-probe: a known financial_instrument's stored
+    # description must not assert a human/role identity (a KG hallucination that
+    # fills a ticker's bio with a person's). AAPL's real text is a corporate
+    # description — none of the forbidden role phrases should appear.
+    desc = q["aapl_desc"] or ""
+    hits = [p for p in T.KG_GOLDEN_DESC_FORBIDDEN if p in desc]
+    R.check(
+        SVC,
+        f"{T.KG_GOLDEN_TICKER} description free of role fabrication",
+        bool(desc) and not hits,
+        f"forbidden phrases: {hits}" if hits else (f"clean ({len(desc)}B)" if desc else "no description"),
+        soft=not desc,
+    )
+
     # PLAN-0056 prediction entity-linking (bullish/bearish 'against a company').
     R.check(
         SVC,
@@ -144,6 +196,22 @@ def _age(ctx: Ctx) -> None:
     # A real 1-hop path query returns edges — proves the graph is traversable.
     edges = _age_count("MATCH ()-[r]->()", "r")
     R.check(SVC, "AGE graph has edges", edges > 0, f"{edges} edges", soft=True)
+
+    # AGE↔relational edge parity: the AGE shadow graph is synced from the relational
+    # `relations` table, so its edge count should track the active relation count.
+    # A ratio far below 1 = the shadow-sync stalled (AGE frozen while relations
+    # grow); far above = the relational side lost rows. Either is a sync regression
+    # that pure vertex/edge-presence checks miss.
+    active_rel = H.as_int(H.psql_scalar("intelligence_db", "SELECT count(*) FROM relations WHERE valid_to IS NULL"), 0)
+    ratio = round(edges / active_rel, 2) if active_rel > 0 and edges >= 0 else -1.0
+    R.check(
+        SVC,
+        "AGE edges vs active relations parity",
+        active_rel > 0 and edges >= 0 and T.KG_AGE_PARITY_LO <= ratio <= T.KG_AGE_PARITY_HI,
+        f"{edges} AGE edges / {active_rel} active relations = {ratio}x "
+        f"(band {T.KG_AGE_PARITY_LO}-{T.KG_AGE_PARITY_HI})",
+        soft=True,
+    )
 
 
 def _stamped_but_empty(R: H.Report, encoded: str) -> None:

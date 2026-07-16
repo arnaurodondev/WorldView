@@ -342,3 +342,59 @@ RAG_DATE_ANCHOR_MUST_CONTAIN_ANY = ["64", "$64"]  # $64.727B — tolerant to rou
 # refusal.
 RAG_PREDICTION_QUESTION = "What do prediction markets say about Donald Trump winning the 2028 US Presidential Election?"
 RAG_PREDICTION_MUST_CONTAIN_ANY = ["trump", "2028", "market", "odds", "probability", "%"]
+
+# ── v4: S9 gateway composition-route contracts (driven in-pod via localhost:8000) ─
+# The gateway-S2S fix (fix/gateway-s2s-auth) made the gateway accept its OWN
+# internal JWT (X-Internal-JWT) as a principal, restoring ~8 backend-composing
+# routes that previously 401'd for every service-to-service caller (chat tools,
+# briefings, screener). We drive each real /v1 gateway route in-pod with a user
+# internal JWT and assert a 200 + a non-trivial, well-shaped payload, so a
+# re-break (guard removed / prefix regressed) is visible — not a silent []-return.
+GW_ROUTE_MIN_LEN = 5  # a 200-but-empty envelope below this many bytes → WARN
+
+# ── v4: OHLCV daily-source authority (provider_priority ↔ source integrity) ────
+# ohlcv_bars upserts resolve conflicts by provider_priority (higher wins), so the
+# priority baked onto each row MUST match its source's canonical rank. A drift in
+# that map lets a low-priority feed overwrite an authoritative bar. Canonical map
+# (services/market-data provider registry): alpaca=110, derived=110,
+# yahoo_finance=80, eodhd=60. (Note: daily history is EODHD-backfilled and thus
+# multi-source — the authority is defined by priority, not by row-count share.)
+MD_SOURCE_PRIORITY: dict[str, int] = {"alpaca": 110, "derived": 110, "yahoo_finance": 80, "eodhd": 60}
+MD_DAILY_AUTHORITY_PRIORITY = 110  # a priority-110 source (alpaca/derived) must contribute 1d bars
+
+# ── v4: KG anti-fabrication / relation precision / graph-edge parity ──────────
+KG_SELF_LOOP_FAIL = 0  # active self-loop relations (subject==object) — must be 0
+KG_RELATION_PRECISION_FLOOR = 95.0  # % active relations with confidence > floor (precision gate)
+KG_RELATION_CONF_MIN = 0.1  # confidence floor used by the precision gate
+# AGE shadow graph vs relational relations: the AGE edge count tracks the active
+# relation count within a band (both alive, neither side wedged). 2026-07-16:
+# 5369 AGE edges vs 5185 active relations ≈ 1.04x.
+KG_AGE_PARITY_LO = 0.5  # AGE_edges / active_relations lower bound → below = AGE sync stalled
+KG_AGE_PARITY_HI = 1.8  # ...upper bound → above = relational side lost rows
+# public.graph_edges matview emits BOTH directions → ≈2x the eligible (active,
+# conf>floor, non-self-loop) relations. 2026-07-16: 10242 vs 5185 eligible ≈ 1.98x.
+KG_MATVIEW_PARITY_LO = 1.4
+KG_MATVIEW_PARITY_HI = 2.2
+# Anti-fabrication spot-probe: a known financial_instrument's stored description
+# must not assert a contradicting human/role identity (a classic KG hallucination
+# where a ticker's description is filled with a person's bio). AAPL's real
+# description opens "Apple Inc. designs, manufactures…" — none of these appear.
+KG_GOLDEN_DESC_FORBIDDEN = ["ceo of", "president of", "prime minister", "politician", "actor", "is a person"]
+
+# ── v4: outcome-based pipeline liveness (per 24h) ─────────────────────────────
+# Floors sit far BELOW observed 24h throughput (2026-07-16: docs 198k, relations
+# 5k, embeddings 51k, pred-snaps 73k) — they catch a *silently wedged* worker
+# (near-zero output) faster than consumer lag, without flapping on churn. A wedged
+# worker whose lag is still draining, or one that commits offsets but persists
+# nothing, shows here as an outcome-count collapse.
+PIPE_DOCS_24H_FLOOR = 200  # content_store_db.documents ingested
+PIPE_RELATIONS_24H_FLOOR = 50  # intelligence_db.relations created
+PIPE_EMBEDDINGS_24H_FLOOR = 200  # nlp_db.chunk_embeddings created
+PIPE_PRED_SNAPS_24H_FLOOR = 200  # market_data_db.prediction_market_snapshots
+
+# ── v4: TLS certificate expiry runway (extends the existing issued=True check) ─
+# The issued-status check confirms cert-manager succeeded ONCE; this asserts the
+# cert is not about to lapse (a renewal-loop failure only shows as imminent
+# expiry, never as issued=False). 2026-07-16: api-tls notAfter 2026-10-13 ≈ 89d.
+CERT_EXPIRY_WARN_DAYS = 21
+CERT_EXPIRY_FAIL_DAYS = 7

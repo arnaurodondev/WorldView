@@ -15,9 +15,12 @@ Layers
     knowledge_graph  S7: entity grounding, relations, AGE sync, prediction linking
     nlp_pipeline     S6: chunks/embeddings/NER/routing/relevance + read APIs
     content          S4+S5: news freshness/volume, dedup, title coverage, DLQ
+    pipeline         outcome-based 24h liveness (docs/relations/embeddings/preds)
     rag_chat         S8: grounded golden-answer assertions
     portfolio        S1+S2: schema presence, readiness, ingestion throughput
     alert            S10+S9: alert schema/rule-type, gateway route contract
+    gateway          S9: composition-route contracts + auth invariants (forged/
+                     expired JWT rejected, system-mutation denied, user path works)
 
 EXIT CODE: 0 if no FAIL rows (WARNs allowed); 1 otherwise.
 
@@ -38,9 +41,11 @@ from . import prober
 from .checks import alert as c_alert
 from .checks import coarse as c_coarse
 from .checks import content as c_content
+from .checks import gateway as c_gateway
 from .checks import knowledge_graph as c_kg
 from .checks import market_data as c_md
 from .checks import nlp_pipeline as c_nlp
+from .checks import pipeline as c_pipeline
 from .checks import portfolio as c_portfolio
 from .checks import rag_chat as c_rag
 
@@ -51,9 +56,11 @@ LAYERS: list[tuple[str, object, bool]] = [
     ("knowledge_graph", c_kg, True),
     ("nlp_pipeline", c_nlp, True),
     ("content", c_content, False),
+    ("pipeline", c_pipeline, False),
     ("rag_chat", c_rag, True),
     ("portfolio", c_portfolio, False),
     ("alert", c_alert, True),
+    ("gateway", c_gateway, True),
 ]
 
 

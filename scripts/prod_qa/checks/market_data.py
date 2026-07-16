@@ -39,6 +39,9 @@ def _db(ctx: Ctx) -> None:
             "d1_dates": "SELECT count(DISTINCT bar_date) FROM ohlcv_bars WHERE timeframe='1d'",
             "d1_bars": "SELECT count(*) FROM ohlcv_bars WHERE timeframe='1d'",
             "d1_insts": "SELECT count(DISTINCT instrument_id) FROM ohlcv_bars WHERE timeframe='1d'",
+            "src_prio": "SELECT string_agg(source||':'||provider_priority||':'||c,',') "
+            "FROM (SELECT source, provider_priority, count(*) c FROM ohlcv_bars GROUP BY 1,2) t",
+            "d1_max_prio": "SELECT max(provider_priority) FROM ohlcv_bars WHERE timeframe='1d'",
             "partial_invariant": "SELECT count(*) FROM ohlcv_bars WHERE is_partial AND NOT is_derived",
             "pred_markets": "SELECT count(*) FROM prediction_markets",
             "pred_snaps": "SELECT count(*) FROM prediction_market_snapshots",
@@ -80,6 +83,38 @@ def _db(ctx: Ctx) -> None:
         "is_partial⇒is_derived invariant",
         H.as_int(q["partial_invariant"], 0) == 0,
         f"{q['partial_invariant']} violating rows",
+    )
+
+    # OHLCV source authority: provider_priority (the upsert conflict-resolution key)
+    # must match each source's canonical rank, else a low-priority feed can
+    # overwrite an authoritative bar. Flag any (source, priority) pair that
+    # disagrees with the canonical map.
+    mismatched: list[str] = []
+    for part in (q["src_prio"] or "").split(","):
+        bits = part.split(":")
+        if len(bits) != 3:
+            continue
+        src, prio_s, cnt = bits
+        want = T.MD_SOURCE_PRIORITY.get(src)
+        if want is not None and H.as_int(prio_s) != want:
+            mismatched.append(f"{src}@{prio_s}(want {want}, {cnt} rows)")
+    R.check(
+        SVC,
+        "OHLCV provider_priority↔source integrity",
+        not mismatched,
+        "; ".join(mismatched) if mismatched else f"{len(T.MD_SOURCE_PRIORITY)} known sources rank-consistent",
+    )
+    # Daily authority: a priority-110 source (alpaca/derived) must contribute 1d
+    # bars — if daily loses its highest-authority feed, a stale lower-priority bar
+    # can win the latest-close conflict. (Daily history itself is EODHD-backfilled,
+    # so this asserts the AUTHORITY is present, not that alpaca dominates by count.)
+    d1_max = H.as_int(q["d1_max_prio"], -1)
+    R.check(
+        SVC,
+        "daily bars retain a priority-110 authority source",
+        d1_max >= T.MD_DAILY_AUTHORITY_PRIORITY,
+        f"max 1d provider_priority={d1_max} (need ≥{T.MD_DAILY_AUTHORITY_PRIORITY})",
+        soft=True,
     )
 
     # Per-timeframe staleness: the aggregate freshness check above uses the newest

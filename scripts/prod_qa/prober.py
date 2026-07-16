@@ -30,7 +30,7 @@ _PROBER = r"""
 import json, os, urllib.request, urllib.error, datetime
 
 from api_gateway.oidc import load_rsa_private_key
-from api_gateway.jwt_utils import issue_user_jwt
+from api_gateway.jwt_utils import issue_user_jwt, issue_service_jwt
 
 _pem = os.environ.get("API_GATEWAY_INTERNAL_JWT_PRIVATE_KEY")
 _kid = os.environ.get("API_GATEWAY_JWT_KEY_VERSION", "v1")
@@ -45,6 +45,10 @@ def tok():
     return issue_user_jwt(user_id="0195e2e0-0000-7000-8000-000000000001",
                           tenant_id="0195e2e0-0000-7000-8000-000000000002",
                           oidc_sub="prod-qa", private_key=_pk, kid=_kid, role="user")
+
+def stok():
+    # role="system" service principal (S2S). Gateway allows reads, denies mutation.
+    return issue_service_jwt("prod-qa-s2s", private_key=_pk, kid=_kid)
 
 R = {}
 def call(name, url, method="GET", body=None, timeout=30):
@@ -125,6 +129,64 @@ call("nlp_embed_cjk", NLP + "/embed", "POST",
 
 # ── alert (S10) ──────────────────────────────────────────────────────────────
 call("al_rules", AL + "/alert-rules")
+
+# ── S9 gateway composition routes + auth invariants (v4) ─────────────────────
+# The gateway-S2S fix lets the gateway accept its OWN internal JWT as a principal,
+# so we can drive the REAL /v1 composition routes over localhost:8000 in-pod (the
+# same app the edge serves) and exercise the BFF proxy/compose layer + the S2S
+# least-privilege guard. `gcall` takes an explicit token so we can send a user,
+# a system, a forged (wrong-key), or an expired token per probe.
+GW = "http://localhost:8000/v1"
+def gcall(name, url, method="GET", body=None, token=None, timeout=25):
+    try:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method,
+              headers={"X-Internal-JWT": token or tok(), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read(6000).decode("utf-8", "replace")
+            R[name] = {"status": r.status, "len": len(raw), "body": raw}
+    except urllib.error.HTTPError as e:
+        R[name] = {"status": e.code, "len": 0, "body": e.read(300).decode("utf-8", "replace")}
+    except Exception as e:
+        R[name] = {"status": -1, "len": 0, "error": str(e)[:200]}
+
+# resolve a second entity (MSFT) for the pairwise paths/between route.
+call("md_msft", MD + "/instruments/lookup?symbol=MSFT")
+mid = None
+try:
+    mid = json.loads(R["md_msft"]["body"]).get("id")
+except Exception:
+    pass
+
+# S9 composition-route contracts (user principal → 200 + shaped payload).
+gcall("gw_top_movers", GW + "/market/top-movers?type=gainers&period=1D&limit=5")
+gcall("gw_screen", GW + "/fundamentals/screen", "POST",
+      {"filters": [{"field": "market_cap", "op": "gte", "value": 1e11}], "limit": 3})
+gcall("gw_econ_cal", GW + "/fundamentals/economic-calendar")
+gcall("gw_alerts_pending", GW + "/alerts/pending")
+gcall("gw_brief", GW + "/briefings/morning", timeout=60)
+if aid:
+    gcall("gw_intel", GW + "/entities/%s/intelligence" % aid)
+if aid and mid:
+    gcall("gw_paths", GW + "/paths/between?source=%s&target=%s" % (aid, mid))
+
+# Auth invariants (positive + negative), all through the gateway edge app:
+#  * forged  = user JWT signed by a FRESH random RSA key (wrong signature) → 401
+#  * expired = valid gateway signer but exp in the past → 401
+#  * system read allowed (200); system MUTATION denied by the S2S guard (401)
+#  * user MUTATION passes the guard → 422 (empty body validation), never a mutation
+from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+_forged_key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_forged = issue_user_jwt(user_id="0195e2e0-0000-7000-8000-000000000001",
+                         tenant_id="0195e2e0-0000-7000-8000-000000000002",
+                         oidc_sub="prod-qa", private_key=_forged_key, kid=_kid, role="user")
+_expired = issue_service_jwt("prod-qa-expired", private_key=_pk, kid=_kid, ttl_seconds=-120)
+_AUTH_URL = GW + "/market/top-movers?type=gainers&period=1D&limit=5"
+gcall("auth_forged", _AUTH_URL, token=_forged)
+gcall("auth_expired", _AUTH_URL, token=_expired)
+gcall("auth_system_read", _AUTH_URL, token=stok())
+gcall("auth_system_mutation", GW + "/alerts", "POST", {}, token=stok())
+gcall("auth_user_mutation", GW + "/alerts", "POST", {}, token=tok())
 
 # ── rag-chat (S8) golden set (non-stream full generation can take 15-40s; the
 # FIRST call per fresh session can cold-hang >150s, so the warm-up 'chat' call

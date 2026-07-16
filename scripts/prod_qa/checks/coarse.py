@@ -293,6 +293,28 @@ def _edge_and_tls(R: H.Report) -> None:
         R.check("edge", f"internal route blocked {path}", ic.strip() in ("401", "403", "404"), f"got {ic.strip()}")
     _, cert = H.kubectl(f"-n {H.NS} get certificate api-tls -o jsonpath='{{.status.conditions[0].status}}'")
     R.check("edge", "TLS cert (api-tls) issued", cert.strip() == "True", f"ready={cert.strip()}")
+    _cert_expiry(R)
+
+
+def _cert_expiry(R: H.Report) -> None:
+    """TLS cert renewal runway. issued=True only proves cert-manager succeeded
+    ONCE — a stuck renewal loop shows up solely as an approaching notAfter. Assert
+    days-until-expiry so a lapsing cert is caught with time to intervene."""
+    import datetime
+
+    _, na = H.kubectl(f"-n {H.NS} get certificate api-tls -o jsonpath='{{.status.notAfter}}'")
+    na = na.strip()
+    if not na:
+        R.warn("edge", "TLS cert (api-tls) expiry runway", "no notAfter on certificate (skipped)")
+        return
+    try:
+        exp = datetime.datetime.fromisoformat(na.replace("Z", "+00:00"))
+        days = round((exp - datetime.datetime.now(datetime.UTC)).total_seconds() / 86400, 1)
+    except ValueError:
+        R.warn("edge", "TLS cert (api-tls) expiry runway", f"unparseable notAfter: {na}")
+        return
+    st = H.FAIL if days < T.CERT_EXPIRY_FAIL_DAYS else H.WARN if days < T.CERT_EXPIRY_WARN_DAYS else H.PASS
+    R.add("edge", "TLS cert (api-tls) expiry runway", st, f"{days}d until {na} (warn <{T.CERT_EXPIRY_WARN_DAYS}d)")
 
 
 def _minio_pod() -> str:
