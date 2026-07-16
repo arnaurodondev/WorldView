@@ -1030,7 +1030,15 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         try:
             value = self.deserialize_value(raw_value, schema_path)
         except Exception as exc:
-            raise MalformedDataError(f"deserialization failed: {exc}") from exc
+            # Always include the exception TYPE — many deserialization failures
+            # (e.g. EOFError/struct.error on truncated Avro) have an EMPTY
+            # ``str(exc)``, which produced 2000+ DLQ rows reading only
+            # "deserialization failed: " with no diagnosable cause. The type
+            # name makes every DLQ ``error_detail`` root-causable.
+            detail = str(exc).strip() or repr(exc)
+            raise MalformedDataError(
+                f"deserialization failed: {type(exc).__name__}: {detail}",
+            ) from exc
 
         event_id = self.extract_event_id(value)
 

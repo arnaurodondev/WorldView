@@ -1022,7 +1022,14 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
                 try:
                     value = self.deserialize_value(msg.value(), self.get_schema_path(msg.topic()))
                 except Exception as exc:
-                    await self._handle_failure(msg, MalformedDataError(f"deserialization failed: {exc}"))
+                    # Include the exception TYPE — truncated-Avro failures often
+                    # have an empty ``str(exc)`` and would otherwise write a DLQ
+                    # row with no diagnosable cause.
+                    _detail = str(exc).strip() or repr(exc)
+                    await self._handle_failure(
+                        msg,
+                        MalformedDataError(f"deserialization failed: {type(exc).__name__}: {_detail}"),
+                    )
                     break
 
                 # Non-OHLCV messages are a successful no-op — they advance the

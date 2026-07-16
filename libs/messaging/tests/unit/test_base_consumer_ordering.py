@@ -177,3 +177,37 @@ class TestMarkProcessedOrdering:
             "commit",
             "mark_processed",
         ], f"Expected ['commit', 'mark_processed'], got {consumer.call_order}"
+
+
+class _EmptyErrorConsumer(_OrderingConsumer):
+    """Deserialization raises an exception whose ``str()`` is empty.
+
+    Reproduces the truncated-Avro failure mode (``EOFError()`` /
+    ``struct.error``) that wrote 2000+ DLQ rows with a bare
+    "deserialization failed: " and no diagnosable cause.
+    """
+
+    def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        raise EOFError  # str(EOFError()) == ""
+
+
+class TestDeserializationErrorDetail:
+    async def test_empty_str_exception_still_names_the_type(self) -> None:
+        """MalformedDataError must include the exception TYPE, never be blank.
+
+        Regression for the empty ``error_detail`` anti-pattern: an exception
+        with an empty ``str()`` must still yield a diagnosable message.
+        """
+        from messaging.kafka.consumer.errors import MalformedDataError
+
+        consumer = _EmptyErrorConsumer()
+        msg = _make_msg(event_id="evt-bad")
+
+        with pytest.raises(MalformedDataError) as excinfo:
+            await consumer._handle_message(msg)
+
+        detail = str(excinfo.value)
+        assert "deserialization failed:" in detail
+        assert "EOFError" in detail  # the type name is always present
+        # The message must not end at the colon with nothing after it.
+        assert detail.rstrip() != "deserialization failed:"
