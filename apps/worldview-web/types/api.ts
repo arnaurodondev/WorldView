@@ -1978,6 +1978,14 @@ export interface Mover {
 export interface TopMoversResponse {
   movers: Mover[];
   type: "gainers" | "losers";
+  // rawCount — number of rows S3 returned for this page BEFORE the client-side
+  // directional filter (gainers>0 / losers<0) dropped any. The infinite-scroll
+  // pager needs this because S3 paginates the UNFILTERED universe by `offset`:
+  // accumulating the filtered `movers.length` under-counts the offset, which
+  // makes S3 re-serve already-seen instruments (duplicate rows) and stops
+  // pagination early. Optional for forward-compat with any pre-existing cache
+  // entry; the pager falls back to `movers.length` when absent.
+  rawCount?: number;
 }
 
 // ── Search ────────────────────────────────────────────────────────────────

@@ -50,7 +50,7 @@ import {
   type FormattedBar,
   type VolumeProfileBucket,
 } from "@/lib/instrument-context";
-import { CHART_HEIGHT, CHART_THEME, computeMA, toTime, setSeriesData } from "@/lib/chart-adapter";
+import { CHART_HEIGHT, CHART_THEME, computeMA, normalizeBars, setSeriesData } from "@/lib/chart-adapter";
 import type { OHLCVBar } from "@/types/api";
 
 /**
@@ -316,27 +316,17 @@ export function useChartSeries({
     const core = coreRef.current;
     if (!core || !data?.bars) return;
 
-    // Round-4 hardening (item 1d): drop bars whose OHLC legs are not finite
-    // numbers BEFORE they reach lightweight-charts. A degraded ingest row
-    // carrying null/NaN crashes the candlestick autoscale and poisons every
-    // derived indicator. OHLCVChart separately renders a named "not enough
-    // data" state when <2 bars survive.
-    const formattedBars: FormattedBar[] = data.bars
-      .filter(
-        (bar) =>
-          Number.isFinite(bar.open) && Number.isFinite(bar.high) &&
-          Number.isFinite(bar.low) && Number.isFinite(bar.close) &&
-          // An unparseable timestamp would produce a NaN time key, which
-          // lightweight-charts rejects with a hard throw.
-          Number.isFinite(new Date(bar.timestamp).getTime()),
-      )
-      .map((bar) => ({
-        time: toTime(Math.floor(new Date(bar.timestamp).getTime() / 1000)),
-        open: bar.open, high: bar.high, low: bar.low, close: bar.close,
-        // WHY finite guard: volume is the one leg that may be honestly null
-        // (some venues omit it); zero renders as "no volume bar".
-        volume: Number.isFinite(bar.volume) ? bar.volume : 0,
-      }));
+    // Round-4 hardening (item 1d) + blank-chart guard: normalizeBars drops bars
+    // whose OHLC legs are not finite numbers BEFORE they reach
+    // lightweight-charts (a degraded ingest row carrying null/NaN crashes the
+    // candlestick autoscale and poisons every derived indicator), AND dedupes by
+    // timestamp + sorts ascending. The dedupe is load-bearing: lightweight-charts
+    // v5 setData() throws "data must be asc ordered by time" on duplicate/unordered
+    // time keys, and that throw blanks the entire chart. Prod daily OHLCV returns
+    // every bar duplicated after the Alpaca backfill, so without this the daily
+    // chart would be blank for real users. OHLCVChart separately renders a named
+    // "not enough data" state when <2 bars survive.
+    const formattedBars: FormattedBar[] = normalizeBars(data.bars);
 
     // Cache for the lazy oscillator path (toggle-on after data already loaded).
     formattedBarsRef.current = formattedBars;

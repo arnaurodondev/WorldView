@@ -63,6 +63,11 @@ export interface RawTopMoversResponse {
     symbol?: string; // legacy / alternate field name kept for forward compat
     name?: string;
     exchange?: string;
+    // S3 /market/period-movers returns the latest price as a TOP-LEVEL
+    // `last_price` (no `metrics` nesting) — e.g. {ticker:"ABT", last_price:99.1,
+    // period_return_pct:11.01}. Kept explicit so the transform can read it
+    // instead of silently defaulting price to 0 (the "—" price-cell bug).
+    last_price?: number | null;
     metrics?: {
       daily_return?: number;
       market_cap?: number;
@@ -115,6 +120,8 @@ export function transformTopMoversResponse(
     return {
       movers: raw.movers,
       type: (raw.type as "gainers" | "losers") ?? moverType,
+      // Already-shaped path is not directionally filtered, so raw == displayed.
+      rawCount: raw.movers.length,
     };
   }
 
@@ -138,9 +145,15 @@ export function transformTopMoversResponse(
           ? metrics.last_price
           : typeof metrics.price === "number"
             ? metrics.price
-            : typeof (r as Record<string, unknown>).price === "number"
-              ? ((r as Record<string, unknown>).price as number)
-              : 0;
+            : // S3 /market/period-movers exposes the latest price at the TOP level
+              // as `last_price` — probe it before `price`/0 so populated movers
+              // rows show their real price without waiting on the secondary
+              // company-overview batch (which, when slow/failing, left "—").
+              typeof r.last_price === "number"
+              ? r.last_price
+              : typeof (r as Record<string, unknown>).price === "number"
+                ? ((r as Record<string, unknown>).price as number)
+                : 0;
     return {
       instrument_id: r.instrument_id ?? "",
       // WHY propagate entity_id when present: top-mover rows need it for correct
@@ -180,7 +193,10 @@ export function transformTopMoversResponse(
     moverType === "gainers" ? m.change_pct > 0 : m.change_pct < 0,
   );
 
-  return { movers: filtered, type: moverType };
+  // rawCount is the PRE-filter page size — the infinite-scroll pager advances
+  // its S3 `offset` by this (not by the filtered length) so it never re-requests
+  // rows it has already seen.
+  return { movers: filtered, type: moverType, rawCount: (raw.results ?? []).length };
 }
 
 export function createDashboardApi(t: string | undefined) {

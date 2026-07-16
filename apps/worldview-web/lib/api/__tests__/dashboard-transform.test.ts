@@ -110,4 +110,54 @@ describe("transformTopMoversResponse", () => {
     expect(transformTopMoversResponse({}, "gainers").movers).toEqual([]);
     expect(transformTopMoversResponse({ results: [] }, "losers").movers).toEqual([]);
   });
+
+  it("reads the TOP-LEVEL last_price from live period-movers rows", () => {
+    // Exact shape S3 /market/period-movers returns in prod: last_price at the
+    // top level, no `metrics`, no `close`. Before the fix this defaulted to 0
+    // and the price cell showed "—" until the secondary overview batch resolved.
+    const raw: RawTopMoversResponse = {
+      results: [
+        {
+          instrument_id: "ins-1",
+          ticker: "ABT",
+          name: "Abbott Laboratories",
+          last_price: 99.1,
+          period_return_pct: 11.01,
+        },
+      ],
+    };
+
+    const out = transformTopMoversResponse(raw, "gainers");
+
+    expect(out.movers[0].price).toBe(99.1);
+    expect(out.movers[0].change_pct).toBe(11.01);
+  });
+
+  it("reports rawCount as the PRE-filter page size (pager offset alignment)", () => {
+    // 3 raw rows; only 1 survives the gainers filter. The pager must advance the
+    // S3 offset by 3 (rawCount), not 1 (movers.length), or it re-serves rows.
+    const raw: RawTopMoversResponse = {
+      results: [
+        { instrument_id: "a", ticker: "UP", name: "Up", period_return_pct: 2.0 },
+        { instrument_id: "b", ticker: "DN", name: "Down", period_return_pct: -1.5 },
+        { instrument_id: "c", ticker: "FLAT", name: "Flat", period_return_pct: 0 },
+      ],
+    };
+
+    const out = transformTopMoversResponse(raw, "gainers");
+
+    expect(out.movers).toHaveLength(1);
+    expect(out.rawCount).toBe(3);
+  });
+
+  it("reports rawCount on the already-shaped {movers} path", () => {
+    const shaped: RawTopMoversResponse = {
+      movers: [
+        { instrument_id: "x", ticker: "A", name: "A", price: 1, change_pct: 1, volume: null },
+        { instrument_id: "y", ticker: "B", name: "B", price: 2, change_pct: 2, volume: null },
+      ],
+    };
+
+    expect(transformTopMoversResponse(shaped, "gainers").rawCount).toBe(2);
+  });
 });

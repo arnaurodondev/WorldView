@@ -19,6 +19,8 @@
  */
 
 import type { ISeriesApi, UTCTimestamp } from "lightweight-charts";
+import type { FormattedBar } from "@/lib/instrument-context";
+import type { OHLCVBar } from "@/types/api";
 
 // ── Layout constants ───────────────────────────────────────────────────────────
 
@@ -108,6 +110,63 @@ export function computeMA(
     time: bars[i + period - 1].time,
     value: bars.slice(i, i + period).reduce((s, b) => s + b.close, 0) / period,
   }));
+}
+
+// ── Bar normalization (dedupe + sort) ───────────────────────────────────────────
+
+/**
+ * normalizeBars — turn a raw S9 OHLCV bar array into chart-ready FormattedBars
+ * that lightweight-charts will accept without throwing.
+ *
+ * WHY THIS EXISTS (blank-chart guard): lightweight-charts v5 `setData()` requires
+ * time keys to be STRICTLY ascending and UNIQUE. If the backend returns the same
+ * bar twice — observed live in prod for daily OHLCV after the Alpaca daily
+ * backfill wrote rows alongside the existing EODHD rows, so every daily bar came
+ * back duplicated (e.g. AAPL: 40 bars / 20 unique dates) — or returns bars out of
+ * order, `setData()` throws "data must be asc ordered by time". That throw
+ * bubbles out of the render effect and blanks the ENTIRE chart (the error
+ * boundary replaces it with a fallback). The candle series is the first
+ * `setData()` call, so a single duplicated day breaks the whole instrument chart.
+ *
+ * This helper is defensive on the frontend so a transient backend data-quality
+ * hiccup degrades gracefully (one bar wins) instead of hiding the chart:
+ *   1. Drop bars whose OHLC legs or timestamp are not finite (a NaN time key is
+ *      itself a hard reject in lightweight-charts).
+ *   2. Dedupe by epoch-second, LAST write wins (the refreshed value replaces the
+ *      stale one for the same instant).
+ *   3. Sort strictly ascending by time so out-of-order payloads still render.
+ *
+ * @param bars  Raw bars from GET /v1/instruments/{id}/ohlcv (or /v1/ohlcv/*)
+ * @returns     Deduped, ascending, finite FormattedBars (time = Unix seconds)
+ */
+export function normalizeBars(bars: OHLCVBar[]): FormattedBar[] {
+  // Map keyed by epoch-second collapses duplicate timestamps to one bar.
+  const byTime = new Map<number, FormattedBar>();
+  for (const bar of bars) {
+    const time = Math.floor(new Date(bar.timestamp).getTime() / 1000);
+    if (
+      !Number.isFinite(bar.open) ||
+      !Number.isFinite(bar.high) ||
+      !Number.isFinite(bar.low) ||
+      !Number.isFinite(bar.close) ||
+      !Number.isFinite(time)
+    ) {
+      continue;
+    }
+    byTime.set(time, {
+      time,
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+      // WHY finite guard: volume is the one leg that may be honestly null
+      // (some venues omit it); zero renders as "no volume bar".
+      volume: Number.isFinite(bar.volume) ? bar.volume : 0,
+    });
+  }
+  // Ascending sort is mandatory — Map insertion order is not guaranteed sorted
+  // when the source payload is out of order.
+  return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
 }
 
 // ── UTCTimestamp helpers ───────────────────────────────────────────────────────

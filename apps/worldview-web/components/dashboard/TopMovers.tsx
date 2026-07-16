@@ -137,11 +137,18 @@ export function TopMovers() {
       createGateway(accessToken).getTopMovers(type, MOVERS_PAGE_SIZE, "1D", pageParam),
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
-      // WHY length-based: the S3 movers payload has no `total`, so we infer
-      // "more pages exist" from a FULL last page. A short page = the end of the
-      // (finite) universe. `offset` for the next page is the count loaded so far.
-      const loaded = allPages.reduce((n, p) => n + p.movers.length, 0);
-      return lastPage.movers.length === MOVERS_PAGE_SIZE ? loaded : undefined;
+      // WHY rawCount (not movers.length): S3 paginates the UNFILTERED universe by
+      // `offset`, but `movers` has already been directionally filtered
+      // (gainers>0 / losers<0). Accumulating the filtered length under-counts the
+      // offset → S3 re-serves already-seen instruments (duplicate rows) and a
+      // short filtered page ends pagination early. Advancing by the raw page size
+      // keeps the offset aligned with S3's cursor. The S3 payload has no `total`,
+      // so we infer "more pages exist" from a FULL RAW last page; a short raw page
+      // = the end of the finite universe. (`?? movers.length` guards any cache
+      // entry seeded before rawCount existed.)
+      const loaded = allPages.reduce((n, p) => n + (p.rawCount ?? p.movers.length), 0);
+      const lastRaw = lastPage.rawCount ?? lastPage.movers.length;
+      return lastRaw === MOVERS_PAGE_SIZE ? loaded : undefined;
     },
     enabled: !!accessToken,
     // WHY 60s: market movers are a macro view, not a real-time tick feed.
