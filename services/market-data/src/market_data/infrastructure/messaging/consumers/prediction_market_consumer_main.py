@@ -85,6 +85,11 @@ async def main() -> None:
             topics=["market.prediction.v1"],
             # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
             group_instance_id=settings.kafka_prediction_market_consumer_instance_id,
+            # 2026-07-15 throughput fix: batch consume+upsert. > 1 activates the
+            # opt-in batched path (one tx + one offset commit per N messages),
+            # amortising the ~2.5s/msg per-iteration overhead. See audit
+            # docs/audits/2026-07-15-prediction-consumer-throughput.md.
+            consume_batch_size=settings.kafka_prediction_market_consumer_batch_size,
             # WHY latest: Polymarket snapshots are upsert-keyed on (market_id,
             # snapshot_at). Replaying the full 60k+ history on restart doesn't
             # add durable state (duplicate events return is_new=False from

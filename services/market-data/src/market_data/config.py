@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     kafka_insider_transactions_consumer_instance_id: str = ""
     kafka_intraday_resampling_consumer_instance_id: str = ""
     kafka_prediction_market_consumer_instance_id: str = ""
+    # 2026-07-15 throughput fix: batch size for the base prediction-market
+    # snapshot consumer. > 1 enables the opt-in batched consume path (one
+    # transaction + one offset commit per N messages), amortising the fixed
+    # per-iteration loop overhead that pinned throughput to ~0.4 msg/s. 1 keeps
+    # the historical single-message path. 500 drains a ~50k backlog in minutes.
+    kafka_prediction_market_consumer_batch_size: int = 500
     # PLAN-0056 Wave A3: static-membership ids for the four deeper-stream
     # prediction consumers (history / event / trade / oi). Empty = dynamic.
     kafka_prediction_history_consumer_instance_id: str = ""

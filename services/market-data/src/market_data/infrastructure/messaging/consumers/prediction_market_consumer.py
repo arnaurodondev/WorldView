@@ -163,30 +163,20 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
     async def process_message_from_failure(self, failure: FailureInfo[dict]) -> None:
         pass
 
-    async def process_message(
-        self,
-        key: str | None,
+    @staticmethod
+    def _build_entities(
         value: dict[str, Any],
-        headers: dict[str, str],
-    ) -> None:
-        """Materialise a prediction market event into the database."""
-        uow = self._current_uow
-        if uow is None:
-            raise RuntimeError("process_message called without an active unit of work — this is a programming error")
+    ) -> tuple[str, PredictionMarket, PredictionMarketSnapshot]:
+        """Validate + build ``(event_id, market, snapshot)`` from a raw event.
 
-        # BP-034: event-id dedup FIRST, before any domain logic.
+        Raises :class:`MalformedDataError` on missing/invalid required fields.
+        Shared by :meth:`process_message` (single) and :meth:`process_batch`.
+        """
         event_id_raw = value.get("event_id")
         if not event_id_raw:
             raise MalformedDataError("Missing or null event_id in prediction market message")
         event_id = str(event_id_raw)
 
-        # Atomic dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
-        is_new = await uow.ingestion_events.create_if_not_exists(event_id, "market.prediction.v1", None)
-        if not is_new:
-            logger.debug("prediction_market_consumer.duplicate_event", event_id=event_id[:8])
-            return
-
-        # Validate required fields
         market_id = value.get("market_id")
         if not market_id:
             raise MalformedDataError("Missing or null market_id in prediction market message")
@@ -202,7 +192,6 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
         raw_outcomes: list[dict] = value.get("outcomes") or []
         market_outcomes = [{"name": o.get("name", ""), "token_id": o.get("token_id", "")} for o in raw_outcomes]
 
-        # Build domain entities
         market = PredictionMarket(
             market_id=str(market_id),
             source=value.get("source", "polymarket"),
@@ -237,6 +226,27 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
             volume_24h=Decimal(str(volume_raw)) if volume_raw is not None else None,
             liquidity=Decimal(str(liquidity_raw)) if liquidity_raw is not None else None,
         )
+        return event_id, market, snapshot
+
+    async def process_message(
+        self,
+        key: str | None,
+        value: dict[str, Any],
+        headers: dict[str, str],
+    ) -> None:
+        """Materialise a prediction market event into the database."""
+        uow = self._current_uow
+        if uow is None:
+            raise RuntimeError("process_message called without an active unit of work — this is a programming error")
+
+        # BP-034: event-id dedup FIRST, before any domain logic.
+        event_id, market, snapshot = self._build_entities(value)
+
+        # Atomic dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
+        is_new = await uow.ingestion_events.create_if_not_exists(event_id, "market.prediction.v1", None)
+        if not is_new:
+            logger.debug("prediction_market_consumer.duplicate_event", event_id=event_id[:8])
+            return
 
         # Persist both rows.
         # M-04: do NOT call uow.commit() here — the base class owns the single
@@ -246,6 +256,56 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
 
         logger.info(
             "prediction_market_consumer.materialised",
-            market_id=str(market_id),
+            market_id=market.market_id,
             resolution_status=market.resolution_status,
+        )
+
+    async def process_batch(
+        self,
+        items: list[tuple[str | None, dict[str, Any], dict[str, str]]],
+    ) -> None:
+        """Materialise a BATCH of prediction market events in ONE transaction.
+
+        Opt-in throughput path (``consume_batch_size > 1``). Bulk-dedups the
+        whole batch against ``ingestion_events`` in one round-trip, then
+        bulk-upserts markets + bulk-inserts snapshots in one round-trip each.
+        Idempotent: duplicates are dropped by dedup + multi-row ``ON CONFLICT``.
+        M-04: the base ``_handle_batch`` owns the single commit — do NOT commit.
+        """
+        uow = self._current_uow
+        if uow is None:
+            raise RuntimeError("process_batch called without an active unit of work — this is a programming error")
+
+        # Parse + validate; skip malformed records individually (a poison record
+        # must not fail the whole batch). Keep the LAST event per event_id.
+        parsed: dict[str, tuple[PredictionMarket, PredictionMarketSnapshot]] = {}
+        for _key, value, _headers in items:
+            try:
+                event_id, market, snapshot = self._build_entities(value)
+            except MalformedDataError as exc:
+                logger.warning("prediction_market_consumer.batch_malformed_skipped", error=str(exc))
+                continue
+            parsed[event_id] = (market, snapshot)
+        if not parsed:
+            return
+
+        # Bulk atomic dedup: one round-trip returns the set of NEW event_ids.
+        new_ids = await uow.ingestion_events.create_many_if_not_exists(
+            [(eid, "market.prediction.v1", None) for eid in parsed]
+        )
+        if not new_ids:
+            logger.debug("prediction_market_consumer.batch_all_duplicates", batch_size=len(parsed))
+            return
+
+        markets = [parsed[eid][0] for eid in new_ids]
+        snapshots = [parsed[eid][1] for eid in new_ids]
+
+        await uow.prediction_markets.bulk_upsert(markets)
+        inserted = await uow.prediction_market_snapshots.bulk_insert_if_not_exists(snapshots)
+
+        logger.info(
+            "prediction_market_consumer.batch_materialised",
+            events=len(parsed),
+            new=len(new_ids),
+            snapshots_inserted=inserted,
         )
