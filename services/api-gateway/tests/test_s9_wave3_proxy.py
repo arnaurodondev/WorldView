@@ -234,6 +234,37 @@ async def test_top_movers_losers_asc(authed_app, authed_mock_clients) -> None:
 
 
 @pytest.mark.asyncio
+async def test_top_movers_forwards_offset(authed_app, authed_mock_clients) -> None:
+    """GET /v1/market/top-movers?offset=N forwards offset to S3 period-movers.
+
+    Regression: get_top_movers() previously omitted ``offset`` from the S3 URL,
+    so every infinite-scroll page pinned to offset=0 and re-served page 1
+    (duplicate rows, never advancing). The offset must reach S3's
+    ORDER BY ... LIMIT/OFFSET query.
+    """
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(
+            200,
+            json.dumps({"results": [], "type": "gainers", "period": "1D", "offset": 40}).encode(),
+        ),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/market/top-movers",
+            params={"type": "gainers", "limit": "20", "offset": "40"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    authed_mock_clients.market_data.get.assert_called_once()
+    url = authed_mock_clients.market_data.get.call_args[0][0]
+    assert "offset=40" in url
+    assert "limit=20" in url
+
+
+@pytest.mark.asyncio
 async def test_top_movers_requires_auth(app, mock_clients) -> None:
     """GET /v1/market/top-movers without auth → 401."""
     transport = ASGITransport(app=app)

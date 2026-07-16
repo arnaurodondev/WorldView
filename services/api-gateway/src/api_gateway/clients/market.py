@@ -241,8 +241,14 @@ async def get_top_movers(
     # (which only catches DownstreamError). Wrapping into DownstreamError(status=504)
     # gives the user a clean "Gateway Timeout" instead of a misleading 500.
     try:
+        # WHY &offset: the route accepts an ``offset`` (Dashboard Regression #3 —
+        # infinite-scroll pagination through the universe leaderboard) and S3's
+        # /market/period-movers honours OFFSET on its ``ORDER BY period_return_pct
+        # LIMIT/OFFSET`` query. Omitting it here silently pinned every page to
+        # offset=0, so the frontend pager re-served page 1 forever (duplicate rows,
+        # never advancing). Forwarding it makes each requested page distinct.
         resp = await clients.market_data.get(
-            f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}",
+            f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}&offset={offset}",
             headers=_h(),
         )
     except (TimeoutError, httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
