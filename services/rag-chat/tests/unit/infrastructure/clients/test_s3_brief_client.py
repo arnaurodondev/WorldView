@@ -113,3 +113,92 @@ async def test_get_economic_calendar_passes_params():
     with patch.object(client, "_get", new=_mock):
         await client.get_economic_calendar(from_date="2026-05-01", to_date="2026-05-31", region="US")
     assert captured == {"from": "2026-05-01", "to": "2026-05-31", "region": "US"}
+
+
+# ── get_prediction_markets: prod S9-auth-gap bypass (BP-73x, 2026-07-16) ──────
+# The persistent prediction-market chat refusal was NOT routing (tool_use v1.25
+# invokes the tool) — it was the S9 gateway 401'ing the forwarded internal JWT,
+# so the tool got [] and the pipeline refused. get_prediction_markets must hit
+# market-data DIRECTLY when a market_data_base_url is wired.
+
+
+def _make_direct_client():
+    from rag_chat.infrastructure.clients.s3_brief_client import S3BriefClient
+
+    return S3BriefClient(
+        base_url="http://s9-mock",
+        timeout=5.0,
+        market_data_base_url="http://market-data-mock:8003",
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_prediction_markets_uses_direct_market_data_route_when_wired():
+    """With market_data_base_url set, the tool must bypass the S9 gateway and call
+    market-data's /api/v1/prediction-markets (the route that accepts the internal
+    JWT) — NOT the gateway /v1/signals/... route that 401s in prod."""
+    client = _make_direct_client()
+    items = [{"market_id": "0x1", "question": "Will Donald Trump win the 2028 US Presidential Election?"}]
+    captured: dict = {}
+
+    async def _direct_get(path, params=None, **kwargs):
+        captured["path"] = path
+        captured["params"] = dict(params or {})
+        return {"items": items, "total": 1}
+
+    # The gateway path must NOT be used — make it explode if it is.
+    async def _gateway_get(path, params=None, **kwargs):  # pragma: no cover
+        raise AssertionError(f"S9 gateway route must not be called; got {path}")
+
+    with (
+        patch.object(client._md_direct, "_get", new=_direct_get),
+        patch.object(client, "_get", new=_gateway_get),
+    ):
+        result = await client.get_prediction_markets(
+            query="Donald Trump 2028 US Presidential Election",
+            category=None,
+            status="open",
+            limit=10,
+        )
+
+    assert captured["path"] == "/api/v1/prediction-markets"
+    assert captured["params"] == {
+        "status": "open",
+        "limit": 10,
+        "query": "Donald Trump 2028 US Presidential Election",
+    }
+    assert result == items
+
+
+@pytest.mark.asyncio
+async def test_get_prediction_markets_direct_extracts_items_key():
+    client = _make_direct_client()
+    items = [{"market_id": "0x9", "question": "Will bitcoin hit $1m before GTA VI?"}]
+    with patch.object(client._md_direct, "_get", new=AsyncMock(return_value={"items": items, "total": 1})):
+        result = await client.get_prediction_markets(query="bitcoin", category=None, status="open", limit=10)
+    assert result == items
+
+
+@pytest.mark.asyncio
+async def test_get_prediction_markets_direct_error_returns_empty():
+    client = _make_direct_client()
+    with patch.object(client._md_direct, "_get", new=AsyncMock(return_value={})):
+        result = await client.get_prediction_markets(query="x", category=None, status="open", limit=10)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_get_prediction_markets_falls_back_to_gateway_without_direct_url():
+    """Without market_data_base_url (dev/tests) the legacy S9 gateway route is used
+    so existing behaviour is preserved."""
+    client = _make_client()
+    assert client._md_direct is None
+    captured: dict = {}
+
+    async def _gateway_get(path, params=None, **kwargs):
+        captured["path"] = path
+        return {"items": [], "total": 0}
+
+    with patch.object(client, "_get", new=_gateway_get):
+        await client.get_prediction_markets(query="x", category=None, status="open", limit=5)
+    assert captured["path"] == "/v1/signals/prediction-markets"

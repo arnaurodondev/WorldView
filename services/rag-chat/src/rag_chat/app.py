@@ -579,9 +579,16 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
 
     # S3BriefClient: S9-proxied screener/movers/calendar endpoints (PLAN-0081 Wave A).
     # WHY api_gateway_url: all catalog endpoints go through S9 for auth + rate limiting.
+    # WHY market_data_base_url: the prediction-market tool must bypass S9 — in prod
+    # the gateway 401s the forwarded internal JWT (only a real Zitadel Bearer
+    # populates request.state.user), which was the persistent prediction-market
+    # chat refusal. It talks directly to market-data's /api/v1/prediction-markets
+    # via the proven X-Internal-JWT service-to-service path (see S3BriefClient
+    # docstring / MarketTapeClient precedent).
     s3_brief = S3BriefClient(
         base_url=settings.api_gateway_url,
         timeout=settings.upstream_timeout_seconds,
+        market_data_base_url=settings.s3_base_url,
     )
 
     # BriefArchiveReadAdapter: read-only adapter backed by read session factory (R27).
