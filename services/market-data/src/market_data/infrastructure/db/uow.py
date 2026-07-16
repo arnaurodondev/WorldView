@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from market_data.application.ports.uow import ReadOnlyUnitOfWork, UnitOfWork
+from market_data.infrastructure.db.repositories.earnings_calendar_repo import PgEarningsCalendarRepository
 from market_data.infrastructure.db.repositories.failed_task_repo import PgFailedTaskRepository
 from market_data.infrastructure.db.repositories.fundamental_metrics_read_repo import PgFundamentalMetricsQueryRepository
 from market_data.infrastructure.db.repositories.fundamental_metrics_repo import PgFundamentalMetricsRepository
@@ -121,6 +122,9 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         # PLAN-0089 Wave L-4b: per-transaction insider feed (separate from the
         # fundamentals-embedded snapshot, see insider_transactions table).
         self._insider_transactions_repo: PgInsiderTransactionsRepository | None = None
+        # fix/data-coverage-warns: global EODHD earnings-calendar feed
+        # (populates the earnings_calendar table read by fetch_next_earnings_date).
+        self._earnings_calendar_repo: PgEarningsCalendarRepository | None = None
 
     # ── context manager ───────────────────────────────────────────────────────
 
@@ -305,6 +309,18 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         if self._insider_transactions_repo is None:
             self._insider_transactions_repo = PgInsiderTransactionsRepository(self._write())
         return self._insider_transactions_repo
+
+    @property
+    def earnings_calendar(self) -> PgEarningsCalendarRepository:
+        """Earnings-calendar repo (fix/data-coverage-warns) — write session.
+
+        Used by the EarningsCalendarConsumer (insert_batch) to materialise the
+        global EODHD ``/calendar/earnings`` feed. The rows back the screener's
+        ``next_earnings_date`` column via ``fetch_next_earnings_date``.
+        """
+        if self._earnings_calendar_repo is None:
+            self._earnings_calendar_repo = PgEarningsCalendarRepository(self._write())
+        return self._earnings_calendar_repo
 
     @property
     def prediction_markets(self) -> PredictionMarketRepository:

@@ -1190,6 +1190,33 @@ services:
       retries: 3
       start_period: 30s
 
+  # fix/data-coverage-warns: the earnings-calendar consumer materialises the
+  # global EODHD /calendar/earnings feed into the ``earnings_calendar`` table
+  # (0 rows on prod until now — its producer side was already live). Mirrors the
+  # insider-transactions consumer definition exactly (same image, env, healthcheck).
+  market-data-earnings-calendar-consumer:
+    init: true
+    image: worldview-market-data:latest
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.earnings_calendar_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   market-data-prediction-market-consumer:
     init: true
     image: worldview-market-data:latest

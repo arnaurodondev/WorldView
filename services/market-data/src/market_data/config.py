@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     kafka_quotes_consumer_instance_id: str = ""
     kafka_fundamentals_consumer_instance_id: str = ""
     kafka_insider_transactions_consumer_instance_id: str = ""
+    # fix/data-coverage-warns — static-membership id for the earnings-calendar
+    # consumer (empty = dynamic, no-op).
+    kafka_earnings_calendar_consumer_instance_id: str = ""
     kafka_intraday_resampling_consumer_instance_id: str = ""
     kafka_prediction_market_consumer_instance_id: str = ""
     # 2026-07-15 throughput fix: batch size for the base prediction-market

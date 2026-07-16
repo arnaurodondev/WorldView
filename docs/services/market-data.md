@@ -113,6 +113,7 @@ or articles, perform NLP processing, manage portfolios.
 | `market.dataset.fetched` | `market-data-fundamentals` | Materialize fundamentals (filters `dataset_type=fundamentals`) | `event_id` |
 | `market.dataset.fetched` | `market-data-intraday-resampling` | Derive 5m/15m/30m/1h/4h/1d bars from `dataset_type=ohlcv, timeframe=1m` events | `event_id` |
 | `market.dataset.fetched` | `market-data-insider-transactions` | Materialize per-transaction insider feed (`dataset_type=insider_transactions`) | `event_id` |
+| `market.dataset.fetched` | `market-data-earnings-calendar` | Materialize the global EODHD `/calendar/earnings` feed (`dataset_type=earnings_calendar`) into `earnings_calendar` — ONE message → many companies, each row's `code` (`TICKER.EXCHANGE`) resolved to an instrument; unknown instruments skipped, upsert on `(instrument_id, report_date)`. Feeds the screener `next_earnings_date` column via `fetch_next_earnings_date` | `event_id` + content-hash |
 | `market.prediction.v1` | `market-data-prediction-markets` | Materialize prediction market snapshots (PRD-0019) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
 | `market.prediction.history.v1` | `market-data-prediction-history` | Materialize per-token interval price bars into `prediction_market_prices` (PLAN-0056 A3) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
 | `market.prediction.event.v1` | `market-data-prediction-events` | Upsert Polymarket event groups into `prediction_events` (group_id→event_id) (PLAN-0056 A3) | Atomic `create_if_not_exists` + `ON CONFLICT DO UPDATE` |
