@@ -91,6 +91,23 @@ def no_sleep() -> Any:
         yield
 
 
+def test_model_id_property_exposes_primary_slug() -> None:
+    """The adapter exposes ``model_id`` (the primary slug) for cost attribution.
+
+    Regression guard for the LLM-cost audit (2026-07-16): the KG fallback chain
+    logs ``getattr(client, "model_id", provider)`` to ``llm_usage_log``. Before
+    this property existed the ``getattr`` fell through to the transport provider
+    string, so every KG extraction row logged ``model_id="deepinfra"`` and
+    per-model cost attribution was impossible. This asserts the real serving slug
+    is now reported.
+    """
+    adapter = _make_adapter(model_id=PRIMARY, fallback_model_id=SECONDARY)
+    assert adapter.model_id == PRIMARY
+    # getattr with a default (the pattern used by fallback_chain) resolves to the
+    # real slug rather than the "deepinfra" provider fallback.
+    assert getattr(adapter, "model_id", "deepinfra") == PRIMARY
+
+
 @pytest.mark.asyncio
 async def test_success_on_primary_no_fallback(no_sleep: Any) -> None:
     """A clean primary success => model_used=primary, reason=none, no secondary call."""

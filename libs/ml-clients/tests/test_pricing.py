@@ -85,6 +85,23 @@ def test_pricing_matrix_contains_core_in_use_models() -> None:
 
 
 @pytest.mark.unit
+def test_qwen3_235b_pricing_matches_deepinfra_list_rate() -> None:
+    """Qwen3-235B fallback pricing reflects the audit-corrected DeepInfra rate.
+
+    Regression guard for the LLM-cost audit (2026-07-16): the prior 0.071/0.10
+    entry 3x-undercounted the matrix FALLBACK (used when DeepInfra omits
+    usage.estimated_cost). Prod ground truth was ~$0.24/Mtok blended on the S6
+    extraction mix; the repo's eval scripts document the list rate as 0.13/0.60.
+    Pin those so the fallback can never silently drift back to the low numbers.
+    """
+    entry = MODEL_PRICING["Qwen/Qwen3-235B-A22B-Instruct-2507"]
+    assert entry.input_per_million == Decimal("0.13")
+    assert entry.output_per_million == Decimal("0.60")
+    # 1M in + 1M out => 0.13 + 0.60 = 0.73 USD (exact Decimal, no float drift).
+    assert compute_cost("Qwen/Qwen3-235B-A22B-Instruct-2507", 1_000_000, 1_000_000) == Decimal("0.73")
+
+
+@pytest.mark.unit
 def test_model_pricing_is_frozen() -> None:
     """ModelPricing instances are immutable — accidental mutation must raise."""
     entry = MODEL_PRICING["meta-llama/Meta-Llama-3.1-8B-Instruct"]

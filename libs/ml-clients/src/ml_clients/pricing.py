@@ -153,11 +153,19 @@ MODEL_PRICING: dict[str, ModelPricing] = {
         notes="as of 2026-06; same SKU as 8B-Instruct (Turbo = serving variant)",
     ),
     "Qwen/Qwen3-235B-A22B-Instruct-2507": ModelPricing(
-        # 235B MoE / 22B active — primary synthesis model.
+        # 235B MoE / 22B active — primary synthesis model + S6 deep-tier extractor.
         model_id="Qwen/Qwen3-235B-A22B-Instruct-2507",
-        input_per_million=Decimal("0.071"),
-        output_per_million=Decimal("0.10"),
-        notes="as of 2026-06; primary chat synthesis",
+        # Corrected 2026-07-16 (LLM-cost audit): the prior 0.071/0.10 entry badly
+        # undercounted. Ground truth from prod ``llm_usage_log`` (cost_source=
+        # "provider", DeepInfra self-reported) over 2 days was ~$0.24/Mtok BLENDED
+        # on the S6 extraction mix (56.8M in / 3.7M out → $14.58). The repo's own
+        # eval scripts (scripts/eval/prototype_entailment_check.py) document the
+        # DeepInfra list rate as $0.13 in / $0.60 out; we adopt that here so the
+        # matrix FALLBACK (used only when DeepInfra omits usage.estimated_cost) no
+        # longer 3x-undercounts. Provider-reported cost remains authoritative.
+        input_per_million=Decimal("0.13"),
+        output_per_million=Decimal("0.60"),
+        notes="as of 2026-07-16; DeepInfra list (audit-corrected from 0.071/0.10)",
     ),
     "Qwen/Qwen3-32B": ModelPricing(
         model_id="Qwen/Qwen3-32B",

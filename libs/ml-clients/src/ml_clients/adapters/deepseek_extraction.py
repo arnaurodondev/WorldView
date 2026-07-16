@@ -245,6 +245,25 @@ class DeepSeekExtractionAdapter:
             http_client=http_client,
         )
 
+    @property
+    def model_id(self) -> str:
+        """Canonical primary model id, exposed for cost/usage attribution.
+
+        Consumers such as ``knowledge_graph.infrastructure.llm.fallback_chain``
+        read ``getattr(client, "model_id", provider)`` when writing a row to
+        ``llm_usage_log``. Without this property that ``getattr`` silently fell
+        back to the transport ``provider`` string (``"deepinfra"``), so every KG
+        extraction row logged ``model_id="deepinfra"`` — the real serving model
+        (e.g. ``deepseek-ai/DeepSeek-V4-Flash-Thinking``) was lost and per-model
+        cost attribution across services was impossible. Exposing the configured
+        primary slug restores correct attribution (LLM-cost audit 2026-07-16).
+
+        The primary slug is reported even when an individual call transparently
+        falls back to ``self._fallback_model_id`` — attribution to the fallback
+        tier is a follow-up; primary-vs-``"deepinfra"`` is the material fix.
+        """
+        return self._model_id
+
     async def aclose(self) -> None:
         await self._client.close()
 
