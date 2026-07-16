@@ -50,6 +50,13 @@ done
 POLYMARKET_EXPIRE_DAYS="${MINIO_POLYMARKET_EXPIRE_DAYS:-1}"
 NEWS_EXPIRE_DAYS="${MINIO_NEWS_EXPIRE_DAYS:-3}"
 MARKET_BRONZE_EXPIRE_DAYS="${MINIO_MARKET_BRONZE_EXPIRE_DAYS:-3}"
+# Silver = the cleaned/extracted text bodies promoted from bronze. Same rationale
+# as bronze: the bodies are RE-FETCHABLE (they can be re-derived from bronze or
+# re-fetched from source), so a bounded window caps object/inode growth without
+# risking durable data — the canonical/rag/*-data promoted copies are untouched.
+# A slightly longer window than bronze (14d) since silver is one step closer to
+# the durable copies. Env-overridable.
+SILVER_EXPIRE_DAYS="${MINIO_SILVER_EXPIRE_DAYS:-14}"
 
 add_expiry_rule() {
     # $1 = bucket/prefix path, $2 = expire-days. Idempotent enough for init:
@@ -73,10 +80,12 @@ done
 # series per object, NOT one-per-bar), so object count is bounded — but a
 # multi-year backfill still accumulates, so give the whole bucket a generous rule.
 add_expiry_rule "market-bronze" "$MARKET_BRONZE_EXPIRE_DAYS"
+# Silver: cleaned text bodies (re-fetchable) — bounded window on the whole bucket.
+add_expiry_rule "worldview-silver" "$SILVER_EXPIRE_DAYS"
 
 echo "=== MinIO setup complete ==="
 mc ls local
-echo "=== Bronze lifecycle rules ==="
-for BUCKET in worldview-bronze market-bronze; do
+echo "=== Bronze + silver lifecycle rules ==="
+for BUCKET in worldview-bronze market-bronze worldview-silver; do
     mc ilm rule ls "local/$BUCKET" || true
 done
