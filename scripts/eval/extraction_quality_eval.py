@@ -101,6 +101,14 @@ _SINGLE_WINDOW_TOKEN_LIMIT = 24_000  # deep_extraction.py: ≤24k tokens → sin
 # so this knob is load-bearing for that candidate.
 _EXTRACTION_REASONING_EFFORT = os.environ.get("EVAL_EXTRACTION_REASONING_EFFORT", "none")
 
+# Observed DEEP-tier extraction firehose rate used to project monthly spend from
+# the per-doc cost measured in this bake-off. ~4.5k docs/day reach the deep
+# extraction path (news firehose). Override via EVAL_DOCS_PER_DAY for sensitivity.
+# NOTE: this is DEEP-tier docs/day (the docs that hit the expensive extraction
+# model), NOT the raw ingest rate — cheap/thin docs are routed away before here.
+_DOCS_PER_DAY = float(os.environ.get("EVAL_DOCS_PER_DAY", "4500"))
+_DAYS_PER_MONTH = 30.0
+
 # ── Judge configuration ──────────────────────────────────────────────────────
 # The judge MUST be independent of the candidate being judged (self-preference
 # bias). Default judge = Anthropic Claude Opus 4.8 when ANTHROPIC_API_KEY is set
@@ -355,7 +363,7 @@ def _balance_by_bucket(pool: list[GoldenArticle], sample_size: int) -> list[Gold
         by_bucket.setdefault(art.span_bucket, []).append(art)
     selected: list[GoldenArticle] = []
     buckets = sorted(by_bucket.keys())
-    idx = {b: 0 for b in buckets}
+    idx = dict.fromkeys(buckets, 0)
     while len(selected) < sample_size and any(idx[b] < len(by_bucket[b]) for b in buckets):
         for b in buckets:
             if idx[b] < len(by_bucket[b]):
@@ -413,6 +421,10 @@ class ModelRunResult:
     n_events: int | None = None
     n_claims: int | None = None
     n_relations: int | None = None
+    # Provider-reported billed cost for this single call (USD). 0.0 on api_error
+    # or when the provider omitted usage.estimated_cost. Summed per model to derive
+    # $/1000-docs and the projected monthly extraction spend.
+    estimated_cost: float = 0.0
 
 
 def _deepinfra_chat(
@@ -426,6 +438,7 @@ def _deepinfra_chat(
     max_tokens: int,
     force_json: bool,
     reasoning_effort: str = "none",
+    usage_out: dict[str, Any] | None = None,
 ) -> tuple[str, int, int]:
     """One OpenAI-compatible chat completion. Returns (content, tokens_in, tokens_out).
 
@@ -434,6 +447,13 @@ def _deepinfra_chat(
     calls pass the A/B-wide value (default "none"); the judge always passes "none".
     ``force_json`` lets the judge call opt out of strict json_object if a model
     rejects it.
+
+    ``usage_out`` (optional): if a dict is passed, the provider-reported
+    ``usage.estimated_cost`` (DeepInfra returns the authoritative USD cost of the
+    call verbatim) is stored under key ``"estimated_cost"`` as a float. This is
+    the ground-truth $ figure the bake-off reports — strictly better than deriving
+    from a possibly-stale price matrix. Left None (e.g. the judge path, or the
+    monkeypatched unit tests) it is simply not populated.
     """
     body: dict[str, Any] = {
         "model": model_id,
@@ -476,6 +496,14 @@ def _deepinfra_chat(
         data = resp.json()
         content = data["choices"][0]["message"].get("content") or ""
         usage = data.get("usage") or {}
+        if usage_out is not None:
+            # DeepInfra reports the authoritative billed cost of this call under
+            # usage.estimated_cost (USD float, often scientific notation). Capture
+            # it so the bake-off's $ figures are ground-truth, not matrix-derived.
+            try:
+                usage_out["estimated_cost"] = float(usage.get("estimated_cost") or 0.0)
+            except (TypeError, ValueError):
+                usage_out["estimated_cost"] = 0.0
         return content, int(usage.get("prompt_tokens", 0) or 0), int(usage.get("completion_tokens", 0) or 0)
     # Unreachable (loop either returns or raises), but satisfies the type checker.
     raise last_exc if last_exc else RuntimeError("retry loop exited unexpectedly")
@@ -518,8 +546,9 @@ def run_model_on_article(
     HTTP call uses the physical model + that arm's reasoning_effort.
     """
     _ensure_prompts_importable()
-    physical_model, reasoning_effort, arm_id = _parse_arm(model_id)
+    physical_model, reasoning_effort, _arm_id = _parse_arm(model_id)
     prompt = _render_extraction_prompt(article.entities, article.text)
+    usage_meta: dict[str, Any] = {}
     t0 = time.perf_counter()
     try:
         content, tin, tout = _deepinfra_chat(
@@ -532,6 +561,7 @@ def run_model_on_article(
             max_tokens=_EXTRACTION_MAX_TOKENS,
             force_json=True,
             reasoning_effort=reasoning_effort,
+            usage_out=usage_meta,
         )
     except Exception as exc:  # any HTTP/timeout error → record, don't crash the run
         return ModelRunResult(
@@ -580,6 +610,7 @@ def run_model_on_article(
         n_events=n_e,
         n_claims=n_c,
         n_relations=n_r,
+        estimated_cost=float(usage_meta.get("estimated_cost", 0.0)),
     )
 
 
@@ -842,6 +873,12 @@ class ModelAggregate:
     p95_latency_s: float | None
     total_tokens_in: int
     total_tokens_out: int
+    # Cost (from DeepInfra's authoritative usage.estimated_cost, summed over the
+    # OK/JSON-error runs — api_error runs cost $0). ``cost_per_1000_docs`` and
+    # ``projected_monthly_usd`` extrapolate the per-doc mean to the firehose rate.
+    total_estimated_cost_usd: float = 0.0
+    cost_per_1000_docs_usd: float = 0.0
+    projected_monthly_usd: float = 0.0
 
 
 def _mean(xs: list[float]) -> float | None:
@@ -852,7 +889,7 @@ def _pct(xs: list[float], p: float) -> float | None:
     if not xs:
         return None
     s = sorted(xs)
-    k = max(0, min(len(s) - 1, int(round((p / 100.0) * (len(s) - 1)))))
+    k = max(0, min(len(s) - 1, round((p / 100.0) * (len(s) - 1))))
     return round(s[k], 3)
 
 
@@ -885,6 +922,17 @@ def aggregate(runs: list[ModelRunResult], scores: list[JudgeScore], model_ids: l
         ok_runs = [r for r in mruns if r.status == "ok"]
         latencies = [r.latency_s for r in mruns if r.status != "api_error"]
 
+        # Cost: sum DeepInfra's authoritative per-call cost. api_error runs made no
+        # billed call ($0). Per-doc mean uses BILLED runs (status != api_error) as
+        # the denominator so a candidate's api_error rate doesn't deflate its true
+        # cost-per-successful-doc (failed docs are retried in prod, still billing on
+        # success). Projection extrapolates that per-doc cost to the firehose rate.
+        billed_runs = [r for r in mruns if r.status != "api_error"]
+        total_cost = sum(r.estimated_cost for r in mruns)
+        cost_per_doc = (total_cost / len(billed_runs)) if billed_runs else 0.0
+        cost_per_1k = cost_per_doc * 1000.0
+        projected_monthly = cost_per_doc * _DOCS_PER_DAY * _DAYS_PER_MONTH
+
         aggs.append(
             ModelAggregate(
                 model_id=m,
@@ -904,6 +952,9 @@ def aggregate(runs: list[ModelRunResult], scores: list[JudgeScore], model_ids: l
                 p95_latency_s=_pct(latencies, 95),
                 total_tokens_in=sum(r.tokens_in for r in mruns),
                 total_tokens_out=sum(r.tokens_out for r in mruns),
+                total_estimated_cost_usd=round(total_cost, 6),
+                cost_per_1000_docs_usd=round(cost_per_1k, 4),
+                projected_monthly_usd=round(projected_monthly, 2),
             )
         )
     return aggs
@@ -918,17 +969,17 @@ def build_report_md(aggs: list[ModelAggregate], baseline: str) -> str:
     lines.append("## Comparison table\n")
     header = (
         "| Model | N | Prec | Recall | Adher | Overall | Fab/art | Allowlist viol/art "
-        "| JSON-fail | API-err | ev | cl | rel | p50 s | p95 s |"
+        "| JSON-fail | API-err | ev | cl | rel | p50 s | p95 s | $/1k docs | $/mo proj |"
     )
     lines.append(header)
-    lines.append("|" + "---|" * 15)
+    lines.append("|" + "---|" * 17)
     for a in ranked:
         lines.append(
             f"| `{a.model_id}`{' ⭐base' if a.model_id == baseline else ''} | {a.n_articles} "
             f"| {a.mean_precision} | {a.mean_recall} | {a.mean_adherence} | **{a.mean_overall}** "
             f"| {a.fabrication_rate} | {a.allowlist_violation_rate} | {a.json_parse_failure_rate} "
             f"| {a.api_error_rate} | {a.mean_events} | {a.mean_claims} | {a.mean_relations} "
-            f"| {a.p50_latency_s} | {a.p95_latency_s} |"
+            f"| {a.p50_latency_s} | {a.p95_latency_s} | ${a.cost_per_1000_docs_usd} | ${a.projected_monthly_usd} |"
         )
     lines.append("\n## Ranked verdict\n")
     base_agg = next((a for a in aggs if a.model_id == baseline), None)
