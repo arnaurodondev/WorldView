@@ -202,6 +202,24 @@ def dedupe_ohlcv_instruments(policies: list[PollingPolicy]) -> list[tuple[str, s
     return out
 
 
+def filter_instruments_by_exchange(
+    instruments: list[tuple[str, str | None]],
+    exchanges: str | None,
+) -> list[tuple[str, str | None]]:
+    """Keep only instruments whose exchange is in the ``--exchanges`` allowlist.
+
+    ``exchanges`` is a case-insensitive CSV (e.g. ``"US,INDX,SHG"``); ``None`` or
+    empty means NO filter (whole universe). The once-daily authoritative CronJob
+    passes an equities+indices allowlist so crypto (``CC``, 24/7) and ``FOREX``
+    stay on Alpaca and are never relabelled to the priority-120 ``eodhd_bulk``
+    source — they are not affected by the Alpaca IEX daily-volume bug.
+    """
+    if not exchanges:
+        return list(instruments)
+    allow = {tok.strip().upper() for tok in exchanges.split(",") if tok.strip()}
+    return [(sym, exch) for (sym, exch) in instruments if (exch or "").upper() in allow]
+
+
 def remaining_instruments(
     instruments: list[tuple[str, str | None]],
     cursor: str | None,
@@ -279,6 +297,15 @@ def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
         default=_DEFAULT_BATCH_DELAY_SECONDS,
         help="Seconds slept between instruments (default: %(default)s).",
     )
+    parser.add_argument(
+        "--exchanges",
+        default=None,
+        help=(
+            "CSV exchange allowlist (e.g. 'US,INDX,SHG'); default = whole universe. "
+            "The authoritative daily CronJob sets equities+indices so crypto (CC) "
+            "and FOREX stay on Alpaca."
+        ),
+    )
     parser.add_argument("--resume", action="store_true", help="Resume from the persisted Valkey cursor.")
     parser.add_argument("--dry-run", action="store_true", help="Print the instrument plan + estimate; fetch nothing.")
     parser.add_argument(
@@ -337,6 +364,7 @@ async def run_backfill(settings: Settings, args: argparse.Namespace) -> int:
         return SqlaUnitOfWork(write_factory, read_factory)
 
     instruments = await _list_ohlcv_instruments(_uow)
+    instruments = filter_instruments_by_exchange(instruments, getattr(args, "exchanges", None))
     valkey = create_valkey_client_from_url(settings.valkey_url)
     cursor = await _load_cursor(valkey, resume=args.resume)
     todo = remaining_instruments(instruments, cursor)

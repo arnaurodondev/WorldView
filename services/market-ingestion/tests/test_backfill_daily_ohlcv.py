@@ -21,11 +21,28 @@ from market_ingestion.scripts.backfill_daily_ohlcv import (
     RunBudget,
     _parse_cli,
     dedupe_ohlcv_instruments,
+    filter_instruments_by_exchange,
     remaining_instruments,
     resolve_horizon,
     resolve_produced_provider,
     symbol_sort_key,
 )
+
+_EXCH_UNIVERSE = [("AAPL", "US"), ("SPY", "US"), ("GSPC", "INDX"), ("BTC-USD", "CC"), ("EURUSD", "FOREX")]
+
+
+class TestExchangeFilter:
+    def test_none_keeps_whole_universe(self) -> None:
+        assert filter_instruments_by_exchange(_EXCH_UNIVERSE, None) == _EXCH_UNIVERSE
+
+    def test_allowlist_excludes_crypto_and_forex(self) -> None:
+        kept = filter_instruments_by_exchange(_EXCH_UNIVERSE, "US,INDX,SHG")
+        assert ("BTC-USD", "CC") not in kept
+        assert ("EURUSD", "FOREX") not in kept
+        assert ("AAPL", "US") in kept and ("GSPC", "INDX") in kept
+
+    def test_allowlist_is_case_insensitive(self) -> None:
+        assert filter_instruments_by_exchange(_EXCH_UNIVERSE, "us") == [("AAPL", "US"), ("SPY", "US")]
 
 
 class TestAuthoritativeMode:

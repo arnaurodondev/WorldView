@@ -76,6 +76,8 @@ spec:
               # eodhd_bulk (priority 120). Trailing 5-day window; NO --resume.
               args:
                 - --authoritative
+                - --exchanges
+                - "US,INDX,SHG"
                 - --days
                 - "5"
                 - --max-credits
