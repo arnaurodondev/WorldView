@@ -185,7 +185,13 @@ def stamp_intraday_source(result: ProviderFetchResult) -> ProviderFetchResult:
 
 
 def done_set_key(day: datetime) -> str:
-    """Valkey key of the per-day resume set of already-refined symbols."""
+    """Valkey key of the per-day resume set of already-refined symbols.
+
+    Stored as a Redis HASH (field=symbol, value="1") because the shared
+    ``ValkeyClient`` wrapper exposes ``hget``/``hset``/``expire`` but not native
+    set ops — a hash gives the same "have I done this symbol?" semantics with one
+    key that ``EXPIRE`` can self-clean.
+    """
     return f"s2:v1:intraday_refine:{day.date().isoformat()}:done"
 
 
@@ -332,7 +338,7 @@ async def run_intraday_refine(settings: Settings, args: argparse.Namespace) -> i
 
             for symbol in symbols:
                 # ── Resume: skip symbols already refined for this day ──────────
-                if await valkey.sismember(done_key, symbol):
+                if await valkey.hget(done_key, symbol) is not None:
                     skipped_resumed += 1
                     continue
 
@@ -374,7 +380,7 @@ async def run_intraday_refine(settings: Settings, args: argparse.Namespace) -> i
                 # resume does not re-spend credits on it.
                 if raw_result.bars_returned == 0:
                     empty_days += 1
-                    await valkey.sadd(done_key, symbol)
+                    await valkey.hset(done_key, symbol, "1")
                     continue
 
                 fetch_result = stamp_intraday_source(raw_result)
@@ -405,7 +411,7 @@ async def run_intraday_refine(settings: Settings, args: argparse.Namespace) -> i
                     logger.warning("intraday_refine_produce_failed", symbol=symbol, exchange=exchange, error=str(exc))
                     continue
 
-                await valkey.sadd(done_key, symbol)
+                await valkey.hset(done_key, symbol, "1")
                 produced += 1
 
             logger.info(
