@@ -18,9 +18,19 @@
 # ship FIRST. This job's 1m superseding does NOT depend on the dup-bars daily
 # normalization — intraday bar_date already keeps its full timestamp.
 #
-# SCHEDULE: 23:30 UTC daily — after the US cash close (20:00 UTC summer / 21:00
-# winter) AND EODHD's 2-3h consolidated-volume settle. Crypto (CC, 24/7) is NOT
-# served by EODHD intraday and stays on Alpaca — hence `--exchanges US` only.
+# SCHEDULE: 23:30 UTC daily. EODHD's intraday feed publishes a trading day ≥1
+# trading day LATE (live-verified 2026-07-17: at Fri 01:22 UTC the just-closed
+# Thursday had 0 bars while Wednesday/T-2 was complete). So the job does NOT target
+# "today" — it targets `today - --settle-lag-days` TRADING days (default 2, the
+# freshest reliably-settled day). Crypto (CC, 24/7) is NOT served by EODHD intraday
+# and stays on Alpaca — hence `--exchanges US` only.
+#
+# PREFLIGHT (credit-burn guard): before the sweep, the script probes ONE liquid
+# symbol (AAPL/MSFT/…) for the target day. If it returns 0 bars (day not yet
+# published, or all-market holiday) the WHOLE sweep ABORTS after that single
+# 5-credit probe — it does NOT burn the ~2,650-credit budget and does NOT write the
+# resume-set, so a later run (or a manual --date) can still refine the day once it
+# publishes. This makes an over-aggressive --settle-lag-days safe (it just retries).
 #
 # CREDIT COST: 5 credits/symbol. ~530 US equities = ~2,650 credits/sweep. Alongside
 # the daily bulk EOD (~100-543) + the existing firehose (~1.1k) that is ~4.3k/day,
@@ -75,6 +85,10 @@ spec:
               args:
                 - --exchanges
                 - "US"
+                # Target today - 2 TRADING days: EODHD intraday publishes ≥1 trading
+                # day late; the preflight aborts cheaply if it is still unpublished.
+                - --settle-lag-days
+                - "2"
                 - --max-credits
                 - "10000"
                 - --daily-headroom

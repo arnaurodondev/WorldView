@@ -46,21 +46,35 @@ double-count regardless of consumer ordering. The derived bars are upserted via 
 unconditional ``bulk_upsert_derived`` path, so they overwrite the stale IEX-derived
 bars with the corrected volume.
 
+PUBLISH LAG + PREFLIGHT (credit-burn guard)
+===========================================
+EODHD's intraday feed publishes a trading day ≥1 trading day LATE (live-verified
+2026-07-17: at Fri 01:22 UTC the just-closed Thursday had 0 bars while Wednesday/T-2
+was complete). So the default target is ``today - --settle-lag-days`` **trading
+days** (default 2 — the freshest reliably-settled day), NOT today. As a hard safety
+net, a PREFLIGHT probes ONE liquid symbol for the target day before the sweep: if it
+returns 0 bars (day not yet published, or an all-market holiday), the whole sweep
+ABORTS after that single 5-credit probe — it does NOT burn the ~2,650-credit budget
+and does NOT write the resume-set, so a later run (or a manual ``--date``) can still
+refine the day once it publishes. Per-symbol empties encountered AFTER the preflight
+passes are genuine holiday/halt cases for that symbol and ARE marked done.
+
 LIVE SESSION UNAFFECTED
 =======================
-Only a fully-CLOSED day is refined (default = today's UTC date, run post-close;
-weekends are skipped). Alpaca keeps writing new-minute 1m bars for the CURRENT
-session at priority 110 — those are distinct ``bar_date`` keys and never collide
-with a prior day's refined bars.
+Only a fully-CLOSED, already-PUBLISHED day is refined (weekends skipped; unpublished
+days aborted by the preflight). Alpaca keeps writing new-minute 1m bars for the
+CURRENT session at priority 110 — those are distinct ``bar_date`` keys and never
+collide with a prior day's refined bars.
 
 SCOPE / BUDGET
 ==============
 US equities only (``--exchanges US``). Crypto (24/7) stays on Alpaca — EODHD
 intraday does not serve it. Per-ticker: 5 credits/symbol (``EODHD_INTRADAY_COST``).
-530 covered US equities ⇒ **~2,650 credits/sweep** — alongside the daily bulk EOD
-(~100-543) + the existing firehose (~1.1k) this is well under the 100k/day EODHD cap
-(≈4.3k/day total). Resumable (a Valkey per-day ``done`` set survives pod-roll),
-advisory-locked, dry-runnable, and bounded by ``--max-credits`` + ``--daily-headroom``.
+530 covered US equities ⇒ **~2,650 credits/sweep** (+1 probe) — alongside the daily
+bulk EOD (~100-543) + the existing firehose (~1.1k) this is well under the 100k/day
+EODHD cap (≈4.3k/day total). Resumable (a Valkey per-day ``done`` set survives
+pod-roll), advisory-locked, dry-runnable, and bounded by ``--max-credits`` +
+``--daily-headroom``.
 
 COORDINATION / DEPLOY ORDER
 ===========================
@@ -77,10 +91,13 @@ pod-roll)::
     # dry-run: print the plan + credit estimate, fetch nothing
     python -m market_ingestion.scripts.intraday_refine --exchanges US --dry-run
 
-    # real once-daily run (safe to re-run; resumes from the Valkey done-set)
+    # real once-daily run (targets today - 2 trading days; resumes from done-set)
     python -m market_ingestion.scripts.intraday_refine --exchanges US
 
-    # a specific historical trading day (backfill / re-refine)
+    # tune the settle lag (e.g. only 1 trading day back)
+    python -m market_ingestion.scripts.intraday_refine --exchanges US --settle-lag-days 1
+
+    # a specific historical trading day (backfill / re-refine — no lag applied)
     python -m market_ingestion.scripts.intraday_refine --exchanges US --date 2026-07-15
 """
 
@@ -121,6 +138,14 @@ _DEFAULT_EXCHANGES = "US"
 # ~2,650 credits for 530 US equities; 10k cap leaves comfortable headroom.
 _DEFAULT_MAX_CREDITS_PER_RUN = 10_000
 _DEFAULT_DAILY_HEADROOM = 5_000
+# EODHD intraday publishes ≥1 trading day late (live-verified 2026-07-17: at
+# Fri 01:22 UTC the just-closed Thu had 0 bars, Wed/T-2 was complete). Default to
+# the freshest reliably-settled day; the preflight guards any residual lag.
+_DEFAULT_SETTLE_LAG_DAYS = 2
+# Liquid tickers that trade EVERY regular session — used for the publish preflight
+# so "probe returned 0 bars" reliably means "day not yet published" (not "this
+# illiquid symbol simply had no 1m prints"). First one present in the universe wins.
+_PREFLIGHT_PREFERRED_SYMBOLS = ("AAPL", "MSFT", "SPY", "NVDA", "AMZN")
 # Valkey key that self-cleans; the per-day "done" set makes the sweep resumable.
 _DONE_SET_TTL_SECONDS = 3 * 24 * 60 * 60  # 3 days
 
@@ -132,12 +157,22 @@ _SERVICE_NAME = "market-ingestion-intraday-refine"
 # ────────────────────────── pure, unit-testable helpers ──────────────────────
 
 
-def resolve_target_day(date_arg: str | None) -> datetime:
+def resolve_target_day(date_arg: str | None, settle_lag_days: int = _DEFAULT_SETTLE_LAG_DAYS) -> datetime:
     """Resolve the trading day to refine, as a UTC-midnight ``datetime``.
 
-    ``date_arg`` is an optional ``YYYY-MM-DD``. When absent the default is the
-    CURRENT UTC date — the CronJob runs post-close (after ~23:00 UTC, once EODHD
-    has settled the consolidated tape), so "today UTC" is the day that just closed.
+    ``date_arg`` is an optional ``YYYY-MM-DD`` (explicit day — used verbatim, no
+    lag). When absent, the target is ``settle_lag_days`` **trading days** (weekends
+    skipped) before today's UTC date.
+
+    WHY THE LAG (live-verified 2026-07-17): EODHD's intraday feed publishes a
+    trading day's consolidated 1m bars ≥1 trading day LATE — at Fri 01:22 UTC the
+    just-closed Thursday had 0 bars while Wednesday (T-2) was complete. Targeting
+    "today" (T) would fetch an UNPUBLISHED day: every symbol returns 0 bars, yet
+    credits are still spent AND the symbols get poisoned into the resume-set. So
+    the default lag is **2 trading days** — the freshest day the live probe proved
+    is reliably settled. The per-run PREFLIGHT (see ``preflight_day_published``) is
+    the hard safety net: even if the lagged day is somehow still unpublished, the
+    sweep aborts before spending the full credit budget or writing the done-set.
 
     Raises:
         ValueError: if *date_arg* is present but not ``YYYY-MM-DD``.
@@ -145,7 +180,13 @@ def resolve_target_day(date_arg: str | None) -> datetime:
     if date_arg:
         return datetime.strptime(date_arg.strip()[:10], "%Y-%m-%d").replace(tzinfo=UTC)
     now = common.time.utc_now()
-    return datetime(now.year, now.month, now.day, tzinfo=UTC)
+    day = datetime(now.year, now.month, now.day, tzinfo=UTC)
+    remaining = max(0, settle_lag_days)
+    while remaining > 0:
+        day -= timedelta(days=1)
+        if not is_weekend(day):
+            remaining -= 1
+    return day
 
 
 def is_weekend(day: datetime) -> bool:
@@ -195,6 +236,68 @@ def done_set_key(day: datetime) -> str:
     return f"s2:v1:intraday_refine:{day.date().isoformat()}:done"
 
 
+def pick_probe_symbol(symbols: list[str]) -> str | None:
+    """Choose a LIQUID probe symbol for the publish preflight.
+
+    Prefers a well-known always-trading ticker (:data:`_PREFLIGHT_PREFERRED_SYMBOLS`)
+    so a 0-bar probe reliably means "day not yet published" rather than "this
+    illiquid symbol had no 1m prints". Falls back to the first symbol. Returns
+    ``None`` only for an empty universe.
+    """
+    if not symbols:
+        return None
+    universe = set(symbols)
+    for preferred in _PREFLIGHT_PREFERRED_SYMBOLS:
+        if preferred in universe:
+            return preferred
+    return sorted(symbols)[0]
+
+
+async def preflight_day_published(
+    adapter: Any,
+    probe_symbol: str,
+    exchange: str,
+    from_ts: int,
+    to_ts: int,
+) -> tuple[bool, ProviderFetchResult | None]:
+    """Probe ONE liquid symbol to decide whether the target day is PUBLISHED yet.
+
+    EODHD publishes a day's intraday bars ≥1 trading day late; targeting an
+    unpublished day would return 0 bars for EVERY symbol while still burning ~2,650
+    credits and poisoning the resume-set. This single 5-credit probe gates the whole
+    sweep:
+
+    - ``(True, result)``  — the liquid probe returned bars ⇒ the day is published
+      and a real session; proceed. The caller REUSES ``result`` (produces the probe
+      symbol, marks it done) so the probe credit is not wasted.
+    - ``(False, None)`` — 0 bars or a fetch error ⇒ the day is NOT usable yet
+      (unpublished, or an all-market holiday). The caller ABORTS the sweep WITHOUT
+      spending the full budget and WITHOUT writing the done-set, so a later run (or
+      a manual ``--date``) can still refine the day once it publishes.
+
+    Distinguishing unpublished-vs-holiday at the DAY level is unnecessary here: both
+    correctly abort the sweep, and because the default target auto-advances one
+    trading day per run, a genuine holiday is simply skipped (never revisited) at
+    the cost of one probe. Per-SYMBOL empties encountered AFTER this gate passes are
+    genuine holiday/halt cases for that symbol and ARE marked done (safe, because the
+    day itself is confirmed published).
+    """
+    try:
+        result: ProviderFetchResult = await adapter.fetch_intraday(
+            symbol=probe_symbol,
+            interval=_INTRADAY_TIMEFRAME,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            exchange=exchange,
+        )
+    except Exception as exc:
+        logger.warning("intraday_refine_preflight_error", symbol=probe_symbol, exchange=exchange, error=str(exc))
+        return False, None
+    if result.bars_returned <= 0:
+        return False, None
+    return True, result
+
+
 @dataclass
 class RunBudget:
     """Tracks per-invocation credit spend and enforces both budget ceilings."""
@@ -230,7 +333,15 @@ def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--date",
         default=None,
-        help="Specific trading day YYYY-MM-DD (default: today UTC — the day that just closed).",
+        help="Specific trading day YYYY-MM-DD (used verbatim, no settle-lag). "
+        "Default: today UTC minus --settle-lag-days trading days.",
+    )
+    parser.add_argument(
+        "--settle-lag-days",
+        type=int,
+        default=_DEFAULT_SETTLE_LAG_DAYS,
+        help=f"Trading days to look back for the default target day (default: {_DEFAULT_SETTLE_LAG_DAYS}). "
+        "EODHD intraday publishes ≥1 trading day late; the preflight guards residual lag. Ignored with --date.",
     )
     parser.add_argument(
         "--max-credits",
@@ -273,7 +384,7 @@ async def run_intraday_refine(settings: Settings, args: argparse.Namespace) -> i
     from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 
     exchanges = parse_exchanges(args.exchanges)
-    target_day = resolve_target_day(args.date)
+    target_day = resolve_target_day(args.date, settle_lag_days=args.settle_lag_days)
 
     if is_weekend(target_day) and not args.allow_weekend:
         logger.info("intraday_refine_skip_weekend", target_day=target_day.date().isoformat())
@@ -294,6 +405,7 @@ async def run_intraday_refine(settings: Settings, args: argparse.Namespace) -> i
         exchanges=exchanges,
         target_day=target_day.date().isoformat(),
         covered_by_exchange=plan,
+        settle_lag_days=args.settle_lag_days,
         estimated_credits=sum(plan.values()) * _CREDITS_PER_SYMBOL,
         credits_per_symbol=_CREDITS_PER_SYMBOL,
         dry_run=args.dry_run,
@@ -323,12 +435,107 @@ async def run_intraday_refine(settings: Settings, args: argparse.Namespace) -> i
     skipped_resumed = 0
     empty_days = 0
 
+    async def _produce_symbol(symbol: str, exchange: str, raw_result: ProviderFetchResult) -> str:
+        """Funnel an already-fetched+credited intraday result through the produce pipeline.
+
+        Returns ``"empty"`` (0 bars — genuine holiday/halt for this symbol on a
+        confirmed-published day, marked done), ``"failed"`` (produce error, NOT
+        marked done so a resume retries), or ``"produced"`` (marked done).
+        """
+        if raw_result.bars_returned == 0:
+            await valkey.hset(done_key, symbol, "1")
+            return "empty"
+
+        fetch_result = stamp_intraday_source(raw_result)
+        task = IngestionTask.create_ohlcv_task(
+            provider=Provider.EODHD_INTRADAY,
+            symbol=symbol,
+            timeframe=Timeframe(_INTRADAY_TIMEFRAME),
+            date_range=date_range,
+            exchange=exchange,
+        )
+        # Persist the synthetic task (idempotent ON CONFLICT DO NOTHING) so the
+        # produce path's task.succeed()/tasks.save() finds its row.
+        async with _uow() as enqueue_uow:
+            await enqueue_uow.tasks.add_many([task])
+            await enqueue_uow.commit()
+
+        use_case = ExecuteTaskUseCase(
+            uow=_uow(),
+            provider_registry=registry,
+            object_store=object_store,
+            serializer=serializer,
+            bronze_bucket=getattr(settings, "bronze_bucket", "market-bronze"),
+            canonical_bucket=getattr(settings, "canonical_bucket", "market-canonical"),
+        )
+        try:
+            await use_case.execute_with_prefetched_result(task, fetch_result)
+        except Exception as exc:
+            logger.warning("intraday_refine_produce_failed", symbol=symbol, exchange=exchange, error=str(exc))
+            return "failed"
+
+        await valkey.hset(done_key, symbol, "1")
+        return "produced"
+
+    async def _cleanup() -> None:
+        try:
+            await valkey.expire(done_key, _DONE_SET_TTL_SECONDS)
+        except Exception as exc:  # pragma: no cover — best-effort TTL
+            logger.warning("intraday_refine_done_set_expire_failed", error=str(exc))
+        await _aclose_registry(registry)
+        await valkey.close()
+
     async with write_factory() as lock_session, pg_advisory_lock(lock_session, INTRADAY_REFINE_LOCK) as acquired:
         if not acquired:
             logger.warning("intraday_refine_lock_busy")
             await valkey.close()
             await _aclose_registry(registry)
             return 0
+
+        # ── PREFLIGHT: probe ONE liquid symbol before spending the full budget ──
+        # EODHD intraday publishes ≥1 trading day late; targeting an unpublished day
+        # would return 0 bars for EVERY symbol yet still burn ~2,650 credits AND
+        # poison the resume-set. Gate the whole sweep on a single 5-credit probe.
+        probe_exchange = next((e for e in exchanges if universe.get(e)), None)
+        probe_symbol = pick_probe_symbol(universe.get(probe_exchange, [])) if probe_exchange else None
+        if probe_exchange is None or probe_symbol is None:
+            logger.info("intraday_refine_no_universe_to_probe", exchanges=exchanges)
+            await _cleanup()
+            return 0
+
+        published, probe_result = await preflight_day_published(
+            eodhd_adapter, probe_symbol, probe_exchange, from_ts, to_ts
+        )
+        # The probe is a real API call — record its 5 credits honestly, either way.
+        budget.record_symbol()
+        await quota_service.record_usage(service=_SERVICE_NAME, cost=_CREDITS_PER_SYMBOL, symbol=probe_symbol)
+
+        if not published:
+            # Day not yet published (or all-market holiday). ABORT the sweep WITHOUT
+            # spending the full budget and WITHOUT writing the done-set, so a later
+            # run — or a manual --date — can still refine this day once it publishes.
+            logger.warning(
+                "intraday_refine_day_unpublished_abort",
+                target_day=target_day.date().isoformat(),
+                probe_symbol=probe_symbol,
+                probe_exchange=probe_exchange,
+                credits_spent=budget.spent,
+            )
+            await _cleanup()
+            return 0
+
+        logger.info(
+            "intraday_refine_day_published",
+            target_day=target_day.date().isoformat(),
+            probe_symbol=probe_symbol,
+        )
+        # Reuse the probe's fetched bars — do not re-spend a second call on it.
+        if probe_result is not None:
+            outcome = await _produce_symbol(probe_symbol, probe_exchange, probe_result)
+            if outcome == "produced":
+                produced += 1
+            elif outcome == "empty":
+                empty_days += 1
 
         for exchange in exchanges:
             symbols = universe.get(exchange, [])
@@ -376,43 +583,11 @@ async def run_intraday_refine(settings: Settings, args: argparse.Namespace) -> i
                 # against the SHARED per-UTC-day counter ourselves.
                 await quota_service.record_usage(service=_SERVICE_NAME, cost=_CREDITS_PER_SYMBOL, symbol=symbol)
 
-                # A holiday / halted symbol returns an empty array — mark done so a
-                # resume does not re-spend credits on it.
-                if raw_result.bars_returned == 0:
+                outcome = await _produce_symbol(symbol, exchange, raw_result)
+                if outcome == "produced":
+                    produced += 1
+                elif outcome == "empty":
                     empty_days += 1
-                    await valkey.hset(done_key, symbol, "1")
-                    continue
-
-                fetch_result = stamp_intraday_source(raw_result)
-                task = IngestionTask.create_ohlcv_task(
-                    provider=Provider.EODHD_INTRADAY,
-                    symbol=symbol,
-                    timeframe=Timeframe(_INTRADAY_TIMEFRAME),
-                    date_range=date_range,
-                    exchange=exchange,
-                )
-                # Persist the synthetic task (idempotent ON CONFLICT DO NOTHING) so
-                # the produce path's task.succeed()/tasks.save() finds its row.
-                async with _uow() as enqueue_uow:
-                    await enqueue_uow.tasks.add_many([task])
-                    await enqueue_uow.commit()
-
-                use_case = ExecuteTaskUseCase(
-                    uow=_uow(),
-                    provider_registry=registry,
-                    object_store=object_store,
-                    serializer=serializer,
-                    bronze_bucket=getattr(settings, "bronze_bucket", "market-bronze"),
-                    canonical_bucket=getattr(settings, "canonical_bucket", "market-canonical"),
-                )
-                try:
-                    await use_case.execute_with_prefetched_result(task, fetch_result)
-                except Exception as exc:
-                    logger.warning("intraday_refine_produce_failed", symbol=symbol, exchange=exchange, error=str(exc))
-                    continue
-
-                await valkey.hset(done_key, symbol, "1")
-                produced += 1
 
             logger.info(
                 "intraday_refine_exchange_done",
@@ -422,14 +597,8 @@ async def run_intraday_refine(settings: Settings, args: argparse.Namespace) -> i
                 empty_days=empty_days,
             )
 
-    # Let the resume set self-clean a few days after the sweep.
-    try:
-        await valkey.expire(done_key, _DONE_SET_TTL_SECONDS)
-    except Exception as exc:  # pragma: no cover — best-effort TTL
-        logger.warning("intraday_refine_done_set_expire_failed", error=str(exc))
-
-    await _aclose_registry(registry)
-    await valkey.close()
+    # Normal completion: self-clean the resume-set + close clients.
+    await _cleanup()
     logger.info(
         "intraday_refine_run_summary",
         target_day=target_day.date().isoformat(),
