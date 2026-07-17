@@ -209,6 +209,43 @@ async def test_network_error_raises_unavailable():
         await adapter.fetch_ohlcv("AAPL", "1d", _START, _END)
 
 
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_connection_error_log_redacts_api_token(monkeypatch):
+    """The ``eodhd_connection_error`` warning must not leak the api_token.
+
+    ``error=str(exc)`` is a structlog FIELD (not scrubbed by the log handler's
+    SecretRedactingFilter), and some httpx transport errors embed the full
+    request URL — so the adapter must redact it at the call site. Token below
+    is an obviously-fake, EODHD-shaped placeholder, never a live key.
+    """
+    fake_token = "demo0000000000.00000000"  # noqa: S105  # pragma: allowlist-secret (synthetic test token)
+    leaky = OSError(f"connect fail: https://eodhd.com/api/eod/AAPL.US?api_token={fake_token}&fmt=json")
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=leaky)
+    adapter = EODHDProviderAdapter(api_key=fake_token, client=client)
+
+    captured: dict[str, object] = {}
+
+    def _fake_warning(event: str, **kw: object) -> None:
+        captured["event"] = event
+        captured.update(kw)
+
+    monkeypatch.setattr(
+        "market_ingestion.infrastructure.adapters.providers.eodhd.logger.warning",
+        _fake_warning,
+    )
+
+    with pytest.raises(ProviderUnavailable):
+        await adapter.fetch_ohlcv("AAPL", "1d", _START, _END)
+
+    logged_error = str(captured.get("error", ""))
+    assert fake_token not in logged_error, f"api_token LEAKED into log field: {logged_error!r}"
+    assert "api_token=***REDACTED-0000" in logged_error
+    # The real request still carried the unredacted token in its query params.
+    assert client.get.call_args.kwargs["params"]["api_token"] == fake_token
+
+
 # ---------------------------------------------------------------------------
 # fetch_quotes
 # ---------------------------------------------------------------------------

@@ -334,6 +334,51 @@ class TestEODHDTickerNewsAdapterErrors:
                 await adapter.fetch(source)
 
 
+class TestEODHDTickerNewsAdapterTokenRedaction:
+    """Security: the EODHD ``api_token`` must never reach a raised error string,
+    yet the real request must still carry it (SYNTHETIC token; not a live key)."""
+
+    # Obviously-fake, EODHD-shaped placeholder — never a real credential.
+    _FAKE_TOKEN = "demo0000000000.00000000"  # noqa: S105  # pragma: allowlist-secret (synthetic test token)
+
+    async def test_httpx_error_message_redacts_api_token(self) -> None:
+        adapter = EODHDTickerNewsAdapter(settings=_make_settings(api_key=self._FAKE_TOKEN))
+        source = _make_source()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            # Simulate an httpx error whose str() embeds the full request URL,
+            # including the api_token query param (some transport errors do).
+            leaky = httpx.ConnectError(
+                f"failed connecting to https://eodhd.com/api/news?api_token={self._FAKE_TOKEN}&fmt=json"
+            )
+            mock_client.get.side_effect = leaky
+
+            with pytest.raises(AdapterError) as exc_info:
+                await adapter.fetch(source)
+
+        raised = str(exc_info.value)
+        assert self._FAKE_TOKEN not in raised, f"api_token LEAKED into raised error: {raised!r}"
+        assert "api_token=***REDACTED-0000" in raised
+
+    async def test_real_request_still_carries_unredacted_token(self) -> None:
+        """The redaction must NOT break the actual call: the params sent to
+        httpx must contain the real, unredacted api_token."""
+        adapter = EODHDTickerNewsAdapter(settings=_make_settings(api_key=self._FAKE_TOKEN))
+        source = _make_source()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = _make_httpx_response([])
+
+            await adapter.fetch(source)
+
+        sent_params = mock_client.get.call_args.kwargs["params"]
+        assert sent_params["api_token"] == self._FAKE_TOKEN
+
+
 class TestEODHDTickerNewsAdapterEdgeCases:
     async def test_missing_symbol_returns_empty(self) -> None:
         adapter = EODHDTickerNewsAdapter(settings=_make_settings())

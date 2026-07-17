@@ -9,7 +9,7 @@ from observability.internal_jwt import (
     mint_internal_jwt,
 )
 from observability.liveness import ConsumerLivenessProbe, make_liveness_probe
-from observability.logging import configure_logging, get_logger
+from observability.logging import configure_logging, get_logger, redact_secrets
 from observability.metrics import (
     KAFKA_CONSUMER_MESSAGES,
     LLM_USAGE_SILENT_ZERO_COST,
@@ -34,8 +34,6 @@ __all__ = [
     "LLM_USAGE_SILENT_ZERO_COST",
     "ConsumerLivenessProbe",
     "InternalJWTMiddleware",
-    "build_internal_jwt_claims",
-    "mint_internal_jwt",
     "MLMetrics",
     "MetricsServerHandle",
     "SentrySettings",
@@ -43,6 +41,7 @@ __all__ = [
     "add_otel_middleware",
     "add_prometheus_middleware",
     "assert_app_env_or_die",
+    "build_internal_jwt_claims",
     "configure_logging",
     "configure_tracing",
     "create_metrics",
@@ -52,8 +51,10 @@ __all__ = [
     "init_sentry",
     "is_silent_zero_cost",
     "log_runtime_banner",
-    "record_silent_zero_cost",
     "make_liveness_probe",
+    "mint_internal_jwt",
+    "record_silent_zero_cost",
+    "redact_secrets",
     "register_error_handlers",
     "start_metrics_server",
 ]

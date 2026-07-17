@@ -14,7 +14,25 @@ from observability.logging import (
     _redact_secrets,
     configure_logging,
     get_logger,
+    redact_secrets,
 )
+
+
+class _FakeHttpxURL:
+    """Stand-in for ``httpx.URL``: a NON-str object whose ``str()`` is the full
+    URL (query string included).
+
+    httpx logs the request URL as an ``httpx.URL`` *object* arg, not a ``str``
+    — ``logger.info('HTTP Request: %s %s ...', method, request.url, ...)``. This
+    is the exact shape that slipped the original str-only filter and leaked the
+    EODHD ``api_token=`` at INFO. Using a fake avoids importing httpx here.
+    """
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+
+    def __str__(self) -> str:
+        return self._url
 
 
 class TestSecretRedaction:
@@ -54,6 +72,59 @@ class TestSecretRedaction:
         assert SecretRedactingFilter().filter(rec) is True
         assert "demo0000000000.00000000" not in rec.getMessage()
         assert "api_token=***REDACTED-0000" in rec.getMessage()
+
+    def test_filter_redacts_httpx_url_object_arg(self) -> None:
+        # THE reported leak: httpx passes the URL as an ``httpx.URL`` object
+        # (not a str), so the original str-only filter skipped it and the
+        # api_token reached stdout at INFO. The filter must redact non-str args
+        # whose textual form carries a credential.
+        rec = logging.LogRecord(
+            name="httpx",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg='HTTP Request: %s %s "%s %d %s"',
+            args=(
+                "GET",
+                _FakeHttpxURL("https://eodhd.com/api/news?api_token=demo0000000000.00000000&fmt=json"),
+                "HTTP/1.1",
+                200,
+                "OK",
+            ),
+            exc_info=None,
+        )
+        assert SecretRedactingFilter().filter(rec) is True
+        out = rec.getMessage()
+        assert "demo0000000000.00000000" not in out
+        assert "api_token=***REDACTED-0000" in out
+        # The %d status-code arg must survive: coercing the int to a redacted
+        # str would raise TypeError at format time.
+        assert '"HTTP/1.1 200 OK"' in out
+
+    def test_filter_preserves_non_secret_object_and_numeric_args(self) -> None:
+        # Non-str args with no credential in their textual form (and numeric
+        # args bound to %d) must be returned untouched, keeping their type.
+        rec = logging.LogRecord(
+            name="svc",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="processed %s in %d ms",
+            args=(_FakeHttpxURL("https://eodhd.com/api/eod/AAPL.US?fmt=json"), 42),
+            exc_info=None,
+        )
+        assert SecretRedactingFilter().filter(rec) is True
+        # int arg still an int (format with %d succeeds), object arg unchanged.
+        assert rec.args is not None
+        assert rec.args[1] == 42
+        assert rec.getMessage() == "processed https://eodhd.com/api/eod/AAPL.US?fmt=json in 42 ms"
+
+    def test_public_redact_secrets_helper(self) -> None:
+        # Public helper for sanitising strings BEFORE they become exception
+        # messages (used by the EODHD adapters on httpx error strings).
+        out = redact_secrets("boom: GET https://eodhd.com/api/news?api_token=demo0000000000.00000000")
+        assert "demo0000000000.00000000" not in out
+        assert "api_token=***REDACTED-0000" in out
 
 
 class TestConfigureLogging:

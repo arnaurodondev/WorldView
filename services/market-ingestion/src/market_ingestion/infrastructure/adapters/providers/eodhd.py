@@ -18,7 +18,7 @@ from market_ingestion.domain.errors import (
 )
 from market_ingestion.domain.freshness import EODHD_CREDIT_COST, EODHD_INTRADAY_COST
 from market_ingestion.infrastructure.adapters.providers.base import BaseProviderAdapter
-from observability.logging import get_logger  # type: ignore[import-untyped]
+from observability.logging import get_logger, redact_secrets  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     import httpx
@@ -758,7 +758,11 @@ class EODHDProviderAdapter(BaseProviderAdapter):
             logger.warning(
                 "eodhd_connection_error",
                 endpoint=slug,
-                error=str(exc),
+                # ``error`` is a structlog field, NOT a stdlib msg/arg, so the
+                # log handler's SecretRedactingFilter does NOT scrub it. Some
+                # httpx transport errors embed the full request URL (with the
+                # ``api_token=`` query param) in ``str(exc)`` — redact here.
+                error=redact_secrets(str(exc)),
             )
             self._record_error(reason="connection_error", endpoint=slug)
             raise ProviderUnavailable(f"EODHD connection error on {slug}: {type(exc).__name__}") from exc

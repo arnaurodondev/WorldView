@@ -33,6 +33,21 @@ def _redact_secrets(text: str) -> str:
     return _SECRET_QS_RE.sub(_repl, text)
 
 
+def redact_secrets(text: str) -> str:
+    """Public helper: mask credential-looking query-string values in *text*.
+
+    The ``SecretRedactingFilter`` scrubs everything that reaches the log
+    handler, but some strings must be sanitised *before* they are embedded into
+    an exception message that may later be surfaced outside the log pipeline
+    (persisted to a DB error column, returned in an API body, used as a metric
+    label). Call this at those sites — e.g. when interpolating an httpx error
+    (whose ``str()`` can embed the full request URL, including ``api_token=``)
+    into a raised domain error. Keeps the last 4 chars so operators can still
+    identify which key is in use.
+    """
+    return _redact_secrets(text)
+
+
 class SecretRedactingFilter(logging.Filter):
     """Stdlib logging filter that scrubs query-string secrets from records.
 
@@ -47,10 +62,33 @@ class SecretRedactingFilter(logging.Filter):
             record.msg = _redact_secrets(record.msg)
         if record.args:
             if isinstance(record.args, tuple):
-                record.args = tuple(_redact_secrets(a) if isinstance(a, str) else a for a in record.args)
+                record.args = tuple(self._scrub_arg(a) for a in record.args)
             elif isinstance(record.args, dict):
-                record.args = {k: (_redact_secrets(v) if isinstance(v, str) else v) for k, v in record.args.items()}
+                record.args = {k: self._scrub_arg(v) for k, v in record.args.items()}
         return True
+
+    @staticmethod
+    def _scrub_arg(arg: Any) -> Any:
+        """Redact a single ``%``-format log argument.
+
+        String args are scrubbed directly.  Non-string args are the subtle leak
+        this filter existed to close but originally missed: httpx logs the
+        request URL as an ``httpx.URL`` *object* (not a ``str``) —
+        ``logger.info('HTTP Request: %s %s ...', method, request.url, ...)`` — so
+        the ``api_token=`` query param bypassed the string-only path below and
+        reached stdout at INFO in plaintext (the EODHD key leak).  We coerce a
+        non-string arg to ``str`` ONLY when its textual form actually carries a
+        credential; otherwise it is returned untouched so numeric args bound to
+        ``%d`` / ``%f`` format specifiers keep their type (coercing an int to a
+        str would raise ``TypeError`` at format time).
+        """
+        if isinstance(arg, str):
+            return _redact_secrets(arg)
+        text = str(arg)
+        if "=" not in text:
+            return arg
+        redacted = _redact_secrets(text)
+        return redacted if redacted != text else arg
 
 
 def _inject_otel_trace_context(

@@ -32,7 +32,7 @@ from content_ingestion.infrastructure.adapters.eodhd_quota import (
     record_eodhd_auth_or_quota_rejection,
     record_eodhd_request,
 )
-from observability import get_logger  # type: ignore[import-untyped]
+from observability import get_logger, redact_secrets  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from content_ingestion.config import Settings
@@ -310,7 +310,12 @@ class EODHDTickerNewsAdapter(SourceAdapter):
         try:
             resp = await client.get(url, params=params)
         except httpx.HTTPError as exc:
-            msg = f"EODHD ticker-news HTTP error for {symbol}.{exchange}: {exc}"
+            # httpx error strings can embed the full request URL (including the
+            # ``api_token=`` query param). Redact before it becomes a raised
+            # error message that may be persisted/surfaced outside the log
+            # pipeline (the log handler's SecretRedactingFilter only guards the
+            # stdout path). See observability.redact_secrets.
+            msg = f"EODHD ticker-news HTTP error for {symbol}.{exchange}: {redact_secrets(str(exc))}"
             raise AdapterError(msg) from exc
 
         # Auth/quota rejection safeguard: 401/402/403/429 mean the shared EODHD
