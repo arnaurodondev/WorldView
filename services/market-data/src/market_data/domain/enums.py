@@ -64,10 +64,27 @@ class DatasetType(StrEnum):
 # Yahoo Finance is DROPPED from OHLCV routing — its entries remain only so any
 # historical ``yahoo_finance`` rows still compare consistently; nothing new is
 # routed to Yahoo.
+#
+# INTRADAY-VOLUME REFINEMENT (2026-07-16): Alpaca's free intraday 1m feed is
+# IEX-only (~2-5% of the consolidated tape), so every derived intraday timeframe
+# (5m..4h, volume-summed from 1m) also carries ~5% volume — wrong on the 1D/5D
+# chart histogram. A once-daily POST-CLOSE CronJob fetches EODHD's per-ticker 1m
+# intraday feed (``/intraday/{sym}?interval=1m`` — consolidated CTA/UTP volume,
+# UTC bar-start timestamps that ALIGN minute-for-minute with Alpaca's) for the
+# CLOSED trading day and stamps those bars ``eodhd_intraday`` at priority 115 —
+# ABOVE Alpaca's live IEX 1m (110) and the ``derived`` tag (110) — so the
+# priority-guarded ``bulk_upsert_with_priority`` REPLACES the IEX 1m bar on the
+# same ``(instrument, "1m", bar_date)`` key. The existing intraday-resampling
+# consumer then re-derives 5m..4h from the corrected 1m (no double-count: the
+# minute-aligned EODHD bar supersedes the Alpaca bar, so there is exactly ONE 1m
+# bar per minute). Alpaca STAYS the LIVE (intra-session) 1m source; EODHD only
+# refines a fully-closed day and, being 115 > 110, a late Alpaca correction can
+# no longer clobber the refined bar. See ``market_ingestion.scripts.intraday_refine``.
 _PROVIDER_PRIORITIES: dict[str, int] = {
     "eodhd_bulk": 120,  # authoritative daily EOD (bulk-last-day) — correct volume + adjusted_close
-    "alpaca": 110,  # 1m intraday (source of truth) + polled 1Day daily fallback
-    "derived": 110,  # locally-derived (from Alpaca 1m) — authoritative for covered intraday window
+    "eodhd_intraday": 115,  # post-close consolidated 1m refinement — supersedes Alpaca IEX 1m (110)
+    "alpaca": 110,  # 1m intraday (LIVE source of truth) + polled 1Day daily fallback
+    "derived": 110,  # locally-derived (from 1m) — authoritative for covered intraday window
     "polygon": 100,  # alternate intraday provider (registered only when keyed)
     "yahoo_finance": 80,  # DROPPED from routing — historical rows only
     "yahoo": 80,  # legacy alias — kept so historical rows compare consistently
@@ -87,6 +104,7 @@ class Provider(StrEnum):
     """
 
     EODHD_BULK = "eodhd_bulk"  # authoritative daily EOD via bulk-last-day (priority 120)
+    EODHD_INTRADAY = "eodhd_intraday"  # post-close consolidated 1m refinement (priority 115)
     ALPACA = "alpaca"
     DERIVED = "derived"
     POLYGON = "polygon"

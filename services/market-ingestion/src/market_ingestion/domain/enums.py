@@ -19,6 +19,16 @@ class Provider(StrEnum):
     # provider_priority 120 — ABOVE Alpaca's IEX daily (110) — and wins the
     # ``provider_priority >=`` upsert guard. See ``scripts/bulk_eod_daily.py``.
     EODHD_BULK = "eodhd_bulk"
+    # EODHD_INTRADAY is a distinct *source identity* (not a separately-registered
+    # adapter) for 1-minute intraday bars fetched via the EODHD ``/intraday``
+    # endpoint. It carries the CORRECT consolidated CTA/UTP volume (Alpaca's live
+    # 1m is IEX-only, ~5%) and is stamped as the canonical ``source`` so
+    # market-data (S3) resolves it to provider_priority 115 — ABOVE Alpaca's live
+    # IEX 1m (110) — and wins the ``provider_priority >=`` upsert guard for the
+    # CLOSED trading day. Its bar-start UTC minute timestamps align with Alpaca's,
+    # so the refined bar REPLACES the IEX bar on the same conflict key instead of
+    # duplicating it. See ``scripts/intraday_refine.py``.
+    EODHD_INTRADAY = "eodhd_intraday"
     ALPHA_VANTAGE = "alpha_vantage"
     POLYGON = "polygon"
     YAHOO_FINANCE = "yahoo_finance"
