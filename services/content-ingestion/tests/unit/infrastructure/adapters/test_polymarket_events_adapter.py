@@ -109,16 +109,25 @@ class TestPolymarketEventsClient:
         assert kwargs["params"]["offset"] == 500
         assert page.next_cursor == "502"
 
-    async def test_stop_on_short_page(self) -> None:
-        """A page shorter than ``limit`` terminates the loop (next_cursor None)."""
+    async def test_short_page_still_advances(self) -> None:
+        """A non-empty page shorter than ``limit`` must ADVANCE, not stop.
+
+        Regression for the server-side page cap: Gamma silently caps its page size
+        at ~100 rows regardless of the requested ``limit`` (verified live
+        2026-07-16). Treating a short page as the last page would terminate the walk
+        after the first ~100 events — the exact bug this branch fixes. The cursor
+        advances by the ACTUAL returned count; only an empty page terminates.
+        """
         http = AsyncMock()
-        http.get = AsyncMock(return_value=_response([_event()]))
+        events = [_event(f"evt_{i}") for i in range(100)]  # server-cap page
+        http.get = AsyncMock(return_value=_response(events))
         client = PolymarketEventsClient(http_client=http, settings=_client_settings())
 
         page = await client.fetch_events_page(limit=500, next_cursor="1000")
 
-        assert page.next_cursor is None
-        assert len(page.events) == 1
+        # 100 rows returned starting at offset 1000 → next offset 1100 (NOT None).
+        assert page.next_cursor == "1100"
+        assert len(page.events) == 100
 
     async def test_stop_on_empty_page(self) -> None:
         """An empty page terminates the loop (next_cursor None)."""
@@ -164,7 +173,9 @@ class TestPolymarketEventsClient:
         page = await client.fetch_events_page(limit=500)
 
         assert page.events[0]["id"] == "evt_x"
-        assert page.next_cursor is None  # 1 < 500 → last page
+        # A non-empty page always advances (short pages are the server-cap norm,
+        # not the end); the loop terminates only on an empty page.
+        assert page.next_cursor == "1"
 
     async def test_non_list_body_yields_empty_page(self) -> None:
         # A bare non-list/non-dict body must not crash — the client returns an

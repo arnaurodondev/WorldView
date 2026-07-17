@@ -98,10 +98,15 @@ class TestPolymarketAdapter:
         assert client.fetch_markets_page.await_count == 3
         assert len(results) == 3
 
-    async def test_adapter_walks_offsets_across_pages_until_short_page(self) -> None:
+    async def test_adapter_walks_offsets_across_pages_until_empty_page(self) -> None:
         """End-to-end: adapter + real client page through increasing offsets and
-        stop on the short page. Proves the offset-pagination fix: page 1 (offset 0,
-        full) → page 2 (offset 2, short) → stop. Regression for the page-1-only bug.
+        stop only on an EMPTY page. Proves the offset-pagination fix is robust to
+        the Gamma server-side page cap: a page shorter than ``limit`` is the norm
+        (the API caps the page size below the requested limit), so the walk must
+        advance past it by the actual returned count and terminate only when a page
+        comes back empty. page 1 (offset 0, full=2) → page 2 (offset 2, short=1,
+        advances by 1) → page 3 (offset 3, empty) → stop. Regression both for the
+        page-1-only bug AND for stopping prematurely on a capped short page.
         """
 
         def _resp(body: list) -> MagicMock:
@@ -110,10 +115,11 @@ class TestPolymarketAdapter:
             r.json.return_value = body
             return r
 
-        full_page = [_market("cond_a"), _market("cond_b")]  # len == limit(2) → more
-        short_page = [_market("cond_c")]  # len < limit → last page
+        full_page = [_market("cond_a"), _market("cond_b")]  # full page → advance
+        short_page = [_market("cond_c")]  # server-capped short page → still advance
+        empty_page: list = []  # empty page → terminate
         http = AsyncMock()
-        http.get = AsyncMock(side_effect=[_resp(full_page), _resp(short_page)])
+        http.get = AsyncMock(side_effect=[_resp(full_page), _resp(short_page), _resp(empty_page)])
         client = PolymarketClient(
             http_client=http,  # type: ignore[arg-type]
             settings=PolymarketProviderSettings(page_size=2, order=""),
@@ -125,10 +131,11 @@ class TestPolymarketAdapter:
         with patch(_utc_now_path, return_value=_FETCHED_AT):
             results = await adapter.fetch(_make_source())
 
-        # Two HTTP calls with offsets 0 then 2, three markets total.
-        assert http.get.await_count == 2
+        # Three HTTP calls with offsets 0, 2 (advanced by the 2 full rows), 3
+        # (advanced by the 1 short-page row); three markets total.
+        assert http.get.await_count == 3
         offsets = [call.kwargs["params"]["offset"] for call in http.get.await_args_list]
-        assert offsets == [0, 2]
+        assert offsets == [0, 2, 3]
         assert len(results) == 3
 
     async def test_adapter_parse_failure_continues(self) -> None:

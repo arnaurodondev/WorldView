@@ -157,9 +157,16 @@ class PolymarketEventsClient:
 
         events = _extract_items(resp.json(), key="events")
 
-        # Last page when the API returned fewer rows than requested (or none).
-        # Otherwise advance the synthetic cursor by ``limit`` for the next page.
-        next_offset: str | None = None if len(events) < limit else str(offset + limit)
+        # Advance the synthetic cursor by the number of rows the API ACTUALLY
+        # returned, and stop only on an empty page. The Gamma API silently caps
+        # its page size at ~100 rows regardless of the requested ``limit`` (verified
+        # live 2026-07-16: limit=500 → 100 rows), so a "short" page (len < limit) is
+        # the norm, not the end of the list. Advancing by ``limit`` would skip the
+        # uncovered rows, and stopping on a short page would (re)break pagination
+        # after the first 100 events — the exact bug this branch fixes. Advancing by
+        # the actual count and terminating only when a page is empty is correct for
+        # any server-side page cap.
+        next_offset: str | None = str(offset + len(events)) if events else None
 
         logger.debug(
             "gamma_events_page_fetched",

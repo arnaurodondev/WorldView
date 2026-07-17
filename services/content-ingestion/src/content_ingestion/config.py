@@ -176,12 +176,18 @@ class PolymarketProviderSettings(BaseModel):
     """Operational parameters for the Polymarket Gamma API provider."""
 
     base_url: str = "https://gamma-api.polymarket.com/markets"
-    page_size: int = Field(default=500, ge=1, le=1000)
-    # The Gamma API paginates via offset/limit and returns a bare JSON array.
-    # ``max_pages_per_cycle`` x ``page_size`` bounds one poll cycle: 20 x 500 =
-    # 10k markets/cycle — enough to walk the full active universe (a few thousand)
-    # while capping the first post-fix cycle so the downstream CLOB/trades/OI
-    # worklists do not stampede when the universe jumps from ~101 to thousands.
+    # The Gamma API paginates via offset/limit, returns a bare JSON array, and
+    # SILENTLY CAPS the page size at ~100 rows regardless of the requested ``limit``
+    # (verified live 2026-07-16: limit=500 → 100 rows). The client advances the
+    # offset by the actual returned count, so ``page_size`` is set to the real cap
+    # (100) to make the per-cycle bound below honest and avoid requesting rows the
+    # API will never return.
+    page_size: int = Field(default=100, ge=1, le=1000)
+    # ``max_pages_per_cycle`` x effective page (~100) bounds one poll cycle:
+    # 20 x 100 = ~2k markets/cycle. The full active universe (~2-4k, verified live)
+    # is walked over a couple of snapshot-idempotent cycles, capping the first
+    # post-fix cycle so the downstream CLOB/trades/OI worklists do not stampede when
+    # the universe jumps from ~101 to thousands.
     max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
     # Stable sort so offset paging is deterministic and high-value markets are
     # fetched first under the page bound. Empty string omits the ``order`` param
@@ -204,9 +210,13 @@ class PolymarketEventsProviderSettings(BaseModel):
     """Operational parameters for the Polymarket Gamma ``/events`` stream (1h cadence)."""
 
     base_url: str = "https://gamma-api.polymarket.com/events"
-    page_size: int = Field(default=500, ge=1, le=1000)
-    # Offset/limit pagination bound: 20 x 500 = 10k events/cycle walks the full
-    # active-event universe (long-tail groups included) while capping each cycle.
+    # Gamma silently caps the page size at ~100 regardless of requested ``limit``
+    # (verified live 2026-07-16), and the client advances the offset by the actual
+    # returned count, so ``page_size`` is set to the real cap (100).
+    page_size: int = Field(default=100, ge=1, le=1000)
+    # Offset/limit pagination bound: 20 x ~100 = ~2k events/cycle walks the full
+    # active-event universe (long-tail groups included) over a couple of
+    # snapshot-idempotent cycles while capping each cycle.
     max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
     # Stable sort so offset paging is deterministic and high-value groups are
     # fetched first. Empty string omits the ``order`` param (safe fallback;

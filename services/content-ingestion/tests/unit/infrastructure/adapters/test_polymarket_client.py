@@ -72,16 +72,26 @@ class TestPolymarketClientPagination:
         assert kwargs["params"]["offset"] == 500
         assert page.next_cursor == "502"
 
-    async def test_stop_on_short_page(self) -> None:
-        """A page shorter than ``limit`` is the last page → next_cursor None."""
+    async def test_short_page_still_advances(self) -> None:
+        """A non-empty page shorter than ``limit`` must ADVANCE, not stop.
+
+        Regression for the server-side page cap: the Gamma API silently caps its
+        page size at ~100 rows regardless of the requested ``limit`` (verified live
+        2026-07-16: limit=500 → 100 rows). Treating a short page as the last page
+        would terminate the walk after the first ~100 markets — the exact bug this
+        branch fixes. The cursor must advance by the ACTUAL returned count so the
+        rest of the universe is walked; only an empty page terminates the loop.
+        """
         http = AsyncMock()
-        http.get = AsyncMock(return_value=_make_response([{"conditionId": "only"}]))
+        markets = [{"conditionId": f"c{i}"} for i in range(100)]  # server-cap page
+        http.get = AsyncMock(return_value=_make_response(markets))
         client = PolymarketClient(http_client=http, settings=_make_settings())
 
         page = await client.fetch_markets_page(limit=500, next_cursor="1000")
 
-        assert page.next_cursor is None
-        assert len(page.markets) == 1
+        # 100 rows returned starting at offset 1000 → next offset 1100 (NOT None).
+        assert page.next_cursor == "1100"
+        assert len(page.markets) == 100
 
     async def test_stop_on_empty_page(self) -> None:
         """An empty page terminates the loop (next_cursor None)."""
@@ -128,7 +138,9 @@ class TestPolymarketClientPagination:
         page = await client.fetch_markets_page(limit=500)
 
         assert page.markets == markets
-        assert page.next_cursor is None  # 1 < 500 → last page
+        # A non-empty page always advances (short pages are the server-cap norm,
+        # not the end); the loop terminates only on an empty page.
+        assert page.next_cursor == "1"
 
     async def test_dict_wrapped_response_parsed(self) -> None:
         """Defensive: an object wrapping the array under ``markets`` is accepted."""
