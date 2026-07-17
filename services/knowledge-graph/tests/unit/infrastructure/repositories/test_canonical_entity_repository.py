@@ -289,10 +289,12 @@ class TestRetypeAttemptTracking:
 
         sql_text = str(session.execute.call_args_list[0].args[0])
         # The cap predicate must be present so capped rows never re-hit the LLM.
-        # COALESCE(...,0) keeps never-attempted rows (no metadata key) eligible.
+        assert ":max_attempts" in sql_text, f"Expected attempt-cap predicate; got SQL:\n{sql_text}"
+        # Defensive numeric guard: a non-numeric metadata value must fall through
+        # to 0 (regex gate) rather than raising and aborting the whole SELECT.
         assert (
-            "COALESCE((metadata->>'retype_attempts')::int, 0) < :max_attempts" in sql_text
-        ), f"Expected attempt-cap predicate; got SQL:\n{sql_text}"
+            "metadata->>'retype_attempts' ~ '^[0-9]+$'" in sql_text
+        ), f"Expected defensive numeric guard on the ::int cast; got SQL:\n{sql_text}"
         params = session.execute.call_args_list[0].args[1]
         assert params["max_attempts"] == 3
         assert params["limit"] == 50
@@ -321,7 +323,11 @@ class TestRetypeAttemptTracking:
         assert session.execute.await_count == 1
         sql_text = str(session.execute.call_args_list[0].args[0])
         # Monotonic increment of the JSONB counter + last-attempt timestamp.
-        assert "'retype_attempts', COALESCE((metadata->>'retype_attempts')::int, 0) + 1" in sql_text
+        assert "'retype_attempts'," in sql_text
+        assert "END + 1" in sql_text, f"Expected guarded increment; got SQL:\n{sql_text}"
+        # Same defensive numeric guard as the SELECT — a non-numeric value must
+        # not raise and abort the batch UPDATE.
+        assert "metadata->>'retype_attempts' ~ '^[0-9]+$'" in sql_text
         assert "'retype_last_attempt_at', :now" in sql_text
         # Guarded on entity_type='unknown' so a concurrently-typed row is untouched.
         assert "AND entity_type = 'unknown'" in sql_text

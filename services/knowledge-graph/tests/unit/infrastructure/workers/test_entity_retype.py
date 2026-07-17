@@ -254,6 +254,46 @@ class TestEntityRetypeWorker:
             await worker.run()  # must not raise
         retype.assert_not_awaited()
 
+    async def test_transient_llm_error_does_not_increment_attempts(self) -> None:
+        """CRITICAL (review defect): a transient LLM/extraction error must NOT
+        count toward the attempt cap.  Otherwise a routine DeepInfra outage —
+        every scanned row errors for a few cycles — would burn the whole
+        ``unknown`` backlog's attempts and permanently exclude recoverable rows
+        from the sweep.  The row is simply retried next cycle instead."""
+        worker, _ = _make_worker()
+        rows = [
+            {
+                "entity_id": _EID_A,
+                "canonical_name": "Interactive Brokers",
+                "ticker": None,
+                "isin": None,
+                "description": None,
+            }
+        ]
+        record = AsyncMock()
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.list_unknown_entities",
+                new=AsyncMock(return_value=rows),
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.record_retype_attempts",
+                new=record,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.extract_entity_profile",
+                new=AsyncMock(side_effect=RuntimeError("deepinfra 503 outage")),
+            ),
+        ):
+            await worker.run()
+        # The erroring row is NEVER handed to the attempt-counter bump — whether
+        # the bump is skipped entirely or called with an empty list, _EID_A must
+        # not appear so the row stays eligible on the next cycle.
+        for call in record.await_args_list:
+            assert _EID_A not in call.args[0], "transient-error row must not be capped"
+
 
 # ---------------------------------------------------------------------------
 # Attempt-tracking (2026-07-16 follow-up)

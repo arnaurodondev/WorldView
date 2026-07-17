@@ -193,8 +193,15 @@ WHERE canonical_name = :canonical_name AND entity_type = :entity_type
         :meth:`record_retype_attempts`.  Rows whose attempt count has reached
         ``max_attempts`` are excluded here so a permanently-unclassifiable entity
         (junk mention, mojibake) is never re-billed to the LLM again.  Rows that
-        have never been attempted have no ``retype_attempts`` key — ``COALESCE``
-        treats them as 0 so they remain eligible with no backfill required.
+        have never been attempted have no ``retype_attempts`` key — the guarded
+        cast treats them as 0 so they remain eligible with no backfill required.
+
+        Defensive cast: ``metadata`` is a free-form JSONB written by several
+        paths, so we NEVER cast ``retype_attempts`` to ``int`` unconditionally —
+        a single non-numeric value (e.g. an operator hand-edit) would raise
+        ``invalid input syntax for type integer`` and abort the WHOLE sweep
+        SELECT, silently killing the worker.  The ``~ '^[0-9]+$'`` regex gate
+        makes any non-numeric value fall through to 0.
 
         Returns the fields the LLM profiler needs as context (name + any
         identifiers + the existing description).  Read-only — no lock taken, the
@@ -206,7 +213,11 @@ WHERE canonical_name = :canonical_name AND entity_type = :entity_type
 SELECT entity_id, canonical_name, ticker, isin, description
 FROM canonical_entities
 WHERE entity_type = 'unknown'
-  AND COALESCE((metadata->>'retype_attempts')::int, 0) < :max_attempts
+  AND CASE
+        WHEN metadata->>'retype_attempts' ~ '^[0-9]+$'
+        THEN (metadata->>'retype_attempts')::int
+        ELSE 0
+      END < :max_attempts
 ORDER BY created_at
 LIMIT :limit
 """),
@@ -246,11 +257,19 @@ LIMIT :limit
         # also keeps the value deterministic under a patched clock in tests.
         from common.time import utc_now  # type: ignore[import-untyped]
 
+        # Same defensive ``~ '^[0-9]+$'`` gate as list_unknown_entities: a
+        # non-numeric existing value falls through to 0 (so the bump makes it 1)
+        # instead of raising and aborting the whole batch UPDATE.
         await self._session.execute(
             text("""
 UPDATE canonical_entities
 SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-        'retype_attempts', COALESCE((metadata->>'retype_attempts')::int, 0) + 1,
+        'retype_attempts',
+        CASE
+            WHEN metadata->>'retype_attempts' ~ '^[0-9]+$'
+            THEN (metadata->>'retype_attempts')::int
+            ELSE 0
+        END + 1,
         'retype_last_attempt_at', :now
     )
 WHERE entity_id = ANY(CAST(:ids AS uuid[]))

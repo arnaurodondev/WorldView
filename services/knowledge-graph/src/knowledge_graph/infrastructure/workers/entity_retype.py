@@ -143,17 +143,23 @@ class EntityRetypeWorker:
                     canonical_name=canonical_name,
                     exc_info=True,
                 )
-                # A transient LLM error still counts as an attempt: a row that
-                # errors every cycle would otherwise be retried forever. The cap
-                # bounds that; a genuinely-recoverable row has up to
-                # ``max_attempts`` cycles to succeed.
-                unresolved_ids.append(entity_id)
+                # A transient LLM/extraction error is NOT a verdict on the entity
+                # — it means the classifier never ran. Counting it toward the cap
+                # would be catastrophic during a routine DeepInfra outage (history:
+                # ~29% extraction api_error, key-rotation incidents): every scanned
+                # ``unknown`` row would error for a few cycles and the ENTIRE
+                # backlog would burn its attempts and be permanently excluded from
+                # the sweep. So we skip the row WITHOUT incrementing — it is simply
+                # retried on the next cycle once the LLM recovers.
                 continue
 
             new_type = self._resolve_type(profile, fallback_ticker=row.get("ticker"))
             if new_type == "unknown":
-                # LLM still couldn't classify — bump the attempt counter (Phase 3)
-                # rather than churning the row's type.
+                # GENUINE unknown verdict (the LLM ran and could not classify) —
+                # bump the attempt counter (Phase 3) rather than churning the
+                # row's type. Only real verdicts + nameless rows count toward the
+                # cap so junk stops being billed while transient errors never
+                # exhaust a recoverable row's budget.
                 unresolved_ids.append(entity_id)
                 continue
             resolved.append((entity_id, new_type))
