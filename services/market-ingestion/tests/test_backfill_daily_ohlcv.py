@@ -62,6 +62,17 @@ class TestResolveHorizon:
         # both boundaries are tz-aware (DateRange requires it)
         assert from_dt.tzinfo is not None and to_dt.tzinfo is not None
 
+    def test_days_trailing_window_overrides_years(self) -> None:
+        now = datetime(2026, 7, 15, tzinfo=UTC)
+        from_dt, to_dt = resolve_horizon(years=2, from_date=None, to_date=None, days=5, now=now)
+        assert to_dt == now
+        assert (to_dt - from_dt) == timedelta(days=5)
+
+    def test_from_date_overrides_days(self) -> None:
+        from_dt, to_dt = resolve_horizon(years=None, from_date="2024-01-01", to_date="2024-12-31", days=5)
+        assert from_dt == datetime(2024, 1, 1, tzinfo=UTC)
+        assert to_dt == datetime(2024, 12, 31, tzinfo=UTC)
+
     def test_empty_window_raises(self) -> None:
         with pytest.raises(ValueError, match="empty"):
             resolve_horizon(years=None, from_date="2025-01-01", to_date="2024-01-01")

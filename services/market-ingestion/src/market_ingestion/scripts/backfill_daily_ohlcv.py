@@ -119,13 +119,17 @@ def resolve_horizon(
     years: int | None,
     from_date: str | None,
     to_date: str | None,
+    days: int | None = None,
     now: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """Resolve the ``[from, to]`` UTC-aware datetime window.
 
-    ``--from``/``--to`` (YYYY-MM-DD) override ``--years``. ``to`` defaults to
-    now (UTC); ``from`` defaults to ``to - years*365d``. The returned datetimes
-    are tz-aware and satisfy ``from < to`` (required by ``DateRange``).
+    Precedence for the start bound: an explicit ``--from`` (YYYY-MM-DD) wins;
+    else ``--days N`` (a short TRAILING window ending at ``to`` — used by the
+    once-daily authoritative CronJob to re-fetch just the recent close(s) per
+    ticker); else ``--years`` (deep backfill). ``to`` defaults to now (UTC).
+    The returned datetimes are tz-aware and satisfy ``from < to`` (required by
+    ``DateRange``).
 
     Raises:
         ValueError: if the resolved window is empty (from >= to).
@@ -134,6 +138,8 @@ def resolve_horizon(
     to_dt = _parse_day(to_date) if to_date else current
     if from_date:
         from_dt = _parse_day(from_date)
+    elif days is not None:
+        from_dt = to_dt - timedelta(days=max(1, days))
     else:
         horizon_years = years if years is not None else _DEFAULT_YEARS
         from_dt = to_dt - timedelta(days=max(1, horizon_years) * 365)
@@ -241,7 +247,19 @@ class RunBudget:
 def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Backfill daily (1d) OHLCV from the EODHD EOD feed.")
     parser.add_argument("--years", type=int, default=None, help=f"Horizon in years (default: {_DEFAULT_YEARS}).")
-    parser.add_argument("--from", dest="from_date", default=None, help="Start date YYYY-MM-DD (overrides --years).")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help=(
+            "Trailing-window length in days ending at --to (overrides --years, "
+            "overridden by --from). Used by the once-daily authoritative CronJob "
+            "to re-fetch only the recent close(s) per ticker at ~1 credit each."
+        ),
+    )
+    parser.add_argument(
+        "--from", dest="from_date", default=None, help="Start date YYYY-MM-DD (overrides --years/--days)."
+    )
     parser.add_argument("--to", dest="to_date", default=None, help="Explicit end date YYYY-MM-DD (default: today UTC).")
     parser.add_argument(
         "--max-credits",
@@ -309,7 +327,9 @@ async def run_backfill(settings: Settings, args: argparse.Namespace) -> int:
     from market_ingestion.infrastructure.db.session import _build_factories
     from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 
-    from_dt, to_dt = resolve_horizon(years=args.years, from_date=args.from_date, to_date=args.to_date)
+    from_dt, to_dt = resolve_horizon(
+        years=args.years, from_date=args.from_date, to_date=args.to_date, days=getattr(args, "days", None)
+    )
 
     write_factory, read_factory = _build_factories(settings)
 

@@ -1,0 +1,131 @@
+# Once-daily K8s CronJob: AUTHORITATIVE daily (1d) OHLCV via PER-TICKER EODHD /eod.
+#
+# PRIMARY ongoing daily-bar source (operator decision 2026-07-16). Alpaca's free IEX
+# daily bar (priority 110) has WRONG volume (IEX-only, ~19-30x understated) and NO
+# adjusted_close. Alpaca stays the intraday 1m source; DAILY bars now come from a
+# per-ticker EODHD /eod sweep of the tracked universe (`backfill_daily_ohlcv.py
+# --authoritative`), stamped `eodhd_bulk` (priority 120) so they win the market-data
+# `provider_priority >=` upsert guard over Alpaca's IEX daily (110).
+#
+# WHY PER-TICKER (not /eod-bulk-last-day): a per-ticker /eod call GUARANTEES coverage
+# of exactly our tracked universe (no "symbol missing from the bulk feed → stays on
+# stale Alpaca" risk) and returns the correct consolidated volume + adjusted_close per
+# ticker (live-verified 2026-07-16: AAPL 62.6M vol + adj present). The bulk endpoint
+# (bulk_eod_daily.py, ~100 credits/exchange) remains an optional cheaper FALLBACK.
+#
+# COORDINATION: requires the `fix/ohlcv-dup-bars` UTC-midnight bar_date normalization
+# (ingest path + migration 045) so the eodhd_bulk and Alpaca daily bars share the same
+# (instrument, timeframe, bar_date) conflict key and the priority guard fires.
+#
+# SCHEDULE: 23:00 UTC (after the US cash close + EODHD end-of-day settle; the /eod feed
+# already serves the same-day close by ~22:00 UTC). Crypto (CC, 24/7) + FOREX stay on
+# Alpaca and are not in the OHLCV /eod universe.
+#
+# WINDOW: `--days 5` re-fetches only the recent close(s) per ticker (weekend/holiday +
+# late-correction tolerant). EODHD /eod is 1 credit/ticker REGARDLESS of range length,
+# so the window length does not change cost. NO `--resume` — every run re-scans the
+# full universe fresh (the resume cursor is for the one-shot deep backfill only).
+#
+# CREDIT COST: ~1 credit/ticker/day × ~543 tracked instruments (531 US + 11 INDX + 1
+# SHG) = ~543 credits/day. Daily account cap 100k, current baseline ~1.1k/day → ample.
+# --max-credits / --daily-headroom bound it against the live firehose.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: market-ingestion-daily-eod-authoritative
+  namespace: worldview
+  labels:
+    app.kubernetes.io/name: market-ingestion-daily-eod-authoritative
+    app.kubernetes.io/instance: market-ingestion
+    app.kubernetes.io/component: daily-eod
+spec:
+  # 23:00 UTC daily — after the US cash close and EODHD's EOD settle.
+  schedule: "0 23 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 7200
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: market-ingestion-daily-eod-authoritative
+            app.kubernetes.io/instance: market-ingestion
+            app.kubernetes.io/component: daily-eod
+        spec:
+          restartPolicy: Never
+          # See backfill-daily-ohlcv-job.yaml: k8s service-link env (MARKET_INGESTION_PORT=
+          # tcp://…) collides with pydantic-settings; disable service links + pin PORT.
+          enableServiceLinks: false
+          serviceAccountName: market-ingestion
+          imagePullSecrets:
+            - name: ghcr-credentials
+          containers:
+            - name: daily-eod
+              image: ghcr.io/arnaurodondev/worldview-market-ingestion:latest
+              imagePullPolicy: Always
+              command:
+                - python
+                - -m
+                - market_ingestion.scripts.backfill_daily_ohlcv
+              # Per-ticker /eod over the whole enabled OHLCV universe, stamped
+              # eodhd_bulk (priority 120). Trailing 5-day window; NO --resume.
+              args:
+                - --authoritative
+                - --days
+                - "5"
+                - --max-credits
+                - "5000"
+                - --daily-headroom
+                - "5000"
+              env:
+                - name: APP_ENV
+                  value: production
+                - name: MARKET_INGESTION_PORT
+                  value: "8002"
+                - name: MARKET_INGESTION_DATABASE_URL
+                  value: postgresql+asyncpg://postgres:$(POSTGRES_PASSWORD)@postgres.infra.svc:5432/ingestion_db
+                - name: MARKET_INGESTION_DATABASE_URL_READ
+                  value: postgresql+asyncpg://postgres:$(POSTGRES_PASSWORD)@postgres.infra.svc:5432/ingestion_db
+                - name: MARKET_INGESTION_KAFKA_BOOTSTRAP_SERVERS
+                  value: kafka.infra.svc:9092
+                - name: MARKET_INGESTION_SCHEMA_REGISTRY_URL
+                  value: http://schema-registry.infra.svc:8081
+                - name: MARKET_INGESTION_STORAGE_ENDPOINT
+                  value: http://minio.infra.svc:9000
+                - name: MARKET_INGESTION_STORAGE_BUCKET
+                  value: market-ingestion
+                - name: MARKET_INGESTION_BRONZE_BUCKET
+                  value: market-bronze
+                - name: MARKET_INGESTION_CANONICAL_BUCKET
+                  value: market-canonical
+                - name: MARKET_INGESTION_VALKEY_URL
+                  value: redis://valkey.infra.svc:6379/0
+                - name: MARKET_INGESTION_EODHD_BASE_URL
+                  value: https://eodhd.com/api
+                - name: MARKET_INGESTION_EODHD_DAILY_QUOTA
+                  value: "100000"
+                - name: MARKET_INGESTION_EODHD_MONTHLY_QUOTA
+                  value: "145000"
+                - name: MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS
+                  value: "30.0"
+                - name: MARKET_INGESTION_LOG_LEVEL
+                  value: INFO
+                - name: MARKET_INGESTION_LOG_JSON
+                  value: "true"
+              # Provides POSTGRES_PASSWORD, MARKET_INGESTION_EODHD_API_KEY,
+              # MARKET_INGESTION_STORAGE_ACCESS_KEY / _SECRET_KEY, etc.
+              envFrom:
+                - secretRef:
+                    name: market-ingestion-secrets
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 320Mi
+                limits:
+                  cpu: "1000m"
+                  memory: 1Gi
