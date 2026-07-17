@@ -1613,14 +1613,24 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             # Non-critical — don't break the consumer loop on lag polling failure.
             pass
 
-    def _compute_total_lag(self) -> int | None:
-        """Sum lag across the current assignment (blocking librdkafka calls).
+    def _compute_lag_and_progress(self) -> tuple[int, int] | None:
+        """Sample ``(total_lag, consumed_offset)`` across the assignment.
+
+        Both figures come from a SINGLE pass over the current assignment so
+        they are mutually consistent (blocking librdkafka calls):
+
+        * ``total_lag`` — sum of ``high_watermark - position`` across the
+          assignment (how far behind we are).
+        * ``consumed_offset`` — sum of the consumer's *positions*.  This is a
+          monotonically-advancing PROGRESS signal: it climbs every time the
+          consumer commits, regardless of how far behind it is or how fast the
+          topic is being produced to.  The stall detector keys on THIS, not on
+          the lag magnitude — see :meth:`_evaluate_lag_stall`.
 
         Returns ``None`` when the consumer/assignment is not ready or on any
         broker error, so the caller can SKIP the sample rather than mistake an
-        unreadable broker for a healthy zero-lag consumer.  Mirrors the
-        watermark arithmetic in :meth:`_record_consumer_lag` but aggregates to a
-        single number for the stall detector.
+        unreadable broker for a healthy zero-lag / zero-progress consumer.
+        Mirrors the watermark arithmetic in :meth:`_record_consumer_lag`.
         """
         consumer = self._consumer
         if consumer is None:
@@ -1629,34 +1639,66 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             assignment = consumer.assignment()
             if not assignment:
                 return None
-            total = 0
+            total_lag = 0
+            consumed_offset = 0
             for tp in assignment:
                 _low, high = consumer.get_watermark_offsets(tp, timeout=1.0)
                 position_list = consumer.position([tp])
                 if position_list and position_list[0].offset >= 0:
-                    total += max(0, high - position_list[0].offset)
-            return total
+                    position = position_list[0].offset
+                    total_lag += max(0, high - position)
+                    consumed_offset += position
+            return total_lag, consumed_offset
         except Exception:
             return None
 
-    def _evaluate_lag_stall(self, total_lag: int) -> bool:
-        """Update stall state from ``total_lag``; return ``True`` to fire an alert.
+    def _compute_total_lag(self) -> int | None:
+        """Return just the total lag for the current assignment, or ``None``.
 
-        A *stall* is lag at/above :attr:`_lag_stall_threshold` that has not
-        decreased for :attr:`_lag_stall_probes` consecutive samples — i.e. the
-        consumer is connected but frozen or falling behind.  Decreasing lag
-        (even if still large) is healthy drain and never alerts.  After firing
-        we reset the counter so the NEXT sustained window re-alerts instead of
-        spamming a line every probe.
+        Thin wrapper over :meth:`_compute_lag_and_progress` kept for callers /
+        metrics that only care about the lag magnitude.
         """
-        prev = self._prev_total_lag
-        self._prev_total_lag = total_lag
+        sample = self._compute_lag_and_progress()
+        return None if sample is None else sample[0]
+
+    def _evaluate_lag_stall(self, total_lag: int, consumed_offset: int) -> bool:
+        """Update stall state; return ``True`` to fire the CRITICAL alert.
+
+        The detector keys on CONSUMER PROGRESS (committed offset advancing),
+        NOT on lag magnitude.  This distinguishes the two states that a large
+        lag can represent:
+
+        * **healthy-but-behind** — lag at/above :attr:`_lag_stall_threshold`
+          but ``consumed_offset`` climbs on every probe.  This covers a
+          consumer draining a large *finite* backlog slowly (the 306k-article
+          raw→stored promotion at ~15/min), and a consumer merely keeping pace
+          with a hot topic where production holds lag roughly flat.  The
+          consumer is committing offsets → NEVER alerts.
+        * **real stall** — lag at/above threshold AND ``consumed_offset`` has
+          NOT advanced for :attr:`_lag_stall_probes` consecutive samples: a
+          wedged poll loop, a frozen handler, a partition stuck behind a poison
+          message, or a broker reachable for metadata but not for fetch.  The
+          offset is frozen → alerts.
+
+        Keying on progress (rather than "lag decreased vs the previous probe")
+        removes the false positives that a slow finite drain produced: at
+        ~15 msgs/probe against a 306k backlog, watermark/position sampling
+        jitter routinely made lag appear flat or tick *up* between probes even
+        though the consumer was committing steadily — that armed and fired the
+        old lag-delta check.  Committed-offset advancement has no such jitter.
+
+        After firing we reset the counter so the NEXT sustained window
+        re-alerts instead of spamming a line every probe.
+        """
+        prev = self._prev_consumed_offset
+        self._prev_consumed_offset = consumed_offset
         if total_lag < self._lag_stall_threshold:
             self._lag_stall_count = 0
             return False
-        # Above threshold.  Only treat it as a stall if lag is NOT draining.
-        if prev >= 0 and total_lag < prev:
-            self._lag_stall_count = 0  # shrinking → healthy backlog drain
+        # Above threshold.  Healthy iff the consumer is still making progress
+        # (committed offset strictly advanced since the previous probe).
+        if prev >= 0 and consumed_offset > prev:
+            self._lag_stall_count = 0  # offset advancing → draining / keeping pace
             return False
         self._lag_stall_count += 1
         if self._lag_stall_count >= self._lag_stall_probes:
@@ -1828,15 +1870,26 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
     # could reach for ``list_topics`` metadata yet not actually consume from.
     # That let an OHLCV consumer fall ~19k messages behind for three days
     # unnoticed: the ``kafka_consumer_lag`` gauge existed but nothing ALERTED
-    # on it.  We sample total lag on each successful probe and emit a single
-    # CRITICAL ``kafka_consumer_lag_stalled`` once lag has stayed at/above the
-    # threshold WITHOUT decreasing for ``_lag_stall_probes`` consecutive samples
-    # (~5 min at the 60 s cadence).  Class attrs for the same no-per-service-
-    # drift reason as the probe knobs above; the two ints become instance attrs
-    # on first assignment (safe — immutable, never shared/mutated in place).
+    # on it.  On each successful probe we sample BOTH total lag and the
+    # consumer's committed offset, and emit a single CRITICAL
+    # ``kafka_consumer_lag_stalled`` once lag has stayed at/above the threshold
+    # while the committed offset has NOT advanced for ``_lag_stall_probes``
+    # consecutive samples (~5 min at the 60 s cadence).
+    #
+    # Tuning (2026-07-16, fix/lag-alert-tuning): the detector originally armed
+    # whenever lag failed to DECREASE between probes.  A large but healthily-
+    # draining finite backlog (the 306k-article raw→stored promotion draining
+    # at ~15 msgs/min from two memory-bound S6 replicas) tripped it as NOISE:
+    # at ~15 msgs/probe against 306k, watermark/position sampling jitter made
+    # lag look flat or tick up even while offsets advanced steadily.  The check
+    # now keys on CONSUMER PROGRESS (committed offset advancing) instead of lag
+    # magnitude, so "healthy-but-behind" is silent and only a truly frozen
+    # offset alerts.  Class attrs for the same no-per-service-drift reason as
+    # the probe knobs above; the ints become instance attrs on first assignment
+    # (safe — immutable, never shared/mutated in place).
     _lag_stall_threshold: int = 5_000  # messages behind before we care
-    _lag_stall_probes: int = 5  # consecutive non-draining samples → alert
-    _prev_total_lag: int = -1
+    _lag_stall_probes: int = 5  # consecutive no-progress samples → alert
+    _prev_consumed_offset: int = -1  # committed-offset sum from the previous probe
     _lag_stall_count: int = 0
 
     def _force_process_exit(self, code: int) -> None:
@@ -1934,21 +1987,27 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 # out two prior misses (matches the spec).
                 consecutive_failures = 0
                 # BP-699: the broker is reachable for metadata — now sample lag
-                # for the stall early-warning.  ``get_watermark_offsets`` is a
-                # blocking librdkafka call, so hop it onto the executor exactly
-                # like the connectivity probe.  A ``None`` sample (assignment not
-                # ready / broker hiccup) is skipped, not counted as healthy.
-                total_lag = await loop.run_in_executor(None, self._compute_total_lag)
-                if total_lag is not None and self._evaluate_lag_stall(total_lag):
-                    logger.critical(
-                        "kafka_consumer_lag_stalled",
-                        group_id=self._config.group_id,
-                        total_lag=total_lag,
-                        threshold=self._lag_stall_threshold,
-                        sustained_probes=self._lag_stall_probes,
-                        probe_interval_seconds=self._probe_interval_seconds,
-                        action="consumer_connected_but_not_draining_check_handler_or_force_recreate",
-                    )
+                # AND the committed offset for the stall early-warning.  These
+                # are blocking librdkafka calls, so hop them onto the executor
+                # exactly like the connectivity probe.  A ``None`` sample
+                # (assignment not ready / broker hiccup) is skipped, not counted
+                # as healthy.  The detector alerts on FROZEN PROGRESS (committed
+                # offset not advancing), not on lag magnitude — a healthy-but-
+                # behind consumer draining a large finite backlog stays silent.
+                sample = await loop.run_in_executor(None, self._compute_lag_and_progress)
+                if sample is not None:
+                    total_lag, consumed_offset = sample
+                    if self._evaluate_lag_stall(total_lag, consumed_offset):
+                        logger.critical(
+                            "kafka_consumer_lag_stalled",
+                            group_id=self._config.group_id,
+                            total_lag=total_lag,
+                            consumed_offset=consumed_offset,
+                            threshold=self._lag_stall_threshold,
+                            sustained_probes=self._lag_stall_probes,
+                            probe_interval_seconds=self._probe_interval_seconds,
+                            action="consumer_connected_but_offset_frozen_check_handler_or_force_recreate",
+                        )
             except Exception as exc:
                 consecutive_failures += 1
                 logger.warning(

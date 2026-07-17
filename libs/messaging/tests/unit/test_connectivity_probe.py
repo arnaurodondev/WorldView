@@ -265,59 +265,120 @@ class TestForceProcessExit:
 
 
 class TestLagStallDetector:
-    """``_evaluate_lag_stall`` fires only on sustained, non-draining lag.
+    """``_evaluate_lag_stall`` fires only on sustained lag with FROZEN progress.
 
     The detector backs the ``kafka_consumer_lag_stalled`` CRITICAL alert that
     catches a connected-but-frozen consumer (the gap that let an OHLCV consumer
-    fall ~19k messages behind for three days unnoticed).
+    fall ~19k messages behind for three days unnoticed).  It keys on the
+    consumer's committed-offset PROGRESS, not on lag magnitude, so a consumer
+    that is merely far behind but still draining never alerts (2026-07-16
+    tuning — the finite 306k-article backlog drain was pure noise under the old
+    lag-delta check).
     """
 
     def test_below_threshold_never_alerts(self) -> None:
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 5
-        # Ten samples all under the threshold → never a stall, counter stays 0.
+        # Ten samples all under the threshold → never a stall even if the
+        # committed offset never moves (a caught-up consumer is idle by design).
         for _ in range(10):
-            assert c._evaluate_lag_stall(100) is False
+            assert c._evaluate_lag_stall(100, consumed_offset=42) is False
         assert c._lag_stall_count == 0
 
-    def test_sustained_nondraining_lag_alerts_after_n_probes(self) -> None:
+    def test_high_lag_frozen_offset_alerts_after_n_probes(self) -> None:
+        """High lag + committed offset NOT advancing = the canonical real stall."""
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 5
-        # Flat, high lag: first 4 samples arm, the 5th fires.
-        results = [c._evaluate_lag_stall(9_000) for _ in range(5)]
+        # Flat, high lag with a frozen offset: first 4 samples arm, the 5th fires.
+        results = [c._evaluate_lag_stall(9_000, consumed_offset=1_000) for _ in range(5)]
         assert results == [False, False, False, False, True]
         # After firing the counter resets so the next window re-alerts (no spam).
         assert c._lag_stall_count == 0
 
-    def test_growing_lag_alerts(self) -> None:
-        """Monotonically growing lag above threshold is the canonical stall."""
+    def test_growing_lag_frozen_offset_alerts(self) -> None:
+        """Growing lag while the offset is frozen is a stall (producer outruns a
+        wedged consumer)."""
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 3
-        results = [c._evaluate_lag_stall(v) for v in (6_000, 7_000, 8_000)]
+        # Lag climbs, offset never moves → consumer is stuck.
+        results = [c._evaluate_lag_stall(v, consumed_offset=1_000) for v in (6_000, 7_000, 8_000)]
         assert results[-1] is True
 
-    def test_draining_lag_resets_counter(self) -> None:
-        """Large but SHRINKING lag is healthy backlog drain — never alerts."""
+    def test_healthy_behind_advancing_offset_never_alerts(self) -> None:
+        """Huge, ROUGHLY-FLAT lag but a steadily-advancing offset is a healthy
+        finite-backlog drain — the exact false positive we are removing.
+
+        Models the 306k-article backlog draining at ~15 msgs/probe: lag barely
+        moves (and even jitters upward) yet the committed offset climbs every
+        probe.  Must never alert across a long window.
+        """
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 5
+        offset = 1_000_000
+        # Lag oscillates around 300k (including upward ticks from sampling
+        # jitter) while the offset advances by ~15 each probe.
+        lags = [300_000, 300_010, 299_995, 300_005, 300_000, 300_020] * 5
+        fired = False
+        for lag in lags:
+            offset += 15
+            if c._evaluate_lag_stall(lag, consumed_offset=offset):
+                fired = True
+        assert fired is False
+        assert c._lag_stall_count == 0
+
+    def test_keeping_pace_with_hot_topic_never_alerts(self) -> None:
+        """Perfectly FLAT high lag but an advancing offset (consumer keeping
+        pace with a hot topic — production == consumption) never alerts."""
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 3
-        # Arm twice with flat high lag, then lag drops → counter resets, no alert.
-        assert c._evaluate_lag_stall(9_000) is False
-        assert c._evaluate_lag_stall(9_000) is False
-        assert c._evaluate_lag_stall(8_000) is False  # draining
+        offset = 500
+        for _ in range(10):
+            offset += 200  # consuming steadily
+            assert c._evaluate_lag_stall(9_000, consumed_offset=offset) is False
         assert c._lag_stall_count == 0
-        # A subsequent single high sample does not immediately re-fire.
-        assert c._evaluate_lag_stall(9_000) is False
 
-    def test_compute_total_lag_none_when_no_consumer(self) -> None:
+    def test_progress_then_freeze_arms_only_after_freeze(self) -> None:
+        """A consumer that is draining and THEN wedges must alert only once the
+        offset actually freezes — progress resets the arm counter."""
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 3
+        # Draining: offset advances → never arms.
+        assert c._evaluate_lag_stall(9_000, consumed_offset=100) is False
+        assert c._evaluate_lag_stall(9_000, consumed_offset=200) is False
+        assert c._lag_stall_count == 0
+        # Now the offset freezes at 200 for 3 probes → arms and fires on the 3rd.
+        assert c._evaluate_lag_stall(9_000, consumed_offset=200) is False
+        assert c._evaluate_lag_stall(9_000, consumed_offset=200) is False
+        assert c._evaluate_lag_stall(9_000, consumed_offset=200) is True
+
+    def test_offset_advance_resets_counter(self) -> None:
+        """A single advancing sample mid-freeze clears the arm counter, so a
+        consumer that briefly stalls then resumes does not alert."""
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 3
+        # First high sample seeds prev and arms (count 1); next frozen sample
+        # arms again (count 2) — one short of firing.
+        assert c._evaluate_lag_stall(9_000, consumed_offset=100) is False  # seed → arm 1
+        assert c._evaluate_lag_stall(9_000, consumed_offset=100) is False  # frozen → arm 2
+        assert c._lag_stall_count == 2
+        # The consumer resumes (offset advances) → counter clears before firing.
+        assert c._evaluate_lag_stall(9_000, consumed_offset=150) is False  # resumed → reset
+        assert c._lag_stall_count == 0
+
+    def test_compute_lag_and_progress_none_when_no_consumer(self) -> None:
         c = _build_consumer()
         c._consumer = None
+        assert c._compute_lag_and_progress() is None
         assert c._compute_total_lag() is None
 
-    def test_compute_total_lag_sums_assignment(self) -> None:
+    def test_compute_lag_and_progress_sums_assignment(self) -> None:
         c = _build_consumer()
         fake = MagicMock()
         tp1, tp2 = MagicMock(), MagicMock()
@@ -329,11 +390,26 @@ class TestLagStallDetector:
         fake.position.side_effect = [[pos1], [pos2]]
         c._consumer = fake
         # lag = (1000-600) + (5000-1000) = 400 + 4000 = 4400
+        # consumed = 600 + 1000 = 1600
+        assert c._compute_lag_and_progress() == (4_400, 1_600)
+
+    def test_compute_total_lag_sums_assignment(self) -> None:
+        c = _build_consumer()
+        fake = MagicMock()
+        tp1, tp2 = MagicMock(), MagicMock()
+        fake.assignment.return_value = [tp1, tp2]
+        fake.get_watermark_offsets.side_effect = [(0, 1_000), (0, 5_000)]
+        pos1, pos2 = MagicMock(), MagicMock()
+        pos1.offset, pos2.offset = 600, 1_000
+        fake.position.side_effect = [[pos1], [pos2]]
+        c._consumer = fake
+        # The thin wrapper returns only the lag component.
         assert c._compute_total_lag() == 4_400
 
-    def test_compute_total_lag_none_on_broker_error(self) -> None:
+    def test_compute_lag_and_progress_none_on_broker_error(self) -> None:
         c = _build_consumer()
         fake = MagicMock()
         fake.assignment.side_effect = RuntimeError("metadata timeout")
         c._consumer = fake
+        assert c._compute_lag_and_progress() is None
         assert c._compute_total_lag() is None
