@@ -75,12 +75,12 @@ class TestCreateOrGetNewEntity:
         # the WHERE clause OR drops the conflict target fires this test.
         call_args = session.execute.call_args_list[0]
         sql_text = str(call_args.args[0])
-        assert "ON CONFLICT (lower(canonical_name))" in sql_text, (
-            f"Expected ON CONFLICT (lower(canonical_name)) target; got SQL:\n{sql_text}"
-        )
-        assert "WHERE entity_type != 'financial_instrument'" in sql_text, (
-            f"Expected partial-index predicate in ON CONFLICT specifier; got SQL:\n{sql_text}"
-        )
+        assert (
+            "ON CONFLICT (lower(canonical_name))" in sql_text
+        ), f"Expected ON CONFLICT (lower(canonical_name)) target; got SQL:\n{sql_text}"
+        assert (
+            "WHERE entity_type != 'financial_instrument'" in sql_text
+        ), f"Expected partial-index predicate in ON CONFLICT specifier; got SQL:\n{sql_text}"
         assert "DO NOTHING" in sql_text, f"Expected DO NOTHING; got SQL:\n{sql_text}"
         params = call_args.args[1]
         assert params["canonical_name"] == "Apple Inc."
@@ -132,9 +132,9 @@ class TestCreateOrGetExistingEntity:
         assert session.execute.await_count == 2
         # Second call MUST be the recovery SELECT keyed on lower(canonical_name).
         select_sql = str(session.execute.call_args_list[1].args[0])
-        assert "lower(canonical_name) = lower(:canonical_name)" in select_sql, (
-            f"Expected case-insensitive SELECT recovery; got:\n{select_sql}"
-        )
+        assert (
+            "lower(canonical_name) = lower(:canonical_name)" in select_sql
+        ), f"Expected case-insensitive SELECT recovery; got:\n{select_sql}"
 
     async def test_raises_when_conflict_but_select_finds_nothing(self) -> None:
         """If ON CONFLICT fired but the existing row vanished (concurrent DELETE),
@@ -219,9 +219,9 @@ class TestConcurrentCreateOrGet:
 
         # All five callers see the SAME entity_id (no duplicate row created).
         entity_ids = {r[0] for r in results}
-        assert entity_ids == {_NEW_ENTITY_ID}, (
-            f"Concurrent callers diverged: {entity_ids}.  Expected exactly one entity_id."
-        )
+        assert entity_ids == {
+            _NEW_ENTITY_ID
+        }, f"Concurrent callers diverged: {entity_ids}.  Expected exactly one entity_id."
         # Exactly one caller reports was_created=True; the rest report False.
         was_created_flags = [r[1] for r in results]
         assert was_created_flags.count(True) == 1, f"Expected exactly one winner, got was_created={was_created_flags}"
@@ -249,9 +249,9 @@ class TestPatchMetadata:
         assert session.execute.await_count == 1
         sql_text = str(session.execute.call_args_list[0].args[0])
         # JSONB shallow-merge — preserves keys not present in the patch.
-        assert "metadata = COALESCE(metadata, '{}'::jsonb) || cast(:patch AS jsonb)" in sql_text, (
-            f"Expected JSONB shallow-merge UPDATE; got:\n{sql_text}"
-        )
+        assert (
+            "metadata = COALESCE(metadata, '{}'::jsonb) || cast(:patch AS jsonb)" in sql_text
+        ), f"Expected JSONB shallow-merge UPDATE; got:\n{sql_text}"
         assert "WHERE entity_id = :entity_id" in sql_text
         params = session.execute.call_args_list[0].args[1]
         assert params["entity_id"] == str(_EXISTING_ENTITY_ID)
@@ -265,6 +265,79 @@ class TestPatchMetadata:
 
         repo = CanonicalEntityRepository(session)
         await repo.patch_metadata(_EXISTING_ENTITY_ID, {})
+
+        session.execute.assert_not_awaited()
+
+
+class TestRetypeAttemptTracking:
+    """Attempt cap for the ``unknown`` re-typing sweep (2026-07-16 follow-up).
+
+    Without a cap a permanently-unclassifiable ``unknown`` row is re-sent to the
+    extraction LLM every 30-min cycle forever. ``list_unknown_entities`` now
+    excludes rows whose ``metadata->>'retype_attempts'`` has reached the cap, and
+    ``record_retype_attempts`` bumps that counter for rows the LLM could not type.
+    """
+
+    async def test_list_unknown_entities_filters_on_attempt_cap(self) -> None:
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = []
+        session.execute = AsyncMock(return_value=result)
+
+        repo = CanonicalEntityRepository(session)
+        await repo.list_unknown_entities(50, max_attempts=3)
+
+        sql_text = str(session.execute.call_args_list[0].args[0])
+        # The cap predicate must be present so capped rows never re-hit the LLM.
+        # COALESCE(...,0) keeps never-attempted rows (no metadata key) eligible.
+        assert (
+            "COALESCE((metadata->>'retype_attempts')::int, 0) < :max_attempts" in sql_text
+        ), f"Expected attempt-cap predicate; got SQL:\n{sql_text}"
+        params = session.execute.call_args_list[0].args[1]
+        assert params["max_attempts"] == 3
+        assert params["limit"] == 50
+
+    async def test_list_unknown_entities_default_cap_is_three(self) -> None:
+        """The repo default mirrors the config default (3) so a caller that omits
+        the argument still gets the cap, not an unbounded scan."""
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = []
+        session.execute = AsyncMock(return_value=result)
+
+        repo = CanonicalEntityRepository(session)
+        await repo.list_unknown_entities(10)
+
+        params = session.execute.call_args_list[0].args[1]
+        assert params["max_attempts"] == 3
+
+    async def test_record_retype_attempts_bumps_counter_and_stamps_time(self) -> None:
+        session = AsyncMock()
+        session.execute = AsyncMock()
+
+        repo = CanonicalEntityRepository(session)
+        await repo.record_retype_attempts([_NEW_ENTITY_ID, _EXISTING_ENTITY_ID])
+
+        assert session.execute.await_count == 1
+        sql_text = str(session.execute.call_args_list[0].args[0])
+        # Monotonic increment of the JSONB counter + last-attempt timestamp.
+        assert "'retype_attempts', COALESCE((metadata->>'retype_attempts')::int, 0) + 1" in sql_text
+        assert "'retype_last_attempt_at', :now" in sql_text
+        # Guarded on entity_type='unknown' so a concurrently-typed row is untouched.
+        assert "AND entity_type = 'unknown'" in sql_text
+        params = session.execute.call_args_list[0].args[1]
+        assert params["ids"] == [str(_NEW_ENTITY_ID), str(_EXISTING_ENTITY_ID)]
+        # Timestamp is an ISO-8601 UTC string (RULES.md #7 — no naive datetimes).
+        assert isinstance(params["now"], str)
+        assert params["now"].endswith("+00:00") or params["now"].endswith("Z")
+
+    async def test_record_retype_attempts_empty_list_is_noop(self) -> None:
+        """No DB round-trip when there are no unresolved rows to bump."""
+        session = AsyncMock()
+        session.execute = AsyncMock()
+
+        repo = CanonicalEntityRepository(session)
+        await repo.record_retype_attempts([])
 
         session.execute.assert_not_awaited()
 

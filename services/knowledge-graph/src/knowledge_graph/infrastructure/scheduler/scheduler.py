@@ -535,6 +535,7 @@ def build_workers(
                     write_session_factory,
                     llm_client,
                     batch_limit=settings.worker_retype_batch_size,
+                    max_attempts=settings.worker_retype_max_attempts,
                     read_session_factory=_read_factory,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(

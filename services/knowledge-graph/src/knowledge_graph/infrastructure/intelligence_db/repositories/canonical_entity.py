@@ -180,13 +180,21 @@ WHERE canonical_name = :canonical_name AND entity_type = :entity_type
         row = result.fetchone()
         return UUID(str(row[0])) if row else None
 
-    async def list_unknown_entities(self, limit: int) -> list[dict[str, object]]:
+    async def list_unknown_entities(self, limit: int, max_attempts: int = 3) -> list[dict[str, object]]:
         """Fetch canonical entities stuck at ``entity_type='unknown'`` (re-typing sweep).
 
         Worker 13K (``EntityRetypeWorker``) reads this batch on the read replica,
         runs the extraction LLM to infer a real type, and writes the result back
         via :meth:`retype_unknown_entity`.  Ordered by ``created_at`` so the
         oldest stuck rows drain first; ``limit`` bounds the per-cycle LLM spend.
+
+        Attempt cap (2026-07-16 follow-up): every cycle that fails to classify a
+        row bumps ``metadata->>'retype_attempts'`` via
+        :meth:`record_retype_attempts`.  Rows whose attempt count has reached
+        ``max_attempts`` are excluded here so a permanently-unclassifiable entity
+        (junk mention, mojibake) is never re-billed to the LLM again.  Rows that
+        have never been attempted have no ``retype_attempts`` key — ``COALESCE``
+        treats them as 0 so they remain eligible with no backfill required.
 
         Returns the fields the LLM profiler needs as context (name + any
         identifiers + the existing description).  Read-only — no lock taken, the
@@ -198,10 +206,11 @@ WHERE canonical_name = :canonical_name AND entity_type = :entity_type
 SELECT entity_id, canonical_name, ticker, isin, description
 FROM canonical_entities
 WHERE entity_type = 'unknown'
+  AND COALESCE((metadata->>'retype_attempts')::int, 0) < :max_attempts
 ORDER BY created_at
 LIMIT :limit
 """),
-            {"limit": limit},
+            {"limit": limit, "max_attempts": max_attempts},
         )
         return [
             {
@@ -213,6 +222,42 @@ LIMIT :limit
             }
             for row in result.fetchall()
         ]
+
+    async def record_retype_attempts(self, entity_ids: list[UUID]) -> None:
+        """Increment the per-entity re-type attempt counter (attempt-tracking).
+
+        Called by Worker 13K for every ``unknown`` row the LLM could NOT classify
+        this cycle.  Bumps ``metadata->>'retype_attempts'`` and stamps
+        ``metadata->>'retype_last_attempt_at'`` (UTC ISO-8601) so a row that
+        keeps failing eventually crosses ``max_attempts`` in
+        :meth:`list_unknown_entities` and drops out of the sweep — bounding LLM
+        spend on junk that will never resolve.
+
+        Guarded on ``entity_type = 'unknown'`` so an entity re-typed by another
+        path between the read and this write is never touched (its attempt
+        counter is irrelevant once it leaves the ``unknown`` bucket).  No-op on an
+        empty list.  Does NOT commit — the caller owns the transaction (it batches
+        this bump with the successful re-type UPDATEs in one unit of work).
+        """
+        if not entity_ids:
+            return
+        # utc_now() keeps the timestamp on the same canonical clock the rest of
+        # the platform uses (RULES.md #7 — UTC-only) rather than SQL now(), which
+        # also keeps the value deterministic under a patched clock in tests.
+        from common.time import utc_now  # type: ignore[import-untyped]
+
+        await self._session.execute(
+            text("""
+UPDATE canonical_entities
+SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+        'retype_attempts', COALESCE((metadata->>'retype_attempts')::int, 0) + 1,
+        'retype_last_attempt_at', :now
+    )
+WHERE entity_id = ANY(CAST(:ids AS uuid[]))
+  AND entity_type = 'unknown'
+"""),
+            {"ids": [str(eid) for eid in entity_ids], "now": utc_now().isoformat()},
+        )
 
     async def retype_unknown_entity(self, entity_id: UUID, new_type: str) -> bool:
         """Set ``entity_type`` for a row CURRENTLY typed ``unknown``. Returns rows-affected>0.

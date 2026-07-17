@@ -65,9 +65,7 @@ class TestResolveCanonicalEntityType:
         )
 
         assert (
-            resolve_canonical_entity_type(
-                "company", ticker=None, tickerless_company_fallback="organization"
-            )
+            resolve_canonical_entity_type("company", ticker=None, tickerless_company_fallback="organization")
             == "organization"
         )
 
@@ -123,10 +121,20 @@ class TestEntityRetypeWorker:
     async def test_happy_path_retypes_and_seeds_rows(self) -> None:
         worker, _ = _make_worker()
         rows = [
-            {"entity_id": _EID_A, "canonical_name": "Interactive Brokers Group, Inc.",
-             "ticker": None, "isin": None, "description": None},
-            {"entity_id": _EID_B, "canonical_name": "ISM Services PMI",
-             "ticker": None, "isin": None, "description": "A monthly economic index."},
+            {
+                "entity_id": _EID_A,
+                "canonical_name": "Interactive Brokers Group, Inc.",
+                "ticker": None,
+                "isin": None,
+                "description": None,
+            },
+            {
+                "entity_id": _EID_B,
+                "canonical_name": "ISM Services PMI",
+                "ticker": None,
+                "isin": None,
+                "description": "A monthly economic index.",
+            },
         ]
         retype = AsyncMock(return_value=True)
         ensure = AsyncMock()
@@ -168,8 +176,7 @@ class TestEntityRetypeWorker:
 
     async def test_unresolved_row_is_skipped(self) -> None:
         worker, _ = _make_worker()
-        rows = [{"entity_id": _EID_A, "canonical_name": "Xyzzy", "ticker": None,
-                 "isin": None, "description": None}]
+        rows = [{"entity_id": _EID_A, "canonical_name": "Xyzzy", "ticker": None, "isin": None, "description": None}]
         retype = AsyncMock(return_value=True)
         with (
             patch(
@@ -193,8 +200,7 @@ class TestEntityRetypeWorker:
     async def test_guarded_update_noop_skips_ensure_rows(self) -> None:
         """When retype_unknown_entity returns False (row already re-typed), skip seeding."""
         worker, _ = _make_worker()
-        rows = [{"entity_id": _EID_A, "canonical_name": "Palladium", "ticker": None,
-                 "isin": None, "description": None}]
+        rows = [{"entity_id": _EID_A, "canonical_name": "Palladium", "ticker": None, "isin": None, "description": None}]
         ensure = AsyncMock()
         with (
             patch(
@@ -222,8 +228,7 @@ class TestEntityRetypeWorker:
 
     async def test_extract_exception_is_swallowed(self) -> None:
         worker, _ = _make_worker()
-        rows = [{"entity_id": _EID_A, "canonical_name": "Boom", "ticker": None,
-                 "isin": None, "description": None}]
+        rows = [{"entity_id": _EID_A, "canonical_name": "Boom", "ticker": None, "isin": None, "description": None}]
         retype = AsyncMock(return_value=True)
         with (
             patch(
@@ -237,9 +242,138 @@ class TestEntityRetypeWorker:
                 new=retype,
             ),
             patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.record_retype_attempts",
+                new=AsyncMock(),
+            ),
+            patch(
                 "knowledge_graph.infrastructure.workers.provisional_enrichment_core.extract_entity_profile",
                 new=AsyncMock(side_effect=RuntimeError("llm down")),
             ),
         ):
             await worker.run()  # must not raise
         retype.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Attempt-tracking (2026-07-16 follow-up)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestEntityRetypeAttemptTracking:
+    """Per-entity attempt cap: skip capped rows, retry under-cap rows, bump on fail."""
+
+    async def test_configured_cap_is_passed_to_the_query(self) -> None:
+        """Worker forwards ``max_attempts`` to ``list_unknown_entities`` so the
+        SQL layer excludes rows that have already hit the cap (at-cap skip)."""
+        from knowledge_graph.infrastructure.workers.entity_retype import EntityRetypeWorker
+
+        factory, _ = _make_session_factory()
+        worker = EntityRetypeWorker(factory, AsyncMock(), batch_limit=50, max_attempts=3)
+        list_unknown = AsyncMock(return_value=[])
+        with patch(
+            "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+            "CanonicalEntityRepository.list_unknown_entities",
+            new=list_unknown,
+        ):
+            await worker.run()
+        # (batch_limit, max_attempts) — the SQL predicate drops rows at the cap.
+        list_unknown.assert_awaited_once_with(50, 3)
+
+    async def test_unresolved_row_increments_attempt_counter(self) -> None:
+        """A row the LLM can't classify stays ``unknown`` AND has its attempt
+        counter bumped (so it eventually crosses the cap)."""
+        worker, _ = _make_worker()
+        rows = [{"entity_id": _EID_A, "canonical_name": "Xyzzy", "ticker": None, "isin": None, "description": None}]
+        record = AsyncMock()
+        retype = AsyncMock(return_value=True)
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.list_unknown_entities",
+                new=AsyncMock(return_value=rows),
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.retype_unknown_entity",
+                new=retype,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.record_retype_attempts",
+                new=record,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.extract_entity_profile",
+                new=AsyncMock(return_value={"entity_type": "gibberish"}),  # → unknown
+            ),
+        ):
+            await worker.run()
+        retype.assert_not_awaited()
+        # The unresolved row's id is handed to the attempt-counter bump.
+        record.assert_awaited_once_with([_EID_A])
+
+    async def test_resolved_row_is_not_counted_as_an_attempt(self) -> None:
+        """A successfully re-typed row leaves the ``unknown`` bucket, so it is
+        NOT added to the attempt-counter bump (preserves under-cap behaviour)."""
+        worker, _ = _make_worker()
+        rows = [{"entity_id": _EID_A, "canonical_name": "Palladium", "ticker": None, "isin": None, "description": None}]
+        record = AsyncMock()
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.list_unknown_entities",
+                new=AsyncMock(return_value=rows),
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.retype_unknown_entity",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state."
+                "EntityEmbeddingStateRepository.ensure_rows_exist",
+                new=AsyncMock(),
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.record_retype_attempts",
+                new=record,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.extract_entity_profile",
+                new=AsyncMock(return_value={"entity_type": "commodity"}),  # → product
+            ),
+        ):
+            await worker.run()
+        # Bump is called with an empty list — the resolved id is absent.
+        record.assert_awaited_once_with([])
+
+    async def test_nameless_row_is_counted_as_an_attempt(self) -> None:
+        """A row with no canonical_name is un-classifiable — count the attempt so
+        a nameless junk row eventually crosses the cap and stops being scanned."""
+        worker, _ = _make_worker()
+        rows = [{"entity_id": _EID_A, "canonical_name": None, "ticker": None, "isin": None, "description": None}]
+        record = AsyncMock()
+        extract = AsyncMock()
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.list_unknown_entities",
+                new=AsyncMock(return_value=rows),
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity."
+                "CanonicalEntityRepository.record_retype_attempts",
+                new=record,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.extract_entity_profile",
+                new=extract,
+            ),
+        ):
+            await worker.run()
+        # No LLM call for a nameless row, but the attempt is still recorded.
+        extract.assert_not_awaited()
+        record.assert_awaited_once_with([_EID_A])

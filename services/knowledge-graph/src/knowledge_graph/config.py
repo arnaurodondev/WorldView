@@ -228,6 +228,13 @@ class Settings(BaseSettings):
     retype_enabled: bool = True  # KNOWLEDGE_GRAPH_RETYPE_ENABLED
     worker_retype_interval_s: int = 1800  # 30 min
     worker_retype_batch_size: int = 100  # unknown rows per cycle
+    # Per-entity attempt cap (2026-07-16 follow-up). Without a cap a
+    # persistently-unclassifiable ``unknown`` row is re-sent to the extraction
+    # LLM on every 30-min cycle forever, wasting calls. Each failed attempt bumps
+    # ``metadata->>'retype_attempts'``; once it reaches this cap the row is
+    # excluded from the sweep's SELECT and never billed again. 3 = give the LLM a
+    # few tries (context/description may improve between cycles) then give up.
+    worker_retype_max_attempts: int = 3  # KNOWLEDGE_GRAPH_WORKER_RETYPE_MAX_ATTEMPTS
 
     # Embedding worker batch controls (PLAN perf-fix)
     # 0 = all due entities per cycle (drain the full queue in one cycle).

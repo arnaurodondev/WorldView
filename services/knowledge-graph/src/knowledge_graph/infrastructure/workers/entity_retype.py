@@ -64,6 +64,12 @@ class EntityRetypeWorker:
                               configured.
         batch_limit:          Max ``unknown`` rows to process per cycle (bounds
                               LLM spend). Must be > 0.
+        max_attempts:         Per-entity re-type attempt cap (attempt-tracking,
+                              2026-07-16 follow-up). A row the LLM fails to
+                              classify has its ``metadata->>'retype_attempts'``
+                              counter bumped; once it reaches ``max_attempts`` the
+                              Phase-1 SELECT excludes it so a permanently-junk row
+                              is never re-billed to the LLM. Must be > 0.
         read_session_factory: Optional read-replica factory for the Phase-1
                               SELECT (R27). Falls back to ``session_factory``.
     """
@@ -74,12 +80,14 @@ class EntityRetypeWorker:
         llm_client: FallbackChainClient,
         *,
         batch_limit: int = 100,
+        max_attempts: int = 3,
         read_session_factory: Any = None,
     ) -> None:
         self._sf = session_factory
         self._read_sf: Any = read_session_factory if read_session_factory is not None else session_factory
         self._llm = llm_client
         self._batch_limit = batch_limit if batch_limit > 0 else 100
+        self._max_attempts = max_attempts if max_attempts > 0 else 3
 
     async def run(self) -> None:
         """Re-type a bounded batch of ``unknown`` entities (one sweep cycle)."""
@@ -91,22 +99,32 @@ class EntityRetypeWorker:
         )
 
         # ── Phase 1: Read (replica) ──────────────────────────────────────────
+        # ``max_attempts`` excludes rows that have already failed the cap so the
+        # LLM is never re-billed for permanently-unclassifiable junk.
         async with self._read_sf() as session:
-            rows = await CanonicalEntityRepository(session).list_unknown_entities(self._batch_limit)
+            rows = await CanonicalEntityRepository(session).list_unknown_entities(
+                self._batch_limit,
+                self._max_attempts,
+            )
 
         if not rows:
             logger.info("entity_retype_worker_complete", scanned=0, retyped=0, unresolved=0)
             return
 
         # ── Phase 2: Classify (no DB session held during LLM I/O) ─────────────
-        # Collect (entity_id, new_type) for rows the LLM could confidently type.
+        # Collect (entity_id, new_type) for rows the LLM could confidently type,
+        # and the ids of rows that stayed ``unknown`` so their attempt counter is
+        # bumped in Phase 3 (attempt-tracking).
         resolved: list[tuple[UUID, str]] = []
-        unresolved = 0
+        unresolved_ids: list[UUID] = []
         for row in rows:
             entity_id: UUID = row["entity_id"]  # type: ignore[assignment]
             canonical_name = str(row.get("canonical_name") or "")
             if not canonical_name:
-                unresolved += 1
+                # No name to classify — count the attempt so a nameless junk row
+                # (mojibake / placeholder) eventually crosses the cap and stops
+                # being scanned.
+                unresolved_ids.append(entity_id)
                 continue
             # Feed the existing description (if any) as grounding context — it is
             # our own data, XML-wrapped + truncated inside extract_entity_profile.
@@ -125,20 +143,26 @@ class EntityRetypeWorker:
                     canonical_name=canonical_name,
                     exc_info=True,
                 )
-                unresolved += 1
+                # A transient LLM error still counts as an attempt: a row that
+                # errors every cycle would otherwise be retried forever. The cap
+                # bounds that; a genuinely-recoverable row has up to
+                # ``max_attempts`` cycles to succeed.
+                unresolved_ids.append(entity_id)
                 continue
 
             new_type = self._resolve_type(profile, fallback_ticker=row.get("ticker"))
             if new_type == "unknown":
-                # LLM still couldn't classify — leave the row untouched for a
-                # future cycle rather than churning it.
-                unresolved += 1
+                # LLM still couldn't classify — bump the attempt counter (Phase 3)
+                # rather than churning the row's type.
+                unresolved_ids.append(entity_id)
                 continue
             resolved.append((entity_id, new_type))
 
         # ── Phase 3: Write (guarded UPDATE + seed embedding-state rows) ───────
+        # A single transaction batches the successful re-types with the
+        # attempt-counter bumps for the rows that stayed ``unknown``.
         retyped = 0
-        if resolved:
+        if resolved or unresolved_ids:
             async with self._sf() as session:
                 entity_repo = CanonicalEntityRepository(session)
                 emb_repo = EntityEmbeddingStateRepository(session)
@@ -157,13 +181,17 @@ class EntityRetypeWorker:
                         entity_id=str(entity_id),
                         new_type=new_type,
                     )
+                # Attempt-tracking: bump the counter (+ last-attempt time) for
+                # every row the LLM could not classify this cycle so a
+                # persistently-unresolvable row eventually drops out of the sweep.
+                await entity_repo.record_retype_attempts(unresolved_ids)
                 await session.commit()
 
         logger.info(  # type: ignore[no-any-return]
             "entity_retype_worker_complete",
             scanned=len(rows),
             retyped=retyped,
-            unresolved=unresolved,
+            unresolved=len(unresolved_ids),
         )
 
     def _resolve_type(self, profile: dict[str, Any] | None, *, fallback_ticker: Any) -> str:
