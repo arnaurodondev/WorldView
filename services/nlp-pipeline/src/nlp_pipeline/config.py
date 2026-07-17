@@ -271,6 +271,42 @@ class Settings(BaseSettings):
     # NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID
     extraction_fallback_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
 
+    # ── Hybrid extraction-model routing (2026-07-17 DeepSeek recall regression) ──
+    # Root cause (docs/audits/2026-07-17-deepseek-recall-validation.md): after the
+    # prod flip of ``extraction_api_model_id`` to ``deepseek-ai/DeepSeek-V4-Flash``,
+    # SEC filings extract ~0 KG facts — head-to-head on 12 major 10-K/10-Q filings
+    # DeepSeek returned 0 facts (all 24 windows empty) while Qwen3-235B returned 118
+    # grounded facts (99% verbatim). DeepSeek is fine on short/medium news but
+    # intrinsically under-extracts long, dense filing prose (no reasoning_effort or
+    # max_words setting rescues it).
+    #
+    # FIX — route PER DOCUMENT: SEC filings (``source_type`` in
+    # ``extraction_high_recall_source_types``) OR any doc whose word_count is at/above
+    # ``extraction_high_recall_word_count_threshold`` go to the HIGH-RECALL model
+    # (Qwen3-235B); everything else keeps the cheaper DeepSeek primary
+    # (``extraction_api_model_id``). The word-count fallback catches non-filing large
+    # docs (the audit found DeepSeek also under-extracts long ``eodhd`` articles).
+    #
+    # Default ON — it repairs a LIVE regression. Set the flag False to disable routing
+    # entirely (every doc uses the single ``extraction_api_model_id`` primary,
+    # i.e. pre-hybrid behaviour). See ``application/blocks/extraction_routing.py``.
+    # NLP_PIPELINE_HYBRID_EXTRACTION_ROUTING_ENABLED
+    hybrid_extraction_routing_enabled: bool = True
+    # HIGH-RECALL model slug for SEC/long-filing extraction (validated: 118 grounded
+    # facts vs DeepSeek's 0). DeepInfra OpenAI-compatible slug.
+    # NLP_PIPELINE_EXTRACTION_HIGH_RECALL_MODEL_ID
+    extraction_high_recall_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    # Word-count threshold (>=) that routes a NON-filing doc to the high-recall model.
+    # 6000 aligns with the audit's "large 6k+" bucket where DeepSeek's empty-or-tiny
+    # rate hit ~88.5%. 0 disables the word-count arm (source_type routing still runs).
+    # NLP_PIPELINE_EXTRACTION_HIGH_RECALL_WORD_COUNT_THRESHOLD
+    extraction_high_recall_word_count_threshold: int = 6000
+    # Comma-separated ``source_type`` values that ALWAYS route to the high-recall model
+    # regardless of word_count (filings are the primary reason for KG-relation
+    # extraction). Matched case-insensitively.
+    # NLP_PIPELINE_EXTRACTION_HIGH_RECALL_SOURCE_TYPES
+    extraction_high_recall_source_types: str = "sec_edgar"
+
     # ── Extraction reasoning_effort + max_tokens (PLAN-0111, 2026-06-16 A/B swap) ─
     # gpt-oss-120b / gpt-oss-20b are REASONING models: with no explicit
     # reasoning_effort they spend the whole budget on hidden reasoning and return

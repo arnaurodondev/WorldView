@@ -14,8 +14,14 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import structlog  # type: ignore[import-untyped]
+
 from nlp_pipeline.application.blocks.deep_extraction import run_deep_extraction_block
 from nlp_pipeline.application.blocks.entity_resolution import run_entity_resolution_block
+from nlp_pipeline.application.blocks.extraction_routing import (
+    parse_source_types,
+    select_extraction_model,
+)
 from nlp_pipeline.application.blocks.novelty import run_novelty_gate
 from nlp_pipeline.application.blocks.routing import _AUTHORITATIVE_FILING_SOURCES
 from nlp_pipeline.application.blocks.suppression import (
@@ -63,6 +69,8 @@ if TYPE_CHECKING:
 # importing the Prometheus singleton itself.
 _NLP_METRICS = PrometheusNlpMetrics()
 
+logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
 
 @dataclass
 class MLPhaseResult:
@@ -74,6 +82,14 @@ class MLPhaseResult:
     pending_resolution_audit: list[Any]
     extraction_result: dict[str, Any]
     signals: list[Any] = field(default_factory=list)
+    # Hybrid-routing provenance (2026-07-17): the model slug that ACTUALLY ran deep
+    # extraction for this doc (DeepSeek-V4-Flash for short/medium, Qwen3-235B for
+    # filings/long docs), or None when deep extraction did not run (HALT/SUPPRESS).
+    # The article consumer stamps this onto ``nlp.article.enriched.v1`` so KG
+    # provenance reflects the real extractor — replacing the stale hardcoded
+    # ``settings.extraction_model_id`` (``qwen2.5:7b-instruct`` legacy default) that
+    # mis-attributed every claim regardless of the true model.
+    extraction_model_id: str | None = None
 
 
 async def run_ml_phase(
@@ -96,6 +112,17 @@ async def run_ml_phase(
     emb: EmbeddingClient,
     ext: ExtractionClient,
     watchlist_client: Any,
+    # Hybrid extraction-model routing (2026-07-17). ``source_type`` (already a required
+    # kwarg above, shared with the VALUE-signal gate) + ``word_count`` feed the per-doc
+    # router (see application/blocks/extraction_routing.py). ``ext`` is the primary
+    # (DeepSeek) client; ``ext_high_recall`` is the optional Qwen3-235B client used for
+    # SEC/long-filing docs. ``ext_model_id`` is the primary's REAL DeepInfra/Ollama slug
+    # (used for provenance + as the router's primary model). These default to the
+    # pre-hybrid behaviour: no high-recall client, so the single primary model runs on
+    # every doc (existing unit tests unchanged).
+    word_count: int = 0,
+    ext_model_id: str | None = None,
+    ext_high_recall: ExtractionClient | None = None,
     usage_logger: LlmUsageLogProtocol | None = None,
     # ENHANCEMENT #6: optional co-mention entailment check (cheap Qwen3-235B client +
     # config). Both default None → the check is a no-op (the prior behaviour). Forwarded
@@ -207,28 +234,76 @@ async def run_ml_phase(
 
     # ── Block 10: Deep LLM extraction ─────────────────────────────────────────
     signals: list[Any] = []
+    extraction_model_id: str | None = None
     _extract_fn = _deep_extraction_fn if _deep_extraction_fn is not None else run_deep_extraction_block
     if should_run_deep_extraction(final_path):
+        # Hybrid extraction-model routing (2026-07-17 DeepSeek recall regression).
+        # Pick the model for THIS doc: SEC filings / long docs → high-recall Qwen3-235B
+        # (grounded filing facts DeepSeek drops as []); short/medium → cheaper DeepSeek
+        # primary. The DeepInfra adapter binds its model at construction (it ignores
+        # ExtractionInput.model_id), so routing selects the matching CLIENT, not just a
+        # slug. When the high-recall client is unavailable (routing disabled, no API
+        # key → Ollama path, or misconfig) we fall back to the primary and stamp the
+        # primary's slug — never silently mis-route.
+        _primary_model_id = ext_model_id or settings.extraction_api_model_id
+        route = select_extraction_model(
+            source_type=source_type,
+            word_count=word_count,
+            primary_model_id=_primary_model_id,
+            high_recall_model_id=settings.extraction_high_recall_model_id,
+            high_recall_source_types=parse_source_types(settings.extraction_high_recall_source_types),
+            word_count_threshold=settings.extraction_high_recall_word_count_threshold,
+            enabled=settings.hybrid_extraction_routing_enabled,
+        )
+        if route.high_recall and ext_high_recall is not None:
+            _ext_client: ExtractionClient = ext_high_recall
+            extraction_model_id = route.model_id
+        else:
+            _ext_client = ext
+            # High-recall was chosen but no dedicated client is wired → run on the
+            # primary and record the primary's slug so provenance stays truthful.
+            extraction_model_id = _primary_model_id if route.high_recall else route.model_id
+        # BP-719 Mode B word cap is a RECALL TAX on the high-recall filing path
+        # (grounded facts live in later windows — see the audit §4), so disable it
+        # whenever the recall model actually serves this doc. Short/medium docs keep
+        # the configured cap (0 in prod anyway).
+        _use_high_recall = route.high_recall and ext_high_recall is not None
+        _max_words = 0 if _use_high_recall else getattr(settings, "deep_extraction_max_words", 0)
+        logger.info(
+            "deep_extraction.model_routed",
+            doc_id=str(doc_id),
+            source_type=source_type,
+            word_count=word_count,
+            route_reason=route.reason,
+            high_recall=_use_high_recall,
+            model_id=extraction_model_id,
+        )
         extraction_result, signals = await _extract_fn(
             doc_id=doc_id,
             chunks=chunks,
             mentions=final_mentions,
             processing_path=final_path,
-            extraction_client=ext,
-            model_id=settings.extraction_model_id,
+            extraction_client=_ext_client,
+            # Provenance fix (2026-07-17): pass the ACTUAL routed slug (DeepSeek or
+            # Qwen), not the stale ``settings.extraction_model_id`` legacy Ollama tag,
+            # so usage-log rows + downstream stamps carry the real model.
+            model_id=extraction_model_id,
             published_at=published_at,
             extracted_at=extracted_at,
             outbox_topic_signal=settings.topic_signal_detected,
             usage_logger=usage_logger,
+            # Fabrication guards run INSIDE run_deep_extraction_block for BOTH models
+            # (deterministic relation gate always; the optional co-mention entailment
+            # check when wired) — the block is model-agnostic, so nothing bypasses the
+            # guards on the Qwen path. The entailment client/config are forwarded
+            # unchanged for both routes.
             entailment_client=entailment_client,
             entailment_config=entailment_config,
             evidence_grounding_config=evidence_grounding_config,
             claim_entailment_client=claim_entailment_client,
             claim_entailment_config=claim_entailment_config,
             metrics=_NLP_METRICS,
-            # BP-719 Mode B: bound the deep-extraction prefix on very large filings
-            # so the ML phase fits the 900s watchdog. 0 (default) = no cap.
-            max_words=getattr(settings, "deep_extraction_max_words", 0),
+            max_words=_max_words,
             # P0-A: per-article window budget + per-window liveness heartbeat.
             max_windows=getattr(settings, "extraction_max_windows_per_doc", 0),
             on_window_done=on_window_done,
@@ -247,4 +322,5 @@ async def run_ml_phase(
         pending_resolution_audit=pending_resolution_audit,
         extraction_result=extraction_result,
         signals=signals,
+        extraction_model_id=extraction_model_id,
     )

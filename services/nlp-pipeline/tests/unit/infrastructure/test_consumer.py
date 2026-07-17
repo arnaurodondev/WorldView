@@ -39,6 +39,15 @@ def _make_settings() -> MagicMock:
     s.embedding_instruction_prefix = "Represent: "
     s.ner_model_id = "gliner"
     s.extraction_model_id = "qwen2.5:7b-instruct"
+    # Hybrid extraction-model routing (2026-07-17) — real values so the numeric
+    # comparison in select_extraction_model does not choke on a bare MagicMock.
+    s.extraction_api_model_id = "deepseek-ai/DeepSeek-V4-Flash"
+    s.hybrid_extraction_routing_enabled = True
+    s.extraction_high_recall_model_id = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    s.extraction_high_recall_word_count_threshold = 6000
+    s.extraction_high_recall_source_types = "sec_edgar"
+    s.deep_extraction_max_words = 0
+    s.extraction_max_windows_per_doc = 0
     s.topic_article_enriched = "nlp.article.enriched.v1"
     s.topic_signal_detected = "nlp.signal.detected.v1"
     s.max_ollama_queue_depth = 20

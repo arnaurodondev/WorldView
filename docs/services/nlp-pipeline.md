@@ -581,6 +581,37 @@ All environment variables use the prefix `NLP_PIPELINE_`. Loaded by `pydantic-se
 | `NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S` | `900` | Article watchdog; fits 300s extraction cap + fallback + NER (Task #5) |
 | `NLP_PIPELINE_EXTRACTION_MODEL_ID` | `qwen2.5:7b-instruct` | Ollama fallback model |
 
+#### Hybrid extraction-model routing (2026-07-17)
+
+The prod flip of `EXTRACTION_API_MODEL_ID` to `deepseek-ai/DeepSeek-V4-Flash` caused
+a LIVE regression: SEC filings extracted ~0 KG facts (head-to-head on 12 major
+10-K/10-Q filings, DeepSeek returned 0 facts vs Qwen3-235B's 118 grounded facts;
+`docs/audits/2026-07-17-deepseek-recall-validation.md`). DeepSeek is fine on
+short/medium news but intrinsically under-extracts long, dense filing prose.
+
+`run_ml_phase` now routes PER DOCUMENT (`application/blocks/extraction_routing.py`):
+SEC filings (`source_type` in the allow-list) OR any doc at/above the word-count
+threshold use a dedicated high-recall Qwen3-235B client; everything else keeps the
+cheaper DeepSeek primary. The `max_words` cap is force-disabled on the Qwen filing
+path (grounded facts live in later windows — capping is a recall tax). The
+`nlp.article.enriched.v1` provenance stamp now carries the model that ACTUALLY ran
+(`MLPhaseResult.extraction_model_id`) instead of the stale hardcoded
+`extraction_model_id` (`qwen2.5:7b-instruct` legacy default). The fabrication guards
+(deterministic relation gate + optional co-mention entailment) run inside
+`run_deep_extraction_block` for BOTH models — nothing bypasses them on the Qwen path.
+
+> **Backfill required on deploy**: the SEC corpus extracted since the DeepSeek flip
+> has ~0 KG facts and must be RE-EXTRACTED (re-run the article pipeline over the
+> `sec_edgar` documents) once this ships. Retrieval/embeddings are unaffected (a
+> separate phase); only the knowledge graph is empty for those filings.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NLP_PIPELINE_HYBRID_EXTRACTION_ROUTING_ENABLED` | `true` | Master switch; false = single primary model on every doc |
+| `NLP_PIPELINE_EXTRACTION_HIGH_RECALL_MODEL_ID` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | High-recall model for SEC/long docs |
+| `NLP_PIPELINE_EXTRACTION_HIGH_RECALL_WORD_COUNT_THRESHOLD` | `6000` | Word count (>=) routing a non-filing doc to high-recall; 0 disables the word-count arm |
+| `NLP_PIPELINE_EXTRACTION_HIGH_RECALL_SOURCE_TYPES` | `sec_edgar` | Comma-separated `source_type` values that always use high-recall (case-insensitive) |
+
 ### ML — Relevance Scoring Worker
 
 | Variable | Default | Description |

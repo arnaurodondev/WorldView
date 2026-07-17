@@ -536,6 +536,15 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         evidence_grounding_config: Any = None,
         claim_entailment_client: ExtractionClient | None = None,
         claim_entailment_config: Any = None,
+        # Hybrid extraction-model routing (2026-07-17). ``extraction_client`` is the
+        # primary (DeepSeek) client; ``extraction_client_high_recall`` is the optional
+        # Qwen3-235B client the ML phase selects for SEC/long-filing docs.
+        # ``extraction_model_id`` is the primary client's REAL serving slug
+        # (DeepInfra ``extraction_api_model_id`` when a key is set, else the Ollama
+        # ``extraction_model_id``) — threaded to run_ml_phase for routing +
+        # provenance. Both default None → pre-hybrid behaviour (single primary model).
+        extraction_client_high_recall: ExtractionClient | None = None,
+        extraction_model_id: str | None = None,
     ) -> None:
         super().__init__(config)
         self._dedup_client = valkey_client
@@ -552,6 +561,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         self._ner = ner_client
         self._emb = embedding_client
         self._ext = extraction_client
+        # Hybrid routing (2026-07-17): optional high-recall (Qwen3-235B) extraction
+        # client + the primary client's real serving slug. None → single-model path.
+        self._ext_high_recall = extraction_client_high_recall
+        self._ext_model_id = extraction_model_id
         # ENHANCEMENT #6: cheap co-mention entailment client (Qwen3-235B) + config.
         # None when the feature is off → run_ml_phase forwards None and the check no-ops.
         self._entailment_client = entailment_client
@@ -1869,6 +1882,13 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 emb=self._emb,
                 ext=self._ext,
                 watchlist_client=self._watchlist._client,  # type: ignore[attr-defined]
+                # Hybrid extraction-model routing (2026-07-17): feed the per-doc
+                # router the doc's word_count (source_type is already passed above)
+                # and the high-recall (Qwen3-235B) client so SEC/long filings extract
+                # with recall while short/medium docs keep the cheap DeepSeek primary.
+                word_count=word_count,
+                ext_model_id=self._ext_model_id,
+                ext_high_recall=self._ext_high_recall,
                 usage_logger=self._usage_logger,
                 entailment_client=self._entailment_client,
                 entailment_config=self._entailment_config,
@@ -1993,9 +2013,14 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     mentions=final_mentions,
                     extraction_result=ml.extraction_result,
                     correlation_id=correlation_id,
-                    extraction_model_id=(
-                        self._settings.extraction_model_id if should_run_deep_extraction(ml.final_path) else None
-                    ),
+                    # Provenance fix (2026-07-17): stamp the model that ACTUALLY ran
+                    # deep extraction for this doc (DeepSeek for short/medium, Qwen3-235B
+                    # for filings/long docs), surfaced on ``ml.extraction_model_id``.
+                    # Previously hardcoded to ``settings.extraction_model_id`` (the stale
+                    # ``qwen2.5:7b-instruct`` legacy Ollama default), which mis-attributed
+                    # every claim regardless of the real extractor. ``ml.extraction_model_id``
+                    # is already None when deep extraction did not run (HALT/SUPPRESS).
+                    extraction_model_id=ml.extraction_model_id,
                     # BUG-3 / BP-698: wire the canonical-alias repo + open intel
                     # session so _enqueue_enriched runs endpoint recovery (M1
                     # canonical fall-back + M2 provisional mint) before the

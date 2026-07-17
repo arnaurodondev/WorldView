@@ -239,13 +239,56 @@ async def main() -> None:
             fallback_model_id=settings.extraction_fallback_model_id or None,
             base_url=settings.extraction_api_base_url,
         )
+        # The primary DeepInfra slug is the real serving model for short/medium docs;
+        # threaded to the consumer for hybrid routing + provenance stamping.
+        primary_extraction_model_id: str = settings.extraction_api_model_id
     else:
         extraction_client = OllamaExtractionAdapter(  # type: ignore[assignment]
             base_url=settings.ollama_base_url,
             model_id=settings.extraction_model_id,
             semaphore=ml_sem,
         )
+        primary_extraction_model_id = settings.extraction_model_id
         log.info("extraction_ollama_adapter_selected", model_id=settings.extraction_model_id)
+
+    # ── Hybrid extraction-model routing (2026-07-17 DeepSeek recall regression) ──
+    # Build a SECOND DeepInfra extraction adapter bound to the HIGH-RECALL model
+    # (Qwen3-235B). run_ml_phase selects it per-doc for SEC filings / long docs, which
+    # DeepSeek-V4-Flash extracts ~0 KG facts from (see
+    # docs/audits/2026-07-17-deepseek-recall-validation.md). The DeepInfra adapter is
+    # model-generic (the entailment client already reuses it for Qwen), so we reuse
+    # the SAME class. It SHARES ``extraction_sem`` with the primary so total concurrent
+    # DeepInfra extraction calls stay bounded, and keeps the same fallback/retry/watchdog
+    # budget. Only constructed when routing is ON and a DeepInfra key is present; when
+    # None the ML phase falls back to the single primary model (pre-hybrid behaviour).
+    extraction_client_high_recall: Any = None
+    if settings.hybrid_extraction_routing_enabled and _extraction_api_key and settings.extraction_high_recall_model_id:
+        from ml_clients.adapters.deepseek_extraction import (  # type: ignore[import-not-found]
+            DeepSeekExtractionAdapter as _HighRecallAdapter,
+        )
+
+        extraction_client_high_recall = _HighRecallAdapter(
+            api_key=_extraction_api_key,
+            model_id=settings.extraction_high_recall_model_id,
+            base_url=settings.extraction_api_base_url,
+            semaphore=extraction_sem,
+            fallback_model_id=settings.extraction_fallback_model_id,
+            reasoning_effort=settings.extraction_reasoning_effort,
+            fallback_reasoning_effort=settings.extraction_fallback_reasoning_effort,
+            max_tokens=settings.extraction_max_tokens,
+            timeout_s=settings.extraction_timeout_s,
+            max_attempts=settings.extraction_max_attempts,
+            total_budget_s=settings.extraction_total_budget_s,
+            max_connections=settings.deepinfra_max_connections,
+            max_keepalive_connections=settings.deepinfra_max_keepalive,
+            metrics=ml_metrics,
+        )
+        log.info(
+            "extraction_high_recall_adapter_selected",
+            model_id=settings.extraction_high_recall_model_id,
+            word_count_threshold=settings.extraction_high_recall_word_count_threshold,
+            source_types=settings.extraction_high_recall_source_types,
+        )
 
     # ── ENHANCEMENT #6: optional co-mention entailment check (default OFF) ─────────
     # When NLP_PIPELINE_RELATION_ENTAILMENT_CHECK_ENABLED is set, build a DEDICATED
@@ -521,6 +564,10 @@ async def main() -> None:
         # 2026-07-16 claim entailment pass: None unless enabled (and key present).
         claim_entailment_client=claim_entailment_client,
         claim_entailment_config=claim_entailment_config,
+        # Hybrid extraction-model routing (2026-07-17): high-recall (Qwen3-235B) client
+        # + the primary's real serving slug for per-doc routing and provenance.
+        extraction_client_high_recall=extraction_client_high_recall,
+        extraction_model_id=primary_extraction_model_id,
     )
     # Bind the probe so /healthz reflects this consumer's poll-loop progress.
     liveness_probe.bind(consumer)
@@ -555,6 +602,7 @@ async def main() -> None:
         [
             (settings.embedding_api_model_id, "deepinfra"),
             (settings.extraction_api_model_id, "deepinfra"),
+            (settings.extraction_high_recall_model_id, "deepinfra"),
             (settings.extraction_fallback_model_id, "deepinfra"),
             (settings.relevance_scoring_api_model_id, "deepinfra"),
             (settings.unresolved_resolution_api_model_id, "deepinfra"),
