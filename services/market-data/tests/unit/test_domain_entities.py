@@ -67,13 +67,22 @@ class TestProviderPriorityOrdering:
 
     def test_alpaca_and_derived_outrank_polled_providers(self) -> None:
         # OHLCV-SOURCING REWORK (2026-06-17): Alpaca 1m (and its locally-derived
-        # higher timeframes) is the single source of truth, so it must outrank
-        # every polled provider — including Polygon — in conflict resolution.
-        highest = max(p.priority for p in Provider)
-        assert Provider.ALPACA.priority == highest
-        assert Provider.DERIVED.priority == highest
+        # higher timeframes) is the LIVE source of truth, so it must outrank every
+        # POLLED / alternate provider (Polygon, Yahoo, per-ticker EODHD) in conflict
+        # resolution. The ONLY sources above it are the authoritative EODHD EOD
+        # corrections — eodhd_bulk (120, correct daily volume + adjusted_close) and
+        # eodhd_intraday (115, post-close consolidated 1m) — which intentionally win
+        # the upsert guard to fix Alpaca's IEX-only volume (daily 2026-07-16 fix +
+        # this intraday refinement). Assert Alpaca/derived top the LIVE tier.
+        authoritative_eod = {Provider.EODHD_BULK, Provider.EODHD_INTRADAY}
+        live_tier_highest = max(p.priority for p in Provider if p not in authoritative_eod)
+        assert Provider.ALPACA.priority == live_tier_highest
+        assert Provider.DERIVED.priority == live_tier_highest
         assert Provider.ALPACA.priority > Provider.POLYGON.priority
-        # Yahoo (deep daily, free) must beat EODHD (last-resort failover).
+        # The authoritative EOD corrections are the only sources above the live tier.
+        assert Provider.EODHD_BULK.priority > Provider.ALPACA.priority
+        assert Provider.EODHD_INTRADAY.priority > Provider.ALPACA.priority
+        # Yahoo (deep daily, free) must beat per-ticker EODHD (last-resort failover).
         assert Provider.YAHOO_FINANCE.priority > Provider.EODHD.priority
 
 
