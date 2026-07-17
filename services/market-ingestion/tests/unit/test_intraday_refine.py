@@ -18,16 +18,51 @@ from market_ingestion.application.ports.adapters import ProviderFetchResult
 from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.scripts.intraday_refine import (
     _CREDITS_PER_SYMBOL,
+    _DEFAULT_SETTLE_LAG_DAYS,
     RunBudget,
     day_date_range,
     day_unix_window,
     done_set_key,
     is_weekend,
+    pick_probe_symbol,
+    preflight_day_published,
     resolve_target_day,
     stamp_intraday_source,
 )
 
+import common.time
+
 pytestmark = pytest.mark.unit
+
+
+def _bars_result(n_bars: int) -> ProviderFetchResult:
+    """A ProviderFetchResult carrying *n_bars* intraday records (n=0 => unpublished/holiday)."""
+    records = [dict(_BAR_1330) for _ in range(n_bars)]
+    return ProviderFetchResult(
+        provider=Provider.EODHD,
+        dataset_type=DatasetType.OHLCV,
+        symbol="AAPL",
+        raw_data=json.dumps(records).encode(),
+        content_type="application/json",
+        fetched_at=datetime.now(tz=UTC),
+        duration_ms=1,
+        bars_returned=n_bars,
+    )
+
+
+class _FakeAdapter:
+    """Minimal async adapter double that counts fetch_intraday calls."""
+
+    def __init__(self, n_bars: int, *, raise_error: bool = False) -> None:
+        self._n = n_bars
+        self._raise = raise_error
+        self.calls = 0
+
+    async def fetch_intraday(self, **_kwargs: object) -> ProviderFetchResult:
+        self.calls += 1
+        if self._raise:
+            raise RuntimeError("boom")
+        return _bars_result(self._n)
 
 
 # A live-verified EODHD /intraday 1m record shape (UTC bar-start, consolidated vol).
@@ -47,16 +82,41 @@ _BAR_1330 = {
 # ── resolve_target_day ────────────────────────────────────────────────────────
 
 
-def test_resolve_target_day_explicit_is_utc_midnight():
-    day = resolve_target_day("2026-07-15")
+def test_resolve_target_day_explicit_is_utc_midnight_no_lag():
+    # An explicit --date is used verbatim — the settle-lag must NOT apply.
+    day = resolve_target_day("2026-07-15", settle_lag_days=2)
     assert day == datetime(2026, 7, 15, tzinfo=UTC)
 
 
-def test_resolve_target_day_default_is_today_utc():
-    day = resolve_target_day(None)
-    now = datetime.now(tz=UTC)
-    assert (day.year, day.month, day.day) == (now.year, now.month, now.day)
-    assert day.hour == 0 and day.tzinfo == UTC
+def test_default_settle_lag_is_two_trading_days():
+    # Grounded in the live probe (2026-07-17): at Fri 01:22 UTC the just-closed
+    # Thursday (T-1) had 0 intraday bars while Wednesday (T-2) was complete.
+    assert _DEFAULT_SETTLE_LAG_DAYS == 2
+
+
+def test_resolve_target_day_default_applies_trading_day_lag(monkeypatch):
+    # Freeze "now" to Friday 2026-07-17 23:30 UTC (the CronJob slot).
+    monkeypatch.setattr(common.time, "utc_now", lambda: datetime(2026, 7, 17, 23, 30, tzinfo=UTC))
+    # Default lag=2 trading days → Wednesday 2026-07-15 (the reliably-settled day).
+    assert resolve_target_day(None).date() == datetime(2026, 7, 15, tzinfo=UTC).date()
+    # lag=1 → Thursday 2026-07-16.
+    assert resolve_target_day(None, settle_lag_days=1).date() == datetime(2026, 7, 16, tzinfo=UTC).date()
+    # lag=0 → today.
+    assert resolve_target_day(None, settle_lag_days=0).date() == datetime(2026, 7, 17, tzinfo=UTC).date()
+
+
+def test_resolve_target_day_lag_skips_weekends(monkeypatch):
+    # Monday 2026-07-20 23:30 UTC: lag=1 trading day must skip Sun/Sat back to Friday.
+    monkeypatch.setattr(common.time, "utc_now", lambda: datetime(2026, 7, 20, 23, 30, tzinfo=UTC))
+    assert resolve_target_day(None, settle_lag_days=1).date() == datetime(2026, 7, 17, tzinfo=UTC).date()
+    # lag=2 → Thursday 2026-07-16.
+    assert resolve_target_day(None, settle_lag_days=2).date() == datetime(2026, 7, 16, tzinfo=UTC).date()
+
+
+def test_resolve_target_day_default_lands_on_a_weekday(monkeypatch):
+    # Whatever "today" is, the lagged default is always a trading weekday.
+    monkeypatch.setattr(common.time, "utc_now", lambda: datetime(2026, 7, 19, 23, 30, tzinfo=UTC))  # Sunday
+    assert not is_weekend(resolve_target_day(None))
 
 
 def test_resolve_target_day_bad_format_raises():
@@ -148,6 +208,60 @@ def test_full_us_sweep_credit_estimate_fits_daily_cap():
     # (~543) + the existing firehose (~1.1k) is ~4.3k, well under the 100k/day cap.
     assert 530 * _CREDITS_PER_SYMBOL == 2_650
     assert 2_650 + 543 + 1_100 < 100_000
+
+
+# ── pick_probe_symbol ─────────────────────────────────────────────────────────
+
+
+def test_pick_probe_symbol_prefers_liquid_reference():
+    # A liquid always-trading ticker makes "0 bars" reliably mean "day unpublished".
+    assert pick_probe_symbol(["ZZZ", "MSFT", "AAA"]) == "MSFT"
+
+
+def test_pick_probe_symbol_falls_back_to_first_sorted():
+    assert pick_probe_symbol(["ZZZ", "AAA", "MMM"]) == "AAA"
+
+
+def test_pick_probe_symbol_empty_universe_is_none():
+    assert pick_probe_symbol([]) is None
+
+
+# ── preflight_day_published (the credit-burn guard) ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preflight_published_day_returns_result_one_call():
+    # A liquid probe with bars ⇒ day is published; the result is returned for reuse
+    # (so the probe's credit is not wasted) and exactly ONE API call was made.
+    adapter = _FakeAdapter(n_bars=960)
+    published, result = await preflight_day_published(adapter, "AAPL", "US", 0, 86_400)
+    assert published is True
+    assert result is not None and result.bars_returned == 960
+    assert adapter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_preflight_unpublished_day_aborts_without_second_call():
+    # 0 bars from the liquid probe ⇒ day not yet published ⇒ abort. This is the
+    # guard that stops the ~2,650-credit burn: only the single probe call happens,
+    # and the caller writes NO done-set entries (verified structurally: preflight
+    # returns (False, None) BEFORE the sweep loop that would fetch/mark symbols).
+    adapter = _FakeAdapter(n_bars=0)
+    published, result = await preflight_day_published(adapter, "AAPL", "US", 0, 86_400)
+    assert published is False
+    assert result is None
+    assert adapter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_preflight_fetch_error_treated_as_unpublished():
+    # A network error can't confirm publication ⇒ treat as not-published (abort,
+    # no done-set poisoning) rather than risk spending the full budget.
+    adapter = _FakeAdapter(n_bars=0, raise_error=True)
+    published, result = await preflight_day_published(adapter, "AAPL", "US", 0, 86_400)
+    assert published is False
+    assert result is None
+    assert adapter.calls == 1
 
 
 # ── end-to-end canonicalization ───────────────────────────────────────────────
