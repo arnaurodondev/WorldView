@@ -134,6 +134,31 @@ async def test_unparseable_output_fails_open() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"entailed": False},
+        {"entailed": False, "confidence": None},
+        {"entailed": False, "confidence": "high"},
+    ],
+)
+async def test_not_entailed_with_malformed_confidence_fails_open(body: dict[str, Any]) -> None:
+    # Fail-open guard: a NOT_ENTAILED verdict whose confidence is missing/null/non-numeric
+    # is UNKNOWN confidence and MUST keep the claim (never drop on ambiguity). Regression
+    # for the confidence-default: an absent/garbage confidence must not read as max-confident
+    # and silently shrink the KG.
+    from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-not-found]
+
+    client = AsyncMock()
+    client.extract.return_value = ExtractionOutput(
+        result=dict(body), raw_response=json.dumps(body), model_id="test-model"
+    )
+    claims = [_claim("DEBT_CHANGE")]
+    out = await _run(claims, client, min_drop_confidence=0.7)
+    assert out == claims  # kept — malformed confidence never drops
+
+
+@pytest.mark.asyncio
 async def test_raw_response_fallback_parse_drops() -> None:
     # Client fills only raw_response (no structured result) — fallback parse must work.
     client = AsyncMock()

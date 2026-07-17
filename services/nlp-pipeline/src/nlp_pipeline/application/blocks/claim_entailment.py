@@ -169,10 +169,16 @@ def _parse_verdict(output: Any) -> tuple[bool, float] | None:
     if payload is None or not isinstance(payload.get("entailed"), bool):
         return None
     entailed = bool(payload["entailed"])
+    # Fail-open on confidence too: a MISSING or non-numeric confidence is UNKNOWN
+    # confidence, which must never trigger a drop. Default to 0.0 (below any sane
+    # ``min_drop_confidence``) so a NOT_ENTAILED verdict with a malformed/absent
+    # confidence (e.g. ``{"entailed": false, "confidence": null}`` or the field
+    # omitted despite the schema) KEEPS the claim rather than destroying it. A
+    # confident drop requires the verifier to emit a real high confidence value.
     try:
-        confidence = float(payload.get("confidence", 1.0))
+        confidence = float(payload.get("confidence", 0.0))
     except (TypeError, ValueError):
-        confidence = 1.0
+        confidence = 0.0
     return entailed, confidence
 
 
