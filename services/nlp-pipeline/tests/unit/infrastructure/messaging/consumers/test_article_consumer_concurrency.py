@@ -31,7 +31,12 @@ pytestmark = pytest.mark.asyncio
 
 
 class _FakeMsg:
-    """Minimal stand-in for a confluent_kafka.Message."""
+    """Minimal stand-in for a confluent_kafka.Message.
+
+    ``value()`` returns a JSON envelope carrying a per-(partition, offset)
+    ``event_id`` so the real ``_safe_event_id`` (deserialize → extract_event_id)
+    keys the durable retry counter deterministically.
+    """
 
     def __init__(self, topic: str, partition: int, offset: int) -> None:
         self._topic = topic
@@ -47,33 +52,82 @@ class _FakeMsg:
     def offset(self) -> int:
         return self._offset
 
+    def value(self) -> bytes:
+        import json
+
+        return json.dumps({"event_id": f"evt-{self._partition}-{self._offset}"}).encode()
+
 
 class _FakeConfig:
     enable_auto_commit = False
     poll_timeout_seconds = 1.0
+    # ``_settle_message`` reads max_retries to bound in-place retries.
+    max_retries = 3
 
 
 class _FakeConfluentConsumer:
-    """Records every commit(message=...) call so we can assert the offsets acked."""
+    """Records every ``commit(message=..., asynchronous=...)`` call.
+
+    Captures the ``asynchronous`` kwarg so a test can assert commits are
+    SYNCHRONOUS (the fix that stopped confluent's default fire-and-forget async
+    commit from silently dropping rejected offset commits).
+    """
 
     def __init__(self) -> None:
         self.committed: list[tuple[str, int, int]] = []
+        self.commit_async_flags: list[bool] = []
 
-    def commit(self, msg: Any) -> None:
-        self.committed.append((msg.topic(), msg.partition(), msg.offset()))
+    def commit(self, message: Any = None, asynchronous: bool = True) -> None:
+        self.committed.append((message.topic(), message.partition(), message.offset()))
+        self.commit_async_flags.append(asynchronous)
 
 
-def _make_consumer() -> ArticleProcessingConsumer:
+def _make_consumer(max_retries: int = 3) -> ArticleProcessingConsumer:
+    """Build a consumer via ``object.__new__`` with only the settle/commit deps.
+
+    Stubs the durable Valkey attempt counter with an in-memory dict, the backoff
+    with a zero-sleep, and ``dead_letter`` with a recording sink — so the tests
+    exercise the real ``_settle_message`` / ``_dispatch_batch`` control flow
+    without any ML/DB/Kafka/Valkey wiring.
+    """
     c = object.__new__(ArticleProcessingConsumer)
-    c._config = _FakeConfig()  # type: ignore[attr-defined]
+    cfg = _FakeConfig()
+    cfg.max_retries = max_retries
+    c._config = cfg  # type: ignore[attr-defined]
     c._consumer = _FakeConfluentConsumer()  # type: ignore[attr-defined]
     # _record_consumer_lag must be a no-op (no metrics/consumer wiring here).
     c._record_consumer_lag = lambda: None  # type: ignore[attr-defined,method-assign]
+    # No real backoff sleeps in tests.
+    c._compute_backoff = lambda attempt: 0.0  # type: ignore[attr-defined,method-assign]
+
+    # In-memory durable attempt counter keyed by event_id (fake Valkey).
+    c._attempts = {}  # type: ignore[attr-defined]
+
+    async def _get_attempt_count(event_id: str) -> int:
+        return c._attempts.get(event_id, 0)  # type: ignore[attr-defined]
+
+    async def _record_attempt(event_id: str, attempt: int, exc: BaseException) -> None:
+        c._attempts[event_id] = c._attempts.get(event_id, 0) + 1  # type: ignore[attr-defined]
+
+    c._get_attempt_count = _get_attempt_count  # type: ignore[attr-defined,method-assign]
+    c._record_attempt = _record_attempt  # type: ignore[attr-defined,method-assign]
+
+    # Recording dead-letter sink (topic, partition, offset, reason).
+    c.dead_lettered = []  # type: ignore[attr-defined]
+
+    async def _dead_letter(failure: Any, reason: str | None = None) -> None:
+        c.dead_lettered.append((failure.topic, failure.partition, failure.offset, reason))  # type: ignore[attr-defined]
+
+    c.dead_letter = _dead_letter  # type: ignore[attr-defined,method-assign]
     return c
 
 
 def _committed(c: ArticleProcessingConsumer) -> list[tuple[str, int, int]]:
     return c._consumer.committed  # type: ignore[attr-defined]
+
+
+def _dead_lettered(c: ArticleProcessingConsumer) -> list[tuple[str, int, int, str | None]]:
+    return c.dead_lettered  # type: ignore[attr-defined]
 
 
 async def test_concurrency_bound_respected_and_all_complete() -> None:
@@ -108,95 +162,179 @@ async def test_concurrency_bound_respected_and_all_complete() -> None:
     assert _committed(c) == [("content.article.stored.v1", 0, 11)]
 
 
-async def test_contiguous_commit_stops_at_failure_gap() -> None:
-    """A failed message stops the contiguous commit run on its partition.
+async def test_poison_head_message_dead_lettered_and_partition_drains() -> None:
+    """A consistently-failing HEAD message is DLQ'd and the partition ADVANCES.
 
-    Offsets 0,1 succeed, offset 2 fails (unexpected exception → dead-letter and
-    treated as 'handled'), so... wait: an unexpected exception is routed to
-    _handle_failure and *counts* as handled (mirrors the base loop).  To test a
-    genuine gap we make offset 2 raise during _handle_failure too, so it is NOT
-    marked handled and the contiguous run stops at offset 1.
+    This is the nlp-consumer-commit-stall regression: the poison sits at offset 0
+    (the partition head).  Under the old seek-back path the partition's committed
+    offset froze there forever.  Now the message is retried in place up to
+    max_retries, dead-lettered, and marked 'handled' so the contiguous commit
+    drains PAST it to the batch high-water — without a single consumer.seek().
     """
-    c = _make_consumer()
+    c = _make_consumer(max_retries=3)
     sem = asyncio.Semaphore(8)
+    attempts_at_offset_0 = 0
 
     async def fake_handle(msg: Any) -> None:
-        if msg.offset() == 2:
-            raise RuntimeError("boom at offset 2")
-
-    async def fake_failure(msg: Any, exc: BaseException) -> None:
-        # Re-raise for the poison offset so it is never marked handled, creating
-        # a real gap; succeed (swallow) for any other offset.
-        if msg.offset() == 2:
-            raise RuntimeError("dead-letter also failed")
+        nonlocal attempts_at_offset_0
+        if msg.offset() == 0:  # poison at the HEAD, always fails
+            attempts_at_offset_0 += 1
+            raise RuntimeError("poison filing: deep extraction failed")
+        # every other offset succeeds
 
     c._handle_message = fake_handle  # type: ignore[attr-defined,method-assign]
-    c._handle_failure = fake_failure  # type: ignore[attr-defined,method-assign]
-
-    batch = [_FakeMsg("t", 0, off) for off in range(5)]
-    # The unhandled failure at offset 2 propagates out of gather; the dispatch
-    # must still commit the contiguous prefix it managed to ack.  We tolerate the
-    # raised error by shielding the gather expectation: dispatch swallows commit
-    # exceptions but not handler exceptions, so guard here.
-    with pytest.raises(RuntimeError):
-        await c._dispatch_batch(asyncio.get_event_loop(), batch, sem)
-
-
-async def test_contiguous_commit_with_dead_lettered_message() -> None:
-    """A dead-lettered (handled) message does NOT break the contiguous run.
-
-    Mirrors the base loop: a message routed cleanly through _handle_failure is
-    'handled' for offset purposes, so the commit advances past it.
-    """
-    c = _make_consumer()
-    sem = asyncio.Semaphore(8)
-
-    async def fake_handle(msg: Any) -> None:
-        if msg.offset() == 2:
-            from messaging.kafka.consumer.errors import FatalError  # type: ignore[import-untyped]
-
-            raise FatalError("poison")
-
-    async def fake_failure(msg: Any, exc: BaseException) -> None:
-        return None  # dead-letter succeeds → handled
-
-    c._handle_message = fake_handle  # type: ignore[attr-defined,method-assign]
-    c._handle_failure = fake_failure  # type: ignore[attr-defined,method-assign]
 
     batch = [_FakeMsg("t", 0, off) for off in range(5)]
     await c._dispatch_batch(asyncio.get_event_loop(), batch, sem)
 
-    # All 5 handled (offset 2 via dead-letter) → commit the highest offset 4.
+    # Poison retried IN PLACE up to max_retries (no seek), then dead-lettered.
+    assert attempts_at_offset_0 == 3
+    assert _dead_lettered(c) == [("t", 0, 0, "max_retries")]
+    # Partition DRAINED: committed high-water is offset 4 (advanced past the head).
     assert _committed(c) == [("t", 0, 4)]
 
 
-async def test_per_partition_independent_commits() -> None:
-    """Two partitions in one batch: A succeeds fully, B dead-letters its messages.
+async def test_transient_failure_retries_in_place_then_succeeds() -> None:
+    """A transient error retries IN PLACE (no seek) and commits once it succeeds.
 
-    A dead-lettered (cleanly handled-via-_handle_failure) message still counts as
-    handled, so both partitions advance to their own high-water marks
-    independently — neither blocks the other.
+    Good work is NOT dead-lettered: the message fails twice, then the third
+    in-place attempt succeeds, so the offset commits and nothing is DLQ'd.
+    """
+    c = _make_consumer(max_retries=5)
+    sem = asyncio.Semaphore(8)
+    calls = 0
+
+    async def fake_handle(msg: Any) -> None:
+        nonlocal calls
+        if msg.offset() == 2:
+            calls += 1
+            if calls < 3:  # fail attempts 1 and 2, succeed on attempt 3
+                raise RuntimeError("transient DeepInfra 429")
+
+    c._handle_message = fake_handle  # type: ignore[attr-defined,method-assign]
+
+    batch = [_FakeMsg("t", 0, off) for off in range(5)]
+    await c._dispatch_batch(asyncio.get_event_loop(), batch, sem)
+
+    assert calls == 3  # retried in place until success
+    assert _dead_lettered(c) == []  # good work never dead-lettered
+    assert _committed(c) == [("t", 0, 4)]  # partition commits the full prefix
+
+
+async def test_good_messages_commit_synchronously() -> None:
+    """All-good batch commits the high-water with a SYNCHRONOUS commit.
+
+    Guards the second half of the fix: confluent's default async commit dropped
+    rejections silently; the consumer now commits with ``asynchronous=False`` so
+    a rejected commit surfaces (and is logged) instead of freezing the offset.
     """
     c = _make_consumer()
     sem = asyncio.Semaphore(8)
 
     async def fake_handle(msg: Any) -> None:
-        # Partition 1 messages all fail → routed to _handle_failure (which here
-        # cleanly dead-letters), so they are 'handled' and the partition commits.
-        if msg.partition() == 1:
-            raise RuntimeError("partition 1 transient error")
-
-    async def fake_failure(msg: Any, exc: BaseException) -> None:
-        return None  # dead-letter always succeeds → handled
+        return None  # everything succeeds
 
     c._handle_message = fake_handle  # type: ignore[attr-defined,method-assign]
-    c._handle_failure = fake_failure  # type: ignore[attr-defined,method-assign]
+
+    batch = [_FakeMsg("t", 0, off) for off in range(4)]
+    await c._dispatch_batch(asyncio.get_event_loop(), batch, sem)
+
+    assert _committed(c) == [("t", 0, 3)]
+    assert _dead_lettered(c) == []
+    # Every commit was synchronous (asynchronous=False).
+    assert c._consumer.commit_async_flags == [False]  # type: ignore[attr-defined]
+
+
+async def test_durable_counter_bounds_retries_across_redelivery() -> None:
+    """The durable attempt counter bounds retries ACROSS a redelivery/restart.
+
+    Simulate a redelivery: the poison already has ``max_retries - 1`` recorded
+    attempts from a prior delivery.  On this delivery it must fail only ONCE more
+    (not a fresh full budget) before dead-lettering — otherwise a poison that is
+    redelivered on every restart would burn a full retry budget forever.
+    """
+    c = _make_consumer(max_retries=3)
+    sem = asyncio.Semaphore(8)
+    # Pre-seed the durable counter as if 2 attempts already failed before restart.
+    c._attempts["evt-0-0"] = 2  # type: ignore[attr-defined]
+    calls = 0
+
+    async def fake_handle(msg: Any) -> None:
+        nonlocal calls
+        if msg.offset() == 0:
+            calls += 1
+            raise RuntimeError("still poison after restart")
+
+    c._handle_message = fake_handle  # type: ignore[attr-defined,method-assign]
+
+    batch = [_FakeMsg("t", 0, off) for off in range(3)]
+    await c._dispatch_batch(asyncio.get_event_loop(), batch, sem)
+
+    # base_attempts=2, so the first local attempt is attempt 3 >= max_retries → DLQ.
+    assert calls == 1  # only one more attempt this delivery, not a fresh budget
+    assert _dead_lettered(c) == [("t", 0, 0, "max_retries")]
+    assert _committed(c) == [("t", 0, 2)]  # partition still drains past the poison
+
+
+async def test_at_least_once_offset_advances_only_after_success_or_dlq() -> None:
+    """At-least-once: an offset is committed only after success OR durable DLQ.
+
+    Partition 0 succeeds fully; partition 1's head is a FatalError (malformed) →
+    DLQ'd immediately (no retries) so it advances.  A message that is neither
+    successfully processed nor dead-lettered must NEVER be committed — verified by
+    the fact that dead_letter is awaited before the offset is marked handled.
+    """
+    from messaging.kafka.consumer.errors import FatalError  # type: ignore[import-untyped]
+
+    c = _make_consumer(max_retries=3)
+    sem = asyncio.Semaphore(8)
+    dl_order: list[str] = []
+    fatal_calls = 0
+
+    async def fake_handle(msg: Any) -> None:
+        nonlocal fatal_calls
+        if msg.partition() == 1 and msg.offset() == 0:
+            fatal_calls += 1
+            raise FatalError("malformed payload")
+
+    async def recording_dl(failure: Any, reason: str | None = None) -> None:
+        dl_order.append(f"{failure.partition}:{failure.offset}:{reason}")
+        c.dead_lettered.append((failure.topic, failure.partition, failure.offset, reason))  # type: ignore[attr-defined]
+
+    c._handle_message = fake_handle  # type: ignore[attr-defined,method-assign]
+    c.dead_letter = recording_dl  # type: ignore[attr-defined,method-assign]
 
     batch = [_FakeMsg("t", 0, off) for off in range(3)] + [_FakeMsg("t", 1, off) for off in range(2)]
     await c._dispatch_batch(asyncio.get_event_loop(), batch, sem)
 
+    # FatalError → dead-lettered immediately, no in-place retries.
+    assert fatal_calls == 1
+    assert dl_order == ["1:0:fatal"]
+    # Both partitions advanced: p0 fully processed, p1 head DLQ'd then p1 drains.
     acked = sorted(_committed(c))
     assert acked == [("t", 0, 2), ("t", 1, 1)]
+
+
+async def test_per_partition_independence_poison_does_not_block_other() -> None:
+    """A poison on one partition never blocks commits on another partition."""
+    c = _make_consumer(max_retries=2)
+    sem = asyncio.Semaphore(8)
+
+    async def fake_handle(msg: Any) -> None:
+        if msg.partition() == 1:  # partition 1 entirely poison
+            raise RuntimeError("partition 1 poison")
+
+    c._handle_message = fake_handle  # type: ignore[attr-defined,method-assign]
+
+    batch = [_FakeMsg("t", 0, off) for off in range(3)] + [_FakeMsg("t", 1, off) for off in range(2)]
+    await c._dispatch_batch(asyncio.get_event_loop(), batch, sem)
+
+    # Partition 0 (all good) commits its high-water regardless of partition 1.
+    acked = sorted(_committed(c))
+    assert acked == [("t", 0, 2), ("t", 1, 1)]
+    # Partition 1's messages were both dead-lettered (drained, not blocking p0).
+    dl_offsets = sorted(o for (_t, p, o, _r) in _dead_lettered(c) if p == 1)
+    assert dl_offsets == [0, 1]
 
 
 def test_contiguous_commit_targets_helper() -> None:
