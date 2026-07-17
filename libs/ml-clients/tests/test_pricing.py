@@ -85,14 +85,17 @@ def test_pricing_matrix_contains_core_in_use_models() -> None:
 
 
 @pytest.mark.unit
-def test_qwen3_235b_pricing_matches_deepinfra_list_rate() -> None:
-    """Qwen3-235B fallback pricing reflects the audit-corrected DeepInfra rate.
+def test_qwen3_235b_pricing_is_conservative_fallback() -> None:
+    """Qwen3-235B fallback pricing is a non-undercounting conservative estimate.
 
     Regression guard for the LLM-cost audit (2026-07-16): the prior 0.071/0.10
     entry 3x-undercounted the matrix FALLBACK (used when DeepInfra omits
     usage.estimated_cost). Prod ground truth was ~$0.24/Mtok blended on the S6
-    extraction mix; the repo's eval scripts document the list rate as 0.13/0.60.
-    Pin those so the fallback can never silently drift back to the low numbers.
+    extraction mix. NOTE 0.13/0.60 is NOT the DeepInfra published list rate (that
+    is ~0.09/0.55 as of 2026-07-16); it is the repo's internal eval-doc value,
+    chosen as a middle ground because provider billing runs ~2x list (reasoning
+    tokens at effort=medium). Pin it so the fallback can never silently drift
+    back to the low numbers.
     """
     entry = MODEL_PRICING["Qwen/Qwen3-235B-A22B-Instruct-2507"]
     assert entry.input_per_million == Decimal("0.13")
