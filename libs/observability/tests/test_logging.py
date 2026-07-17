@@ -57,6 +57,49 @@ class TestSecretRedaction:
         out = _redact_secrets("GET /api/news?limit=1000&from=2026-07-03&offset=0")
         assert out == "GET /api/news?limit=1000&from=2026-07-03&offset=0"
 
+    def test_redacts_client_secret_underscore_name(self) -> None:
+        # ``\bsecret`` never matched inside ``client_secret`` (no boundary after
+        # the underscore); the compound name must be listed explicitly.
+        out = _redact_secrets("POST /oauth/token client_secret=democlientsecret9999&grant_type=x")
+        assert "democlientsecret9999" not in out
+        assert "client_secret=***REDACTED-9999" in out
+
+    def test_redacts_refresh_token_underscore_name(self) -> None:
+        out = _redact_secrets("refresh_token=demorefreshtoken4242&scope=openid")
+        assert "demorefreshtoken4242" not in out
+        assert "refresh_token=***REDACTED-4242" in out
+
+    def test_redacts_authorization_bearer_header(self) -> None:
+        # DeepInfra + OIDC send the key as ``Authorization: Bearer <token>``.
+        out = _redact_secrets('Authorization: Bearer demobearertokenABCD1234 "next"')
+        assert "demobearertokenABCD1234" not in out
+        assert "Authorization: Bearer ***REDACTED-1234" in out
+        # Must not swallow the trailing token on the same line.
+        assert '"next"' in out
+
+    def test_leaves_non_secret_underscore_field_untouched(self) -> None:
+        # Negative: an underscore-joined field that is NOT a credential (its tail
+        # is not one of the listed names) must pass through verbatim — no
+        # over-redaction of ``sort_token``-style identifiers or plain refresh IDs.
+        text = "GET /api/jobs?next_page=abc123&customer_id=42&is_secretariat=false"
+        assert _redact_secrets(text) == text
+
+    def test_filter_redacts_bearer_header_without_equals(self) -> None:
+        # The filter fast-path guard must trip on ``bearer`` even when the record
+        # carries no ``=`` (the Bearer header form).
+        rec = logging.LogRecord(
+            name="httpx",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="request headers Authorization: Bearer demobearertokenABCD1234",
+            args=None,
+            exc_info=None,
+        )
+        assert SecretRedactingFilter().filter(rec) is True
+        assert "demobearertokenABCD1234" not in rec.getMessage()
+        assert "Authorization: Bearer ***REDACTED-1234" in rec.getMessage()
+
     def test_filter_redacts_record_args(self) -> None:
         # httpx passes the URL as a %-format arg, not baked into msg.
         rec = logging.LogRecord(

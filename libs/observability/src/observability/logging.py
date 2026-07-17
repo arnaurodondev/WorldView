@@ -17,20 +17,52 @@ import structlog
 # parameter whose name looks like a credential, keeping only the last 4 chars so
 # operators can still identify WHICH key is in use (e.g. confirm a rotation)
 # without exposing the secret.
+#
+# The credential-name alternation must list COMPOUND, underscore-joined names
+# (``client_secret``, ``refresh_token``) EXPLICITLY and BEFORE their bare tails
+# (``secret``, ``token``).  A leading ``\b`` is a word boundary, and ``_`` is a
+# word character, so ``\bsecret`` / ``\btoken`` never match inside
+# ``client_secret`` / ``refresh_token`` (there is no boundary after the ``_``).
+# Listing the full names — anchored by ``\b`` before ``client`` / ``refresh`` —
+# is what closes that under-redaction gap without widening the pattern into
+# non-secret identifiers that merely end in ``_token`` / ``_secret``.
 _SECRET_QS_RE = re.compile(
-    r"(?i)\b(api_?token|api_?key|access_?token|token|secret|password|apikey)=([^&\s\"'#]+)",
+    r"(?i)\b("
+    r"client_?secret|refresh_?token|access_?token|api_?token|api_?key|"
+    r"token|secret|password|apikey"
+    r")=([^&\s\"'#]+)",
+)
+
+# OAuth/OIDC and the DeepInfra API key are sent in the HTTP ``Authorization``
+# header as ``Bearer <token>``.  httpx does not log headers today, but other
+# call sites (retry/debug logging, exception reprs) can, so we scrub the
+# header form defensively — same last-4 marker so a key stays identifiable.
+# The value stops at the first whitespace/quote/comma/semicolon so we never
+# swallow a trailing ``", HTTP/1.1 200"`` or a second header on the same line.
+_SECRET_BEARER_RE = re.compile(
+    r"(?i)(authorization:\s*bearer\s+)([^\s\"',;#]+)",
 )
 
 
 def _redact_secrets(text: str) -> str:
-    """Mask credential-looking query-string values in *text*, keeping last 4."""
+    """Mask credential-looking values in *text*, keeping the last 4 chars.
 
-    def _repl(match: re.Match[str]) -> str:
+    Covers two shapes: ``<name>=<value>`` query-string credentials and the
+    ``Authorization: Bearer <token>`` header form.
+    """
+
+    def _repl_qs(match: re.Match[str]) -> str:
         name, value = match.group(1), match.group(2)
         tail = value[-4:] if len(value) > 4 else ""
         return f"{name}=***REDACTED{('-' + tail) if tail else ''}"
 
-    return _SECRET_QS_RE.sub(_repl, text)
+    def _repl_bearer(match: re.Match[str]) -> str:
+        prefix, value = match.group(1), match.group(2)
+        tail = value[-4:] if len(value) > 4 else ""
+        return f"{prefix}***REDACTED{('-' + tail) if tail else ''}"
+
+    text = _SECRET_QS_RE.sub(_repl_qs, text)
+    return _SECRET_BEARER_RE.sub(_repl_bearer, text)
 
 
 def redact_secrets(text: str) -> str:
@@ -58,7 +90,10 @@ class SecretRedactingFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str) and "=" in record.msg:
+        # Fast-path guard: only run the regexes when the record could plausibly
+        # carry a secret. Query-string creds contain ``=``; the Bearer-header
+        # form does not, so we also trip on a case-insensitive ``bearer``.
+        if isinstance(record.msg, str) and ("=" in record.msg or "bearer" in record.msg.casefold()):
             record.msg = _redact_secrets(record.msg)
         if record.args:
             if isinstance(record.args, tuple):
