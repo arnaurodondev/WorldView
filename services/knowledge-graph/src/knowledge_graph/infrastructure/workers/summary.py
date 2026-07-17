@@ -185,20 +185,42 @@ class SummaryWorker:
         # Each relation's LLM call (Phase 3, 5-30 s) holds NO DB session, so
         # running ``self._concurrency`` of them in flight only multiplies
         # network I/O — it never widens the DB connection footprint beyond the
-        # short per-row write sessions.  ``asyncio.gather`` preserves the
-        # per-relation try/except isolation (each ``_process_relation`` swallows
-        # its own commit failures), so one bad row cannot abort the batch.
+        # short per-row write sessions.  ``_process_relation`` swallows its own
+        # commit failures (returns counter deltas), so one bad row cannot abort
+        # the batch.  ``return_exceptions=True`` is the belt-and-braces guard:
+        # if a relation's LLM call ever *raises* (rather than returning None) —
+        # e.g. an unexpected client-side error not caught inside
+        # ``_generate_summary`` — gather must NOT propagate it, because that
+        # would abort the whole cycle and leave the sibling coroutines detached
+        # as orphans that may still commit after ``run`` returns.  Instead we
+        # collect the Exception, log it as a per-relation failure, and continue
+        # aggregating the rest of the batch.
         semaphore = asyncio.Semaphore(self._concurrency)
 
         async def _bounded(rel: Any, force_regen: bool) -> dict[str, int]:
             async with semaphore:
                 return await self._process_relation(rel, force_regen=force_regen)
 
-        outcomes = await asyncio.gather(*(_bounded(rel, force_regen_flags[i]) for i, rel in enumerate(stale_relations)))
+        outcomes = await asyncio.gather(
+            *(_bounded(rel, force_regen_flags[i]) for i, rel in enumerate(stale_relations)),
+            return_exceptions=True,
+        )
 
         # Aggregate per-relation outcome counters into the batch summary.
+        # An ``Exception`` element means that relation's coroutine raised (the
+        # ``return_exceptions=True`` guard above); log-and-skip it so it counts
+        # as a failure but never corrupts the totals sum or aborts the batch.
         totals: dict[str, int] = {}
-        for outcome in outcomes:
+        for rel, outcome in zip(stale_relations, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                totals["relation_errors"] = totals.get("relation_errors", 0) + 1
+                logger.error(  # type: ignore[no-any-return]
+                    "summary_worker_relation_error",
+                    relation_id=str(rel.get("relation_id")),
+                    error=str(outcome),
+                    error_type=type(outcome).__name__,
+                )
+                continue
             for key, value in outcome.items():
                 totals[key] = totals.get(key, 0) + value
 
@@ -211,6 +233,10 @@ class SummaryWorker:
             skipped_null_evidence_text=totals.get("skipped_null_evidence_text", 0),
             immutable_hits=totals.get("immutable_hits", 0),
             raw_fallback_hits=totals.get("raw_fallback_hits", 0),
+            # BACKLOG-DRAIN (2026-07-16): relations whose coroutine raised and
+            # were log-and-skipped (return_exceptions guard).  Non-zero here
+            # means an uncaught error path exists in _process_relation.
+            relation_errors=totals.get("relation_errors", 0),
             # DEF-018 / Wave B-1 phase metrics:
             phase1_fetched_count=batch_size,
             phase2_llm_calls=totals.get("llm_calls", 0),

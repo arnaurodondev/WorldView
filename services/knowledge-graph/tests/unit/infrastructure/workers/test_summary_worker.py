@@ -1604,3 +1604,43 @@ class TestSummaryWorkerBatchAndConcurrency:
         # Despite the matching hash, the force-regen slot forces a fresh summary.
         llm.extract.assert_awaited_once()
         mock_sum.insert_new.assert_awaited_once()
+
+    def test_one_relation_raises_others_still_commit(self) -> None:
+        """A relation whose LLM call RAISES is log-and-skipped; the rest still commit.
+
+        Guards the ``asyncio.gather(..., return_exceptions=True)`` path: one bad
+        coroutine must not abort the cycle or detach the siblings as orphans.
+        """
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Merger news.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": f"00000000-0000-0000-0000-0000000003{i:02d}"} for i in range(5)]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        # The 3rd relation (index 2) raises inside the LLM call; all others succeed.
+        call_state = {"n": 0}
+
+        async def _extract(*_args: object, **_kwargs: object) -> object:
+            idx = call_state["n"]
+            call_state["n"] += 1
+            if idx == 2:
+                raise RuntimeError("simulated LLM client explosion")
+            return ExtractionOutput(result={"summary": "s"}, raw_response="ok", model_id="m")
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(side_effect=_extract)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            # concurrency=1 makes the per-relation call order deterministic so
+            # exactly one relation (index 2) hits the raising branch.
+            worker = SummaryWorker(sf, llm, batch_limit=100, concurrency=1)
+            asyncio.run(worker.run())  # must NOT raise
+
+        # 4 of 5 relations were summarized + committed; the raising one is skipped.
+        assert mock_sum.insert_new.await_count == 4
+        assert mock_rel.mark_summary_updated.await_count == 4
