@@ -72,6 +72,27 @@ class EntailmentCheckConfig:
     model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
 
 
+@dataclass(frozen=True)
+class ClaimEntailmentCheckConfig:
+    """Config for the optional claim entailment pass (2026-07-16 fabrication cure).
+
+    Built from ``Settings.claim_entailment_check_*``. When ``enabled`` is False (the
+    default) the pass is skipped entirely. Verifies CLAIMS of high-fabrication claim_types
+    (the audit's dominant, previously-unguarded bucket) and drops those whose evidence
+    quote does not entail the assigned label. See
+    ``nlp_pipeline.application.blocks.claim_entailment`` for the rationale and the fail-open
+    / 0%-FP-tuned design. Verifier defaults to the cheap live-extraction-class model.
+    """
+
+    enabled: bool = False
+    claim_types: frozenset[str] = frozenset(
+        {"DEBT_CHANGE", "REVENUE_GROWTH", "GUIDANCE_RAISE", "GUIDANCE_CUT", "HEADCOUNT_CHANGE", "EPS_BEAT"}
+    )
+    min_drop_confidence: float = 0.7
+    max_per_doc: int = 20
+    model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
+
+
 # ── Window configuration (PRD §6.7 Block 10) ─────────────────────────────────
 
 SINGLE_WINDOW_TOKEN_LIMIT: int = 24_000
@@ -424,6 +445,8 @@ async def run_deep_extraction_block(
     entailment_client: ExtractionClient | None = None,
     entailment_config: EntailmentCheckConfig | None = None,
     evidence_grounding_config: EvidenceGroundingConfig | None = None,
+    claim_entailment_client: ExtractionClient | None = None,
+    claim_entailment_config: ClaimEntailmentCheckConfig | None = None,
     metrics: NlpMetricsPort = NOOP_METRICS,
     max_words: int = 0,
     max_windows: int = 0,
@@ -732,6 +755,39 @@ async def run_deep_extraction_block(
             )
         merged["claims"] = kept_claims
         merged["relations"] = kept_relations
+
+    # ── Claim entailment pass (2026-07-16 semantic-mislabel fabrication cure) ─────────
+    # Runs AFTER the deterministic evidence-span gate (so ungrounded quotes are already
+    # gone — the verifier only spends on real quotes) and BEFORE the KG write. Verifies
+    # CLAIMS of high-fabrication claim_types (the audit's dominant, previously-unguarded
+    # bucket) and drops those whose verbatim evidence does NOT entail the assigned label
+    # (a refinancing tagged DEBT_CHANGE, a segment mention tagged REVENUE_GROWTH, an
+    # inverted polarity). A substring check cannot catch a mislabel; only semantic
+    # entailment can. FAIL-OPEN and config-gated — a no-op when disabled (the default) or
+    # when no claim_entailment_client is wired. Gated to high-fab types → ~1-2 calls/doc.
+    # See claim_entailment.py for the measured precision/false-positive numbers.
+    if (
+        claim_entailment_config is not None
+        and claim_entailment_config.enabled
+        and claim_entailment_client is not None
+        and merged.get("claims")
+    ):
+        from nlp_pipeline.application.blocks.claim_entailment import check_claim_entailment
+
+        try:
+            filtered_claims = await check_claim_entailment(
+                list(merged["claims"]),
+                entailment_client=claim_entailment_client,
+                model_id=claim_entailment_config.model_id,
+                high_fab_claim_types=claim_entailment_config.claim_types,
+                min_drop_confidence=claim_entailment_config.min_drop_confidence,
+                max_per_doc=claim_entailment_config.max_per_doc,
+                doc_id=str(doc_id),
+            )
+            merged = {**merged, "claims": filtered_claims}
+        except Exception:
+            # Fail-open at the block boundary too: never let the check break extraction.
+            logger.warning("deep_extraction.claim_entailment_check_failed", doc_id=str(doc_id), exc_info=True)
 
     # Surface degradation on the merged result so the caller (and any persistence
     # path) can carry it forward. Kept as plain dict keys to avoid changing the

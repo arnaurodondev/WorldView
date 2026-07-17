@@ -287,6 +287,50 @@ async def main() -> None:
             max_per_doc=entailment_config.max_per_doc,
         )
 
+    # ── 2026-07-16 claim entailment pass (default OFF) ────────────────────────────
+    # When NLP_PIPELINE_CLAIM_ENTAILMENT_CHECK_ENABLED is set, build a DEDICATED cheap
+    # verifier client (default DeepSeek-V4-Flash — cheap but ≥ the audit's adequacy bar;
+    # small max_tokens since the verdict JSON is tiny) and a config from settings, and pass
+    # both to the consumer. The pass then verifies CLAIMS of high-fabrication claim_types
+    # after the deterministic gates. Left None when disabled → run_deep_extraction_block
+    # no-ops the pass (unchanged behaviour).
+    claim_entailment_client: Any = None
+    claim_entailment_config: Any = None
+    if settings.claim_entailment_check_enabled and _extraction_api_key:
+        from ml_clients.adapters.deepseek_extraction import (  # type: ignore[import-not-found]
+            DeepSeekExtractionAdapter as _ClaimVerifierAdapter,
+        )
+
+        from nlp_pipeline.application.blocks.deep_extraction import ClaimEntailmentCheckConfig
+
+        claim_entailment_config = ClaimEntailmentCheckConfig(
+            enabled=True,
+            claim_types=frozenset(
+                t.strip() for t in settings.claim_entailment_check_claim_types.split(",") if t.strip()
+            ),
+            min_drop_confidence=settings.claim_entailment_check_min_drop_confidence,
+            max_per_doc=settings.claim_entailment_check_max_per_doc,
+            model_id=settings.claim_entailment_check_model_id,
+        )
+        claim_entailment_client = _ClaimVerifierAdapter(
+            api_key=_extraction_api_key,
+            model_id=claim_entailment_config.model_id,  # cheap verifier (≥ V4-Flash class)
+            base_url=settings.extraction_api_base_url,
+            semaphore=extraction_sem,
+            # A binary label-entailment verdict needs no chain-of-thought; "none" keeps the
+            # verifier at its cheapest (no billed reasoning tokens) and DeepSeek-V4-Flash
+            # still returns valid content. This is what the bake-off measured cost against.
+            reasoning_effort="none",
+            max_tokens=512,
+            metrics=ml_metrics,
+        )
+        log.info(
+            "claim_entailment_check_enabled",
+            model_id=claim_entailment_config.model_id,
+            claim_types=sorted(claim_entailment_config.claim_types),
+            max_per_doc=claim_entailment_config.max_per_doc,
+        )
+
     # ── 2026-07-16 fabrication filter: evidence-span grounding gate ───────────────
     # Deterministic, free, model-agnostic. Built from settings and always passed to the
     # consumer (unlike the entailment check, it needs no LLM client). Unknown mode strings
@@ -474,6 +518,9 @@ async def main() -> None:
         entailment_config=entailment_config,
         # 2026-07-16 fabrication filter: deterministic evidence-span grounding gate.
         evidence_grounding_config=evidence_grounding_config,
+        # 2026-07-16 claim entailment pass: None unless enabled (and key present).
+        claim_entailment_client=claim_entailment_client,
+        claim_entailment_config=claim_entailment_config,
     )
     # Bind the probe so /healthz reflects this consumer's poll-loop progress.
     liveness_probe.bind(consumer)

@@ -511,6 +511,38 @@ class Settings(BaseSettings):
     # NLP_PIPELINE_EVIDENCE_GROUNDING_RELATIONS_MODE
     evidence_grounding_relations_mode: str = "present_only"
 
+    # ── Claim/relation entailment pass (2026-07-16 semantic-mislabel fabrication cure) ──
+    # A cheap LLM entailment gate that drops CLAIMS of high-fabrication claim_types whose
+    # evidence quote does NOT entail the assigned label (a refinancing tagged DEBT_CHANGE,
+    # a segment mention tagged REVENUE_GROWTH, a plain release tagged GUIDANCE_RAISE, or an
+    # inverted polarity). The 2026-07-16 fabrication investigation
+    # (docs/audits/2026-07-16-extraction-fabrication.md) found fabrication is SEMANTIC
+    # MISLABELLING of verbatim quotes — the models quote correctly but mis-type — and that
+    # CLAIMS were the largest previously-UNGUARDED slice (validate_relations + the
+    # relation entailment gate touch relations only). A substring check (evidence_grounding)
+    # cannot catch a mislabel; only semantic entailment can. See application/blocks/
+    # claim_entailment.py for the design and the audit's measured 0%-FP entailment template.
+    # Default OFF so this is a safe, opt-in prototype: enabling it changes extraction output.
+    # Enabling ALSO requires wiring a verifier client in article_consumer_main (built from
+    # the extraction key); until then the block stays a no-op even if this flag is True.
+    claim_entailment_check_enabled: bool = False  # NLP_PIPELINE_CLAIM_ENTAILMENT_CHECK_ENABLED
+    # Only claims whose claim_type is in this set are checked (high-fabrication buckets per
+    # the audit §1). Comma-separated env override. Keep tight: every other claim_type skips
+    # the LLM call entirely (cost + latency control) so this stays ~1-2 calls/doc.
+    claim_entailment_check_claim_types: str = (
+        # NLP_PIPELINE_CLAIM_ENTAILMENT_CHECK_CLAIM_TYPES
+        "DEBT_CHANGE,REVENUE_GROWTH,GUIDANCE_RAISE,GUIDANCE_CUT,HEADCOUNT_CHANGE,EPS_BEAT"
+    )
+    # Confidence floor below which a NOT_ENTAILED verdict is IGNORED (the claim is kept).
+    # Second guard so a low-confidence "drop" never destroys a good claim.
+    claim_entailment_check_min_drop_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    # Max gated claims checked per document (hard cap on added cost/latency per article).
+    claim_entailment_check_max_per_doc: int = Field(default=20, ge=0, le=200)
+    # Verifier model. Default = the cheap live-extraction-class model. The audit REJECTED
+    # weaker verifiers (gpt-oss-20b: 27.6% FP kills good items); the verifier MUST be at
+    # least DeepSeek-V4-Flash / Qwen3-235B class. NLP_PIPELINE_CLAIM_ENTAILMENT_CHECK_MODEL_ID
+    claim_entailment_check_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
+
     # ── Concurrency (Task #14 — ~50 articles in flight platform-wide) ──────────
     # Deep extraction on DeepInfra is I/O-bound (12-22s network wait per article),
     # NOT CPU-bound.  The base Kafka consumer loop is strictly serial (one article

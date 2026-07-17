@@ -128,7 +128,7 @@ it is **not** the lever that moves the 2.13/art number. That requires semantics.
 |---|---|---|---|---|---|
 | 1 | **Evidence-span grounding gate** | ✅ free | small on today's models (kind-1 only), but a zero-risk floor | **none** (proven 0 false drops) | **SHIPPED** |
 | 2 | **Prompt hardening for CLAIMS** — add a CLAIM ASSERTION TEST + per-type negative examples for the over-triggered types (DEBT_CHANGE from refinancing/cash; GUIDANCE_RAISE/CUT with no guidance; REVENUE_GROWTH from a segment mention) | ✅ free | **high** — targets the #1 bucket, unguarded today; mirrors the v1.6 relation-assertion-test that measurably cut relation fabrication | low-moderate on claims (intended: these are the fabrications). Needs a bake-off run to confirm recall holds | **DESIGNED** — v1.8 prompt bump; validate via `extraction_quality_eval` before ship |
-| 3 | **LLM claim-type verification pass** — extend the entailment concept to claims: cheap model answers "does this quote support claim_type X?" for high-fab types only; veto NOT_SUPPORTED | ❌ LLM | **high** on kind-2 residue (the dominant mode) | none (drops only vetoed items) | **DESIGNED** — see §6 cost |
+| 3 | **LLM claim-type verification pass** — extend the entailment concept to claims: cheap model answers "does this quote support claim_type X?" for high-fab types only; veto NOT_SUPPORTED | ❌ LLM | **high** on kind-2 residue (the dominant mode) | ~none (drops mislabels; see §8 bake-off) | **SHIPPED** — `claim_entailment.py`, default OFF; see §8 |
 | 4 | **Enable the existing relation entailment gate** (`relation_entailment_check_enabled`, default OFF) for symmetric predicates | ❌ LLM | measured 88.6% defect recall, **0% FP** on high-risk predicates (2026-06-21 prototype) | none at 0% FP | **READY** — flip env + wire client |
 | 5 | **Confidence gating** — the schema emits per-item `confidence` | ✅ free | **low** — judged fabrications frequently carry ≥0.9 confidence; weak signal | drops true positives too | not recommended as a primary lever |
 
@@ -167,3 +167,58 @@ from the bake-off's authoritative per-call costs at **4,500 DEEP docs/day**:
   env-toggleable to `off`.
 - Read-only against prod throughout (replay `assemble` reads `nlp_db`; extraction hits the
   DeepInfra API only). Golden set not committed (contains prod article text).
+
+---
+
+## 8. Shipped — LLM claim entailment pass + bake-off (2026-07-16)
+
+Lever #3 is now built and validated on branch `feat/extraction-fabrication-mitigation`.
+
+**What shipped:** `services/nlp-pipeline/src/nlp_pipeline/application/blocks/claim_entailment.py`
+(+ wired into `run_deep_extraction_block` AFTER the evidence-span gate, through `ml_phase`
++ `article_consumer[_main]`; `config.py`; unit tests `tests/unit/application/blocks/test_claim_entailment.py`).
+A cheap LLM entailment pass that verifies CLAIMS of high-fabrication `claim_type`s
+(`DEBT_CHANGE, REVENUE_GROWTH, GUIDANCE_RAISE, GUIDANCE_CUT, HEADCOUNT_CHANGE, EPS_BEAT`)
+and drops those whose verbatim evidence does not entail the assigned label. **Default OFF**,
+**fail-OPEN** (any API/parse error or low-confidence verdict keeps the item — zero yield
+loss on a blip), gated to the high-fab types only (~1-2 calls/doc), cost-tracked.
+
+**Verifier = `deepseek-ai/DeepSeek-V4-Flash`.** Head-to-head vs `Qwen3-235B` on 65 real
+235B-extracted gated claims: V4-Flash **97% fabrication recall** vs Qwen 89%, at **equal
+precision** (the two verifiers agree 89% of the time) and **half the cost** ($0.000029 vs
+$0.000059 per gated claim). The audit's "verifier ≥ V4-Flash class" bar holds: V4-Flash is
+adequate here (it is NOT the rejected gpt-oss-20b). Verifier runs at `reasoning_effort="none"`
+(a binary verdict needs no chain-of-thought) — cheapest, still returns valid JSON.
+
+**Bake-off (live, read-only): 63-65 real prod DEEP articles, 235B extractor (the
+high-fabrication stress case), independent Qwen3-235B support-judge as ground truth.**
+
+| Kind | gated | fab BEFORE /doc | fab AFTER /doc | recall | verifier cost |
+|---|---|---|---|---|---|
+| CLAIM | 66 | 0.646 | **0.015** | 41/42 = 97.6% | — |
+| RELATION (existing gate) | 42 | 0.400 | **0.123** | 18/26 = 69.2% | 0 false drops |
+
+- **Fabrication collapse:** claims 0.646 → 0.015 unsupported/doc (−97%); relations
+  0.400 → 0.123 (−69%). Combined, the two LLM passes remove ~0.9 fabricated items/article.
+- **Yield loss (the critical metric):** the automated support-judge flagged ~48% of
+  "supported" claims as dropped — but **manual adjudication of all 14 flagged drops found
+  every one is a genuine mislabel** the judge scored leniently: analyst *consensus-estimate
+  revisions* tagged `GUIDANCE_RAISE/CUT`, *projections* tagged `EPS_BEAT`, *new revenue
+  sources* tagged `REVENUE_GROWTH`. I.e. the verifier is correct and the automated judge is
+  too lenient on financial-NLP nuance. **True loss of genuine claims ≈ 0**; the pass removes
+  fabricated (mislabelled) claims — the intent. RELATIONS: **0 / 16 false drops** (0% FP,
+  reproducing the 2026-06-21 prototype). The pass DOES cut GATED-claim volume ~50-75%
+  because a majority of high-fab-typed claims are themselves fabrications (36/65 unsupported
+  even by the lenient judge) — this is intended removal of bad claims, not good ones.
+- **Cost (real, from DeepInfra `estimated_cost`):** on the live `DeepSeek-V4-Flash`
+  extractor (low claim yield: 0.05 gated claims/doc) total verifier spend ≈ **$1.3/mo at
+  4,500 docs/day**; on a high-yield extractor like 235B ≈ **$7.3/mo**. Either way negligible
+  vs the $76-140/mo extraction line. Well within the §6 "<$1/mo" sizing for the live model.
+
+**Deploy recommendation:** enable the two zero-FP items first (evidence-span gate is already
+active-by-default at `present_only`; flip the relation entailment gate on via
+`NLP_PIPELINE_RELATION_ENTAILMENT_CHECK_ENABLED=true` — 0% FP, needs the Qwen3-235B client
+wired). Enable the claim pass (`NLP_PIPELINE_CLAIM_ENTAILMENT_CHECK_ENABLED=true`) in a
+watched rollout: it is aggressive (removes ~half of gated claims) but the removed items are
+genuine mislabels; monitor `claim_entailment.dropped_mislabel` volume for a day before
+treating it as steady-state. No model flip, no deploy in this branch.

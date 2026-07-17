@@ -440,6 +440,8 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         entailment_client: ExtractionClient | None = None,
         entailment_config: Any = None,
         evidence_grounding_config: Any = None,
+        claim_entailment_client: ExtractionClient | None = None,
+        claim_entailment_config: Any = None,
     ) -> None:
         super().__init__(config)
         self._dedup_client = valkey_client
@@ -465,6 +467,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # None here (e.g. a test) makes run_deep_extraction_block apply its own default
         # (present_only), so the gate is active by default.
         self._evidence_grounding_config = evidence_grounding_config
+        # 2026-07-16 claim entailment pass: cheap verifier client (DeepSeek-V4-Flash) +
+        # config. None when the feature is off → run_ml_phase forwards None and the pass
+        # no-ops (unchanged behaviour).
+        self._claim_entailment_client = claim_entailment_client
+        self._claim_entailment_config = claim_entailment_config
         self._bp = backpressure
         self._chunk_text_store = chunk_text_store
         self._usage_logger = usage_logger
@@ -1392,6 +1399,8 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 entailment_client=self._entailment_client,
                 entailment_config=self._entailment_config,
                 evidence_grounding_config=self._evidence_grounding_config,
+                claim_entailment_client=self._claim_entailment_client,
+                claim_entailment_config=self._claim_entailment_config,
                 _deep_extraction_fn=run_deep_extraction_block,
                 # P0-A poison-pill fix (prod review 2026-07-15): thread the base
                 # consumer's liveness heartbeat down into the sequential window

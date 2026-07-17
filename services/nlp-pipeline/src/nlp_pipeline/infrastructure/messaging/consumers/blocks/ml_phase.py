@@ -99,6 +99,11 @@ async def run_ml_phase(
     # Forwarded verbatim to run_deep_extraction_block; None → block applies its own
     # default (present_only), so the gate is active unless explicitly turned off.
     evidence_grounding_config: Any = None,
+    # 2026-07-16 claim entailment pass: cheap verifier client + config. Both default None
+    # → the pass is a no-op (the prior behaviour). Forwarded verbatim to
+    # run_deep_extraction_block, which gates on claim_entailment_config.enabled.
+    claim_entailment_client: ExtractionClient | None = None,
+    claim_entailment_config: Any = None,
     # Injected callable for Block 10 — defaults to the real implementation.
     # article_consumer._run_pipeline passes ``run_deep_extraction_block`` from
     # the article_consumer namespace so unit tests can patch it there.
@@ -196,6 +201,8 @@ async def run_ml_phase(
             entailment_client=entailment_client,
             entailment_config=entailment_config,
             evidence_grounding_config=evidence_grounding_config,
+            claim_entailment_client=claim_entailment_client,
+            claim_entailment_config=claim_entailment_config,
             metrics=_NLP_METRICS,
             # BP-719 Mode B: bound the deep-extraction prefix on very large filings
             # so the ML phase fits the 900s watchdog. 0 (default) = no cap.
