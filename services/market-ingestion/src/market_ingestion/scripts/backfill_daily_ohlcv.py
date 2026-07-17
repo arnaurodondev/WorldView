@@ -67,7 +67,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -146,6 +146,17 @@ def resolve_horizon(
 def _parse_day(day: str) -> datetime:
     """Parse a ``YYYY-MM-DD`` string into a UTC-aware midnight datetime."""
     return datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
+
+
+def resolve_produced_provider(authoritative: bool) -> Provider:
+    """Pick the ``source`` label for the produced bars.
+
+    ``--authoritative`` stamps ``eodhd_bulk`` (market-data priority 120) so the
+    fetched EODHD /eod bars OVERWRITE Alpaca's IEX daily bars (110) — used to
+    correct the ~9.9k Alpaca-won rows. The default keeps the deep-history label
+    ``eodhd`` (60), which coexists as failover and never clobbers Alpaca.
+    """
+    return Provider.EODHD_BULK if authoritative else Provider.EODHD
 
 
 def symbol_sort_key(symbol: str, exchange: str | None) -> str:
@@ -252,6 +263,18 @@ def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--resume", action="store_true", help="Resume from the persisted Valkey cursor.")
     parser.add_argument("--dry-run", action="store_true", help="Print the instrument plan + estimate; fetch nothing.")
+    parser.add_argument(
+        "--authoritative",
+        action="store_true",
+        help=(
+            "Stamp fetched bars as the AUTHORITATIVE daily source ('eodhd_bulk', "
+            "provider_priority 120) instead of the deep-history 'eodhd' (60). Use "
+            "this to CORRECT the ~9.9k Alpaca-won (110) daily rows whose IEX volume "
+            "is understated and whose adjusted_close is NULL — the EODHD /eod range "
+            "carries the correct consolidated volume + adjusted_close, and priority "
+            "120 >= 110 lets the upsert guard overwrite the Alpaca bar."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -333,6 +356,11 @@ async def run_backfill(settings: Settings, args: argparse.Namespace) -> int:
     serializer = DefaultCanonicalSerializer()
     date_range = DateRange(start=from_dt, end=to_dt)
     timeframe = Timeframe(_DAILY_TIMEFRAME)
+    # ``--authoritative`` relabels the EODHD /eod bars as the top-priority daily
+    # source (``eodhd_bulk``=120) so they OVERWRITE Alpaca's IEX daily bars (110)
+    # — used to correct the ~9.9k Alpaca-won rows with wrong volume + null
+    # adjusted_close. Default keeps the deep-history label (``eodhd``=60).
+    produced_provider = resolve_produced_provider(getattr(args, "authoritative", False))
 
     produced = 0
     skipped_empty = 0
@@ -396,9 +424,16 @@ async def run_backfill(settings: Settings, args: argparse.Namespace) -> int:
                     await asyncio.sleep(args.sleep)
                 continue
 
+            # Relabel the fetch result's provider so the canonical ``source`` and
+            # the outbox event carry ``produced_provider`` (eodhd_bulk when
+            # ``--authoritative``); ExecuteTaskUseCase stamps
+            # ``fetched_by_provider = fetch_result.provider.value``.
+            if produced_provider is not Provider.EODHD:
+                fetch_result = replace(fetch_result, provider=produced_provider)
+
             # ── Produce through the SAME pipeline the live worker uses ──────
             task = IngestionTask.create_ohlcv_task(
-                provider=Provider.EODHD,
+                provider=produced_provider,
                 symbol=symbol,
                 timeframe=timeframe,
                 date_range=date_range,

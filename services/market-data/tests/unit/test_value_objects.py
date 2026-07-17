@@ -85,6 +85,23 @@ class TestProviderPriority:
         assert pp.provider == "unknown"
         assert pp.priority == 0
 
+    def test_eodhd_bulk_is_authoritative_daily(self) -> None:
+        # DAILY-VOLUME CORRECTION (2026-07-16): the EODHD bulk-EOD daily source
+        # (correct consolidated volume + adjusted_close) MUST outrank Alpaca's
+        # IEX daily bar so the ``provider_priority >=`` upsert guard lets it win.
+        eodhd_bulk = ProviderPriority.for_provider(Provider.EODHD_BULK)
+        assert eodhd_bulk.provider == "eodhd_bulk"
+        assert eodhd_bulk.priority == 120
+        # Strictly above Alpaca (110) — the whole point of the fix.
+        assert eodhd_bulk.priority > ProviderPriority.for_provider(Provider.ALPACA).priority
+        # And still above the per-ticker deep-history EODHD failover (60).
+        assert eodhd_bulk.priority > ProviderPriority.for_provider(Provider.EODHD).priority
+
+    def test_eodhd_bulk_resolves_from_string(self) -> None:
+        # market-data resolves the event ``provider`` string via ``Provider(...)``;
+        # the canonical source "eodhd_bulk" must map to the real member (not UNKNOWN).
+        assert Provider("eodhd_bulk") is Provider.EODHD_BULK
+
     def test_for_provider_all_providers(self) -> None:
         for provider in Provider:
             pp = ProviderPriority.for_provider(provider)

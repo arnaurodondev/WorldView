@@ -19,11 +19,27 @@ from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.scripts.backfill_daily_ohlcv import (
     CURSOR_KEY,
     RunBudget,
+    _parse_cli,
     dedupe_ohlcv_instruments,
     remaining_instruments,
     resolve_horizon,
+    resolve_produced_provider,
     symbol_sort_key,
 )
+
+
+class TestAuthoritativeMode:
+    def test_default_is_deep_history_eodhd(self) -> None:
+        assert resolve_produced_provider(authoritative=False) is Provider.EODHD
+
+    def test_authoritative_stamps_eodhd_bulk(self) -> None:
+        # eodhd_bulk resolves to market-data priority 120 (> Alpaca 110), so the
+        # corrected bars overwrite the Alpaca-won daily rows.
+        assert resolve_produced_provider(authoritative=True) is Provider.EODHD_BULK
+
+    def test_cli_authoritative_flag_defaults_off(self) -> None:
+        assert _parse_cli([]).authoritative is False
+        assert _parse_cli(["--authoritative"]).authoritative is True
 
 
 class TestResolveHorizon:

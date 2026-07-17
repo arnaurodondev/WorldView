@@ -362,7 +362,8 @@ All environment variables are prefixed with `MARKET_INGESTION_`.
 
 - **Purpose**: OHLCV bars (EOD), real-time quotes (15-min delayed), full fundamentals (18 sections), earnings calendar, economic events, macro indicators, insider transactions, news sentiment, yield curve, historical market cap.
 - **Auth**: `api_token` query parameter.
-- **Rate limits**: Demo key — limited to 3 endpoints; production key — 100,000 credits/month (hard cap). Credit cost: fundamentals=10, intraday=5, news/economic/macro/yield/insider=5, OHLCV EOD=1, quotes=1.
+- **Rate limits**: Demo key — limited to 3 endpoints; production key — 100,000 credits/month (hard cap). Credit cost: fundamentals=10, intraday=5, news/economic/macro/yield/insider=5, OHLCV EOD=1, quotes=1, **bulk EOD=100/exchange**.
+- **Bulk EOD (authoritative daily source)**: `GET /eod-bulk-last-day/{EXCHANGE}` returns EVERY symbol on an exchange for one trading day (US ≈ 33.6k records) in ONE call with `close`, **`adjusted_close`**, and the **correct consolidated `volume`** — a flat 100 credits/exchange. The `bulk_eod_daily` script (`scripts/bulk_eod_daily.py`, run once daily by `infra/k8s/bulk-eod-daily-cronjob.yaml`) fetches this, filters to the covered universe, and produces per-symbol daily bars stamped `eodhd_bulk` → market-data `provider_priority = 120`, ABOVE Alpaca's IEX daily (110). This fixes the wrong daily volume + NULL adjusted_close Alpaca's IEX feed produced. The `backfill_daily_ohlcv.py --authoritative` flag stamps the same `eodhd_bulk` label to CORRECT the ~9.9k historical Alpaca-won daily rows (~550 credits via per-ticker `/eod`).
 - **Get your key**: [eodhd.com](https://eodhd.com) — free demo key works for local development.
 - **Quota enforcement**: `EodhdQuotaService` in `libs/messaging` enforces 100K/month via atomic Valkey INCRBY. Soft warning at 80%. Hard block retries the task (not fail) so it can run next month.
 

@@ -222,6 +222,20 @@ CREATE TABLE ohlcv_bars (
     PRIMARY KEY (instrument_id, timeframe, bar_date)
 );
 SELECT create_hypertable('ohlcv_bars', 'bar_date');
+-- Provider-priority ladder (higher wins the `EXCLUDED.provider_priority >=`
+-- upsert guard); resolved from the canonical `source` string in
+-- `market_data.domain.enums._PROVIDER_PRIORITIES`:
+--   eodhd_bulk=120  authoritative DAILY EOD (EODHD /eod-bulk-last-day) — CORRECT
+--                   consolidated volume + adjusted_close; one 100-credit call per
+--                   exchange/day via the `bulk_eod_daily` CronJob (market-ingestion).
+--   alpaca=110      intraday 1m (source of truth) + polled 1Day daily FALLBACK.
+--                   NOTE: Alpaca's free IEX daily volume is ~19-30x understated and
+--                   its adjusted_close is NULL — eodhd_bulk (120) overwrites it for 1d.
+--   derived=110     locally resampled 5m..4h from the Alpaca 1m series.
+--   polygon=100 · yahoo_finance/yahoo=80 (historical only) · eodhd=60 (per-ticker
+--   deep-history / failover daily) · alpha_vantage=40 · macrotrends=20 · unknown=0.
+-- Requires the `fix/ohlcv-dup-bars` UTC-midnight `bar_date` normalization so
+-- per-provider daily bars share one conflict key and the priority guard fires.
 
 CREATE TABLE quotes (
     instrument_id   UUID PRIMARY KEY REFERENCES instruments(id),

@@ -12,6 +12,13 @@ from messaging.enums import OutboxStatus as OutboxStatus  # — canonical re-exp
 
 class Provider(StrEnum):
     EODHD = "eodhd"
+    # EODHD_BULK is a distinct *source identity* (not a separately-registered
+    # adapter) for daily bars fetched via the EODHD ``/eod-bulk-last-day``
+    # endpoint. It carries the CORRECT consolidated volume + adjusted_close and
+    # is stamped as the canonical ``source`` so market-data (S3) resolves it to
+    # provider_priority 120 — ABOVE Alpaca's IEX daily (110) — and wins the
+    # ``provider_priority >=`` upsert guard. See ``scripts/bulk_eod_daily.py``.
+    EODHD_BULK = "eodhd_bulk"
     ALPHA_VANTAGE = "alpha_vantage"
     POLYGON = "polygon"
     YAHOO_FINANCE = "yahoo_finance"

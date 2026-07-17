@@ -41,19 +41,37 @@ class DatasetType(StrEnum):
 # a higher-quality Yahoo/derived bar (the NVDA eodhd<->derived flip-flop).
 #
 # Priority ladder (higher wins). FINAL TOPOLOGY (PLAN-0036, 2026-06-16): Alpaca is
-# now the single source for BOTH intraday (1m → derived 5m..4h) AND deep daily
-# (polled 1Day, ~6y split-adjusted). It therefore sits at the top so a polled
-# Alpaca daily bar (110) and a derived intraday bar (110) both outrank the EODHD
-# daily failover (60). Yahoo Finance is DROPPED from OHLCV routing — its entries
-# remain only so any historical ``yahoo_finance`` rows still compare consistently;
-# nothing new is routed to Yahoo.
+# the single source for intraday (1m → derived 5m..4h) AND was the polled daily
+# source (1Day, ~6y split-adjusted).
+#
+# DAILY-VOLUME CORRECTION (2026-07-16): Alpaca's free IEX daily feed is WRONG for
+# daily bars — its daily ``volume`` is IEX-only (~5% of true consolidated, ~19-30x
+# understated) and it carries NO ``adjusted_close`` (the ``_normalize_bars`` mapper
+# drops it). Close *price* is fine, but volume + adjusted_close are not. EODHD's
+# bulk end-of-day feed (``/eod-bulk-last-day/{EXCHANGE}`` — one call per exchange,
+# ~100 credits/day) carries the CORRECT consolidated volume + adjusted_close + raw
+# close for every symbol. So a NEW authoritative daily source ``eodhd_bulk`` is
+# introduced at priority 120 — ABOVE Alpaca (110) — so the correct EODHD-bulk daily
+# bar wins the ``provider_priority >=`` upsert guard over Alpaca's IEX daily bar.
+# Alpaca STAYS the intraday 1m source (unchanged) and remains a daily fallback
+# (110) if the once-daily bulk CronJob fails. Plain ``eodhd`` (60) stays the
+# per-ticker deep-history/failover source. Coordinates with ``fix/ohlcv-dup-bars``:
+# that branch normalizes daily ``bar_date`` to UTC-midnight so the eodhd_bulk (120)
+# and Alpaca (110) daily bars collapse onto the SAME conflict key and the priority
+# guard actually fires; migration 045 dedups ``ORDER BY provider_priority DESC``,
+# so eodhd_bulk (120) is the retained winner once its rows exist.
+#
+# Yahoo Finance is DROPPED from OHLCV routing — its entries remain only so any
+# historical ``yahoo_finance`` rows still compare consistently; nothing new is
+# routed to Yahoo.
 _PROVIDER_PRIORITIES: dict[str, int] = {
-    "alpaca": 110,  # 1m intraday + polled 1Day daily — single source of truth
+    "eodhd_bulk": 120,  # authoritative daily EOD (bulk-last-day) — correct volume + adjusted_close
+    "alpaca": 110,  # 1m intraday (source of truth) + polled 1Day daily fallback
     "derived": 110,  # locally-derived (from Alpaca 1m) — authoritative for covered intraday window
     "polygon": 100,  # alternate intraday provider (registered only when keyed)
     "yahoo_finance": 80,  # DROPPED from routing — historical rows only
     "yahoo": 80,  # legacy alias — kept so historical rows compare consistently
-    "eodhd": 60,  # daily failover only (Alpaca-1Day primary)
+    "eodhd": 60,  # per-ticker deep-history / failover daily (Alpaca-1Day / eodhd_bulk primary)
     "alpha_vantage": 40,
     "macrotrends": 20,
     "unknown": 0,
@@ -68,6 +86,7 @@ class Provider(StrEnum):
     resolves to a real priority instead of falling through to ``UNKNOWN``.
     """
 
+    EODHD_BULK = "eodhd_bulk"  # authoritative daily EOD via bulk-last-day (priority 120)
     ALPACA = "alpaca"
     DERIVED = "derived"
     POLYGON = "polygon"

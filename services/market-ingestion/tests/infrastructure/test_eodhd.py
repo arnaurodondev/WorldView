@@ -341,3 +341,92 @@ async def test_eodhd_adapter_default_base_url():
 
     url: str = client.get.call_args[0][0]
     assert url.startswith("https://eodhd.com/api"), url
+
+
+# ---------------------------------------------------------------------------
+# fetch_bulk_eod — authoritative daily source (DAILY-VOLUME CORRECTION 2026-07-16)
+# ---------------------------------------------------------------------------
+
+# One representative record per the live-verified bulk response shape. The two
+# fields that matter — ``volume`` (correct consolidated tape) and
+# ``adjusted_close`` — are present; Alpaca's IEX daily feed gets both wrong.
+_BULK_SAMPLE = (
+    b'[{"code":"AAPL","exchange_short_name":"US","date":"2026-07-16","open":328.0,'
+    b'"high":334.68,"low":326.79,"close":333.26,"adjusted_close":333.26,'
+    b'"volume":62673782,"prev_close":327.5,"change":5.76,"change_p":1.7588},'
+    b'{"code":"MSFT","exchange_short_name":"US","date":"2026-07-16","open":500.0,'
+    b'"high":505.0,"low":498.0,"close":503.0,"adjusted_close":503.0,'
+    b'"volume":18000000,"prev_close":499.0,"change":4.0,"change_p":0.8}]'
+)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_bulk_eod_whole_exchange_url_and_provider():
+    """A whole-exchange bulk call hits /eod-bulk-last-day/{EXCHANGE} and is tagged EODHD_BULK."""
+    adapter, client = _make_adapter(content=_BULK_SAMPLE)
+
+    result = await adapter.fetch_bulk_eod(exchange="US")
+
+    url: str = client.get.call_args[0][0]
+    assert url == "https://eodhd.com/api/eod-bulk-last-day/US"
+    # No ``symbols`` param on a whole-exchange call → flat-rate bulk.
+    params = client.get.call_args.kwargs["params"]
+    assert "symbols" not in params
+    assert params["fmt"] == "json"
+    assert result.provider is Provider.EODHD_BULK
+    assert result.dataset_type is DatasetType.OHLCV
+    assert result.bars_returned == 2
+    assert result.raw_data == _BULK_SAMPLE
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_bulk_eod_records_carry_volume_and_adjusted_close():
+    """The bulk payload preserves the correct consolidated volume + adjusted_close."""
+    import json as _json
+
+    adapter, _ = _make_adapter(content=_BULK_SAMPLE)
+    result = await adapter.fetch_bulk_eod(exchange="US")
+    records = _json.loads(result.raw_data.decode())
+    aapl = next(r for r in records if r["code"] == "AAPL")
+    assert aapl["volume"] == 62673782  # consolidated, NOT the ~5% IEX figure
+    assert aapl["adjusted_close"] == 333.26  # present (Alpaca stores None)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_bulk_eod_date_param_forwarded():
+    """A specific --date is forwarded to EODHD for historical bulk pulls."""
+    adapter, client = _make_adapter(content=b"[]")
+    await adapter.fetch_bulk_eod(exchange="US", date="2026-07-14")
+    params = client.get.call_args.kwargs["params"]
+    assert params["date"] == "2026-07-14"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_bulk_eod_credit_cost_flat_vs_per_symbol():
+    """Whole-exchange = flat 100 credits; a symbols filter is billed per ticker."""
+    import structlog.testing
+
+    adapter, _ = _make_adapter(content=_BULK_SAMPLE)
+    with structlog.testing.capture_logs() as logs:
+        await adapter.fetch_bulk_eod(exchange="US")
+    call = next(e for e in logs if e["event"] == "provider_api_call")
+    assert call["credit_cost"] == 100
+
+    adapter2, _ = _make_adapter(content=_BULK_SAMPLE)
+    with structlog.testing.capture_logs() as logs2:
+        await adapter2.fetch_bulk_eod(exchange="US", symbols=["AAPL", "MSFT"])
+    call2 = next(e for e in logs2 if e["event"] == "provider_api_call")
+    assert call2["credit_cost"] == 2  # 1 credit per named ticker
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_bulk_eod_auth_error_maps_to_domain_error():
+    """A 401 from the bulk endpoint raises ProviderAuthError like the other endpoints."""
+    adapter, _ = _make_adapter(status_code=401, content=b"Forbidden")
+    with pytest.raises(ProviderAuthError):
+        await adapter.fetch_bulk_eod(exchange="US")

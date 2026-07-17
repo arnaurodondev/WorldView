@@ -46,6 +46,13 @@ FRESHNESS_TTL_SECONDS: dict[str, int] = {
 EODHD_CREDIT_COST: dict[str, int] = {
     "fundamentals": 10,  # /api/fundamentals/:ticker
     "ohlcv": 1,  # /api/eod/:ticker
+    # /api/eod-bulk-last-day/:EXCHANGE — ONE call returns EVERY symbol on the
+    # exchange (correct consolidated volume + adjusted_close). Costs a flat 100
+    # credits per exchange regardless of symbol count (verified against
+    # https://eodhd.com/financial-apis/bulk-api-eod-splits-dividends). This is
+    # ~200x cheaper than 1-credit-per-ticker intraday polling and cheaper than a
+    # per-ticker /eod sweep once an exchange has >100 symbols.
+    "bulk_eod": 100,
     "quotes": 1,  # /api/real-time/:ticker
     "bulk_quotes": 1,  # /api/real-time/:ticker?s=... — 1 credit per symbol
     "news_sentiment": 5,  # /api/news

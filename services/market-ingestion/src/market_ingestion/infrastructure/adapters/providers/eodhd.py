@@ -154,6 +154,84 @@ class EODHDProviderAdapter(BaseProviderAdapter):
             bars_returned=bars_returned,
         )
 
+    async def fetch_bulk_eod(
+        self,
+        exchange: str,
+        date: str | None = None,
+        symbols: list[str] | None = None,
+    ) -> ProviderFetchResult:
+        """Fetch END-OF-DAY bars for EVERY symbol on *exchange* in ONE call.
+
+        Hits EODHD ``/eod-bulk-last-day/{EXCHANGE}`` which returns one record per
+        symbol for a single trading day (the last close by default, or *date*
+        when supplied). Each record carries the CORRECT consolidated ``volume``
+        and ``adjusted_close`` — the two fields Alpaca's free IEX daily feed gets
+        wrong. This is the once-daily authoritative daily-bar source.
+
+        Cost: a flat **100 credits** per exchange (``EODHD_CREDIT_COST["bulk_eod"]``),
+        independent of the symbol count, EXCEPT when *symbols* is passed (then
+        EODHD bills 1 credit per named ticker instead). Callers that want the
+        whole exchange must leave *symbols* unset.
+
+        Args:
+            exchange: EODHD exchange code (e.g. ``"US"``, ``"INDX"``, ``"SHG"``).
+            date:     Optional ``YYYY-MM-DD`` — a specific trading day (used by the
+                      corrective backfill to walk historical dates). ``None`` =
+                      the exchange's most recent close.
+            symbols:  Optional ticker filter (``["AAPL", "MSFT"]``). Leave unset
+                      for the whole-exchange flat-rate call.
+
+        Returns:
+            ProviderFetchResult whose ``raw_data`` is the raw JSON array of
+            per-symbol EOD records. ``provider`` is ``Provider.EODHD_BULK`` so the
+            canonical ``source`` resolves to the authoritative daily priority.
+
+        Raises:
+            ProviderAuthError / ProviderRateLimited / ProviderUnavailable /
+            ProviderDataError / ProviderUnsupportedSymbol — as mapped by ``_get``.
+        """
+        params: dict[str, Any] = {"api_token": self._api_key, "fmt": "json"}
+        if date:
+            params["date"] = date
+        if symbols:
+            params["symbols"] = ",".join(symbols)
+
+        url = f"{self._base_url}/eod-bulk-last-day/{exchange}"
+        t0 = time.monotonic()
+        raw = await self._get(url, params)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
+        # Named-symbol calls are billed per ticker; a whole-exchange call is the
+        # flat bulk rate.  Record the honest spend against the shared counter.
+        credit_cost = len(symbols) if symbols else EODHD_CREDIT_COST.get("bulk_eod", 100)
+        self._record_api_call(
+            dataset_type=DatasetType.OHLCV.value,
+            symbol=f"BULK.{exchange}",
+            exchange=exchange,
+            timeframe="1d",
+            bars_returned=bars_returned,
+            latency_ms=duration_ms,
+            credit_cost=credit_cost,
+        )
+
+        return ProviderFetchResult(
+            provider=Provider.EODHD_BULK,
+            dataset_type=DatasetType.OHLCV,
+            symbol=f"BULK.{exchange}",
+            raw_data=raw,
+            content_type="application/json",
+            fetched_at=datetime.now(tz=UTC),
+            duration_ms=duration_ms,
+            provider_metadata={"exchange": exchange, "date": date or "latest"},
+            bars_returned=bars_returned,
+        )
+
     async def fetch_quotes(
         self,
         symbol: str,
