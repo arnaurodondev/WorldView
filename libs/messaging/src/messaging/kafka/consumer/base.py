@@ -527,6 +527,13 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         # a dead loop goes stale.  ``-1.0`` means "not yet started".  Exposed via
         # :meth:`seconds_since_progress` for an in-process liveness healthcheck.
         self._last_progress_ts: float = -1.0
+        # BP-699 lag-stall detector state, tracked PER PARTITION (not summed)
+        # so a single wedged partition is not masked by others advancing.
+        # Instance-level (never class-level) because these are MUTABLE — a
+        # shared class-level dict would leak state across consumer instances.
+        # Keyed by ``"<topic>:<partition>"``.
+        self._prev_partition_positions: dict[str, int] = {}
+        self._partition_stall_counts: dict[str, int] = {}
         # BP-700 reconnect bookkeeping: number of consecutive transient-error
         # reconnect cycles.  Drives exponential backoff and the terminal-stop
         # ceiling so a permanently-down broker still eventually force-exits for a
@@ -1613,24 +1620,29 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             # Non-critical — don't break the consumer loop on lag polling failure.
             pass
 
-    def _compute_lag_and_progress(self) -> tuple[int, int] | None:
-        """Sample ``(total_lag, consumed_offset)`` across the assignment.
+    def _compute_partition_lag_progress(self) -> dict[str, tuple[int, int]] | None:
+        """Sample per-partition ``{tp_key: (lag, position)}`` for the assignment.
 
-        Both figures come from a SINGLE pass over the current assignment so
-        they are mutually consistent (blocking librdkafka calls):
+        Everything comes from a SINGLE pass over the current assignment so lag
+        and position are mutually consistent (blocking librdkafka calls).  Per
+        entry:
 
-        * ``total_lag`` — sum of ``high_watermark - position`` across the
-          assignment (how far behind we are).
-        * ``consumed_offset`` — sum of the consumer's *positions*.  This is a
-          monotonically-advancing PROGRESS signal: it climbs every time the
-          consumer commits, regardless of how far behind it is or how fast the
-          topic is being produced to.  The stall detector keys on THIS, not on
-          the lag magnitude — see :meth:`_evaluate_lag_stall`.
+        * ``lag`` — ``high_watermark - position`` for that partition (how far
+          behind we are on it).
+        * ``position`` — the consumer's *position* on that partition.  This is
+          a monotonically-advancing PROGRESS signal: it climbs every time the
+          consumer commits that partition, regardless of how far behind it is
+          or how fast the topic is produced to.  The stall detector keys on
+          this PER PARTITION — see :meth:`_evaluate_lag_stall`.
+
+        Results are keyed PER PARTITION (``"<topic>:<partition>"``), NOT summed,
+        so a single wedged partition (frozen position, growing lag) is not
+        masked by the consumer's other partitions advancing.
 
         Returns ``None`` when the consumer/assignment is not ready or on any
         broker error, so the caller can SKIP the sample rather than mistake an
-        unreadable broker for a healthy zero-lag / zero-progress consumer.
-        Mirrors the watermark arithmetic in :meth:`_record_consumer_lag`.
+        unreadable broker for a healthy consumer.  Mirrors the watermark
+        arithmetic in :meth:`_record_consumer_lag`.
         """
         consumer = self._consumer
         if consumer is None:
@@ -1639,72 +1651,86 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             assignment = consumer.assignment()
             if not assignment:
                 return None
-            total_lag = 0
-            consumed_offset = 0
+            samples: dict[str, tuple[int, int]] = {}
             for tp in assignment:
                 _low, high = consumer.get_watermark_offsets(tp, timeout=1.0)
                 position_list = consumer.position([tp])
                 if position_list and position_list[0].offset >= 0:
                     position = position_list[0].offset
-                    total_lag += max(0, high - position)
-                    consumed_offset += position
-            return total_lag, consumed_offset
+                    samples[f"{tp.topic}:{tp.partition}"] = (max(0, high - position), position)
+            return samples
         except Exception:
             return None
 
     def _compute_total_lag(self) -> int | None:
-        """Return just the total lag for the current assignment, or ``None``.
+        """Return the summed lag across the current assignment, or ``None``.
 
-        Thin wrapper over :meth:`_compute_lag_and_progress` kept for callers /
-        metrics that only care about the lag magnitude.
+        Thin wrapper over :meth:`_compute_partition_lag_progress` kept for
+        callers / metrics that only care about the aggregate lag magnitude.
         """
-        sample = self._compute_lag_and_progress()
-        return None if sample is None else sample[0]
+        samples = self._compute_partition_lag_progress()
+        return None if samples is None else sum(lag for lag, _pos in samples.values())
 
-    def _evaluate_lag_stall(self, total_lag: int, consumed_offset: int) -> bool:
-        """Update stall state; return ``True`` to fire the CRITICAL alert.
+    def _evaluate_lag_stall(self, samples: dict[str, tuple[int, int]]) -> list[tuple[str, int]]:
+        """Update per-partition stall state; return the partitions that alert.
 
-        The detector keys on CONSUMER PROGRESS (committed offset advancing),
-        NOT on lag magnitude.  This distinguishes the two states that a large
-        lag can represent:
+        The detector keys on PER-PARTITION CONSUMER PROGRESS (each partition's
+        committed position advancing), NOT on aggregate lag magnitude and NOT
+        on the summed position.  Tracking progress per partition is what makes
+        the two failure modes separable:
 
-        * **healthy-but-behind** — lag at/above :attr:`_lag_stall_threshold`
-          but ``consumed_offset`` climbs on every probe.  This covers a
-          consumer draining a large *finite* backlog slowly (the 306k-article
-          raw→stored promotion at ~15/min), and a consumer merely keeping pace
-          with a hot topic where production holds lag roughly flat.  The
-          consumer is committing offsets → NEVER alerts.
-        * **real stall** — lag at/above threshold AND ``consumed_offset`` has
-          NOT advanced for :attr:`_lag_stall_probes` consecutive samples: a
-          wedged poll loop, a frozen handler, a partition stuck behind a poison
-          message, or a broker reachable for metadata but not for fetch.  The
-          offset is frozen → alerts.
+        * **healthy-but-behind** — a partition's lag is at/above
+          :attr:`_lag_stall_threshold` but its position climbs on every probe.
+          This covers a consumer draining a large *finite* backlog slowly (the
+          306k-article raw→stored promotion at ~15/min) and a consumer merely
+          keeping pace with a hot topic where production holds lag roughly flat.
+          The partition is committing → does NOT alert.
+        * **real stall** — a partition's lag is at/above threshold AND its
+          position has NOT advanced for :attr:`_lag_stall_probes` consecutive
+          samples: a wedged poll loop, a frozen handler, a partition stuck
+          behind a poison message, or a broker reachable for metadata but not
+          for fetch.  That partition's position is frozen → alerts.
 
-        Keying on progress (rather than "lag decreased vs the previous probe")
-        removes the false positives that a slow finite drain produced: at
-        ~15 msgs/probe against a 306k backlog, watermark/position sampling
-        jitter routinely made lag appear flat or tick *up* between probes even
-        though the consumer was committing steadily — that armed and fired the
-        old lag-delta check.  Committed-offset advancement has no such jitter.
+        Per-partition (rather than summed) progress closes BOTH edges: the
+        false POSITIVE of the old lag-delta check (a slow finite drain whose
+        lag looked flat / jittered upward between probes, ~15 msgs/probe
+        against 306k — committed-position advancement has no such jitter) AND
+        the false NEGATIVE of a summed-progress check (one wedged partition
+        with unbounded lag masked because the consumer's OTHER partitions kept
+        the offset sum climbing).  A stall on ANY single partition alerts.
 
-        After firing we reset the counter so the NEXT sustained window
-        re-alerts instead of spamming a line every probe.
+        Returns a list of ``(tp_key, lag)`` for every partition that crossed
+        the sustained-freeze threshold on THIS probe (empty ⇒ no alert).  A
+        firing partition's counter resets so the NEXT sustained window
+        re-alerts instead of spamming a line every probe.  Partitions no longer
+        in the assignment are dropped from the tracking state (rebalance-safe).
         """
-        prev = self._prev_consumed_offset
-        self._prev_consumed_offset = consumed_offset
-        if total_lag < self._lag_stall_threshold:
-            self._lag_stall_count = 0
-            return False
-        # Above threshold.  Healthy iff the consumer is still making progress
-        # (committed offset strictly advanced since the previous probe).
-        if prev >= 0 and consumed_offset > prev:
-            self._lag_stall_count = 0  # offset advancing → draining / keeping pace
-            return False
-        self._lag_stall_count += 1
-        if self._lag_stall_count >= self._lag_stall_probes:
-            self._lag_stall_count = 0
-            return True
-        return False
+        # Drop state for partitions no longer assigned (rebalance / revocation)
+        # so a revoked partition cannot alert on stale, frozen numbers and the
+        # dicts do not grow unbounded across the process lifetime.
+        live_keys = set(samples)
+        self._partition_stall_counts = {k: v for k, v in self._partition_stall_counts.items() if k in live_keys}
+        self._prev_partition_positions = {k: v for k, v in self._prev_partition_positions.items() if k in live_keys}
+
+        fired: list[tuple[str, int]] = []
+        for tp_key, (lag, position) in samples.items():
+            prev = self._prev_partition_positions.get(tp_key, -1)
+            self._prev_partition_positions[tp_key] = position
+            if lag < self._lag_stall_threshold:
+                self._partition_stall_counts[tp_key] = 0
+                continue
+            # Above threshold on this partition.  Healthy iff its committed
+            # position strictly advanced since the previous probe.
+            if prev >= 0 and position > prev:
+                self._partition_stall_counts[tp_key] = 0  # advancing → draining / keeping pace
+                continue
+            count = self._partition_stall_counts.get(tp_key, 0) + 1
+            if count >= self._lag_stall_probes:
+                self._partition_stall_counts[tp_key] = 0  # reset so the next window re-alerts
+                fired.append((tp_key, lag))
+            else:
+                self._partition_stall_counts[tp_key] = count
+        return fired
 
     def _maybe_apply_backpressure(self) -> None:
         """Pause/resume partitions based on the configured backpressure policy.
@@ -1870,11 +1896,11 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
     # could reach for ``list_topics`` metadata yet not actually consume from.
     # That let an OHLCV consumer fall ~19k messages behind for three days
     # unnoticed: the ``kafka_consumer_lag`` gauge existed but nothing ALERTED
-    # on it.  On each successful probe we sample BOTH total lag and the
-    # consumer's committed offset, and emit a single CRITICAL
-    # ``kafka_consumer_lag_stalled`` once lag has stayed at/above the threshold
-    # while the committed offset has NOT advanced for ``_lag_stall_probes``
-    # consecutive samples (~5 min at the 60 s cadence).
+    # on it.  On each successful probe we sample per-partition lag + committed
+    # position, and emit a single CRITICAL ``kafka_consumer_lag_stalled`` once
+    # ANY partition has stayed at/above the threshold while its committed
+    # position has NOT advanced for ``_lag_stall_probes`` consecutive samples
+    # (~5 min at the 60 s cadence).
     #
     # Tuning (2026-07-16, fix/lag-alert-tuning): the detector originally armed
     # whenever lag failed to DECREASE between probes.  A large but healthily-
@@ -1882,15 +1908,17 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
     # at ~15 msgs/min from two memory-bound S6 replicas) tripped it as NOISE:
     # at ~15 msgs/probe against 306k, watermark/position sampling jitter made
     # lag look flat or tick up even while offsets advanced steadily.  The check
-    # now keys on CONSUMER PROGRESS (committed offset advancing) instead of lag
-    # magnitude, so "healthy-but-behind" is silent and only a truly frozen
-    # offset alerts.  Class attrs for the same no-per-service-drift reason as
-    # the probe knobs above; the ints become instance attrs on first assignment
-    # (safe — immutable, never shared/mutated in place).
-    _lag_stall_threshold: int = 5_000  # messages behind before we care
+    # now keys on PER-PARTITION CONSUMER PROGRESS (committed position advancing)
+    # instead of lag magnitude, so "healthy-but-behind" is silent.  Progress is
+    # tracked per partition (NOT summed) so a single wedged partition — frozen
+    # position, unbounded lag — is not masked by the consumer's other
+    # partitions advancing (a false negative a summed signal would hide).  The
+    # two knobs below are class attrs for the no-per-service-drift reason as the
+    # probe knobs above; they are immutable ints so class-level is safe.  The
+    # MUTABLE per-partition tracking dicts live on ``self`` (set in __init__) —
+    # a shared class-level dict would leak state across consumer instances.
+    _lag_stall_threshold: int = 5_000  # per-partition messages behind before we care
     _lag_stall_probes: int = 5  # consecutive no-progress samples → alert
-    _prev_consumed_offset: int = -1  # committed-offset sum from the previous probe
-    _lag_stall_count: int = 0
 
     def _force_process_exit(self, code: int) -> None:
         """Terminate the WHOLE process immediately, from any asyncio/task context.
@@ -1986,27 +2014,30 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 # success resets the counter, so a single good probe wipes
                 # out two prior misses (matches the spec).
                 consecutive_failures = 0
-                # BP-699: the broker is reachable for metadata — now sample lag
-                # AND the committed offset for the stall early-warning.  These
-                # are blocking librdkafka calls, so hop them onto the executor
-                # exactly like the connectivity probe.  A ``None`` sample
-                # (assignment not ready / broker hiccup) is skipped, not counted
-                # as healthy.  The detector alerts on FROZEN PROGRESS (committed
-                # offset not advancing), not on lag magnitude — a healthy-but-
-                # behind consumer draining a large finite backlog stays silent.
-                sample = await loop.run_in_executor(None, self._compute_lag_and_progress)
-                if sample is not None:
-                    total_lag, consumed_offset = sample
-                    if self._evaluate_lag_stall(total_lag, consumed_offset):
+                # BP-699: the broker is reachable for metadata — now sample
+                # per-partition lag + committed position for the stall
+                # early-warning.  These are blocking librdkafka calls, so hop
+                # them onto the executor exactly like the connectivity probe.  A
+                # ``None`` sample (assignment not ready / broker hiccup) is
+                # skipped, not counted as healthy.  The detector alerts on
+                # FROZEN PER-PARTITION PROGRESS (a partition's committed position
+                # not advancing while its lag is high), not on lag magnitude — a
+                # healthy-but-behind consumer draining a large finite backlog
+                # stays silent, while a single wedged partition still alerts.
+                samples = await loop.run_in_executor(None, self._compute_partition_lag_progress)
+                if samples is not None:
+                    stalled = self._evaluate_lag_stall(samples)
+                    if stalled:
                         logger.critical(
                             "kafka_consumer_lag_stalled",
                             group_id=self._config.group_id,
-                            total_lag=total_lag,
-                            consumed_offset=consumed_offset,
+                            stalled_partitions=[tp_key for tp_key, _lag in stalled],
+                            stalled_partition_lag=dict(stalled),
+                            total_lag=sum(lag for lag, _pos in samples.values()),
                             threshold=self._lag_stall_threshold,
                             sustained_probes=self._lag_stall_probes,
                             probe_interval_seconds=self._probe_interval_seconds,
-                            action="consumer_connected_but_offset_frozen_check_handler_or_force_recreate",
+                            action="partition_connected_but_position_frozen_check_handler_or_force_recreate",
                         )
             except Exception as exc:
                 consecutive_failures += 1

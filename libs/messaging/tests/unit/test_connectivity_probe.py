@@ -264,16 +264,25 @@ class TestForceProcessExit:
 # ── Lag-stall early warning (BP-690) ──────────────────────────────────────────
 
 
+def _one(lag: int, position: int, tp_key: str = "t:0") -> dict[str, tuple[int, int]]:
+    """Build a single-partition ``{tp_key: (lag, position)}`` sample."""
+    return {tp_key: (lag, position)}
+
+
 class TestLagStallDetector:
     """``_evaluate_lag_stall`` fires only on sustained lag with FROZEN progress.
 
     The detector backs the ``kafka_consumer_lag_stalled`` CRITICAL alert that
     catches a connected-but-frozen consumer (the gap that let an OHLCV consumer
-    fall ~19k messages behind for three days unnoticed).  It keys on the
-    consumer's committed-offset PROGRESS, not on lag magnitude, so a consumer
+    fall ~19k messages behind for three days unnoticed).  It keys on each
+    partition's committed-position PROGRESS, not on lag magnitude, so a consumer
     that is merely far behind but still draining never alerts (2026-07-16
     tuning — the finite 306k-article backlog drain was pure noise under the old
-    lag-delta check).
+    lag-delta check), while a SINGLE wedged partition still alerts even if the
+    consumer's other partitions keep advancing (per-partition, not summed).
+
+    ``_evaluate_lag_stall`` returns the list of ``(tp_key, lag)`` partitions
+    that fired on this probe (empty ⇒ no alert).
     """
 
     def test_below_threshold_never_alerts(self) -> None:
@@ -281,107 +290,166 @@ class TestLagStallDetector:
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 5
         # Ten samples all under the threshold → never a stall even if the
-        # committed offset never moves (a caught-up consumer is idle by design).
+        # position never moves (a caught-up consumer is idle by design).
         for _ in range(10):
-            assert c._evaluate_lag_stall(100, consumed_offset=42) is False
-        assert c._lag_stall_count == 0
+            assert c._evaluate_lag_stall(_one(100, position=42)) == []
+        assert c._partition_stall_counts["t:0"] == 0
 
-    def test_high_lag_frozen_offset_alerts_after_n_probes(self) -> None:
-        """High lag + committed offset NOT advancing = the canonical real stall."""
+    def test_high_lag_frozen_position_alerts_after_n_probes(self) -> None:
+        """High lag + partition position NOT advancing = the canonical real stall."""
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 5
-        # Flat, high lag with a frozen offset: first 4 samples arm, the 5th fires.
-        results = [c._evaluate_lag_stall(9_000, consumed_offset=1_000) for _ in range(5)]
+        # Flat, high lag with a frozen position: first 4 samples arm, the 5th fires.
+        results = [bool(c._evaluate_lag_stall(_one(9_000, position=1_000))) for _ in range(5)]
         assert results == [False, False, False, False, True]
         # After firing the counter resets so the next window re-alerts (no spam).
-        assert c._lag_stall_count == 0
+        assert c._partition_stall_counts["t:0"] == 0
 
-    def test_growing_lag_frozen_offset_alerts(self) -> None:
-        """Growing lag while the offset is frozen is a stall (producer outruns a
+    def test_growing_lag_frozen_position_alerts(self) -> None:
+        """Growing lag while the position is frozen is a stall (producer outruns a
         wedged consumer)."""
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 3
-        # Lag climbs, offset never moves → consumer is stuck.
-        results = [c._evaluate_lag_stall(v, consumed_offset=1_000) for v in (6_000, 7_000, 8_000)]
-        assert results[-1] is True
+        # Lag climbs, position never moves → consumer is stuck.
+        fired = [c._evaluate_lag_stall(_one(v, position=1_000)) for v in (6_000, 7_000, 8_000)]
+        assert fired[-1] == [("t:0", 8_000)]
 
-    def test_healthy_behind_advancing_offset_never_alerts(self) -> None:
-        """Huge, ROUGHLY-FLAT lag but a steadily-advancing offset is a healthy
+    def test_healthy_behind_advancing_position_never_alerts(self) -> None:
+        """Huge, ROUGHLY-FLAT lag but a steadily-advancing position is a healthy
         finite-backlog drain — the exact false positive we are removing.
 
         Models the 306k-article backlog draining at ~15 msgs/probe: lag barely
-        moves (and even jitters upward) yet the committed offset climbs every
+        moves (and even jitters upward) yet the committed position climbs every
         probe.  Must never alert across a long window.
         """
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 5
-        offset = 1_000_000
+        position = 1_000_000
         # Lag oscillates around 300k (including upward ticks from sampling
-        # jitter) while the offset advances by ~15 each probe.
+        # jitter) while the position advances by ~15 each probe.
         lags = [300_000, 300_010, 299_995, 300_005, 300_000, 300_020] * 5
         fired = False
         for lag in lags:
-            offset += 15
-            if c._evaluate_lag_stall(lag, consumed_offset=offset):
+            position += 15
+            if c._evaluate_lag_stall(_one(lag, position=position)):
                 fired = True
         assert fired is False
-        assert c._lag_stall_count == 0
+        assert c._partition_stall_counts["t:0"] == 0
 
     def test_keeping_pace_with_hot_topic_never_alerts(self) -> None:
-        """Perfectly FLAT high lag but an advancing offset (consumer keeping
+        """Perfectly FLAT high lag but an advancing position (consumer keeping
         pace with a hot topic — production == consumption) never alerts."""
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 3
-        offset = 500
+        position = 500
         for _ in range(10):
-            offset += 200  # consuming steadily
-            assert c._evaluate_lag_stall(9_000, consumed_offset=offset) is False
-        assert c._lag_stall_count == 0
+            position += 200  # consuming steadily
+            assert c._evaluate_lag_stall(_one(9_000, position=position)) == []
+        assert c._partition_stall_counts["t:0"] == 0
 
     def test_progress_then_freeze_arms_only_after_freeze(self) -> None:
-        """A consumer that is draining and THEN wedges must alert only once the
-        offset actually freezes — progress resets the arm counter."""
+        """A partition that is draining and THEN wedges must alert only once its
+        position actually freezes — progress resets the arm counter."""
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 3
-        # Draining: offset advances → never arms.
-        assert c._evaluate_lag_stall(9_000, consumed_offset=100) is False
-        assert c._evaluate_lag_stall(9_000, consumed_offset=200) is False
-        assert c._lag_stall_count == 0
-        # Now the offset freezes at 200 for 3 probes → arms and fires on the 3rd.
-        assert c._evaluate_lag_stall(9_000, consumed_offset=200) is False
-        assert c._evaluate_lag_stall(9_000, consumed_offset=200) is False
-        assert c._evaluate_lag_stall(9_000, consumed_offset=200) is True
+        # Draining: position advances → never arms.
+        assert c._evaluate_lag_stall(_one(9_000, position=100)) == []
+        assert c._evaluate_lag_stall(_one(9_000, position=200)) == []
+        assert c._partition_stall_counts["t:0"] == 0
+        # Now the position freezes at 200 for 3 probes → arms and fires on the 3rd.
+        assert c._evaluate_lag_stall(_one(9_000, position=200)) == []
+        assert c._evaluate_lag_stall(_one(9_000, position=200)) == []
+        assert c._evaluate_lag_stall(_one(9_000, position=200)) == [("t:0", 9_000)]
 
-    def test_offset_advance_resets_counter(self) -> None:
+    def test_position_advance_resets_counter(self) -> None:
         """A single advancing sample mid-freeze clears the arm counter, so a
-        consumer that briefly stalls then resumes does not alert."""
+        partition that briefly stalls then resumes does not alert."""
         c = _build_consumer()
         c._lag_stall_threshold = 5_000
         c._lag_stall_probes = 3
         # First high sample seeds prev and arms (count 1); next frozen sample
         # arms again (count 2) — one short of firing.
-        assert c._evaluate_lag_stall(9_000, consumed_offset=100) is False  # seed → arm 1
-        assert c._evaluate_lag_stall(9_000, consumed_offset=100) is False  # frozen → arm 2
-        assert c._lag_stall_count == 2
-        # The consumer resumes (offset advances) → counter clears before firing.
-        assert c._evaluate_lag_stall(9_000, consumed_offset=150) is False  # resumed → reset
-        assert c._lag_stall_count == 0
+        assert c._evaluate_lag_stall(_one(9_000, position=100)) == []  # seed → arm 1
+        assert c._evaluate_lag_stall(_one(9_000, position=100)) == []  # frozen → arm 2
+        assert c._partition_stall_counts["t:0"] == 2
+        # The partition resumes (position advances) → counter clears before firing.
+        assert c._evaluate_lag_stall(_one(9_000, position=150)) == []  # resumed → reset
+        assert c._partition_stall_counts["t:0"] == 0
 
-    def test_compute_lag_and_progress_none_when_no_consumer(self) -> None:
+    # ── Per-partition wedge (the false-NEGATIVE the summed signal masked) ──────
+
+    def test_one_wedged_partition_alerts_while_others_advance(self) -> None:
+        """THE regression: one partition frozen with growing lag MUST alert even
+        though the consumer's other partition keeps advancing.
+
+        A summed-progress check would be fooled here — the offset SUM climbs
+        every probe (p1 advances by more than p0 is behind), so it would read
+        healthy and never alert.  Per-partition tracking catches p0's freeze.
+        """
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 3
+        p1_pos = 10_000
+        fired_any = False
+        for i in range(3):
+            p1_pos += 5_000  # partition 1 draining fast (healthy)
+            # partition 0 wedged: position frozen at 1_000, lag growing.
+            samples = {
+                "t:0": (6_000 + i * 1_000, 1_000),  # frozen position, growing lag
+                "t:1": (2_000, p1_pos),  # advancing, and even under threshold
+            }
+            stalled = c._evaluate_lag_stall(samples)
+            if stalled:
+                fired_any = True
+        assert fired_any is True
+        # Only the wedged partition fired; the healthy one never did.
+        assert stalled == [("t:0", 8_000)]
+
+    def test_multi_partition_all_healthy_never_alerts(self) -> None:
+        """Two partitions both far behind but both advancing → never alerts."""
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 3
+        p0, p1 = 100, 5_000
+        for _ in range(8):
+            p0 += 15
+            p1 += 300
+            samples = {"t:0": (300_000, p0), "t:1": (50_000, p1)}
+            assert c._evaluate_lag_stall(samples) == []
+
+    def test_revoked_partition_state_is_dropped(self) -> None:
+        """A partition that leaves the assignment must not keep alerting on stale
+        frozen numbers, and its tracking state must be pruned (rebalance-safe)."""
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 3
+        # Arm t:0 twice (frozen, high lag).
+        assert c._evaluate_lag_stall({"t:0": (9_000, 500)}) == []
+        assert c._evaluate_lag_stall({"t:0": (9_000, 500)}) == []
+        assert c._partition_stall_counts["t:0"] == 2
+        # t:0 is revoked; only t:1 remains (healthy) → t:0 state is dropped and
+        # never fires despite having been one probe from the threshold.
+        assert c._evaluate_lag_stall({"t:1": (9_000, 700)}) == []
+        assert "t:0" not in c._partition_stall_counts
+        assert "t:0" not in c._prev_partition_positions
+
+    def test_compute_partition_lag_progress_none_when_no_consumer(self) -> None:
         c = _build_consumer()
         c._consumer = None
-        assert c._compute_lag_and_progress() is None
+        assert c._compute_partition_lag_progress() is None
         assert c._compute_total_lag() is None
 
-    def test_compute_lag_and_progress_sums_assignment(self) -> None:
+    def test_compute_partition_lag_progress_maps_assignment(self) -> None:
         c = _build_consumer()
         fake = MagicMock()
         tp1, tp2 = MagicMock(), MagicMock()
+        tp1.topic, tp1.partition = "articles", 0
+        tp2.topic, tp2.partition = "articles", 3
         fake.assignment.return_value = [tp1, tp2]
         # (low, high) per partition; positions trail the high watermark.
         fake.get_watermark_offsets.side_effect = [(0, 1_000), (0, 5_000)]
@@ -389,27 +457,31 @@ class TestLagStallDetector:
         pos1.offset, pos2.offset = 600, 1_000
         fake.position.side_effect = [[pos1], [pos2]]
         c._consumer = fake
-        # lag = (1000-600) + (5000-1000) = 400 + 4000 = 4400
-        # consumed = 600 + 1000 = 1600
-        assert c._compute_lag_and_progress() == (4_400, 1_600)
+        # per-partition (lag, position): (1000-600, 600) and (5000-1000, 1000).
+        assert c._compute_partition_lag_progress() == {
+            "articles:0": (400, 600),
+            "articles:3": (4_000, 1_000),
+        }
 
     def test_compute_total_lag_sums_assignment(self) -> None:
         c = _build_consumer()
         fake = MagicMock()
         tp1, tp2 = MagicMock(), MagicMock()
+        tp1.topic, tp1.partition = "articles", 0
+        tp2.topic, tp2.partition = "articles", 3
         fake.assignment.return_value = [tp1, tp2]
         fake.get_watermark_offsets.side_effect = [(0, 1_000), (0, 5_000)]
         pos1, pos2 = MagicMock(), MagicMock()
         pos1.offset, pos2.offset = 600, 1_000
         fake.position.side_effect = [[pos1], [pos2]]
         c._consumer = fake
-        # The thin wrapper returns only the lag component.
+        # The thin wrapper sums the per-partition lags: 400 + 4000 = 4400.
         assert c._compute_total_lag() == 4_400
 
-    def test_compute_lag_and_progress_none_on_broker_error(self) -> None:
+    def test_compute_partition_lag_progress_none_on_broker_error(self) -> None:
         c = _build_consumer()
         fake = MagicMock()
         fake.assignment.side_effect = RuntimeError("metadata timeout")
         c._consumer = fake
-        assert c._compute_lag_and_progress() is None
+        assert c._compute_partition_lag_progress() is None
         assert c._compute_total_lag() is None
