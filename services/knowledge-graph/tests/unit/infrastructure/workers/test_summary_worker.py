@@ -1453,3 +1453,154 @@ class TestSummaryWorkerRetryAndGeminiFallback:
         mock_sum.insert_new.assert_not_awaited()
         # Stale flag must still be cleared (F-DS-208).
         mock_rel.mark_summary_updated.assert_awaited_once()
+
+
+class TestSummaryWorkerBatchAndConcurrency:
+    """BACKLOG-DRAIN (2026-07-16): configurable batch size + LLM concurrency.
+
+    The 2026-07-16 KG deep-quality audit found relation-summary coverage
+    collapsed to ~5% because the worker processed a hardcoded 20 relations
+    per cycle.  ``batch_limit`` + ``concurrency`` are now constructor-injected.
+    """
+
+    def test_default_batch_limit_is_20(self) -> None:
+        """Default preserves the historical 20-row batch (backward compatible)."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session([], [], None)
+        llm = AsyncMock()
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        mock_rel.fetch_stale_summary.assert_awaited_once_with(20)
+
+    def test_batch_limit_passed_to_fetch(self) -> None:
+        """Custom batch_limit is forwarded to fetch_stale_summary."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session([], [], None)
+        llm = AsyncMock()
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm, batch_limit=250)
+            asyncio.run(worker.run())
+
+        mock_rel.fetch_stale_summary.assert_awaited_once_with(250)
+
+    def test_zero_or_negative_params_floored_to_one(self) -> None:
+        """batch_limit/concurrency <= 0 are floored to 1 (no ValueError / deadlock)."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session([], [], None)
+        llm = AsyncMock()
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm, batch_limit=0, concurrency=0)
+            asyncio.run(worker.run())
+
+        mock_rel.fetch_stale_summary.assert_awaited_once_with(1)
+
+    def test_concurrency_processes_all_relations(self) -> None:
+        """concurrency>1 → every stale relation is summarized (insert_new per relation)."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Merger news.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": f"00000000-0000-0000-0000-0000000000{i:02d}"} for i in range(1, 8)]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(return_value=ExtractionOutput(result={"summary": "s"}, raw_response="ok", model_id="m"))
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm, batch_limit=100, concurrency=4)
+            asyncio.run(worker.run())
+
+        # All 7 relations summarized despite concurrency bounding.
+        assert llm.extract.await_count == 7
+        assert mock_sum.insert_new.await_count == 7
+        assert mock_rel.mark_summary_updated.await_count == 7
+
+    def test_concurrency_bounded_by_semaphore(self) -> None:
+        """No more than ``concurrency`` LLM calls are ever in flight at once."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Merger news.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": f"00000000-0000-0000-0000-0000000001{i:02d}"} for i in range(10)]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        in_flight = 0
+        max_in_flight = 0
+
+        async def _slow_extract(*_args: object, **_kwargs: object) -> object:
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            await asyncio.sleep(0)  # yield so other tasks can interleave
+            in_flight -= 1
+            return ExtractionOutput(result={"summary": "s"}, raw_response="ok", model_id="m")
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(side_effect=_slow_extract)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm, batch_limit=100, concurrency=3)
+            asyncio.run(worker.run())
+
+        assert max_in_flight <= 3
+        assert llm.extract.await_count == 10
+
+    def test_force_regen_slot_triggers_llm_on_unchanged_hash(self) -> None:
+        """force_regen_batch_size pre-assigns slots → hash-unchanged relation still calls the LLM."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_texts = ["Same evidence."]
+        combined = "\n".join(sorted(evidence_texts))
+        evidence_hash = hashlib.sha256(combined.encode()).hexdigest()
+        evidence_rows = [{"evidence_text": t, "canonicalized_evidence_text": None} for t in evidence_texts]
+        existing_summary = {"evidence_hash": evidence_hash, "summary_text": "old"}
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-0000000002aa"}]
+
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, existing_summary)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(result={"summary": "regenerated"}, raw_response="ok", model_id="m")
+        )
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            # force_regen_batch_size=1 → first relation is a force-regen slot.
+            worker = SummaryWorker(sf, llm, force_regen_batch_size=1)
+            asyncio.run(worker.run())
+
+        # Despite the matching hash, the force-regen slot forces a fresh summary.
+        llm.extract.assert_awaited_once()
+        mock_sum.insert_new.assert_awaited_once()

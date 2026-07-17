@@ -250,6 +250,30 @@ class Settings(BaseSettings):
             "0 disables force-regen."
         ),
     )  # KNOWLEDGE_GRAPH_SUMMARY_WORKER_FORCE_REGEN_BATCH_SIZE
+    # SummaryWorker per-cycle batch size + LLM concurrency (BACKLOG-DRAIN 2026-07-16).
+    # The 2026-07-16 KG deep-quality audit found relation-summary coverage collapsed
+    # to ~5% (351/6533) with ~97% of relations ``summary_stale`` — 6171 of them had
+    # NEVER been summarized.  Root cause: the SummaryWorker processed a HARDCODED 20
+    # relations/cycle at a 3600 s prod interval → ~15-18 summaries/hour while the graph
+    # grew to 6500+ relations.  Both levers are now settings so ops can drain the
+    # backlog without a code change:
+    #   * ``summary_worker_batch_limit``  — relations pulled per cycle (was ``_BATCH_LIMIT=20``).
+    #   * ``summary_worker_concurrency``  — bounded-concurrent LLM calls within a cycle.
+    # Sizing rationale: 8 concurrent DeepSeek-V4-Flash summary calls (~5 s each) drain
+    # a 100-row batch in ~65 s, comfortably inside the 600 s code-default interval and
+    # without starving the 4 sibling LLM workers on the shared asyncio loop (each LLM
+    # await yields the loop).  Mirrors the ProvisionalEnrichmentWorker batch+concurrency
+    # pattern (batch 500 / concurrency 5).
+    summary_worker_batch_limit: int = Field(
+        default=100,
+        ge=1,
+        description="Relations fetched + summarized per SummaryWorker cycle (was hardcoded 20).",
+    )  # KNOWLEDGE_GRAPH_SUMMARY_WORKER_BATCH_LIMIT
+    summary_worker_concurrency: int = Field(
+        default=8,
+        ge=1,
+        description="Max concurrent summary LLM calls within one SummaryWorker cycle.",
+    )  # KNOWLEDGE_GRAPH_SUMMARY_WORKER_CONCURRENCY
     # Parallel HTTP concurrency for FundamentalsRefreshWorker Phase 2.
     worker_fundamentals_concurrency: int = 5  # KNOWLEDGE_GRAPH_WORKER_FUNDAMENTALS_CONCURRENCY
 

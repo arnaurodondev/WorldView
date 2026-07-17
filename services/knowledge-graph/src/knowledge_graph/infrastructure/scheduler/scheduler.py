@@ -479,6 +479,12 @@ def build_workers(
                     force_regen_batch_size=settings.summary_worker_force_regen_batch_size,
                     read_session_factory=_read_factory,
                     gemini_extraction_client=gemini_extraction_client,
+                    # BACKLOG-DRAIN (2026-07-16): batch size + LLM concurrency are
+                    # now settings-driven so ops can drain the relation-summary
+                    # backlog (coverage collapsed to ~5% in the 2026-07-16 audit)
+                    # without a code change.  Defaults: batch 100 / concurrency 8.
+                    batch_limit=settings.summary_worker_batch_limit,
+                    concurrency=settings.summary_worker_concurrency,
                 ),
                 "definition_embedding": def_worker,
                 "narrative_embedding": NarrativeRefreshWorker(

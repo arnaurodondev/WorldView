@@ -100,7 +100,19 @@ class SummaryWorker:
         *,
         gemini_extraction_client: ExtractionClient | None = None,
         summary_retry_delays: tuple[float, ...] = _SUMMARY_RETRY_DELAYS,
+        batch_limit: int = _BATCH_LIMIT,
+        concurrency: int = 1,
     ) -> None:
+        # BACKLOG-DRAIN (2026-07-16): batch size + LLM concurrency are now
+        # constructor-injected from settings (defaults preserve the historical
+        # 20-row / sequential behaviour so existing call sites + tests are
+        # unaffected).  ``concurrency`` bounds the number of relations whose LLM
+        # summary call is in flight at once — each call holds NO DB session
+        # (see the three-phase discipline in the module docstring), so running
+        # several in parallel does not touch the DB pool; only the write phase
+        # briefly opens a per-row session.
+        self._batch_limit = max(1, int(batch_limit))
+        self._concurrency = max(1, int(concurrency))
         self._sf = session_factory
         # DEF-018 / Wave B-1: route Phase 1 + Phase 2 reads through the read
         # replica when one is wired in by the scheduler.  Falling back to the
@@ -130,6 +142,92 @@ class SummaryWorker:
           Phase 3a Hash unchanged → mark updated (single UPDATE + commit).
           Phase 3b Hash changed  → LLM call (NO session open), then write
                    summary + mark updated in one final session.
+
+        BACKLOG-DRAIN (2026-07-16): Phases 2-4 for each relation are dispatched
+        concurrently (bounded by ``self._concurrency``) via
+        :meth:`_process_relation`; the per-relation session discipline is
+        unchanged.
+        """
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+
+        # ── Phase 1: fetch stale list (READ session, short-lived) ───────────
+        # DEF-018 / Wave B-1: open the read-replica session so the stale-list
+        # SELECT does not contend with the write pool.  ``fetch_stale_summary``
+        # no longer uses ``FOR UPDATE SKIP LOCKED`` (per F-DS-201:
+        # ``max_instances=1`` APScheduler coalescing prevents concurrency).
+        # BACKLOG-DRAIN (2026-07-16): pull ``self._batch_limit`` rows (was the
+        # hardcoded ``_BATCH_LIMIT=20``) so a large summary backlog drains in
+        # far fewer cycles.
+        async with self._read_session_factory() as session:
+            rel_repo = RelationRepository(session)
+            stale_relations = await rel_repo.fetch_stale_summary(self._batch_limit)  # type: ignore[attr-defined]
+
+        batch_size = len(stale_relations)
+
+        logger.info(  # type: ignore[no-any-return]
+            "summary_worker_batch_start",
+            stale_relations=batch_size,
+            phase1_fetched_count=batch_size,
+            batch_limit=self._batch_limit,
+            concurrency=self._concurrency,
+        )
+
+        # BACKLOG-DRAIN (2026-07-16): pre-assign the force-regen slots to the
+        # first ``_force_regen_batch_size`` relations *in fetch order*.  The old
+        # sequential loop consumed a slot lazily when each relation reached the
+        # hash check; under concurrency that running counter is racy, so we
+        # assign slots deterministically up front instead.  ``fetch_stale_summary``
+        # returns a stable ORDER BY (confidence DESC, latest_evidence_at DESC),
+        # so the same relations are force-regenerated each cycle.
+        force_regen_flags = [i < self._force_regen_batch_size for i in range(batch_size)]
+
+        # ── Phases 2-4: process each relation, bounded by a semaphore ────────
+        # Each relation's LLM call (Phase 3, 5-30 s) holds NO DB session, so
+        # running ``self._concurrency`` of them in flight only multiplies
+        # network I/O — it never widens the DB connection footprint beyond the
+        # short per-row write sessions.  ``asyncio.gather`` preserves the
+        # per-relation try/except isolation (each ``_process_relation`` swallows
+        # its own commit failures), so one bad row cannot abort the batch.
+        semaphore = asyncio.Semaphore(self._concurrency)
+
+        async def _bounded(rel: Any, force_regen: bool) -> dict[str, int]:
+            async with semaphore:
+                return await self._process_relation(rel, force_regen=force_regen)
+
+        outcomes = await asyncio.gather(*(_bounded(rel, force_regen_flags[i]) for i, rel in enumerate(stale_relations)))
+
+        # Aggregate per-relation outcome counters into the batch summary.
+        totals: dict[str, int] = {}
+        for outcome in outcomes:
+            for key, value in outcome.items():
+                totals[key] = totals.get(key, 0) + value
+
+        logger.info(  # type: ignore[no-any-return]
+            "summary_worker_complete",
+            stale_relations=batch_size,
+            summaries_created=totals.get("created", 0),
+            summaries_skipped=totals.get("skipped", 0),
+            skipped_no_evidence=totals.get("skipped_no_evidence", 0),
+            skipped_null_evidence_text=totals.get("skipped_null_evidence_text", 0),
+            immutable_hits=totals.get("immutable_hits", 0),
+            raw_fallback_hits=totals.get("raw_fallback_hits", 0),
+            # DEF-018 / Wave B-1 phase metrics:
+            phase1_fetched_count=batch_size,
+            phase2_llm_calls=totals.get("llm_calls", 0),
+            phase3_written_count=totals.get("created", 0),
+        )
+
+    async def _process_relation(self, rel: Any, *, force_regen: bool) -> dict[str, int]:
+        """Process one stale relation (Phases 2-4) and return counter deltas.
+
+        BACKLOG-DRAIN (2026-07-16): extracted verbatim from the old sequential
+        ``run`` loop body so it can be dispatched concurrently via
+        ``asyncio.gather``.  The three-phase session discipline is unchanged —
+        Phase 2 reads run on the read replica, the LLM call (Phase 3) holds no
+        session, and each write opens its own short-lived write session.
+
+        Returns a dict of counter deltas (all keys optional); the caller sums
+        them across the batch for the ``summary_worker_complete`` log.
         """
         from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
         from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
@@ -139,231 +237,157 @@ class SummaryWorker:
             RelationSummaryRepository,
         )
 
-        summaries_created = 0
-        summaries_skipped = 0
-        immutable_hits_total = 0
-        raw_fallback_hits_total = 0
-        skipped_no_evidence = 0
-        skipped_null_evidence_text = 0
-        # DEF-018 / Wave B-1: per-phase counters for observability.  Emitted in
-        # the final ``summary_worker_complete`` structlog record below.
-        phase1_fetched_count = 0
-        phase2_llm_calls = 0
-        phase3_written_count = 0
+        relation_id = rel["relation_id"]
 
-        # ── Phase 1: fetch stale list (READ session, short-lived) ───────────
-        # DEF-018 / Wave B-1: open the read-replica session so the stale-list
-        # SELECT does not contend with the write pool.  ``fetch_stale_summary``
-        # no longer uses ``FOR UPDATE SKIP LOCKED`` (per F-DS-201:
-        # ``max_instances=1`` APScheduler coalescing prevents concurrency).
+        # ── Phase 2: fetch evidence + existing summary (READ session) ───
         async with self._read_session_factory() as session:
-            rel_repo = RelationRepository(session)
-            stale_relations = await rel_repo.fetch_stale_summary(_BATCH_LIMIT)  # type: ignore[attr-defined]
+            ev_repo = RelationEvidenceRepository(session)
+            summary_repo = RelationSummaryRepository(session)
 
-        batch_size = len(stale_relations)
-        phase1_fetched_count = batch_size
-
-        logger.info(  # type: ignore[no-any-return]
-            "summary_worker_batch_start",
-            stale_relations=batch_size,
-            phase1_fetched_count=phase1_fetched_count,
-        )
-
-        # Track how many relations in this cycle have been force-regenerated so
-        # we can stop once _force_regen_batch_size is reached.
-        force_regen_used = 0
-
-        for rel in stale_relations:
-            relation_id = rel["relation_id"]  # type: ignore[assignment]
-
-            # ── Phase 2: fetch evidence + existing summary (READ session) ───
-            # DEF-018 / Wave B-1: also routed through the read replica — these
-            # are pure SELECTs against ``relation_evidence_*`` and
-            # ``relation_summaries``.  No session is held while the LLM runs.
-            async with self._read_session_factory() as session:
-                ev_repo = RelationEvidenceRepository(session)
-                summary_repo = RelationSummaryRepository(session)
-
-                evidence_rows = await ev_repo.get_all_for_relation(  # type: ignore[attr-defined]
-                    relation_id,  # type: ignore[arg-type]
+            evidence_rows = await ev_repo.get_all_for_relation(  # type: ignore[attr-defined]
+                relation_id,
+                limit=_EVIDENCE_LIMIT,
+            )
+            evidence_source = "immutable"
+            # Fall back to raw staging table when the immutable partition
+            # table is empty (insert_immutable promotion not yet implemented).
+            if not evidence_rows:
+                evidence_rows = await ev_repo.get_raw_for_relation_id(  # type: ignore[attr-defined]
+                    relation_id,
                     limit=_EVIDENCE_LIMIT,
                 )
-                evidence_source = "immutable"
-                # Fall back to raw staging table when the immutable partition
-                # table is empty (insert_immutable promotion not yet implemented).
-                if not evidence_rows:
-                    evidence_rows = await ev_repo.get_raw_for_relation_id(  # type: ignore[attr-defined]
-                        relation_id,  # type: ignore[arg-type]
-                        limit=_EVIDENCE_LIMIT,
-                    )
-                    evidence_source = "raw_fallback"
-                    if evidence_rows:
-                        logger.debug(  # type: ignore[no-any-return]
-                            "summary_worker_raw_fallback_triggered",
-                            relation_id=str(relation_id),
-                            evidence_source=evidence_source,
-                            row_count=len(evidence_rows),
-                        )
-
-                # Get existing summary for hash check — read while session is still open.
-                existing = await summary_repo.get_current(relation_id)  # type: ignore[arg-type]
-
-            # ── Outside any session: process evidence texts ──────────────────
-
-            if not evidence_rows:
-                skipped_no_evidence += 1
-                continue
-
-            # Track which evidence source contributed
-            if evidence_source == "immutable":
-                immutable_hits_total += len(evidence_rows)
-            else:
-                raw_fallback_hits_total += len(evidence_rows)
-
-            evidence_texts = []
-            for e in evidence_rows:
-                # Prefer evidence_text; fall back to canonicalized_evidence_text (immutable rows only).
-                # Avoid str(None) = "None" bug from the old list-comprehension approach.
-                text = e.get("evidence_text") or e.get("canonicalized_evidence_text")
-                if text:
-                    evidence_texts.append(str(text))
-
-            logger.info(  # type: ignore[no-any-return]
-                "summary_worker_relation_evidence_audit",
-                relation_id=str(relation_id),
-                evidence_rows_fetched=len(evidence_rows),
-                evidence_text_null_count=sum(1 for e in evidence_rows if not e.get("evidence_text")),
-                # Fix DATA-008: only count nulls when the key is present in the dict.
-                # relation_evidence_raw has NO canonicalized_evidence_text column, so
-                # counting absent keys as nulls would inflate the metric for raw-path rows.
-                canonicalized_text_null_count=sum(
-                    1
-                    for e in evidence_rows
-                    if "canonicalized_evidence_text" in e and not e.get("canonicalized_evidence_text")
-                ),
-                evidence_texts_available=len(evidence_texts),
-            )
-            if not evidence_texts:
-                skipped_null_evidence_text += 1
-                continue
-
-            # SHA-256 of combined evidence for change detection
-            combined = "\n".join(sorted(evidence_texts))
-            evidence_hash = hashlib.sha256(combined.encode()).hexdigest()
-
-            # ── Determine whether the LLM call is needed ─────────────────────
-            # Force-regen mode: skip the hash check for the first
-            # _force_regen_batch_size relations in this cycle.
-            # QA-fix §3.1: increment the counter BEFORE the hash check so a
-            # force-regen slot is not consumed by a no-op hash-unchanged skip.
-            force_regen_active = self._force_regen_batch_size > 0 and force_regen_used < self._force_regen_batch_size
-            if force_regen_active:
-                force_regen_used += 1
-
-            if not force_regen_active and existing and existing.get("evidence_hash") == evidence_hash:
-                # Hash unchanged — skip expensive LLM call; just clear the stale flag.
-                # QA-fix §2.1: per-relation try/except so one commit failure does
-                # not abort the whole batch.
-                try:
-                    async with self._sf() as session:
-                        rel_repo = RelationRepository(session)
-                        await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
-                        await session.commit()
-                    summaries_skipped += 1
-                except Exception as exc:
-                    logger.error(  # type: ignore[no-any-return]
-                        "summary_worker_phase4_commit_failed",
-                        phase="hash_unchanged_clear_stale",
+                evidence_source = "raw_fallback"
+                if evidence_rows:
+                    logger.debug(  # type: ignore[no-any-return]
+                        "summary_worker_raw_fallback_triggered",
                         relation_id=str(relation_id),
-                        error=str(exc),
+                        evidence_source=evidence_source,
+                        row_count=len(evidence_rows),
                     )
-                continue
 
-            # ── Phase 3 (LLM): NO session is open here ──────────────────────
-            # DEF-018 / Wave B-1 / ARCH-003: this is the single most expensive
-            # step in the cycle (5-30 s per relation).  Holding a DB session
-            # across this call is the original ARCH-003 violation we are
-            # fixing — ``self._read_session_factory`` was already exited above.
-            phase2_llm_calls += 1
-            summary_text = await self._generate_summary(evidence_texts, relation_id)  # type: ignore[arg-type]
-            if summary_text is None:
-                # F-DS-208: on permanent LLM failure clear the stale flag
-                # rather than retry every cycle (retry-storm prevention).
-                # The flag is re-set when fresh evidence arrives via upsert.
-                logger.warning(  # type: ignore[no-any-return]
-                    "summary_worker_llm_failed",
-                    relation_id=str(relation_id),
-                    summary_last_failed_at=utc_now().isoformat(),
-                )
-                try:
-                    async with self._sf() as session:
-                        rel_repo = RelationRepository(session)
-                        await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
-                        await session.commit()
-                except Exception as exc:
-                    logger.error(  # type: ignore[no-any-return]
-                        "summary_worker_phase4_commit_failed",
-                        phase="llm_failure_clear_stale",
-                        relation_id=str(relation_id),
-                        error=str(exc),
-                    )
-                continue
+            # Get existing summary for hash check — read while session is still open.
+            existing = await summary_repo.get_current(relation_id)
 
-            # ── Phase 3 (write): WRITE session per row ──────────────────────
-            # QA-fix §2.1: per-relation try/except — Phase 4 commit failure
-            # must not abort the remaining batch.
-            new_summary_id: UUID | None = None
+        # ── Outside any session: process evidence texts ──────────────────
+        if not evidence_rows:
+            return {"skipped_no_evidence": 1}
+
+        # Track which evidence source contributed
+        source_counter = "immutable_hits" if evidence_source == "immutable" else "raw_fallback_hits"
+
+        evidence_texts = []
+        for e in evidence_rows:
+            # Prefer evidence_text; fall back to canonicalized_evidence_text (immutable rows only).
+            # Avoid str(None) = "None" bug from the old list-comprehension approach.
+            text = e.get("evidence_text") or e.get("canonicalized_evidence_text")
+            if text:
+                evidence_texts.append(str(text))
+
+        logger.info(  # type: ignore[no-any-return]
+            "summary_worker_relation_evidence_audit",
+            relation_id=str(relation_id),
+            evidence_rows_fetched=len(evidence_rows),
+            evidence_text_null_count=sum(1 for e in evidence_rows if not e.get("evidence_text")),
+            # Fix DATA-008: only count nulls when the key is present in the dict.
+            # relation_evidence_raw has NO canonicalized_evidence_text column, so
+            # counting absent keys as nulls would inflate the metric for raw-path rows.
+            canonicalized_text_null_count=sum(
+                1
+                for e in evidence_rows
+                if "canonicalized_evidence_text" in e and not e.get("canonicalized_evidence_text")
+            ),
+            evidence_texts_available=len(evidence_texts),
+        )
+        if not evidence_texts:
+            return {source_counter: len(evidence_rows), "skipped_null_evidence_text": 1}
+
+        # SHA-256 of combined evidence for change detection
+        combined = "\n".join(sorted(evidence_texts))
+        evidence_hash = hashlib.sha256(combined.encode()).hexdigest()
+
+        # ── Determine whether the LLM call is needed ─────────────────────
+        # Force-regen mode: skip the hash check for the pre-assigned slots
+        # (see ``force_regen_flags`` in ``run``).
+        if not force_regen and existing and existing.get("evidence_hash") == evidence_hash:
+            # Hash unchanged — skip expensive LLM call; just clear the stale flag.
+            # QA-fix §2.1: per-relation try/except so one commit failure does
+            # not abort the whole batch.
             try:
                 async with self._sf() as session:
-                    summary_repo = RelationSummaryRepository(session)
                     rel_repo = RelationRepository(session)
-                    new_summary_id = await summary_repo.insert_new(
-                        relation_id=relation_id,  # type: ignore[arg-type]
-                        summary_text=summary_text,
-                        evidence_count=len(evidence_texts),
-                        evidence_hash=evidence_hash,
-                        model_id="kg-summary-v1",
-                        prompt_template_id=UUID(_PROMPT_TEMPLATE_ID),
-                        generation_trigger="worker_13c_scheduled",
-                    )
-                    await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
+                    await rel_repo.mark_summary_updated(relation_id)  # type: ignore[attr-defined]
                     await session.commit()
-                summaries_created += 1
-                phase3_written_count += 1
+                return {source_counter: len(evidence_rows), "skipped": 1}
             except Exception as exc:
                 logger.error(  # type: ignore[no-any-return]
                     "summary_worker_phase4_commit_failed",
-                    phase="insert_new",
+                    phase="hash_unchanged_clear_stale",
                     relation_id=str(relation_id),
                     error=str(exc),
                 )
+                return {source_counter: len(evidence_rows)}
 
-            # ── Phase 4 (embedding): populate summary_embedding (T-B-04) ────
-            # Runs OUTSIDE the write session — the embedding call can take
-            # several seconds and must not hold a DB connection open (DS-001).
-            # On any failure: log and continue; the NULL embedding is not fatal
-            # (Worker 13F will back-fill missing embeddings in a future wave).
-            if new_summary_id is not None and self._embedding_port is not None:
-                await self._embed_and_persist_summary(
-                    summary_id=new_summary_id,
-                    summary_text=summary_text,
-                    relation_id=relation_id,
+        # ── Phase 3 (LLM): NO session is open here ──────────────────────
+        summary_text = await self._generate_summary(evidence_texts, relation_id)
+        if summary_text is None:
+            # F-DS-208: on permanent LLM failure clear the stale flag
+            # rather than retry every cycle (retry-storm prevention).
+            # The flag is re-set when fresh evidence arrives via upsert.
+            logger.warning(  # type: ignore[no-any-return]
+                "summary_worker_llm_failed",
+                relation_id=str(relation_id),
+                summary_last_failed_at=utc_now().isoformat(),
+            )
+            try:
+                async with self._sf() as session:
+                    rel_repo = RelationRepository(session)
+                    await rel_repo.mark_summary_updated(relation_id)  # type: ignore[attr-defined]
+                    await session.commit()
+            except Exception as exc:
+                logger.error(  # type: ignore[no-any-return]
+                    "summary_worker_phase4_commit_failed",
+                    phase="llm_failure_clear_stale",
+                    relation_id=str(relation_id),
+                    error=str(exc),
                 )
+            return {source_counter: len(evidence_rows), "llm_calls": 1}
 
-        logger.info(  # type: ignore[no-any-return]
-            "summary_worker_complete",
-            stale_relations=batch_size,
-            summaries_created=summaries_created,
-            summaries_skipped=summaries_skipped,
-            skipped_no_evidence=skipped_no_evidence,
-            skipped_null_evidence_text=skipped_null_evidence_text,
-            immutable_hits=immutable_hits_total,
-            raw_fallback_hits=raw_fallback_hits_total,
-            # DEF-018 / Wave B-1 phase metrics:
-            phase1_fetched_count=phase1_fetched_count,
-            phase2_llm_calls=phase2_llm_calls,
-            phase3_written_count=phase3_written_count,
-        )
+        # ── Phase 3 (write): WRITE session per row ──────────────────────
+        new_summary_id: UUID | None = None
+        result: dict[str, int] = {source_counter: len(evidence_rows), "llm_calls": 1}
+        try:
+            async with self._sf() as session:
+                summary_repo = RelationSummaryRepository(session)
+                rel_repo = RelationRepository(session)
+                new_summary_id = await summary_repo.insert_new(
+                    relation_id=relation_id,
+                    summary_text=summary_text,
+                    evidence_count=len(evidence_texts),
+                    evidence_hash=evidence_hash,
+                    model_id="kg-summary-v1",
+                    prompt_template_id=UUID(_PROMPT_TEMPLATE_ID),
+                    generation_trigger="worker_13c_scheduled",
+                )
+                await rel_repo.mark_summary_updated(relation_id)  # type: ignore[attr-defined]
+                await session.commit()
+            result["created"] = 1
+        except Exception as exc:
+            logger.error(  # type: ignore[no-any-return]
+                "summary_worker_phase4_commit_failed",
+                phase="insert_new",
+                relation_id=str(relation_id),
+                error=str(exc),
+            )
+
+        # ── Phase 4 (embedding): populate summary_embedding (T-B-04) ────
+        if new_summary_id is not None and self._embedding_port is not None:
+            await self._embed_and_persist_summary(
+                summary_id=new_summary_id,
+                summary_text=summary_text,
+                relation_id=relation_id,
+            )
+
+        return result
 
     async def _embed_and_persist_summary(
         self,
