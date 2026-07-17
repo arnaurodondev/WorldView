@@ -1,0 +1,128 @@
+# Once-daily POST-CLOSE K8s CronJob: 1-minute intraday volume refinement from EODHD.
+#
+# WHY: Alpaca's free intraday 1m feed (the base timeframe market-data derives
+# 5m/15m/30m/1h/4h from) is IEX-only — ~2-5% of the consolidated tape, so every
+# intraday bar's absolute volume is ~20x understated (wrong on the 1D/5D chart
+# histogram). Alpaca stays the LIVE intra-session 1m source; a once-daily post-close
+# sweep fetches EODHD's per-ticker 1m intraday feed (`/intraday/{SYMBOL}?interval=1m`)
+# for the CLOSED trading day — CORRECT consolidated CTA/UTP volume, UTC bar-start
+# timestamps that ALIGN minute-for-minute with Alpaca's. The bars are stamped
+# `eodhd_intraday` (priority 115) so they win the market-data 1m upsert guard over
+# Alpaca's IEX 1m (110) and REPLACE it on the same (instrument, 1m, bar_date) key.
+# Producing them republishes market.dataset.fetched, so the existing
+# intraday_resampling_consumer re-derives 5m..4h from the corrected 1m — no
+# double-count, because the aligned EODHD bar supersedes the Alpaca bar (one bar/min).
+#
+# COORDINATION: SEPARATE deploy unit. The daily `feat/eodhd-bulk-eod` (eodhd_bulk
+# daily source, priority 120) + `fix/ohlcv-dup-bars` (daily bar_date normalization)
+# ship FIRST. This job's 1m superseding does NOT depend on the dup-bars daily
+# normalization — intraday bar_date already keeps its full timestamp.
+#
+# SCHEDULE: 23:30 UTC daily — after the US cash close (20:00 UTC summer / 21:00
+# winter) AND EODHD's 2-3h consolidated-volume settle. Crypto (CC, 24/7) is NOT
+# served by EODHD intraday and stays on Alpaca — hence `--exchanges US` only.
+#
+# CREDIT COST: 5 credits/symbol. ~530 US equities = ~2,650 credits/sweep. Alongside
+# the daily bulk EOD (~100-543) + the existing firehose (~1.1k) that is ~4.3k/day,
+# well under the 100k/day EODHD account cap. The per-run cap (--max-credits) and
+# shared daily headroom (--daily-headroom) bound it. Resumable: a Valkey per-day
+# done-set (`s2:v1:intraday_refine:<date>:done`) survives a pod-roll so a restart
+# does not re-spend credits.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: market-ingestion-intraday-refine
+  namespace: worldview
+  labels:
+    app.kubernetes.io/name: market-ingestion-intraday-refine
+    app.kubernetes.io/instance: market-ingestion
+    app.kubernetes.io/component: intraday-refine
+spec:
+  # 23:30 UTC daily — after the US cash close and EODHD's consolidated-volume settle.
+  schedule: "30 23 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      # Per-ticker sweep of ~530 symbols at ~5 credits each — allow a wide window.
+      activeDeadlineSeconds: 7200
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: market-ingestion-intraday-refine
+            app.kubernetes.io/instance: market-ingestion
+            app.kubernetes.io/component: intraday-refine
+        spec:
+          restartPolicy: Never
+          # See backfill-daily-ohlcv-job.yaml: k8s service-link env (MARKET_INGESTION_PORT=
+          # tcp://…) collides with pydantic-settings; disable service links + pin PORT.
+          enableServiceLinks: false
+          serviceAccountName: market-ingestion
+          imagePullSecrets:
+            - name: ghcr-credentials
+          containers:
+            - name: intraday-refine
+              image: ghcr.io/arnaurodondev/worldview-market-ingestion:latest
+              imagePullPolicy: Always
+              command:
+                - python
+                - -m
+                - market_ingestion.scripts.intraday_refine
+              args:
+                - --exchanges
+                - "US"
+                - --max-credits
+                - "10000"
+                - --daily-headroom
+                - "5000"
+              env:
+                - name: APP_ENV
+                  value: production
+                - name: MARKET_INGESTION_PORT
+                  value: "8002"
+                - name: MARKET_INGESTION_DATABASE_URL
+                  value: postgresql+asyncpg://postgres:$(POSTGRES_PASSWORD)@postgres.infra.svc:5432/ingestion_db
+                - name: MARKET_INGESTION_DATABASE_URL_READ
+                  value: postgresql+asyncpg://postgres:$(POSTGRES_PASSWORD)@postgres.infra.svc:5432/ingestion_db
+                - name: MARKET_INGESTION_KAFKA_BOOTSTRAP_SERVERS
+                  value: kafka.infra.svc:9092
+                - name: MARKET_INGESTION_SCHEMA_REGISTRY_URL
+                  value: http://schema-registry.infra.svc:8081
+                - name: MARKET_INGESTION_STORAGE_ENDPOINT
+                  value: http://minio.infra.svc:9000
+                - name: MARKET_INGESTION_STORAGE_BUCKET
+                  value: market-ingestion
+                - name: MARKET_INGESTION_BRONZE_BUCKET
+                  value: market-bronze
+                - name: MARKET_INGESTION_CANONICAL_BUCKET
+                  value: market-canonical
+                - name: MARKET_INGESTION_VALKEY_URL
+                  value: redis://valkey.infra.svc:6379/0
+                - name: MARKET_INGESTION_EODHD_BASE_URL
+                  value: https://eodhd.com/api
+                - name: MARKET_INGESTION_EODHD_DAILY_QUOTA
+                  value: "100000"
+                - name: MARKET_INGESTION_EODHD_MONTHLY_QUOTA
+                  value: "145000"
+                - name: MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS
+                  value: "30.0"
+                - name: MARKET_INGESTION_LOG_LEVEL
+                  value: INFO
+                - name: MARKET_INGESTION_LOG_JSON
+                  value: "true"
+              # Provides POSTGRES_PASSWORD, MARKET_INGESTION_EODHD_API_KEY,
+              # MARKET_INGESTION_STORAGE_ACCESS_KEY / _SECRET_KEY, etc.
+              envFrom:
+                - secretRef:
+                    name: market-ingestion-secrets
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 320Mi
+                limits:
+                  cpu: "1000m"
+                  memory: 1Gi
