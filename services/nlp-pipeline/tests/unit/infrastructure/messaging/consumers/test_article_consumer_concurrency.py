@@ -109,7 +109,11 @@ def _make_consumer(max_retries: int = 3) -> ArticleProcessingConsumer:
     async def _record_attempt(event_id: str, attempt: int, exc: BaseException) -> None:
         c._attempts[event_id] = c._attempts.get(event_id, 0) + 1  # type: ignore[attr-defined]
 
+    async def _durable_attempt_count(event_id: str) -> int:
+        return c._attempts.get(event_id, 0)  # type: ignore[attr-defined]
+
     c._get_attempt_count = _get_attempt_count  # type: ignore[attr-defined,method-assign]
+    c._durable_attempt_count = _durable_attempt_count  # type: ignore[attr-defined,method-assign]
     c._record_attempt = _record_attempt  # type: ignore[attr-defined,method-assign]
 
     # Recording dead-letter sink (topic, partition, offset, reason).
@@ -335,6 +339,147 @@ async def test_per_partition_independence_poison_does_not_block_other() -> None:
     # Partition 1's messages were both dead-lettered (drained, not blocking p0).
     dl_offsets = sorted(o for (_t, p, o, _r) in _dead_lettered(c) if p == 1)
     assert dl_offsets == [0, 1]
+
+
+async def test_dlq_write_failure_holds_offset_not_dropped() -> None:
+    """At-least-once: a FAILED DLQ write must NOT advance the offset (no drop).
+
+    Regression for the silent-drop hole: processing fails (e.g. Postgres down) →
+    after max_retries the message routes to the DLQ → but the DLQ write ALSO needs
+    Postgres → it fails too.  The message must be RETAINED (offset held as a
+    barrier for retry on the next rebalance/restart), never committed-past and
+    lost.  Higher offsets that succeeded cannot commit past the held poison head —
+    a temporary head-of-line block is the correct trade vs. losing an article.
+    """
+    c = _make_consumer(max_retries=2)
+    sem = asyncio.Semaphore(8)
+
+    async def fake_handle(msg: Any) -> None:
+        if msg.offset() == 0:  # poison HEAD, always fails
+            raise RuntimeError("processing failed — nlp_db unavailable")
+
+    async def failing_dead_letter(failure: Any, reason: str | None = None) -> None:
+        # The DLQ store is ALSO down → the durable write fails.  Real DLQ-write
+        # failures surface as DB/driver exceptions (NOT RuntimeError, which is
+        # reserved for the intentional dead-letter-cap force-restart signal).
+        raise ConnectionError("DLQ write failed — nlp_db unavailable")
+
+    c._handle_message = fake_handle  # type: ignore[attr-defined,method-assign]
+    c.dead_letter = failing_dead_letter  # type: ignore[attr-defined,method-assign]
+
+    batch = [_FakeMsg("t", 0, off) for off in range(3)]
+    await c._dispatch_batch(asyncio.get_event_loop(), batch, sem)
+
+    # DLQ write failed → offset 0 is a commit BARRIER: nothing on partition 0
+    # advances past it (offsets 1,2 succeeded but cannot commit past the held
+    # head), so the poison is retried later rather than SILENTLY DROPPED.
+    assert _committed(c) == []
+    # It was NOT recorded as successfully dead-lettered.
+    assert _dead_lettered(c) == []
+
+
+async def test_dead_letter_persists_raw_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The DLQ row carries the ORIGINAL message bytes so it is re-ingestable.
+
+    Regression: ``_dead_letter_impl`` used to persist ``event_id.encode()`` and
+    DISCARD ``failure.raw_payload`` — DLQ rows were not recoverable.  It must now
+    write the real ``raw_payload`` bytes as ``payload_avro`` and RE-RAISE on a
+    write failure (so ``_dead_letter_poison`` can hold the offset).
+    """
+    import nlp_pipeline.infrastructure.messaging.consumers.article_consumer as mod
+
+    from messaging.kafka.consumer.base import FailureInfo  # type: ignore[import-untyped]
+
+    captured: dict[str, Any] = {}
+
+    class _FakeRepo:
+        def __init__(self, session: Any) -> None:
+            self._session = session
+
+        async def move_to_dlq(
+            self,
+            *,
+            original_event_id: Any,
+            topic: str,
+            payload_avro: bytes,
+            error_detail: str,
+        ) -> None:
+            captured["payload_avro"] = payload_avro
+            captured["topic"] = topic
+            captured["error_detail"] = error_detail
+
+    class _FakeSession:
+        async def __aenter__(self) -> _FakeSession:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    monkeypatch.setattr(mod, "DLQRepository", _FakeRepo)
+
+    c = object.__new__(ArticleProcessingConsumer)
+    c._nlp_sf = lambda: _FakeSession()  # type: ignore[attr-defined,method-assign]
+
+    raw = b"\x00\x01original-confluent-avro-bytes"
+    failure: FailureInfo[None] = FailureInfo(
+        event_id="019f6627-8af5-7686-b5c7-44da96ae1229",
+        topic="content.article.stored.v1",
+        partition=4,
+        offset=262,
+        attempt=5,
+        last_error=RuntimeError("deep extraction failed"),
+        raw_payload=raw,
+    )
+    await c._dead_letter_impl(failure)
+
+    # The DLQ row carries the REAL message bytes (not the event_id), so the
+    # dead-lettered article can be replayed later.
+    assert captured["payload_avro"] == raw
+    assert captured["topic"] == "content.article.stored.v1"
+
+
+async def test_dead_letter_impl_reraises_on_write_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A DLQ-store write failure PROPAGATES (so the caller can hold the offset)."""
+    import nlp_pipeline.infrastructure.messaging.consumers.article_consumer as mod
+
+    from messaging.kafka.consumer.base import FailureInfo  # type: ignore[import-untyped]
+
+    class _BoomRepo:
+        def __init__(self, session: Any) -> None:
+            pass
+
+        async def move_to_dlq(self, **kwargs: Any) -> None:
+            raise RuntimeError("nlp_db down")
+
+    class _FakeSession:
+        async def __aenter__(self) -> _FakeSession:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    monkeypatch.setattr(mod, "DLQRepository", _BoomRepo)
+
+    c = object.__new__(ArticleProcessingConsumer)
+    c._nlp_sf = lambda: _FakeSession()  # type: ignore[attr-defined,method-assign]
+
+    failure: FailureInfo[None] = FailureInfo(
+        event_id="019f6627-8af5-7686-b5c7-44da96ae1229",
+        topic="content.article.stored.v1",
+        partition=4,
+        offset=262,
+        attempt=5,
+        last_error=RuntimeError("boom"),
+        raw_payload=b"bytes",
+    )
+    with pytest.raises(RuntimeError, match="nlp_db down"):
+        await c._dead_letter_impl(failure)
 
 
 def test_contiguous_commit_targets_helper() -> None:

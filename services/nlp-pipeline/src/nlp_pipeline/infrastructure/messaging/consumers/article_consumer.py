@@ -785,10 +785,12 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         offset = msg.offset()
         # Durable count survives redelivery/restart, so a message that fails, is
         # redelivered, and fails again ESCALATES toward the DLQ instead of getting
-        # a fresh full retry budget every time.  (Fail-closed: a Valkey outage
-        # makes ``_get_attempt_count`` return max_retries → dead-letter on first
-        # failure rather than risk an unbounded in-place loop.)
-        base_attempts = await self._get_attempt_count(event_id)
+        # a fresh full retry budget every time.  ``_durable_attempt_count`` fails
+        # OPEN (returns 0 on any Valkey unavailability): the in-place retry budget
+        # below is bounded regardless, so an unreadable counter must NOT collapse
+        # the budget to 0 and dead-letter good work on its first failure during a
+        # Valkey blip (that would be a silent-drop at-least-once hole).
+        base_attempts = await self._durable_attempt_count(event_id)
         max_retries = max(1, self._config.max_retries)
 
         for local_attempt in range(max_retries):
@@ -810,17 +812,19 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     await self._handle_message(msg)
                 return True  # settled: success → offset may advance
             except FatalError as exc:
-                # Non-retryable (malformed / schema / business-rule): DLQ now and
-                # advance — retrying can never help.
-                await self._dead_letter_and_advance(msg, exc, event_id=event_id, reason="fatal")
-                return True
+                # Non-retryable (malformed / schema / business-rule): dead-letter.
+                # ADVANCE only if the DLQ write DURABLY persisted the message —
+                # otherwise return False (barrier) so it is retried, never dropped.
+                return await self._dead_letter_poison(msg, exc, event_id=event_id, reason="fatal")
             except Exception as exc:
                 await self._record_attempt(event_id, attempt, exc)
                 if attempt >= max_retries:
-                    # Retries exhausted → DLQ and ADVANCE so the partition drains
-                    # instead of blocking on this poison article.
-                    await self._dead_letter_and_advance(msg, exc, event_id=event_id, reason="max_retries")
-                    return True
+                    # Retries exhausted → dead-letter.  ADVANCE (drain the poison)
+                    # ONLY if the DLQ write succeeded; if the DLQ store itself is
+                    # down (e.g. Postgres outage) return False so the partition
+                    # holds at this offset and the message is retried on the next
+                    # rebalance/restart rather than SILENTLY DROPPED.
+                    return await self._dead_letter_poison(msg, exc, event_id=event_id, reason="max_retries")
                 logger.warning(  # type: ignore[no-any-return]
                     "article_consumer.transient_retry_in_place",
                     event_id=event_id,
@@ -839,21 +843,58 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # silent re-freeze.
         return True
 
-    async def _dead_letter_and_advance(
+    async def _durable_attempt_count(self, event_id: str) -> int:
+        """Prior durable attempt count for *event_id*, failing OPEN on Valkey errors.
+
+        Unlike the base ``_get_attempt_count`` (which fails CLOSED to
+        ``max_retries`` so the SERIAL retry loop cannot spin forever), the
+        concurrent settle path bounds retries IN PLACE regardless, so a Valkey
+        outage must NOT immediately dead-letter a message on its first failure —
+        that would drop good work during a transient Valkey blip.  We therefore
+        treat an unreadable / absent / corrupt counter as ``0`` (no prior
+        attempts) and let the bounded in-place retry budget run.
+        """
+        client = self._dedup_client
+        if client is None:
+            return 0
+        try:
+            raw = await client.get(self._retry_attempt_key(event_id))
+        except Exception:
+            return 0
+        if raw is None:
+            return 0
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 0
+
+    async def _dead_letter_poison(
         self,
         msg: Any,
         exc: BaseException,
         *,
         event_id: str,
         reason: str,
-    ) -> None:
-        """Durably dead-letter a poison message so its partition can advance.
+    ) -> bool:
+        """Durably dead-letter a poison message; return whether its offset may advance.
 
-        Builds a :class:`FailureInfo` carrying the ORIGINAL payload bytes and
-        routes it through :meth:`dead_letter` (→ ``_dead_letter_impl`` →
-        ``nlp_db.dlq``).  A DLQ-write failure is logged, never raised: the
-        message is idempotently re-deliverable, and crashing here would
-        re-introduce the head-of-line block this fix removes.
+        Builds a :class:`FailureInfo` carrying the ORIGINAL ``msg.value()`` bytes
+        (so the DLQ row is re-ingestable) and routes it through
+        :meth:`dead_letter` (→ ``_dead_letter_impl`` → ``nlp_db.dlq``).
+
+        Returns:
+            ``True``  — the message was DURABLY dead-lettered, so the partition
+                        may commit PAST it (drain the poison).
+            ``False`` — the DLQ write itself FAILED (e.g. the ``nlp_db`` store is
+                        down during a Postgres outage).  The offset must NOT
+                        advance: returning False makes ``_settle_message`` leave
+                        this offset as a commit barrier so the message is retried
+                        on the next rebalance/restart rather than SILENTLY
+                        DROPPED.  We accept a temporary head-of-line block on this
+                        one partition until the DLQ store recovers — never a lost
+                        article.  (The dead_letter-cap ``RuntimeError`` is
+                        deliberately re-raised: it is an intentional poison-storm
+                        crash signal handled by the run loop's supervisor.)
         """
         failure: FailureInfo[None] = FailureInfo(
             event_id=event_id,
@@ -866,14 +907,23 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         )
         try:
             await self.dead_letter(failure, reason=reason)
+        except RuntimeError:
+            # dead_letter cap exceeded — intentional force-restart signal.
+            raise
         except Exception:
-            logger.exception(  # type: ignore[no-any-return]
-                "article_consumer.dead_letter_failed",
+            # DLQ WRITE FAILED → do NOT advance: better a temporary head-of-line
+            # block than a silently-dropped article (at-least-once).
+            logger.error(  # type: ignore[no-any-return]
+                "article_consumer.dead_letter_write_failed_holding_offset",
                 event_id=event_id,
+                reason=reason,
                 topic=msg.topic(),
                 partition=msg.partition(),
                 offset=msg.offset(),
+                error=str(exc)[:200],
+                exc_info=True,
             )
+            return False
         logger.error(  # type: ignore[no-any-return]
             "article_consumer.poison_dead_lettered_advanced",
             event_id=event_id,
@@ -883,6 +933,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             offset=msg.offset(),
             error=str(exc)[:200],
         )
+        return True
 
     @staticmethod
     def _contiguous_commit_targets(batch: list[Any], outcomes: dict[tuple[str, int], dict[int, bool]]) -> list[Any]:
@@ -1769,20 +1820,32 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         logger.warning("article_consumer_failure_retry", event_id=failure.event_id, attempt=failure.attempt)  # type: ignore[no-any-return]
 
     async def _dead_letter_impl(self, failure: FailureInfo[None]) -> None:
+        """Persist a dead-letter row with the ORIGINAL payload; RAISE on write failure.
+
+        Two correctness properties:
+
+        * RE-INGESTABLE PAYLOAD — persist ``failure.raw_payload`` (the original
+          ``content.article.stored.v1`` message bytes) as ``payload_avro`` so a
+          dead-lettered article can be replayed later.  Previously only the
+          ``event_id`` bytes were stored, so DLQ rows were NOT recoverable.  Fall
+          back to the event_id bytes only when raw_payload is absent.
+        * NO SILENT SWALLOW — a DLQ-write failure RE-RAISES so the caller
+          (``_dead_letter_poison``) learns the message was NOT durably stored and
+          holds the offset for retry instead of advancing past a lost article.
+        """
         logger.error("article_consumer_dead_lettered", event_id=failure.event_id, error=str(failure.last_error))  # type: ignore[no-any-return]
-        try:
-            async with self._nlp_sf() as session:
-                event_uuid = uuid.UUID(failure.event_id) if _is_valid_uuid(failure.event_id) else common.ids.new_uuid7()
-                diagnostic_bytes = failure.event_id.encode("utf-8")
-                await DLQRepository(session).move_to_dlq(
-                    original_event_id=event_uuid,
-                    topic=_TOPIC,
-                    payload_avro=diagnostic_bytes,
-                    error_detail=str(failure.last_error)[:1024],
-                )
-                await session.commit()
-        except Exception:
-            logger.exception("dead_letter_write_failed", event_id=failure.event_id)  # type: ignore[no-any-return]
+        event_uuid = uuid.UUID(failure.event_id) if _is_valid_uuid(failure.event_id) else common.ids.new_uuid7()
+        # Persist the real message bytes so the row can be re-ingested; only fall
+        # back to a diagnostic event_id blob when the original payload is missing.
+        payload_bytes = failure.raw_payload if failure.raw_payload else failure.event_id.encode("utf-8")
+        async with self._nlp_sf() as session:
+            await DLQRepository(session).move_to_dlq(
+                original_event_id=event_uuid,
+                topic=failure.topic or _TOPIC,
+                payload_avro=payload_bytes,
+                error_detail=str(failure.last_error)[:1024],
+            )
+            await session.commit()
 
     async def get_pending_retries(self) -> list[FailureInfo[None]]:
         return []
