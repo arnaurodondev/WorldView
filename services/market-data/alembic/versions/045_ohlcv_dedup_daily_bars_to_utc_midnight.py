@@ -36,7 +36,11 @@ WHAT THIS MIGRATION DOES:
        (``bar_date DESC``).
     2. UPSERT the winner at ``bar_date`` = that calendar day's UTC midnight
        (unconditional ``ON CONFLICT DO UPDATE`` so a pre-existing midnight row
-       is overwritten with the winner's OHLCV / priority / source).
+       is overwritten with the winner's OHLCV / priority / source).  The
+       winner's ``adjusted_close`` is COALESCEd with the group's non-null
+       adjusted_close (only EODHD populates it) so the split/div-adjusted close
+       SURVIVES the dedup rather than nulling out on ~50k dup-days until the
+       EODHD corrective backfill lands — see the inline comment on ``winners``.
     3. DELETE every remaining row in the group whose ``bar_date`` is NOT
        midnight — the winner's data already lives at midnight, so this is safe.
 
@@ -54,8 +58,13 @@ CHUNK-SAFETY (``ohlcv_bars`` is a TimescaleDB hypertable, ``bar_date`` is the
     * ``INSERT ... ON CONFLICT`` targets the PK, which INCLUDES the partition
       key — supported on hypertables (TimescaleDB 2.x, live PG16.6 / TS here).
     * The work is done in a PL/pgSQL loop, ONE instrument per iteration, so the
-      per-iteration working set (and lock footprint) stays small (548
-      instruments) instead of one table-wide statement.
+      per-iteration WORKING SET stays small (548 instruments) instead of one
+      table-wide statement.  NOTE: the whole DO block is a single Alembic
+      transaction, so row LOCKS accumulate and are held until COMMIT — the loop
+      bounds memory/CPU per step, not lock lifetime.  ``lock_timeout`` (10s) and
+      ``statement_timeout`` (15min) are set at the top of the block so
+      contention with the live OHLCV consumer fails fast + rolls back cleanly
+      (idempotent re-run) rather than wedging ingestion on the shared node.
 
 IDEMPOTENT + RESUMABLE:
     * Idempotent: after a full pass every non-intraday group has exactly one
@@ -97,6 +106,23 @@ BEGIN
     -- the session tz, so pin it to UTC for the whole block).
     SET LOCAL timezone = 'UTC';
 
+    -- Gentleness on the shared single node: this migration runs against LIVE
+    -- ``ohlcv_bars`` while the OHLCV consumer keeps upserting daily bars.  The
+    -- whole DO block is ONE Alembic transaction, so the row locks it takes on
+    -- upserted/deleted 1d rows are held until COMMIT and would block a
+    -- concurrent live upsert on the same (instrument, day) row.  Bound the
+    -- blast radius so contention FAILS FAST and rolls back cleanly (the
+    -- migration is idempotent + resumable — just re-run ``alembic upgrade``)
+    -- instead of wedging live ingestion or piling up on a saturated node:
+    --   * lock_timeout      — abort if any single row/table lock waits > 10s
+    --                         (a live upsert holding the row, or vice-versa).
+    --   * statement_timeout — hard ceiling on total runtime (the DO block is a
+    --                         single statement); 15min is generous for the
+    --                         measured ~273k upserts + ~50k deletes but stops a
+    --                         runaway from holding locks indefinitely.
+    SET LOCAL lock_timeout = '10s';
+    SET LOCAL statement_timeout = '15min';
+
     FOR r IN
         SELECT DISTINCT instrument_id
         FROM ohlcv_bars
@@ -105,17 +131,44 @@ BEGIN
         -- Step 1+2: choose the winner per (timeframe, calendar-day) and UPSERT it
         -- at UTC midnight.  DISTINCT ON keeps the first row per group under the
         -- ORDER BY, i.e. highest priority, newest wall-clock on a tie.
-        WITH winners AS (
-            SELECT DISTINCT ON (timeframe, date_trunc('day', bar_date))
+        --
+        -- adjusted_close preservation: the OHLCV winner is chosen by
+        -- provider_priority (Alpaca 110 / Yahoo 80), but on this account ONLY
+        -- EODHD (priority 60) populates ``adjusted_close`` — Alpaca and Yahoo
+        -- rows carry NULL.  Picking the winner naively would therefore DROP the
+        -- split/dividend-adjusted close on the ~50k duplicated days (the deleted
+        -- EODHD copy carried it), leaving a NULL window until the EODHD
+        -- corrective backfill (step 2 of the 3-branch OHLCV sequence) reruns.
+        -- To avoid that transient regression we COALESCE the group's non-null
+        -- adjusted_close (``max`` over the calendar-day partition; only EODHD is
+        -- non-null so ``max`` == the EODHD value) onto the priority winner.  This
+        -- changes NEITHER the OHLCV winner NOR provider_priority — it only keeps
+        -- a real adjusted_close alive instead of nulling it.  The later EODHD
+        -- backfill still overwrites the full row when it lands.
+        WITH ranked AS (
+            SELECT
                 timeframe,
                 date_trunc('day', bar_date) AS norm_bar_date,
+                bar_date,
                 open, high, low, close, volume, adjusted_close,
-                source, provider_priority, is_derived, is_partial
+                source, provider_priority, is_derived, is_partial,
+                max(adjusted_close) OVER (
+                    PARTITION BY timeframe, date_trunc('day', bar_date)
+                ) AS group_adjusted_close
             FROM ohlcv_bars
             WHERE instrument_id = r.instrument_id
               AND timeframe IN ('1d', '1w', '1M')
+        ),
+        winners AS (
+            SELECT DISTINCT ON (timeframe, norm_bar_date)
+                timeframe,
+                norm_bar_date,
+                open, high, low, close, volume,
+                COALESCE(adjusted_close, group_adjusted_close) AS adjusted_close,
+                source, provider_priority, is_derived, is_partial
+            FROM ranked
             ORDER BY timeframe,
-                     date_trunc('day', bar_date),
+                     norm_bar_date,
                      provider_priority DESC,
                      bar_date DESC
         )
