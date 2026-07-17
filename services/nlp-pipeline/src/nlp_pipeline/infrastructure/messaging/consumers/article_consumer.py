@@ -439,6 +439,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         learned_router: LearnedRouter | None = None,
         entailment_client: ExtractionClient | None = None,
         entailment_config: Any = None,
+        evidence_grounding_config: Any = None,
     ) -> None:
         super().__init__(config)
         self._dedup_client = valkey_client
@@ -459,6 +460,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # None when the feature is off → run_ml_phase forwards None and the check no-ops.
         self._entailment_client = entailment_client
         self._entailment_config = entailment_config
+        # 2026-07-16 fabrication filter: deterministic evidence-span grounding gate.
+        # Never None in the main entry point (built unconditionally from settings); a
+        # None here (e.g. a test) makes run_deep_extraction_block apply its own default
+        # (present_only), so the gate is active by default.
+        self._evidence_grounding_config = evidence_grounding_config
         self._bp = backpressure
         self._chunk_text_store = chunk_text_store
         self._usage_logger = usage_logger
@@ -1385,6 +1391,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 usage_logger=self._usage_logger,
                 entailment_client=self._entailment_client,
                 entailment_config=self._entailment_config,
+                evidence_grounding_config=self._evidence_grounding_config,
                 _deep_extraction_fn=run_deep_extraction_block,
                 # P0-A poison-pill fix (prod review 2026-07-15): thread the base
                 # consumer's liveness heartbeat down into the sequential window

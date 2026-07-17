@@ -287,6 +287,34 @@ async def main() -> None:
             max_per_doc=entailment_config.max_per_doc,
         )
 
+    # ── 2026-07-16 fabrication filter: evidence-span grounding gate ───────────────
+    # Deterministic, free, model-agnostic. Built from settings and always passed to the
+    # consumer (unlike the entailment check, it needs no LLM client). Unknown mode strings
+    # fall back to "present_only" with a warning so a typo cannot silently disable it.
+    from nlp_pipeline.application.blocks.evidence_grounding import (
+        _VALID_MODES,
+        MODE_PRESENT_ONLY,
+        EvidenceGroundingConfig,
+    )
+
+    def _grounding_mode(raw: str, field: str) -> str:
+        mode = (raw or "").strip().lower()
+        if mode not in _VALID_MODES:
+            log.warning("evidence_grounding_invalid_mode", field=field, value=raw, fallback=MODE_PRESENT_ONLY)
+            return MODE_PRESENT_ONLY
+        return mode
+
+    evidence_grounding_config = EvidenceGroundingConfig(
+        claims_mode=_grounding_mode(settings.evidence_grounding_claims_mode, "claims_mode"),
+        relations_mode=_grounding_mode(settings.evidence_grounding_relations_mode, "relations_mode"),
+    )
+    log.info(
+        "evidence_grounding_gate_configured",
+        claims_mode=evidence_grounding_config.claims_mode,
+        relations_mode=evidence_grounding_config.relations_mode,
+        enabled=evidence_grounding_config.enabled,
+    )
+
     # Backpressure controller
     bp = BackpressureController(
         max_depth=settings.max_ollama_queue_depth,
@@ -444,6 +472,8 @@ async def main() -> None:
         # ENHANCEMENT #6: None unless the entailment check is enabled (and key present).
         entailment_client=entailment_client,
         entailment_config=entailment_config,
+        # 2026-07-16 fabrication filter: deterministic evidence-span grounding gate.
+        evidence_grounding_config=evidence_grounding_config,
     )
     # Bind the probe so /healthz reflects this consumer's poll-loop progress.
     liveness_probe.bind(consumer)

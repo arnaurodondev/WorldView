@@ -492,6 +492,25 @@ class Settings(BaseSettings):
     # Max risky relations checked per document (hard cap on added cost/latency per article).
     relation_entailment_check_max_per_doc: int = Field(default=20, ge=0, le=200)
 
+    # ── Evidence-span grounding gate (2026-07-16 fabrication filter) ──────────────
+    # Deterministic, free, model-agnostic post-extraction filter that drops any
+    # claim/relation whose ``evidence_text`` is NOT verbatim-traceable to the source
+    # passage (a normalised substring). The DEEP_EXTRACTION prompt already REQUIRES a
+    # verbatim quote per item; this gate enforces that requirement instead of trusting
+    # it. The 2026-07-16 model bake-off measured fabrication (ungrounded items) as the
+    # top quality drag (2.13/art live 235B, 0.83/art DeepSeek-V4-Flash), and CLAIMS were
+    # the largest previously-unguarded slice (relation_validation only touches relations).
+    # A faithfully-quoted item is always a substring of its source, so the gate is
+    # yield-neutral on faithful output — it removes only items the model could not ground.
+    # Modes: "off" (no-op) | "present_only" (drop only when evidence_text is present but
+    # ungrounded) | "require" (also drop items with a missing/blank quote). Claims schema-
+    # require evidence_text so "require" is defensible for them; relations do not, so
+    # "present_only" avoids penalising a legitimately quote-less relation.
+    # NLP_PIPELINE_EVIDENCE_GROUNDING_CLAIMS_MODE
+    evidence_grounding_claims_mode: str = "present_only"
+    # NLP_PIPELINE_EVIDENCE_GROUNDING_RELATIONS_MODE
+    evidence_grounding_relations_mode: str = "present_only"
+
     # ── Concurrency (Task #14 — ~50 articles in flight platform-wide) ──────────
     # Deep extraction on DeepInfra is I/O-bound (12-22s network wait per article),
     # NOT CPU-bound.  The base Kafka consumer loop is strictly serial (one article

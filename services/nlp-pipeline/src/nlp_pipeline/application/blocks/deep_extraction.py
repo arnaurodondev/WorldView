@@ -34,6 +34,10 @@ from ml_clients.pricing import resolve_cost  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
+from nlp_pipeline.application.blocks.evidence_grounding import (
+    EvidenceGroundingConfig,
+    apply_evidence_grounding,
+)
 from nlp_pipeline.application.blocks.relation_validation import validate_relations
 from nlp_pipeline.application.blocks.suppression import should_run_deep_extraction
 from nlp_pipeline.application.ports.metrics import NOOP_METRICS, NlpMetricsPort
@@ -419,6 +423,7 @@ async def run_deep_extraction_block(
     usage_logger: LlmUsageLogProtocol | None = None,
     entailment_client: ExtractionClient | None = None,
     entailment_config: EntailmentCheckConfig | None = None,
+    evidence_grounding_config: EvidenceGroundingConfig | None = None,
     metrics: NlpMetricsPort = NOOP_METRICS,
     max_words: int = 0,
     max_windows: int = 0,
@@ -689,6 +694,44 @@ async def run_deep_extraction_block(
         except Exception:
             # Fail-open at the block boundary too: never let the check break extraction.
             logger.warning("deep_extraction.entailment_check_failed", doc_id=str(doc_id), exc_info=True)
+
+    # ── Deterministic evidence-span grounding gate (2026-07-16 fabrication filter) ──
+    # Drop any claim/relation whose ``evidence_text`` is NOT verbatim-traceable to the
+    # source passage. The 2026-07-16 model bake-off measured fabrication (ungrounded
+    # items) as the single largest quality drag (2.13/art on live 235B); the largest,
+    # previously-unguarded slice is CLAIMS (relation_validation only touches relations).
+    # A faithfully-quoted item is always a substring of the source, so this gate is
+    # yield-neutral on faithful output — it only removes items the model could not
+    # ground. It complements (does not replace) the relation entailment gate, which
+    # handles the harder "real quote, wrong label" fabrications a substring check cannot.
+    # See application/blocks/evidence_grounding.py. Config-gated; default present_only.
+    _grounding_cfg = evidence_grounding_config or EvidenceGroundingConfig()
+    if _grounding_cfg.enabled and (merged.get("claims") or merged.get("relations")):
+        # Reconstruct the source text the items were extracted from. Windows are
+        # single-space-joined subsets of this same concatenation, so a quote grounded
+        # in any window is a substring of the full-document join. Honour the BP-719
+        # Mode B prefix cap so the source matches what the model actually saw.
+        source_text = " ".join(c.text for c in chunks)
+        if max_words > 0:
+            source_text = " ".join(source_text.split()[:max_words])
+        kept_claims, kept_relations, grounding_report = apply_evidence_grounding(
+            list(merged.get("claims", [])),
+            list(merged.get("relations", [])),
+            source_text,
+            _grounding_cfg,
+        )
+        if grounding_report.claims_dropped or grounding_report.relations_dropped:
+            logger.info(
+                "deep_extraction.evidence_grounding_filtered",
+                doc_id=str(doc_id),
+                claims_kept=grounding_report.claims_kept,
+                claims_dropped=grounding_report.claims_dropped,
+                relations_kept=grounding_report.relations_kept,
+                relations_dropped=grounding_report.relations_dropped,
+                **{f"dropped_{reason}": count for reason, count in grounding_report.drop_reasons.items()},
+            )
+        merged["claims"] = kept_claims
+        merged["relations"] = kept_relations
 
     # Surface degradation on the merged result so the caller (and any persistence
     # path) can carry it forward. Kept as plain dict keys to avoid changing the

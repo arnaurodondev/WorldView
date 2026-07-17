@@ -95,6 +95,10 @@ async def run_ml_phase(
     # verbatim to run_deep_extraction_block, which gates on entailment_config.enabled.
     entailment_client: ExtractionClient | None = None,
     entailment_config: Any = None,
+    # 2026-07-16 fabrication filter: deterministic evidence-span grounding gate config.
+    # Forwarded verbatim to run_deep_extraction_block; None → block applies its own
+    # default (present_only), so the gate is active unless explicitly turned off.
+    evidence_grounding_config: Any = None,
     # Injected callable for Block 10 — defaults to the real implementation.
     # article_consumer._run_pipeline passes ``run_deep_extraction_block`` from
     # the article_consumer namespace so unit tests can patch it there.
@@ -191,6 +195,7 @@ async def run_ml_phase(
             usage_logger=usage_logger,
             entailment_client=entailment_client,
             entailment_config=entailment_config,
+            evidence_grounding_config=evidence_grounding_config,
             metrics=_NLP_METRICS,
             # BP-719 Mode B: bound the deep-extraction prefix on very large filings
             # so the ML phase fits the 900s watchdog. 0 (default) = no cap.

@@ -315,7 +315,10 @@ class TestRunDeepExtractionBlock:
                     "claim_type": "dividend",
                     "polarity": "positive",
                     "confidence": 0.90,
-                    "evidence_text": "raised dividend",
+                    # Verbatim substring of the chunk text above — the evidence-span
+                    # grounding gate (default present_only) drops claims whose quote is
+                    # not traceable to the source, so this fixture must quote verbatim.
+                    "evidence_text": "Apple raised its dividend.",
                 }
             ],
             "relations": [],
