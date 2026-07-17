@@ -43,7 +43,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     UnitOfWorkProtocol,
 )
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
-from messaging.kafka.consumer.errors import ConsumerError  # type: ignore[import-untyped]
+from messaging.kafka.consumer.errors import FatalError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 from nlp_pipeline.application.blocks.deep_extraction import run_deep_extraction_block
@@ -576,11 +576,19 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     #      lowest offset in the batch.  A message that hit an un-handled exception
     #      breaks the contiguous run, so its offset (and everything after it on
     #      that partition) is re-polled on the next cycle / after rebalance.
-    # A message routed through ``_handle_failure`` (dead-letter / outbox retry) is
-    # considered "handled" for offset purposes — this matches the base loop, which
-    # commits after ``_handle_failure`` returns.  Idempotency (ValkeyDedupMixin +
-    # deterministic UUID5 IDs + idempotent upserts + the routing_decisions
-    # already-processed guard in ``process_message``) makes re-delivery safe.
+    #
+    # POISON / FAILURE HANDLING (see ``_settle_message``): a failing message is
+    # settled WITHOUT a consumer ``seek()`` — it is retried in place (async
+    # backoff) up to ``max_retries`` and then durably dead-lettered, at which
+    # point it counts as "handled" so the partition DRAINS past it.  This is the
+    # nlp-consumer-commit-stall fix: the old path called the base
+    # ``_handle_failure`` whose seek-back re-pinned the partition head under
+    # concurrency and froze the committed offset forever.  Idempotency
+    # (ValkeyDedupMixin + deterministic UUID5 IDs + idempotent upserts + the
+    # routing_decisions already-processed guard in ``process_message``) makes the
+    # in-place retries and any re-delivery safe.  The offset is committed
+    # SYNCHRONOUSLY (see ``_commit_sync``) so a rejected commit is logged, not
+    # silently dropped by confluent's default fire-and-forget async commit.
     #
     # Messages are keyed by ``doc_id`` upstream (S5), so two events for the same
     # document land on the same partition and are dispatched in offset order;
@@ -679,33 +687,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             tp = (msg.topic(), msg.partition())
             offset = msg.offset()
             async with sem:
-                try:
-                    try:
-                        await self._handle_message(msg)
-                    except _ASYNCPG_CONN_ERRORS as conn_exc:
-                        logger.warning(  # type: ignore[no-any-return]
-                            "consumer_db_connection_lost_retrying",
-                            error=str(conn_exc),
-                            topic=msg.topic(),
-                            partition=msg.partition(),
-                            offset=offset,
-                        )
-                        await asyncio.sleep(1.0)
-                        await self._handle_message(msg)
-                    outcomes[tp][offset] = True
-                except ConsumerError as exc:
-                    # Routed to dead-letter / outbox retry — treated as handled for
-                    # offset purposes (mirrors the base loop committing after
-                    # _handle_failure returns).
-                    await self._handle_failure(msg, exc)
-                    outcomes[tp][offset] = True
-                except Exception as exc:
-                    # Unexpected error: the base loop still commits after
-                    # _handle_failure, so we mirror that to avoid a poison message
-                    # permanently blocking its partition's contiguous offset run.
-                    logger.exception("kafka_unexpected_error", error=str(exc))  # type: ignore[no-any-return]
-                    await self._handle_failure(msg, exc)
-                    outcomes[tp][offset] = True
+                # ``_settle_message`` NEVER seeks and NEVER blocks the loop; it
+                # returns True once the message is settled (succeeded OR durably
+                # dead-lettered) so the contiguous commit can drain the partition
+                # PAST a poison article instead of pinning its head forever.
+                outcomes[tp][offset] = await self._settle_message(msg)
 
         await asyncio.gather(*(_process_one(m) for m in batch))
 
@@ -716,11 +702,187 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # one whose offset equals the contiguous high-water mark and commits it.
         commit_targets = self._contiguous_commit_targets(batch, outcomes)
         for msg in commit_targets:
-            if not self._config.enable_auto_commit:
-                with contextlib.suppress(Exception):
-                    await loop.run_in_executor(None, self._consumer.commit, msg)
+            if self._config.enable_auto_commit:
+                continue
+            try:
+                # SYNCHRONOUS commit (asynchronous=False).  confluent's DEFAULT
+                # ``commit(msg)`` is fire-and-forget (asynchronous=True): it never
+                # raises and, with no ``on_commit`` callback registered, drops
+                # every failure silently — so a rejected offset commit vanished
+                # and the partition's committed offset froze with no signal
+                # (the root cause of the nlp-consumer-commit-stall). Block on the
+                # broker ack (on the executor thread, not the event loop) and LOG
+                # failures so a stuck commit is observable instead of a silent
+                # freeze.  The ack costs ~1 RTT and runs once per poll batch.
+                await loop.run_in_executor(None, self._commit_sync, msg)
+            except Exception as commit_exc:
+                logger.warning(  # type: ignore[no-any-return]
+                    "article_consumer.offset_commit_failed",
+                    topic=msg.topic(),
+                    partition=msg.partition(),
+                    offset=msg.offset(),
+                    error=str(commit_exc),
+                )
         with contextlib.suppress(Exception):
             await loop.run_in_executor(None, self._record_consumer_lag)
+
+    def _commit_sync(self, msg: Any) -> None:
+        """Synchronously commit *msg*'s offset (blocks until the broker acks).
+
+        Runs on the default executor thread — never the event loop.  Synchronous
+        (``asynchronous=False``) so a commit rejection surfaces as an exception
+        the caller LOGS, rather than confluent's default async commit that drops
+        errors on the floor.  confluent commits ``msg.offset() + 1`` for the
+        message's partition, implicitly acking every lower offset.
+        """
+        self._consumer.commit(message=msg, asynchronous=False)
+
+    async def _safe_event_id(self, msg: Any) -> str:
+        """Best-effort event_id for retry-counter keying / DLQ (never raises)."""
+        try:
+            value = self.deserialize_value(msg.value() or b"", self.get_schema_path(msg.topic()))
+            return self.extract_event_id(value)
+        except Exception:
+            return f"{msg.topic()}/{msg.partition()}/{msg.offset()}"
+
+    async def _settle_message(self, msg: Any) -> bool:
+        """Process one message; return True once its offset MAY advance.
+
+        HEAD-OF-LINE FIX (fix/nlp-consumer-commit-stall, 2026-07-17)
+        ----------------------------------------------------------------
+        The previous concurrent path routed failures through the base
+        ``_handle_failure`` whose ``enable_persistent_retry`` branch calls
+        ``consumer.seek()`` + a *blocking* ``time.sleep()``.  ``seek()`` is a
+        GLOBAL operation on the shared librdkafka consumer; issuing it from one
+        of up to ``article_consumer_concurrency`` CONCURRENT ``_process_one``
+        tasks re-pins the partition's fetch position to the failing offset while
+        other offsets on the same partition are still in flight.  A message that
+        keeps failing (observed live: ``dlq-recover``-tagged SEC-filing events)
+        therefore pinned its partition's committed offset FOREVER — a permanent
+        head-of-line freeze — while the rest of the backlog was re-read and
+        re-paid to DeepInfra on every cycle/restart.  ``_process_one`` also
+        ignored ``_handle_failure``'s ``False`` "commit-barrier" return, so the
+        contract was doubly broken.
+
+        This method fixes it with a concurrency-safe settle policy that NEVER
+        seeks and NEVER blocks the event loop:
+
+          1. Run the pipeline; on success return True (advance).
+          2. On a transient error, retry IN PLACE up to ``max_retries`` attempts
+             with async exponential backoff.  The durable Valkey attempt counter
+             (``_get_attempt_count`` / ``_record_attempt``) bounds retries ACROSS
+             redeliveries/restarts too, so a poison cannot loop forever.
+          3. On exhaustion (or a non-retryable ``FatalError`` such as a malformed
+             payload) DEAD-LETTER the message durably (nlp_db.dlq) and return
+             True so the contiguous commit drains the partition PAST the poison.
+
+        At-least-once is preserved: an offset advances only after the message
+        SUCCEEDS or is durably dead-lettered.  Idempotency (ValkeyDedupMixin +
+        the routing_decisions already-processed guard + deterministic IDs) makes
+        the in-place retries and any redelivery safe.
+        """
+        event_id = await self._safe_event_id(msg)
+        offset = msg.offset()
+        # Durable count survives redelivery/restart, so a message that fails, is
+        # redelivered, and fails again ESCALATES toward the DLQ instead of getting
+        # a fresh full retry budget every time.  (Fail-closed: a Valkey outage
+        # makes ``_get_attempt_count`` return max_retries → dead-letter on first
+        # failure rather than risk an unbounded in-place loop.)
+        base_attempts = await self._get_attempt_count(event_id)
+        max_retries = max(1, self._config.max_retries)
+
+        for local_attempt in range(max_retries):
+            attempt = base_attempts + local_attempt + 1
+            try:
+                try:
+                    await self._handle_message(msg)
+                except _ASYNCPG_CONN_ERRORS as conn_exc:
+                    # Stale asyncpg pool after a Postgres restart: one quick retry
+                    # gives the pool a chance to evict the dead connection.
+                    logger.warning(  # type: ignore[no-any-return]
+                        "consumer_db_connection_lost_retrying",
+                        error=str(conn_exc),
+                        topic=msg.topic(),
+                        partition=msg.partition(),
+                        offset=offset,
+                    )
+                    await asyncio.sleep(1.0)
+                    await self._handle_message(msg)
+                return True  # settled: success → offset may advance
+            except FatalError as exc:
+                # Non-retryable (malformed / schema / business-rule): DLQ now and
+                # advance — retrying can never help.
+                await self._dead_letter_and_advance(msg, exc, event_id=event_id, reason="fatal")
+                return True
+            except Exception as exc:
+                await self._record_attempt(event_id, attempt, exc)
+                if attempt >= max_retries:
+                    # Retries exhausted → DLQ and ADVANCE so the partition drains
+                    # instead of blocking on this poison article.
+                    await self._dead_letter_and_advance(msg, exc, event_id=event_id, reason="max_retries")
+                    return True
+                logger.warning(  # type: ignore[no-any-return]
+                    "article_consumer.transient_retry_in_place",
+                    event_id=event_id,
+                    attempt=attempt,
+                    max_retries=max_retries,
+                    error=str(exc),
+                    topic=msg.topic(),
+                    partition=msg.partition(),
+                    offset=offset,
+                )
+                # Async backoff — does NOT block the event loop (contrast the base
+                # ``_seek_back``'s ``time.sleep``) and does NOT seek the consumer.
+                await asyncio.sleep(self._compute_backoff(attempt))
+
+        # Defensive: the loop always returns above.  Advance rather than risk a
+        # silent re-freeze.
+        return True
+
+    async def _dead_letter_and_advance(
+        self,
+        msg: Any,
+        exc: BaseException,
+        *,
+        event_id: str,
+        reason: str,
+    ) -> None:
+        """Durably dead-letter a poison message so its partition can advance.
+
+        Builds a :class:`FailureInfo` carrying the ORIGINAL payload bytes and
+        routes it through :meth:`dead_letter` (→ ``_dead_letter_impl`` →
+        ``nlp_db.dlq``).  A DLQ-write failure is logged, never raised: the
+        message is idempotently re-deliverable, and crashing here would
+        re-introduce the head-of-line block this fix removes.
+        """
+        failure: FailureInfo[None] = FailureInfo(
+            event_id=event_id,
+            topic=msg.topic(),
+            partition=msg.partition(),
+            offset=msg.offset(),
+            attempt=self._config.max_retries,
+            last_error=exc,
+            raw_payload=msg.value() or b"",
+        )
+        try:
+            await self.dead_letter(failure, reason=reason)
+        except Exception:
+            logger.exception(  # type: ignore[no-any-return]
+                "article_consumer.dead_letter_failed",
+                event_id=event_id,
+                topic=msg.topic(),
+                partition=msg.partition(),
+                offset=msg.offset(),
+            )
+        logger.error(  # type: ignore[no-any-return]
+            "article_consumer.poison_dead_lettered_advanced",
+            event_id=event_id,
+            reason=reason,
+            topic=msg.topic(),
+            partition=msg.partition(),
+            offset=msg.offset(),
+            error=str(exc)[:200],
+        )
 
     @staticmethod
     def _contiguous_commit_targets(batch: list[Any], outcomes: dict[tuple[str, int], dict[int, bool]]) -> list[Any]:
