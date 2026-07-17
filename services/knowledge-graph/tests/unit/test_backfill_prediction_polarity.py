@@ -76,10 +76,20 @@ class TestProcessBatch:
                 _Result(
                     rows=[
                         # (exposure_id, entity_id, question, condition_id, canonical_name)
-                        ("01900000-0000-7000-8000-00000000aaaa", "01900000-0000-7000-8000-0000000000e1",
-                         "Will X win?", "0xcond", "Acme Corp"),
-                        ("01900000-0000-7000-8000-00000000bbbb", "01900000-0000-7000-8000-0000000000e2",
-                         "Will X win?", "0xcond", "Beta Inc"),
+                        (
+                            "01900000-0000-7000-8000-00000000aaaa",
+                            "01900000-0000-7000-8000-0000000000e1",
+                            "Will X win?",
+                            "0xcond",
+                            "Acme Corp",
+                        ),
+                        (
+                            "01900000-0000-7000-8000-00000000bbbb",
+                            "01900000-0000-7000-8000-0000000000e2",
+                            "Will X win?",
+                            "0xcond",
+                            "Beta Inc",
+                        ),
                     ]
                 )
             ]
@@ -106,8 +116,13 @@ class TestProcessBatch:
                 _Result(
                     rows=[
                         # no canonical_name → unclassifiable, must skip
-                        ("01900000-0000-7000-8000-00000000cccc", "01900000-0000-7000-8000-0000000000e3",
-                         "Q?", "0xc", None),
+                        (
+                            "01900000-0000-7000-8000-00000000cccc",
+                            "01900000-0000-7000-8000-0000000000e3",
+                            "Q?",
+                            "0xc",
+                            None,
+                        ),
                     ]
                 )
             ]

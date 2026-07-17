@@ -187,9 +187,7 @@ class PredictionEventConsumer(BaseKafkaConsumer[dict]):
         # legacy/pre-linkage events (Avro default []) → no linkage, no regression.
         # Coerce defensively: only non-empty string ids survive.
         raw_member_ids = value.get("member_condition_ids") or []
-        member_condition_ids = tuple(
-            str(cid).strip() for cid in raw_member_ids if isinstance(cid, str) and cid.strip()
-        )
+        member_condition_ids = tuple(str(cid).strip() for cid in raw_member_ids if isinstance(cid, str) and cid.strip())
 
         event = PredictionEvent(
             event_id=str(group_id),

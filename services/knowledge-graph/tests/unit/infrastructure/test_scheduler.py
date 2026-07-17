@@ -128,7 +128,6 @@ class TestProvisionalEnrichmentInterval:
             "worker_embedding_refresh_interval_s."
         )
 
-
     def test_entity_retype_job_registered_when_enabled(self) -> None:
         """Worker 13K registers 'worker_13k_entity_retype' at its interval when enabled."""
         s = _make_settings()
