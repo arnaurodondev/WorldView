@@ -133,10 +133,19 @@ spec:
               envFrom:
                 - secretRef:
                     name: market-ingestion-secrets
+              # SCHEDULABILITY on the single-node cx53: the scheduler binds on
+              # memory REQUESTS, and the node runs memory-request-bound (observed
+              # 92-99% reserved during the live NLP news backfill). A 320Mi request
+              # can go Pending at a transient 99% peak (~313Mi free) — the same
+              # fail-to-schedule mode that stranded gliner (a 2Gi request). This is a
+              # short-lived, network-bound per-ticker sweep whose real RSS tracks the
+              # market-ingestion worker (~170Mi live), so a 256Mi request fits even at
+              # a 99% peak while staying well above actual usage; the 1Gi limit still
+              # absorbs the per-symbol canonicalize/serialize burst.
               resources:
                 requests:
                   cpu: 200m
-                  memory: 320Mi
+                  memory: 256Mi
                 limits:
                   cpu: "1000m"
                   memory: 1Gi
