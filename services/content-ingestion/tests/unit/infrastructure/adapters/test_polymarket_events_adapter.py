@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from content_ingestion.config import PolymarketEventsProviderSettings
 from content_ingestion.domain.entities import Source, SourceType
 from content_ingestion.domain.exceptions import AdapterError
 from content_ingestion.infrastructure.adapters.polymarket_gamma_events.adapter import (
@@ -23,10 +24,9 @@ _FETCHED_AT = datetime(2026, 4, 9, 14, 0, 0, tzinfo=UTC)
 _UTC_NOW_PATH = "content_ingestion.infrastructure.adapters.polymarket_gamma_events.adapter.common.time.utc_now"
 
 
-def _client_settings(base_url: str = "https://gamma-api.polymarket.com/events") -> object:
-    cfg = MagicMock()
-    cfg.base_url = base_url
-    return cfg
+def _client_settings(order: str = "", ascending: bool = False) -> PolymarketEventsProviderSettings:
+    # Real settings so the offset-pagination config (order/ascending) is exercised.
+    return PolymarketEventsProviderSettings(order=order, ascending=ascending)
 
 
 def _adapter_settings(page_size: int = 500, max_pages: int = 20) -> object:
@@ -36,7 +36,7 @@ def _adapter_settings(page_size: int = 500, max_pages: int = 20) -> object:
     return cfg
 
 
-def _response(body: dict, status_code: int = 200) -> MagicMock:
+def _response(body: object, status_code: int = 200) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status_code
     resp.json.return_value = body
@@ -71,32 +71,107 @@ def _make_adapter(client: object, storage: object = None, settings: object = Non
 
 
 class TestPolymarketEventsClient:
-    async def test_parses_events_page(self) -> None:
+    async def test_first_page_request_carries_offset_zero(self) -> None:
+        """A cursor-less first call sends ``offset=0`` + ``closed=false`` (bare-array API)."""
         http = AsyncMock()
-        http.get = AsyncMock(return_value=_response({"events": [_event()], "next_cursor": "c1"}))
-        client = PolymarketEventsClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+        http.get = AsyncMock(return_value=_response([]))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())
 
-        page = await client.fetch_events_page(limit=10)
+        await client.fetch_events_page(limit=500)
 
-        assert page.next_cursor == "c1"
-        assert page.events[0]["id"] == "evt_1"
+        _, kwargs = http.get.call_args
+        assert kwargs["params"]["offset"] == 0
+        assert kwargs["params"]["limit"] == 500
+        assert kwargs["params"]["closed"] == "false"
+        assert kwargs["params"]["active"] == "true"
 
-    async def test_next_cursor_absent(self) -> None:
+    async def test_synthetic_cursor_advances_by_limit(self) -> None:
+        """A full page (len == limit) yields next_cursor == str(offset + limit)."""
         http = AsyncMock()
-        http.get = AsyncMock(return_value=_response({"events": []}))
-        client = PolymarketEventsClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+        events = [_event(f"evt_{i}") for i in range(2)]
+        http.get = AsyncMock(return_value=_response(events))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())
 
-        page = await client.fetch_events_page()
+        page = await client.fetch_events_page(limit=2)
 
         assert isinstance(page, GammaEventsPage)
+        assert page.next_cursor == "2"
+
+    async def test_request_uses_offset_decoded_from_cursor(self) -> None:
+        """The opaque cursor string is decoded back into the ``offset`` param."""
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response([_event(), _event("evt_2")]))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())
+
+        page = await client.fetch_events_page(limit=2, next_cursor="500")
+
+        _, kwargs = http.get.call_args
+        assert kwargs["params"]["offset"] == 500
+        assert page.next_cursor == "502"
+
+    async def test_stop_on_short_page(self) -> None:
+        """A page shorter than ``limit`` terminates the loop (next_cursor None)."""
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response([_event()]))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())
+
+        page = await client.fetch_events_page(limit=500, next_cursor="1000")
+
+        assert page.next_cursor is None
+        assert len(page.events) == 1
+
+    async def test_stop_on_empty_page(self) -> None:
+        """An empty page terminates the loop (next_cursor None)."""
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response([]))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())
+
+        page = await client.fetch_events_page(limit=500, next_cursor="2000")
+
+        assert page.events == []
         assert page.next_cursor is None
 
-    async def test_non_list_body_yields_empty_page(self) -> None:
-        # PLAN-0056 QA FIX 5: a bare non-list/non-dict body must not crash — the
-        # client returns an empty page instead of propagating a non-iterable.
+    async def test_order_param_included_when_configured(self) -> None:
+        """A non-empty ``order`` adds order + ascending params for stable paging."""
         http = AsyncMock()
-        http.get = AsyncMock(return_value=_response("unexpected-string-body"))  # type: ignore[arg-type]
-        client = PolymarketEventsClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+        http.get = AsyncMock(return_value=_response([]))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings(order="volume24hr"))
+
+        await client.fetch_events_page(limit=500)
+
+        _, kwargs = http.get.call_args
+        assert kwargs["params"]["order"] == "volume24hr"
+        assert kwargs["params"]["ascending"] == "false"
+
+    async def test_order_param_omitted_when_empty(self) -> None:
+        """Empty ``order`` (safe fallback) omits both order and ascending params."""
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response([]))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings(order=""))
+
+        await client.fetch_events_page(limit=500)
+
+        _, kwargs = http.get.call_args
+        assert "order" not in kwargs["params"]
+        assert "ascending" not in kwargs["params"]
+
+    async def test_bare_array_response_parsed(self) -> None:
+        """The live bare-array response shape is parsed into events."""
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response([_event("evt_x")]))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())
+
+        page = await client.fetch_events_page(limit=500)
+
+        assert page.events[0]["id"] == "evt_x"
+        assert page.next_cursor is None  # 1 < 500 → last page
+
+    async def test_non_list_body_yields_empty_page(self) -> None:
+        # A bare non-list/non-dict body must not crash — the client returns an
+        # empty page instead of propagating a non-iterable.
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response("unexpected-string-body"))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())
 
         page = await client.fetch_events_page()
 
@@ -104,10 +179,10 @@ class TestPolymarketEventsClient:
         assert page.next_cursor is None
 
     async def test_non_dict_items_skipped(self) -> None:
-        # Only genuine event dicts are kept; scalar junk in the list is dropped.
+        # Only genuine event dicts are kept; scalar junk in the array is dropped.
         http = AsyncMock()
-        http.get = AsyncMock(return_value=_response({"events": [_event(), "junk", 42, None]}))
-        client = PolymarketEventsClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+        http.get = AsyncMock(return_value=_response([_event(), "junk", 42, None]))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())
 
         page = await client.fetch_events_page()
 
@@ -116,8 +191,8 @@ class TestPolymarketEventsClient:
 
     async def test_http_429_raises_adapter_error(self) -> None:
         http = AsyncMock()
-        http.get = AsyncMock(return_value=_response({}, status_code=429))
-        client = PolymarketEventsClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+        http.get = AsyncMock(return_value=_response([], status_code=429))
+        client = PolymarketEventsClient(http_client=http, settings=_client_settings())
 
         with pytest.raises(AdapterError, match="429") as exc:
             await client.fetch_events_page()

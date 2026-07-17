@@ -1,8 +1,25 @@
 """HTTP client for the Polymarket Gamma ``/events`` API.
 
-No authentication required — the Gamma API is publicly accessible. Each page
-returns up to ``limit`` events and an optional ``next_cursor`` for pagination,
-mirroring the ``/markets`` endpoint used by :class:`PolymarketClient`.
+No authentication required — the Gamma API is publicly accessible.
+
+Pagination (verified against the official Gamma docs, 2026-07-16): the Gamma list
+endpoints paginate via ``offset``/``limit`` query params and return a **bare JSON
+array** of event objects (there is NO response-body ``next_cursor`` field). A page
+is the last page when it returns fewer than ``limit`` items (or is empty).
+
+To preserve the adapter's cursor-loop contract without leaking offset arithmetic
+into the adapter, this client keeps the ``next_cursor`` parameter/field names but
+treats the cursor as an **opaque synthetic string == the next offset**:
+
+* ``next_cursor is None``  → start at offset 0 (first page).
+* ``next_cursor == "500"`` → start at offset 500 (second page, page_size 500).
+* returned ``next_cursor``  → ``str(offset + limit)`` when a full page came back
+  (more pages may remain), or ``None`` when the page was short/empty (done).
+
+The adapter loops until ``next_cursor is None`` or ``max_pages_per_cycle`` is hit,
+so long-tail-but-active event groups (2028 Presidential, GTA VI, WC 2026, …) are
+fetched instead of only the first 500 events — those member markets no longer keep
+``event_id = NULL``.
 """
 
 from __future__ import annotations
@@ -26,12 +43,47 @@ class GammaEventsPage:
     """Typed result from a single paginated Gamma ``/events`` call.
 
     Attributes:
-        events: Raw event dicts from the ``events`` array in the response.
-        next_cursor: Opaque cursor for the next page, or ``None`` if no more pages.
+        events: Raw event dicts from the response array.
+        next_cursor: Synthetic opaque cursor (the next ``offset`` as a string) when
+            more pages may remain, or ``None`` when this was the last page.
     """
 
     events: list[dict]
     next_cursor: str | None
+
+
+def _cursor_to_offset(next_cursor: str | None) -> int:
+    """Decode the opaque synthetic cursor into an integer offset.
+
+    A missing/invalid cursor is treated as offset 0 (start of the list) so a
+    malformed cursor can never silently skip the head of the universe.
+    """
+    if next_cursor is None:
+        return 0
+    try:
+        offset = int(next_cursor)
+    except (TypeError, ValueError):
+        return 0
+    return offset if offset >= 0 else 0
+
+
+def _extract_items(data: object, *, key: str) -> list[dict]:
+    """Normalise a Gamma response body into a list of dicts.
+
+    The live Gamma API returns a bare JSON array, but we defensively also accept
+    an object wrapping the array under ``key`` or ``data``. Any non-list / non-dict
+    body yields an empty list so a malformed response can never crash the loop.
+    """
+    if isinstance(data, list):
+        raw: list = data
+    elif isinstance(data, dict):
+        candidate = data.get(key)
+        if not isinstance(candidate, list):
+            candidate = data.get("data")
+        raw = candidate if isinstance(candidate, list) else []
+    else:
+        raw = []
+    return [item for item in raw if isinstance(item, dict)]
 
 
 class PolymarketEventsClient:
@@ -42,7 +94,7 @@ class PolymarketEventsClient:
 
     Args:
         http_client: Shared async HTTP client (injected by the worker).
-        settings: Provider configuration (base URL, page size, etc.).
+        settings: Provider configuration (base URL, page size, sort order, etc.).
     """
 
     def __init__(
@@ -59,22 +111,37 @@ class PolymarketEventsClient:
         limit: int = 500,
         next_cursor: str | None = None,
     ) -> GammaEventsPage:
-        """Fetch one page of active Polymarket events.
+        """Fetch one page of active Polymarket events via offset pagination.
 
         Args:
             limit: Maximum number of events per page (1-1000).
-            next_cursor: Opaque pagination cursor from a prior response.
+            next_cursor: Opaque synthetic cursor from a prior page (the next
+                ``offset`` encoded as a string). ``None`` starts at offset 0.
 
         Returns:
-            :class:`GammaEventsPage` with the parsed events and optional cursor.
+            :class:`GammaEventsPage` with the parsed events and the synthetic next
+            cursor (``None`` once the last page is reached).
 
         Raises:
             AdapterError: On any non-200 HTTP status (429 included — the worker
                 treats ``AdapterError`` as retryable).
         """
-        params: dict[str, str | int] = {"active": "true", "limit": limit}
-        if next_cursor is not None:
-            params["next_cursor"] = next_cursor
+        offset = _cursor_to_offset(next_cursor)
+
+        # ``active=true`` + ``closed=false`` restrict to live, tradeable event
+        # groups. ``order``/``ascending`` give a stable sort so offset paging is
+        # deterministic and (when ordered by volume) high-value groups are fetched
+        # first under the ``max_pages_per_cycle`` bound.
+        params: dict[str, str | int] = {
+            "active": "true",
+            "closed": "false",
+            "limit": limit,
+            "offset": offset,
+        }
+        order = getattr(self._settings, "order", "") or ""
+        if order:
+            params["order"] = order
+            params["ascending"] = "true" if getattr(self._settings, "ascending", False) else "false"
 
         try:
             resp = await self._http.get(
@@ -88,18 +155,16 @@ class PolymarketEventsClient:
         if resp.status_code != 200:
             raise AdapterError(f"Gamma events API HTTP {resp.status_code}", status_code=resp.status_code)
 
-        data = resp.json()
-        # Guard against a non-list body: a malformed / unexpected response (e.g. a
-        # bare string, number, or error object) must yield an empty page rather
-        # than propagating a non-iterable into ``_process_event`` and failing the
-        # whole task. Only a genuine list of event dicts is accepted.
-        raw_events = data.get("events", []) if isinstance(data, dict) else data
-        events: list[dict] = [e for e in raw_events if isinstance(e, dict)] if isinstance(raw_events, list) else []
-        cursor: str | None = data.get("next_cursor") if isinstance(data, dict) else None
+        events = _extract_items(resp.json(), key="events")
+
+        # Last page when the API returned fewer rows than requested (or none).
+        # Otherwise advance the synthetic cursor by ``limit`` for the next page.
+        next_offset: str | None = None if len(events) < limit else str(offset + limit)
 
         logger.debug(
             "gamma_events_page_fetched",
+            offset=offset,
             event_count=len(events),
-            has_next=cursor is not None,
+            has_next=next_offset is not None,
         )
-        return GammaEventsPage(events=events, next_cursor=cursor)
+        return GammaEventsPage(events=events, next_cursor=next_offset)

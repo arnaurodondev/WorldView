@@ -368,7 +368,7 @@ All news-source `SourceType` values come from `contracts.enums.ContentSourceType
 | **SEC EDGAR** | 30 min | User-Agent header (required) | `asyncio.Semaphore(8)` | `sha256(accession_no)` | Date-range via `startdt`/`enddt`; per-CIK via `config["ciks"]` |
 | **Finnhub** | 15 min | `FINNHUB_API_KEY` query param | Token bucket (55 req/min) | `sha256(str(article_id))` | Date-range on news + transcripts |
 | **NewsAPI** | 4 hours* | `NEWSAPI_KEY` (`X-Api-Key` header) | Valkey daily counter (100 req/day default) | `sha256(article.url)` | Date-range via `from` |
-| **Polymarket** | Configurable | None (public Gamma API) | `max_pages_per_cycle=20` | `(market_id, fetched_at)` unique | Full catalogue re-fetch |
+| **Polymarket** | Configurable | None (public Gamma API) | offset pagination, `max_pages_per_cycle=20` × `page_size=500` | `(market_id, fetched_at)` unique | Full catalogue re-fetch |
 
 *NewsAPI default poll interval is 4 hours (`poll_interval_seconds=14400`) to stay under the 100 req/day free-tier limit.
 
@@ -380,11 +380,13 @@ All news-source `SourceType` values come from `contracts.enums.ContentSourceType
 
 **Polymarket special path:** `POLYMARKET` is intentionally NOT in `ADAPTER_REGISTRY`. The worker detects `SourceType.POLYMARKET` and dispatches directly to `_execute_polymarket_task()` → `PolymarketAdapter` → `FetchAndWritePredictionMarketsUseCase` (R24: batch-collect first, then short-lived session for dedup). The scheduler uses `PolymarketAdapter` only for its `fetch_log_exists_fn` dedup callback.
 
+**Gamma pagination (offset, not cursor — `fix/polymarket-pagination`, 2026-07-16):** the Gamma `/markets` and `/events` endpoints paginate via `offset`/`limit` and return a **bare JSON array** — there is no response-body `next_cursor`. The clients (`PolymarketClient`, `PolymarketEventsClient`) previously read a non-existent `next_cursor`, so the adapter loop always broke after page 1 → only the first 500 rows (in default order) were ever ingested (`max_pages_per_cycle` was dead code). This left the market universe at ~101 rows and long-tail-but-active event groups (2028 Presidential, GTA VI, WC 2026) unfetched, so their member markets kept `event_id = NULL`. **Fix:** the clients now send `offset` (incremented by `limit` each page) + `closed=false` + a configurable stable `order`/`ascending` sort, and stop when a page returns fewer than `limit` items (or empty). To keep the adapter's cursor-loop contract unchanged, the client returns a **synthetic string cursor == the next offset** (or `None` when done). Dedup/upsert stays snapshot-based `(id, snapshot_at)` — idempotent, no clobber. One cycle is bounded by `max_pages_per_cycle × page_size` = 20 × 500 = 10k rows so the first post-fix cycle (universe jumping from ~101 to potentially thousands) does not stampede the downstream CLOB/trades/OI work-lists. `order` defaults to `volume24hr` (highest-value first) and is deploy-overridable to `""` (omits the param) if the live field name differs.
+
 **Deeper-stream Polymarket adapters (PLAN-0056 Wave B1):** four additional streams supplement the base markets snapshot. Each is a `{Name}Client` + `{Name}Adapter` package under `infrastructure/adapters/`, mirroring `PolymarketAdapter` (dedup via `fetch_log_exists_fn(id, snapshot_at)`, non-fatal MinIO bronze write, `AdapterError` on non-200, 429 → retryable). Like base `POLYMARKET`, all four route directly through `_execute_polymarket_task()` (wired in Wave B3) and are NOT in `ADAPTER_REGISTRY`. This wave delivers clients + adapters + config + fetch-result entities only.
 
 | Stream | `SourceType` | Package | Client / Adapter | Endpoint (default `base_url`) | Fetch-result entity |
 |--------|--------------|---------|------------------|-------------------------------|---------------------|
-| Events | `polymarket_gamma_events` | `polymarket_gamma_events/` | `PolymarketEventsClient` / `PolymarketEventsAdapter` | `https://gamma-api.polymarket.com/events` (cursor-paginated) | `PredictionEventFetchResult` |
+| Events | `polymarket_gamma_events` | `polymarket_gamma_events/` | `PolymarketEventsClient` / `PolymarketEventsAdapter` | `https://gamma-api.polymarket.com/events` (offset-paginated) | `PredictionEventFetchResult` |
 | Price history | `polymarket_clob` | `polymarket_clob/` | `PolymarketClobHistoryClient` / `PolymarketClobHistoryAdapter` | `https://clob.polymarket.com/prices-history` (per token_id) | `PredictionHistoryFetchResult` |
 | Trades | `polymarket_data_trades` | `polymarket_data_trades/` | `PolymarketTradesClient` / `PolymarketTradesAdapter` | `https://data-api.polymarket.com/trades` (per condition_id, offset) | `PredictionTradeFetchResult` |
 | Open interest | `polymarket_data_oi` | `polymarket_data_oi/` | `PolymarketOIClient` / `PolymarketOIAdapter` | `https://data-api.polymarket.com/oi` (per condition_id) | `PredictionOIFetchResult` |
@@ -506,6 +508,8 @@ All environment variables are prefixed with `CONTENT_INGESTION_`. Nested provide
 | `CONTENT_INGESTION_POLYMARKET__BASE_URL` | `https://gamma-api.polymarket.com/markets` | Gamma API endpoint |
 | `CONTENT_INGESTION_POLYMARKET__PAGE_SIZE` | `500` | Markets per page (max 1000) |
 | `CONTENT_INGESTION_POLYMARKET__MAX_PAGES_PER_CYCLE` | `20` | Max pages per cycle (20 × 500 = 10K markets) |
+| `CONTENT_INGESTION_POLYMARKET__ORDER` / `__ASCENDING` | `volume24hr` / `false` | Stable offset-paging sort; set `ORDER=""` to omit the param |
+| `CONTENT_INGESTION_POLYMARKET_EVENTS__ORDER` / `__ASCENDING` | `volume24hr` / `false` | Stable offset-paging sort for `/events`; `ORDER=""` omits it |
 | `CONTENT_INGESTION_POLYMARKET_EVENTS__BASE_URL` | `https://gamma-api.polymarket.com/events` | Gamma events endpoint (B1) |
 | `CONTENT_INGESTION_POLYMARKET_CLOB__BASE_URL` | `https://clob.polymarket.com/prices-history` | CLOB price-history endpoint (B1) |
 | `CONTENT_INGESTION_POLYMARKET_CLOB__INTERVAL` / `__FALLBACK_INTERVAL` | `1h` / `1d` | Primary + resolved-market fallback interval (B1) |

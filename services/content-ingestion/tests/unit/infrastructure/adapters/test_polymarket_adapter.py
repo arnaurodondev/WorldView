@@ -6,9 +6,10 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from content_ingestion.config import PolymarketProviderSettings
 from content_ingestion.domain.entities import Source, SourceType
 from content_ingestion.infrastructure.adapters.polymarket.adapter import PolymarketAdapter, _build_bronze_key
-from content_ingestion.infrastructure.adapters.polymarket.client import GammaMarketsPage
+from content_ingestion.infrastructure.adapters.polymarket.client import GammaMarketsPage, PolymarketClient
 
 pytestmark = pytest.mark.unit
 
@@ -95,6 +96,39 @@ class TestPolymarketAdapter:
             results = await adapter.fetch(_make_source())
 
         assert client.fetch_markets_page.await_count == 3
+        assert len(results) == 3
+
+    async def test_adapter_walks_offsets_across_pages_until_short_page(self) -> None:
+        """End-to-end: adapter + real client page through increasing offsets and
+        stop on the short page. Proves the offset-pagination fix: page 1 (offset 0,
+        full) → page 2 (offset 2, short) → stop. Regression for the page-1-only bug.
+        """
+
+        def _resp(body: list) -> MagicMock:
+            r = MagicMock()
+            r.status_code = 200
+            r.json.return_value = body
+            return r
+
+        full_page = [_market("cond_a"), _market("cond_b")]  # len == limit(2) → more
+        short_page = [_market("cond_c")]  # len < limit → last page
+        http = AsyncMock()
+        http.get = AsyncMock(side_effect=[_resp(full_page), _resp(short_page)])
+        client = PolymarketClient(
+            http_client=http,  # type: ignore[arg-type]
+            settings=PolymarketProviderSettings(page_size=2, order=""),
+        )
+        settings = PolymarketProviderSettings(page_size=2, max_pages_per_cycle=20, order="")
+
+        adapter = _make_adapter(client=client, settings=settings)
+        _utc_now_path = "content_ingestion.infrastructure.adapters.polymarket.adapter.common.time.utc_now"
+        with patch(_utc_now_path, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_make_source())
+
+        # Two HTTP calls with offsets 0 then 2, three markets total.
+        assert http.get.await_count == 2
+        offsets = [call.kwargs["params"]["offset"] for call in http.get.await_args_list]
+        assert offsets == [0, 2]
         assert len(results) == 3
 
     async def test_adapter_parse_failure_continues(self) -> None:

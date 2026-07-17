@@ -177,7 +177,18 @@ class PolymarketProviderSettings(BaseModel):
 
     base_url: str = "https://gamma-api.polymarket.com/markets"
     page_size: int = Field(default=500, ge=1, le=1000)
+    # The Gamma API paginates via offset/limit and returns a bare JSON array.
+    # ``max_pages_per_cycle`` x ``page_size`` bounds one poll cycle: 20 x 500 =
+    # 10k markets/cycle — enough to walk the full active universe (a few thousand)
+    # while capping the first post-fix cycle so the downstream CLOB/trades/OI
+    # worklists do not stampede when the universe jumps from ~101 to thousands.
     max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
+    # Stable sort so offset paging is deterministic and high-value markets are
+    # fetched first under the page bound. Empty string omits the ``order`` param
+    # (safe fallback if the live field name differs — overridable at deploy via
+    # ``CONTENT_INGESTION_POLYMARKET__ORDER``). ``ascending=false`` = highest first.
+    order: str = "volume24hr"
+    ascending: bool = False
 
 
 # ── PLAN-0056 Wave B1 — deeper-stream Polymarket provider settings ─────────────
@@ -194,7 +205,14 @@ class PolymarketEventsProviderSettings(BaseModel):
 
     base_url: str = "https://gamma-api.polymarket.com/events"
     page_size: int = Field(default=500, ge=1, le=1000)
+    # Offset/limit pagination bound: 20 x 500 = 10k events/cycle walks the full
+    # active-event universe (long-tail groups included) while capping each cycle.
     max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
+    # Stable sort so offset paging is deterministic and high-value groups are
+    # fetched first. Empty string omits the ``order`` param (safe fallback;
+    # overridable via ``CONTENT_INGESTION_POLYMARKET_EVENTS__ORDER``).
+    order: str = "volume24hr"
+    ascending: bool = False
     max_retries: int = Field(default=3, ge=0, le=10)
     backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=60.0)
     # Poll cadence (PRD-0033 §4.2): events groups change slowly — hourly.
