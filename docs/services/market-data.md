@@ -228,10 +228,20 @@ SELECT create_hypertable('ohlcv_bars', 'bar_date');
 --   eodhd_bulk=120  authoritative DAILY EOD (EODHD /eod-bulk-last-day) — CORRECT
 --                   consolidated volume + adjusted_close; one 100-credit call per
 --                   exchange/day via the `bulk_eod_daily` CronJob (market-ingestion).
---   alpaca=110      intraday 1m (source of truth) + polled 1Day daily FALLBACK.
+--   eodhd_intraday=115  once-daily POST-CLOSE 1m refinement (EODHD /intraday) —
+--                   CORRECT consolidated CTA/UTP volume for the CLOSED day. UTC
+--                   bar-start minute timestamps ALIGN with Alpaca's 1m bar_date, so
+--                   it REPLACES the IEX 1m bar (110) on the same conflict key; the
+--                   intraday_resampling consumer then re-derives 5m..4h from the
+--                   corrected 1m. Via the `intraday_refine` CronJob (market-ingestion,
+--                   ~5 credits/symbol). Alpaca stays the LIVE intra-session 1m source.
+--   alpaca=110      intraday 1m (LIVE source of truth) + polled 1Day daily FALLBACK.
 --                   NOTE: Alpaca's free IEX daily volume is ~19-30x understated and
---                   its adjusted_close is NULL — eodhd_bulk (120) overwrites it for 1d.
---   derived=110     locally resampled 5m..4h from the Alpaca 1m series.
+--                   its adjusted_close is NULL — eodhd_bulk (120) overwrites it for 1d;
+--                   its intraday 1m volume is IEX-only (~5%) — eodhd_intraday (115)
+--                   overwrites it for a CLOSED day.
+--   derived=110     locally resampled 5m..4h from the 1m series (Alpaca live +
+--                   eodhd_intraday post-close refinement).
 --   polygon=100 · yahoo_finance/yahoo=80 (historical only) · eodhd=60 (per-ticker
 --   deep-history / failover daily) · alpha_vantage=40 · macrotrends=20 · unknown=0.
 -- Requires the `fix/ohlcv-dup-bars` UTC-midnight `bar_date` normalization so
