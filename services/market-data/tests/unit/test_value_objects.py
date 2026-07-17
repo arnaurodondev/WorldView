@@ -102,6 +102,24 @@ class TestProviderPriority:
         # the canonical source "eodhd_bulk" must map to the real member (not UNKNOWN).
         assert Provider("eodhd_bulk") is Provider.EODHD_BULK
 
+    def test_eodhd_intraday_supersedes_alpaca_iex_1m(self) -> None:
+        # INTRADAY-VOLUME REFINEMENT (2026-07-16): the once-daily post-close EODHD
+        # 1m source (correct consolidated CTA/UTP volume) MUST outrank Alpaca's live
+        # IEX 1m (110) and the ``derived`` tag (110) so the ``provider_priority >=``
+        # 1m upsert guard REPLACES the IEX bar for the closed day — but stay BELOW
+        # the authoritative daily bulk (120) so daily resolution is unaffected.
+        intraday = ProviderPriority.for_provider(Provider.EODHD_INTRADAY)
+        assert intraday.provider == "eodhd_intraday"
+        assert intraday.priority == 115
+        assert intraday.priority > ProviderPriority.for_provider(Provider.ALPACA).priority  # 110
+        assert intraday.priority > ProviderPriority.for_provider(Provider.DERIVED).priority  # 110
+        assert intraday.priority < ProviderPriority.for_provider(Provider.EODHD_BULK).priority  # 120
+
+    def test_eodhd_intraday_resolves_from_string(self) -> None:
+        # The canonical source "eodhd_intraday" must map to the real member so the
+        # S3 consumer resolves priority 115 instead of falling through to UNKNOWN.
+        assert Provider("eodhd_intraday") is Provider.EODHD_INTRADAY
+
     def test_for_provider_all_providers(self) -> None:
         for provider in Provider:
             pp = ProviderPriority.for_provider(provider)
