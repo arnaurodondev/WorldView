@@ -26,8 +26,23 @@
 # so the window length does not change cost. NO `--resume` — every run re-scans the
 # full universe fresh (the resume cursor is for the one-shot deep backfill only).
 #
-# CREDIT COST: ~1 credit/ticker/day × ~543 tracked instruments (531 US + 11 INDX + 1
-# SHG) = ~543 credits/day. Daily account cap 100k, current baseline ~1.1k/day → ample.
+# CREDIT COST: ~1 credit/ticker/day × ~543 tracked instruments = ~543 credits/day.
+# The 543 is the DISTINCT (symbol,exchange) count in the US,INDX,SHG allowlist
+# (531 US + 11 INDX + 1 SHG), re-verified live against ingestion_db @ migration 0025
+# on 2026-07-17 — the raw enabled-policy count is higher (~617 US rows, multiple
+# timeframes/variants per symbol) but the sweep dedups to one /eod fetch per
+# (symbol,exchange), so the credit figure is unchanged.
+#
+# HEADROOM (re-measured 2026-07-17 — NOT the old ~1.1k/day assumption, which was
+# ~30x low): the live SHARED EODHD daily draw is ~30-36k credits/day (Valkey enforced
+# counter eodhd:v1:quota:day:*: 07-16=30,607, 07-15=36,156), dominated by the
+# content-ingestion general-news firehose (60s poll) + an active NLP news backfill
+# (being throttled down) + market-ingestion quotes/fundamentals routing. Adding THIS
+# sweep (543/day) + the intraday-refine cronjob (~2,650/day) + the one-shot 2yr
+# corrective backfill (~543, deploy day only) lifts the peak day to ~40k/day — still
+# ~60k under the 100k/day account cap. The --daily-headroom guard below hard-stops
+# this sweep once the shared daily counter would exceed (100k - headroom), so it can
+# never push the account over the cap even if the firehose baseline climbs.
 # --max-credits / --daily-headroom bound it against the live firehose.
 apiVersion: batch/v1
 kind: CronJob

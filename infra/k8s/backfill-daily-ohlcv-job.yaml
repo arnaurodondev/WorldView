@@ -8,6 +8,30 @@
 # so the backfill has the same DB / Kafka / MinIO / Valkey / EODHD wiring. The
 # script is resumable (Valkey cursor), budget-capped, idempotent, and dry-runnable.
 #
+# ORDERING (HARD REQUIREMENT — run this BACK-TO-BACK after fix/ohlcv-dup-bars):
+#   1. Deploy fix/ohlcv-dup-bars FIRST (ingest-path UTC-midnight bar_date normalization
+#      + market-data migration 045). Migration 045 collapses the duplicate daily bars
+#      to one UTC-midnight row per (instrument, timeframe, bar_date), keeping the
+#      HIGHEST-priority winner. Where Alpaca IEX daily (110) is the winner, that
+#      surviving row has UNDERSTATED volume and a NULL adjusted_close — i.e. 045 leaves
+#      the corrected key but temporarily WRONG values.
+#   2. Run THIS Job with --authoritative IMMEDIATELY AFTER 045. It stamps eodhd_bulk
+#      (priority 120 >= 110), so the /eod bars OVERWRITE those Alpaca winners in place,
+#      restoring correct consolidated volume + adjusted_close. Until this Job finishes,
+#      users see NULL adjusted_close on the affected days — so do NOT leave a long gap
+#      between step 1 and step 2. (Without 045 first, eodhd_bulk 120 and Alpaca 110 sit
+#      on DIFFERENT bar_date keys and the priority guard never fires — the overwrite
+#      silently no-ops.)
+#
+# NODE LOAD (single-node cx53, CPU-saturated as of 2026-07-17 by an active NLP news
+# backfill that is being drained): this Job is single-threaded asyncio, one symbol at a
+# time, --sleep 0.2 between symbols, cpu limit 1000m — gentle on the FETCH side and it
+# cannot starve the NLP drain. BUT a full 2yr run produces ~550 symbols x ~500 daily
+# bars ~= 270k downstream OHLCV upserts through Kafka -> market-data -> postgres. To
+# avoid contending with the NLP drain + live ingestion on the saturated node, run this
+# one-shot corrective backfill OFF-PEAK / AFTER the NLP drain has completed (the daily
+# --days 5 authoritative CronJob is tiny by comparison and is safe to leave scheduled).
+#
 # USAGE (operator runs; do NOT run against prod automatically):
 #   # 1. Dry-run first — prints the instrument plan + credit estimate, fetches nothing:
 #   #    edit args below to `--years 2 --dry-run`, then:
