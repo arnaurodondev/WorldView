@@ -21,6 +21,7 @@ import contextlib
 import os
 import signal
 import sys
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
@@ -30,6 +31,13 @@ from observability import (  # type: ignore[import-untyped]
     log_runtime_banner,
     start_metrics_server,
 )
+
+if TYPE_CHECKING:
+    # Type-only import (used solely by the ``path_engine`` annotation below). Kept
+    # in a TYPE_CHECKING block so it is never imported at runtime — this is the
+    # canonical ruff TCH001/TC001 fix and stays green across ruff versions
+    # (CI pins 0.4.0; the pre-commit/post-edit hook runs a newer ruff).
+    from knowledge_graph.application.ports.graph_path_engine import GraphPathEngine
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -73,10 +81,9 @@ async def main() -> None:
     engine, read_engine, write_factory, _read_factory = _build_factories(settings)
 
     # Build GraphPathEngine (typed-VLE adapter, PLAN-0112 T-2-04 — replaces the
-    # deprecated PathDiscovery), PathScorer, PathTemplateMatcher.
-    from knowledge_graph.application.ports.graph_path_engine import (
-        GraphPathEngine,  # noqa: TC001 — runtime annotation below
-    )
+    # deprecated PathDiscovery), PathScorer, PathTemplateMatcher. GraphPathEngine
+    # itself is imported under TYPE_CHECKING (module top) — only the concrete
+    # adapters below are needed at runtime.
     from knowledge_graph.application.services.path_scorer import PathScorer
     from knowledge_graph.application.services.path_template_matcher import PathTemplateMatcher
     from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine
