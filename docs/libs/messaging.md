@@ -17,6 +17,7 @@ The `messaging` library provides these independently usable building blocks:
 | **Kafka Consumer** | `messaging.kafka.consumer` | Idempotent event consumption with automatic retry, back-off, dead-lettering, and optional backpressure. |
 | **Run() Supervision** | `messaging.kafka.consumer.supervisor` | Entry-point wrapper that fails the process loudly on a terminal `run()` exit instead of wedging on a never-awaited task. |
 | **Processed-Events Cleanup** | `messaging.kafka.maintenance` | Retention enforcement for the `processed_events` idempotency table. |
+| **Table Retention Pruner** | `messaging.kafka.maintenance.table_retention` | Generic batched, per-batch-committing age-based pruner for any unbounded append/log table (outbox delivered rows, dedup/idempotency logs). |
 | **Valkey Client** | `messaging.valkey` | Async Redis/Valkey operations with pooling and structured key taxonomy. |
 | **PostgreSQL Advisory Lock** | `messaging.pg` | Single-leader scheduling across replicas without a dedicated lock service. |
 | **EODHD Quota Service** | `messaging.eodhd_quota` | Shared monthly EODHD credit quota enforcement via Valkey (prevents per-replica over-consumption). |
@@ -604,6 +605,66 @@ deleted = await worker.run_once(session)   # pass a fresh AsyncSession per invoc
 Schedule `run_once` daily (e.g. 02:00 UTC) from the service's scheduler or a
 dedicated `*_cleanup_main.py` process. Class defaults are exposed as
 `DEFAULT_RETENTION_DAYS`, `BATCH_SIZE`, and `INTER_BATCH_SLEEP_SECONDS`.
+
+### Generic Table Retention Pruner (`messaging.kafka.maintenance.table_retention`)
+
+`RetentionCleanupWorker` is a generalisation of the processed-events cleanup for
+**any** unbounded append/log table. It was added after the **2026-07-18 Postgres
+disk-full outage**, whose root cause was that the outbox dispatcher marks rows
+`status='delivered'` but NEVER pruned them — `content_ingestion_db.outbox_events`
+grew to 7.2 GB / 4.3M rows (the claimable partial index only covers
+`pending`/`processing`, so delivered rows are invisible and accumulate forever).
+Two other tables had the same shape: `prediction_market_fetch_log` (3.8M rows /
+1.1 GB) and `market_data_db.ingestion_events` (~1 GB).
+
+```python
+from datetime import timedelta
+from messaging.kafka.maintenance import (
+    RetentionCleanupWorker, RetentionPolicy, build_retention_loop_coros,
+)
+
+worker = RetentionCleanupWorker(
+    policy=RetentionPolicy(
+        table="outbox_events",
+        pk_column="id",
+        age_column="dispatched_at",
+        retention=timedelta(hours=1),
+        status_column="status",       # OPTIONAL equality filter
+        status_value="delivered",     # only delivered rows are ever deleted
+    ),
+    service_name="content-ingestion",
+    batch_size=10_000,                # rows per committed transaction
+    max_batches=200,                  # per-pass safety cap (drains huge backlogs across passes)
+)
+```
+
+| Member | Purpose |
+|--------|---------|
+| `RetentionPolicy(table, pk_column, age_column, retention, status_column=None, status_value=None)` | Declarative prune spec. Identifiers are validated against `^[A-Za-z_][A-Za-z0-9_]*$`; `retention` must be positive; `status_value` required when `status_column` set. |
+| `RetentionCleanupWorker(*, policy, service_name, batch_size=10_000, max_batches=None, inter_batch_sleep_seconds=0.1)` | Batched pruner; commits per batch (autocommit-per-batch → flat WAL). |
+| `async run_once(session, *, now=None) -> int` | One pass; `DELETE ... WHERE pk IN (SELECT pk ... WHERE age_column < cutoff [AND status=...] ORDER BY age_column LIMIT n [FOR UPDATE SKIP LOCKED])`. `FOR UPDATE SKIP LOCKED` emitted for PostgreSQL only (dialect-detected; SQLite tests omit it). |
+| `async run_retention_loop(*, worker, session_factory, interval_seconds, stop_event, initial_delay_seconds=0.0)` | Fail-open periodic loop; fresh session per pass; stops on `stop_event`. |
+| `build_retention_loop_coros(*, workers, session_factory, interval_seconds, stop_event)` | Returns one zero-arg coroutine factory per worker (for `asyncio.create_task`), staggered. |
+
+**Wiring (no new deployment):** each owning service hosts the pruner inside its
+already-running **outbox dispatcher process** (`*/outbox/dispatcher_main.py`),
+using the dispatcher's write session factory:
+
+- `content-ingestion` dispatcher_main → `outbox_events` (delivered, 1h default) +
+  `prediction_market_fetch_log` (14d default). Env: `CONTENT_INGESTION_OUTBOX_RETENTION_SECONDS`,
+  `..._OUTBOX_PRUNE_{BATCH_SIZE,INTERVAL_SECONDS,MAX_BATCHES}`,
+  `..._PREDICTION_FETCH_LOG_RETENTION_DAYS` (+ batch/interval/max_batches).
+- `market-data` dispatcher_main → `ingestion_events` (14d default). Env:
+  `MARKET_DATA_INGESTION_EVENTS_RETENTION_DAYS` (+ batch/interval/max_batches).
+
+Set any retention window to `0` to disable that table's pruner. **The outbox
+pruner NEVER deletes `pending`/`processing`/`failed`/`dead_letter` rows.**
+
+> **Space reclamation:** these deletes free space *inside* the table files but do
+> NOT return it to the OS. After the first prune of a bloated table, run a
+> maintenance-window `VACUUM FULL <table>` or `pg_repack` (with a temporary
+> `maintenance_work_mem` bump) to shrink the physical files — routine
+> autovacuum only prevents *further* growth.
 
 ---
 

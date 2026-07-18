@@ -257,6 +257,17 @@ CREATE TABLE outbox_events (
 );
 CREATE INDEX ix_outbox_claimable ON outbox_events (status, leased_until)
     WHERE status IN ('pending', 'processing');
+-- RETENTION (2026-07-18 disk-full fix): the dispatcher marks rows
+-- status='delivered' but the claimable index does NOT cover them, so delivered
+-- rows are invisible to the dispatcher and historically piled up forever
+-- (reached 7.2 GB / 4.3M rows). The dispatcher_main process now runs a periodic
+-- pruner (messaging.kafka.maintenance.RetentionCleanupWorker) that batch-deletes
+-- delivered rows older than CONTENT_INGESTION_OUTBOX_RETENTION_SECONDS (default
+-- 3600) on dispatched_at — NEVER pending/processing/failed/dead_letter.
+-- prediction_market_fetch_log is pruned the same way on created_at
+-- (CONTENT_INGESTION_PREDICTION_FETCH_LOG_RETENTION_DAYS, default 14). See
+-- docs/libs/messaging.md "Generic Table Retention Pruner". One-time reclaim of
+-- already-bloated files needs a maintenance-window VACUUM FULL / pg_repack.
 
 -- Scheduler task queue (one row per source per scheduling window).
 -- UNIQUE (source_id, window_start) — idempotent scheduler: ON CONFLICT DO NOTHING.

@@ -3,6 +3,14 @@
 Runs ``MarketDataOutboxDispatcher`` in a loop, forwarding outbox
 records to Kafka.  Intended to run as a separate container/process.
 
+This process also hosts the **retention pruner** for
+``market_data_db.ingestion_events`` — the per-event idempotency table that
+grew unbounded (~1 GB / 3.7M rows) and contributed to the 2026-07-18
+disk-full outage. The dispatcher is a long-lived, single-replica process with
+a write session factory to the same DB, so it is the natural host for the
+pruner (no new deployment required). See
+``libs/messaging/kafka/maintenance/table_retention.py``.
+
 Usage (standalone)::
 
     python -m market_data.infrastructure.messaging.outbox.dispatcher_main
@@ -14,10 +22,16 @@ import asyncio
 import contextlib
 import os
 import signal
+from datetime import timedelta
 
 from market_data.config import Settings
 from market_data.infrastructure.db.session import build_session_factory, build_write_engine
 from market_data.infrastructure.messaging.outbox.dispatcher import create_dispatcher
+from messaging.kafka.maintenance import (
+    RetentionCleanupWorker,
+    RetentionPolicy,
+    build_retention_loop_coros,
+)
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
@@ -28,8 +42,33 @@ from observability import (  # type: ignore[import-untyped]
 logger = get_logger(__name__)
 
 
+def _build_retention_workers(settings: Settings) -> list[RetentionCleanupWorker]:
+    """Build the enabled market_data_db retention pruners.
+
+    A retention window of 0 disables the pruner (returns no worker) so pruning
+    can be turned off via env without a redeploy.
+    """
+    workers: list[RetentionCleanupWorker] = []
+    if settings.ingestion_events_retention_days > 0:
+        workers.append(
+            RetentionCleanupWorker(
+                policy=RetentionPolicy(
+                    table="ingestion_events",
+                    pk_column="id",
+                    # ``occurred_at`` (server_default now()) — always non-null.
+                    age_column="occurred_at",
+                    retention=timedelta(days=settings.ingestion_events_retention_days),
+                ),
+                service_name="market-data",
+                batch_size=settings.ingestion_events_prune_batch_size,
+                max_batches=settings.ingestion_events_prune_max_batches,
+            )
+        )
+    return workers
+
+
 class DispatcherProcess:
-    """Wraps ``MarketDataOutboxDispatcher`` with a lifecycle API."""
+    """Wraps ``MarketDataOutboxDispatcher`` + retention pruners with a lifecycle API."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -39,14 +78,44 @@ class DispatcherProcess:
             settings=settings,
             session_factory=write_factory,
         )
+        # ``stop_event`` coordinates a graceful shutdown of the retention loops
+        # alongside the dispatcher's own stop signal.
+        self._stop_event = asyncio.Event()
+        self._retention_workers = _build_retention_workers(settings)
+        self._retention_coros = build_retention_loop_coros(
+            workers=self._retention_workers,
+            session_factory=write_factory,
+            interval_seconds=settings.ingestion_events_prune_interval_seconds,
+            stop_event=self._stop_event,
+        )
 
     def stop(self) -> None:
-        """Signal the dispatcher loop to stop."""
+        """Signal the dispatcher loop and retention loops to stop."""
         self._dispatcher.stop()
+        self._stop_event.set()
 
     async def run(self) -> None:
-        """Run the dispatcher until ``stop()`` is called."""
-        await self._dispatcher.run()
+        """Run the dispatcher and retention loops until ``stop()`` is called."""
+        for worker in self._retention_workers:
+            logger.info(
+                "retention_pruner_enabled",
+                table=worker.policy.table,
+                retention_seconds=int(worker.policy.retention.total_seconds()),
+            )
+        tasks: list[asyncio.Task[None]] = [asyncio.create_task(self._dispatcher.run())]
+        for coro in self._retention_coros:
+            tasks.append(asyncio.create_task(coro()))
+        try:
+            # The dispatcher task runs until stop(); await it, then wind down the
+            # retention loops (which observe the same stop_event).
+            await tasks[0]
+        finally:
+            self._stop_event.set()
+            for task in tasks[1:]:
+                task.cancel()
+            for task in tasks[1:]:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
 
 async def _run_dispatcher() -> None:

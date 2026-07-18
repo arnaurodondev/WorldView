@@ -455,6 +455,36 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = 20
     outbox_metrics_poll_seconds: int = 30
 
+    # ── Outbox / append-log retention (2026-07-18 disk-full outage) ─────────
+    # The dispatcher marks published rows ``status='delivered'`` but historically
+    # NEVER pruned them, so ``outbox_events`` grew to 7.2 GB / 4.3M rows and
+    # filled the Postgres volume. A periodic pruner (wired into dispatcher_main)
+    # deletes delivered rows older than the retention window in autocommit-per-
+    # batch chunks. Delivered rows only need to survive a short window for
+    # idempotency/audit after Kafka delivery — the Kafka topic is the durable
+    # record — so the default is intentionally short (1h). NEVER prunes
+    # pending/processing/failed/dead_letter rows. Set to 0 to DISABLE pruning.
+    outbox_retention_seconds: int = Field(default=3600, ge=0)
+    # Rows deleted per transaction. Small enough to keep WAL/lock footprint low,
+    # large enough to amortise commit overhead on a multi-million-row backlog.
+    outbox_prune_batch_size: int = Field(default=10_000, ge=1)
+    # Delay between pruning passes.
+    outbox_prune_interval_seconds: float = Field(default=300.0, ge=1.0)
+    # Safety cap on batches per pass so an enormous backlog drains across several
+    # passes rather than one unbounded burst (matches the 100-150k/chunk manual
+    # recovery). 200 * 10k = up to 2M rows/pass.
+    outbox_prune_max_batches: int = Field(default=200, ge=1)
+
+    # ``prediction_market_fetch_log`` — one dedup row per Polymarket snapshot,
+    # appended every poll cycle (reached 3.8M rows / 1.1 GB). Rows only guard
+    # against re-publishing the same (market_id, snapshot_at) within a poll
+    # window, so a 14-day window is far longer than any dedup horizon. Pruned
+    # on ``created_at``. Set to 0 to DISABLE.
+    prediction_fetch_log_retention_days: int = Field(default=14, ge=0)
+    prediction_fetch_log_prune_batch_size: int = Field(default=10_000, ge=1)
+    prediction_fetch_log_prune_interval_seconds: float = Field(default=3600.0, ge=1.0)
+    prediction_fetch_log_prune_max_batches: int = Field(default=200, ge=1)
+
     # ── Rate limiting ─────────────────────────────────────────────────────────
     newsapi_daily_limit: int = 100
 

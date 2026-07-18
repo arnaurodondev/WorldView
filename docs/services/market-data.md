@@ -267,6 +267,14 @@ CREATE TABLE ingestion_events (
     event_id    UUID PRIMARY KEY,
     processed_at TIMESTAMPTZ DEFAULT now()
 );
+-- RETENTION (2026-07-18 disk-full fix): ingestion_events is one idempotency row
+-- per processed Kafka event and grew unbounded (~1 GB / 3.7M rows). The
+-- market-data dispatcher_main process now runs a periodic pruner
+-- (messaging.kafka.maintenance.RetentionCleanupWorker) that batch-deletes rows
+-- older than MARKET_DATA_INGESTION_EVENTS_RETENTION_DAYS (default 14) on the
+-- actual append column `occurred_at`. See docs/libs/messaging.md "Generic Table
+-- Retention Pruner". One-time reclaim of already-bloated files needs a
+-- maintenance-window VACUUM FULL / pg_repack.
 
 CREATE TABLE failed_tasks (
     id              UUID PRIMARY KEY,

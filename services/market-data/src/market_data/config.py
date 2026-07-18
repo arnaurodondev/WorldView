@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 import structlog
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,6 +33,19 @@ class Settings(BaseSettings):
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"
     schema_registry_url: str = "http://localhost:8081"
+
+    # ── ingestion_events retention (2026-07-18 disk-full outage) ────────────
+    # ``ingestion_events`` stores one idempotency row per processed Kafka event
+    # and grew unbounded (~1 GB / 3.7M rows). Rows only guard against re-
+    # processing a re-delivered event (offset rewind / rebalance replay), so a
+    # 14-day window is comfortably longer than any plausible rewind horizon.
+    # A periodic pruner (wired into the market-data dispatcher_main) deletes
+    # rows older than the window on ``occurred_at`` in autocommit-per-batch
+    # chunks. Set to 0 to DISABLE pruning.
+    ingestion_events_retention_days: int = Field(default=14, ge=0)
+    ingestion_events_prune_batch_size: int = Field(default=10_000, ge=1)
+    ingestion_events_prune_interval_seconds: float = Field(default=3600.0, ge=1.0)
+    ingestion_events_prune_max_batches: int = Field(default=200, ge=1)
 
     # PLAN-0113 FIX-2: static-membership instance ids (opt-in). Empty default =
     # dynamic membership (no-op). Setting a stable, per-replica value enables Kafka
