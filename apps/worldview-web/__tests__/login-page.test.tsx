@@ -163,3 +163,81 @@ describe("LoginPage dev-login gating", () => {
     });
   });
 });
+
+// ── Zitadel authorize-URL scope (refresh-token fix, audit 2026-07-19) ──────────
+//
+// WHY THIS EXISTS: Zitadel only issues a refresh_token when `offline_access` is
+// among the authorize scopes. If initiateLogin() omits it, S9 never receives a
+// refresh_token, sets no httpOnly cookie, and every silent refresh 401s → the
+// user is bounced to the sign-in page on each access-token expiry. This test
+// pins `offline_access` into the authorize URL so the regression cannot recur.
+describe("LoginPage Zitadel authorize URL", () => {
+  // Capture the URL passed to window.location.replace() during initiateLogin().
+  let replacedUrl = "";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    replacedUrl = "";
+
+    // The page reads these NEXT_PUBLIC_* vars to build the authorize URL.
+    vi.stubEnv("NEXT_PUBLIC_ZITADEL_URL", "https://example.zitadel.cloud");
+    vi.stubEnv("NEXT_PUBLIC_ZITADEL_CLIENT_ID", "test-client-id");
+
+    // 302 probe → the real "Sign in with Zitadel" button is rendered.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(probeResponse(302)));
+
+    // Replace window.location with a stub that records replace() and exposes
+    // origin (read by the page to build the callback URL). jsdom's real
+    // location.replace is not spy-able, so we swap the whole object.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        origin: "https://app.worldview-labs.com",
+        replace: (url: string) => {
+          replacedUrl = url;
+        },
+      },
+    });
+
+    // Deterministic crypto so PKCE verifier/challenge generation does not depend
+    // on the test environment's WebCrypto availability.
+    vi.stubGlobal("crypto", {
+      getRandomValues: (arr: Uint8Array) => {
+        for (let i = 0; i < arr.length; i++) arr[i] = i % 256;
+        return arr;
+      },
+      subtle: {
+        digest: async () => new Uint8Array(32).buffer,
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("requests the offline_access scope so Zitadel returns a refresh_token", async () => {
+    render(<LoginPage />);
+
+    const zitadelButton = await screen.findByRole("button", {
+      name: /sign in with zitadel/i,
+    });
+
+    await act(async () => {
+      fireEvent.click(zitadelButton);
+    });
+
+    await waitFor(() => {
+      expect(replacedUrl).toContain("/oauth/v2/authorize");
+    });
+
+    // Parse the scope param and assert all four scopes are present. Query-string
+    // encoding turns spaces into "+" / "%20"; URLSearchParams decodes both.
+    const query = replacedUrl.split("?")[1] ?? "";
+    const scope = new URLSearchParams(query).get("scope") ?? "";
+    expect(scope.split(/\s+/)).toEqual(
+      expect.arrayContaining(["openid", "profile", "email", "offline_access"]),
+    );
+  });
+});

@@ -148,6 +148,26 @@ async def test_login_redirect_contains_required_params() -> None:
 
 
 @pytest.mark.asyncio
+async def test_login_redirect_requests_offline_access() -> None:
+    """GET /v1/auth/login must request the offline_access scope.
+
+    Zitadel only returns a refresh_token when offline_access is among the
+    authorize scopes. Without it the whole silent-refresh flow is impossible
+    (see audit 2026-07-19-refresh-token-failure). The frontend authorize URL
+    must match this scope set.
+    """
+    valkey = _make_mock_valkey()
+    app = _make_auth_app(valkey=valkey)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=False) as ac:
+        resp = await ac.get("/v1/auth/login")
+
+    assert resp.status_code == 302
+    assert "offline_access" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
 async def test_login_stores_state_in_valkey() -> None:
     """GET /v1/auth/login stores auth:pkce:{state} in Valkey with TTL=600."""
     valkey = _make_mock_valkey()
@@ -360,6 +380,46 @@ async def test_refresh_no_cookie_401() -> None:
     assert resp.json()["error"] == "missing_refresh_token"
 
 
+@pytest.mark.asyncio
+async def test_refresh_with_cookie_succeeds_and_rotates() -> None:
+    """POST /v1/auth/refresh WITH a refresh_token cookie returns 200, a new
+    access token, and re-sets a rotated cookie on the browser-visible path.
+
+    This is the end-to-end contract that was broken: the cookie must (a) be
+    accepted by the endpoint and (b) be re-issued with Path=/api/v1/auth/refresh
+    so the browser keeps sending it on subsequent silent refreshes.
+    """
+    # Zitadel token endpoint returns a rotated refresh token + a fresh access token.
+    zitadel_response = MagicMock(status_code=200)
+    zitadel_response.json = MagicMock(
+        return_value={
+            "access_token": "new-access-token",
+            "refresh_token": "rotated-refresh-token",
+            "expires_in": 900,
+        },
+    )
+    httpx_client = MagicMock(spec=httpx.AsyncClient)
+    httpx_client.post = AsyncMock(return_value=zitadel_response)
+    app = _make_auth_app(httpx_client=httpx_client)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/v1/auth/refresh", cookies={"refresh_token": "old-refresh-token"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["access_token"] == "new-access-token"  # noqa: S105
+    assert body["token_type"] == "Bearer"  # noqa: S105
+
+    # Rotation persisted: a new Set-Cookie is issued on the browser-visible path
+    # so the next silent refresh still attaches the cookie.
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert "refresh_token=rotated-refresh-token" in set_cookie
+    assert "path=/api/v1/auth/refresh" in set_cookie.lower()
+    assert "httponly" in set_cookie.lower()
+    assert "samesite=strict" in set_cookie.lower()
+
+
 # ── Logout endpoint ───────────────────────────────────────────────────────────
 
 
@@ -379,6 +439,9 @@ async def test_logout_clears_cookie() -> None:
     set_cookie = resp.headers.get("set-cookie", "")
     assert "refresh_token=" in set_cookie
     assert "max-age=0" in set_cookie.lower()
+    # The clear MUST target the same path the cookie was set on, otherwise the
+    # browser keeps a stale cookie the delete never matches.
+    assert "path=/api/v1/auth/refresh" in set_cookie.lower()
 
 
 @pytest.mark.asyncio

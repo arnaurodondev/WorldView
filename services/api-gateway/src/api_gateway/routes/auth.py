@@ -77,7 +77,18 @@ def _sanitize_oidc_error(error: str | None, description: str | None) -> tuple[st
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 _COOKIE_NAME = "refresh_token"
-_COOKIE_PATH = "/v1/auth/refresh"
+# WHY "/api/v1/auth/refresh" (not "/v1/auth/refresh"): the browser never sees the
+# bare S9 path. The frontend calls the same-origin Vercel proxy at BASE="/api"
+# (lib/api/_client.ts) and next.config.ts rewrites "/api/:path*" → S9 "/:path*",
+# so the browser-visible request path is "/api/v1/auth/refresh". A cookie's Path
+# attribute is matched by the browser against that request path — with the old
+# "/v1/auth/refresh" value the cookie was never attached to the refresh POST, so
+# refresh 401'd even once a token was issued. This value is set on the callback
+# response AND read back on POST /api/v1/auth/refresh AND used to clear the cookie
+# on logout, so all three stay path-consistent. Narrow-scoping the refresh token
+# to only the refresh endpoint (least privilege) is intentional — it is not sent
+# on ordinary API calls. See audit 2026-07-19-refresh-token-failure.
+_COOKIE_PATH = "/api/v1/auth/refresh"
 _COOKIE_MAX_AGE = 2592000  # 30 days
 
 

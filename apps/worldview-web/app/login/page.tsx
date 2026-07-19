@@ -267,7 +267,14 @@ function LoginContent() {
         response_type: "code",
         client_id: clientId,
         redirect_uri: callbackUrl,
-        scope: "openid profile email", // WHY these scopes: standard OIDC profile claims
+        // WHY offline_access: Zitadel only returns a refresh_token when
+        // offline_access is among the authorize scopes. Without it, S9's
+        // /v1/auth/callback receives no refresh_token, sets no httpOnly cookie,
+        // and every silent POST /api/v1/auth/refresh 401s → the user is bounced
+        // to the Zitadel sign-in page on each access-token expiry.
+        // This MUST match the S9 GET /v1/auth/login scope (auth.py:142), which
+        // already requests offline_access. See audit 2026-07-19-refresh-token-failure.
+        scope: "openid profile email offline_access", // WHY these scopes: standard OIDC profile claims + refresh token
         code_challenge: challenge,
         code_challenge_method: "S256",
         state,

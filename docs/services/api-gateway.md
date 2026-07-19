@@ -57,6 +57,8 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 
 **`POST /v1/auth/dev-login`**: Available only when `OIDC_DISCOVERY_OPTIONAL=true` and Zitadel is not configured. Returns the same response shape as `/v1/auth/callback` (access token + user profile). Returns `403 Forbidden` when OIDC is configured (production). Used by the frontend "Dev Login" button for local development without Zitadel.
 
+**Refresh-token cookie (silent refresh)**: The `refresh_token` is stored in an `httpOnly; Secure; SameSite=strict` cookie set by `/v1/auth/callback` and re-issued (rotated) on every `/v1/auth/refresh`. The cookie `Path` is **`/api/v1/auth/refresh`** — it must match the browser-visible request path, since the frontend calls the same-origin Vercel proxy (`BASE=/api`, rewritten by `next.config.ts` to S9), not S9 directly. A mismatched path means the browser never attaches the cookie and every refresh 401s. Two preconditions for a refresh token to exist at all: (1) the authorize request must include the `offline_access` scope (both `GET /v1/auth/login` and the frontend `app/login/page.tsx` authorize URL request it — Zitadel returns no `refresh_token` otherwise), and (2) the Zitadel app must have the Refresh Token grant enabled and be a confidential Web app. See audit `docs/audits/2026-07-19-refresh-token-failure.md`.
+
 ### Health & Internal Endpoints
 
 | Method | Path | Description | Auth |
