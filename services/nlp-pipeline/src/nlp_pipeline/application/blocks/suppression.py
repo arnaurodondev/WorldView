@@ -63,6 +63,7 @@ def apply_deep_extraction_value_gate(
     enabled: bool,
     score_floor: float,
     filing_sources: frozenset[str],
+    high_value_event: bool = False,
 ) -> ProcessingPath:
     """Backlog-drain lever (2026-07-17): skip the expensive deep-extraction chain for
     genuinely LOW-VALUE documents, routing them to the same cheap path as LIGHT.
@@ -97,11 +98,16 @@ def apply_deep_extraction_value_gate(
     ABOVE the boundary WOULD gate DEEP-tier docs in the ``[boundary, floor)`` band — so
     the caller must keep ``score_floor <= settings.routing_tier_deep``.
 
-    CAVEAT (tracked follow-up): the composite score is an entity-DENSITY proxy, not a
-    VALUE proxy. A focused single-company earnings / M&A / contract story has few org
-    mentions and scores low despite high value, so even at the aligned 0.45 floor some
-    substantive MEDIUM news is gated out of KG extraction. A value signal (event-type
-    detection) to force-extract such docs is a planned follow-up, not implemented here.
+    VALUE-SIGNAL OVERRIDE (2026-07-18): the composite score is an entity-DENSITY proxy,
+    not a VALUE proxy. A focused single-company earnings / M&A / analyst / contract story
+    has few org mentions and scores low despite high value, so a pure score floor gates
+    substantive MEDIUM news out of KG extraction (observed: PulteGroup Q1 miss, Nebius
+    stake disclosure, a $186M Army contract). ``high_value_event`` is a cheap deterministic
+    event-type signal (see ``blocks/event_value.py`` — regex over title + lede, NO extra
+    LLM call) computed by the caller. When ``True`` the doc is kept on ``FULL_PIPELINE``
+    even below the floor: a doc is gated ONLY when it is BOTH low-score AND not a
+    substantive event. Thin docs (promos, listicles) carry no event signal and are still
+    gated, so the throughput win largely holds.
 
     Returns the (possibly downgraded) ``ProcessingPath``.
     """
@@ -113,6 +119,12 @@ def apply_deep_extraction_value_gate(
     # Authoritative regulatory filings are always fully extracted (high-value
     # disclosures whose worth the entity_density-driven score under-measures).
     if source_type is not None and source_type in filing_sources:
+        return path
+    # Substantive financial event (earnings / M&A / analyst / contract / ownership):
+    # the density score under-measures its value, so keep it on the full chain even
+    # below the floor. This is the VALUE override that rescues focused single-company
+    # news the pure density floor would wrongly gate.
+    if high_value_event:
         return path
     # High-value docs (score at/above the floor) are always fully extracted.
     if routing_decision.composite_score >= score_floor:
