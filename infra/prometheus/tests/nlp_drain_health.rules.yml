@@ -1,0 +1,50 @@
+# promtool-testable raw copy of the drain-health rules.
+#
+# SYNC CONTRACT: the ``expr`` / ``for`` / ``labels`` here MUST stay identical to
+# infra/k8s/prometheusrule-nlp-pipeline-drain-health.yaml (the deployable CRD).
+# This raw copy exists only so ``promtool test rules`` can unit-test the alert
+# logic (promtool cannot read a PrometheusRule CRD).  If you change one, change
+# both; the test in nlp_drain_health_test.yml guards the behaviour.
+groups:
+  - name: worldview.nlp.drain
+    rules:
+      - alert: NlpPipelineBacklogNotDraining
+        expr: |
+          (
+            sum(kafka_consumergroup_lag{consumergroup="nlp-pipeline-group"}) > 20000
+          )
+          and
+          (
+            (
+              sum(kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"})
+              -
+              sum(kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"} offset 15m)
+            ) < 45
+          )
+        for: 20m
+        labels:
+          severity: critical
+          team: platform
+          subsystem: nlp-pipeline
+        annotations:
+          summary: "nlp-pipeline-group backlog is high and NOT draining"
+      - alert: NlpPipelinePartitionStalled
+        expr: |
+          (
+            kafka_consumergroup_lag{consumergroup="nlp-pipeline-group"} > 2000
+          )
+          and
+          (
+            (
+              kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"}
+              -
+              kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"} offset 15m
+            ) < 1
+          )
+        for: 20m
+        labels:
+          severity: warning
+          team: platform
+          subsystem: nlp-pipeline
+        annotations:
+          summary: "nlp-pipeline-group partition stalled"
