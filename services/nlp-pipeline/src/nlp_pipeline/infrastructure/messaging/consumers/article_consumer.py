@@ -48,6 +48,7 @@ from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-
 from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 from nlp_pipeline.application.blocks.deep_extraction import run_deep_extraction_block
 from nlp_pipeline.application.blocks.embeddings import run_embeddings_block
+from nlp_pipeline.application.blocks.event_value import has_high_value_event
 from nlp_pipeline.application.blocks.ner import run_ner_block
 from nlp_pipeline.application.blocks.routing import _AUTHORITATIVE_FILING_SOURCES, compute_routing_score
 from nlp_pipeline.application.blocks.sectioning import section_document
@@ -1482,14 +1483,30 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # subtitle the model was trained on. The static router below still
         # controls processing; the shadow only needs to precede extraction.
 
+        # VALUE-signal override (2026-07-18): cheap deterministic event-type signal
+        # (earnings / M&A / analyst / contract / ownership) over title + lede — NO extra
+        # LLM call. Computed ONCE here from the title + leading section text and threaded
+        # into BOTH gate call sites (here and ml_phase) so a focused single-company event
+        # story is never gated out of KG extraction despite its low entity-density score.
+        _body_head = " ".join(s.text for s in sections[:3] if s.text) if sections else None
+        high_value_event = has_high_value_event(
+            doc_title,
+            _body_head,
+            enabled=self._settings.event_value_override_enabled,
+            categories=self._settings.event_value_categories_set,
+            min_hits=self._settings.event_value_min_hits,
+            scan_chars=self._settings.event_value_scan_chars,
+        )
+
         initial_path = apply_suppression_gate(routing_decision)
         # Backlog-drain lever (docs/audits/2026-07-17-article-backlog-lever.md):
         # gate genuinely low-value MEDIUM/DEEP docs OUT of the expensive deep-extraction
         # chain, dropping them to the LIGHT path (chunk embeddings only → still fully
         # searchable). Applied here so the embeddings block below ALSO skips the (unused)
         # section embeddings for gated docs; ml_phase re-applies it post-novelty as the
-        # authoritative gate for entity resolution + deep extraction. Filings and any doc
-        # scoring >= the floor are never gated.
+        # authoritative gate for entity resolution + deep extraction. Filings, any doc
+        # scoring >= the floor, and any doc carrying a high-value event signal are never
+        # gated.
         initial_path = apply_deep_extraction_value_gate(
             initial_path,
             routing_decision,
@@ -1497,6 +1514,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             enabled=self._settings.deep_extraction_value_gate_enabled,
             score_floor=self._settings.deep_extraction_score_floor,
             filing_sources=_AUTHORITATIVE_FILING_SOURCES,
+            high_value_event=high_value_event,
         )
 
         # Block 7: Embeddings + denorm fields (PLAN-0063 W5-2)
@@ -1619,6 +1637,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 routing_decision=routing_decision,
                 initial_path=initial_path,
                 source_type=source_type,
+                high_value_event=high_value_event,
                 published_at=published_at,
                 extracted_at=extracted_at,
                 settings=self._settings,

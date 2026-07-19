@@ -452,6 +452,34 @@ class Settings(BaseSettings):
     # NLP_PIPELINE_DEEP_EXTRACTION_SCORE_FLOOR
     deep_extraction_score_floor: float = Field(default=0.45, ge=0.0, le=1.0)
 
+    # ── Event-type VALUE-signal override (2026-07-18) ───────────────────────────
+    # The composite routing score is an entity-DENSITY proxy, NOT a VALUE proxy. A
+    # focused single-company earnings / M&A / analyst / contract story mentions few
+    # orgs, scores in the gated [0.35, 0.45) band, and would be wrongly dropped from
+    # KG extraction despite being exactly what a finance KG should capture (observed:
+    # PulteGroup Q1 miss, Nebius stake disclosure, a $186M Army contract).
+    #
+    # THE OVERRIDE: a cheap DETERMINISTIC event-type signal (regex over title + lede,
+    # NO extra LLM call — see application/blocks/event_value.py) force-keeps such a
+    # doc on FULL_PIPELINE even below the floor. A doc is gated ONLY when it is BOTH
+    # low-score AND not-a-substantive-event, so thin docs (promos, listicles) are
+    # still gated and the throughput win largely holds.
+    # NLP_PIPELINE_EVENT_VALUE_OVERRIDE_ENABLED
+    event_value_override_enabled: bool = True
+    # Distinct event categories that must fire for the override to trip. 1 = any
+    # single substantive event rescues the doc; raise for a stricter override.
+    # NLP_PIPELINE_EVENT_VALUE_MIN_HITS
+    event_value_min_hits: int = Field(default=1, ge=1)
+    # Leading body characters scanned for the signal (the signal lives in the lede;
+    # a full-body scan would slow every article for no accuracy gain).
+    # NLP_PIPELINE_EVENT_VALUE_SCAN_CHARS
+    event_value_scan_chars: int = Field(default=600, ge=0)
+    # Enabled event categories (comma-separated env override). Empty/unset = ALL known
+    # categories (earnings, m_and_a, analyst, contract, ownership). Restrict to disable
+    # a category class without touching the code-level pattern catalogue.
+    # NLP_PIPELINE_EVENT_VALUE_CATEGORIES
+    event_value_categories: str = ""
+
     # ── Learned routing classifier (PLAN-0111 C-2 / C-6) ─────────────────────
     # Controls the EmbeddingGemma-based learned router that runs ALONGSIDE the
     # static weighted-sum router:
@@ -754,6 +782,21 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @property
+    def event_value_categories_set(self) -> frozenset[str] | None:
+        """Parse ``event_value_categories`` into a frozenset, or ``None`` for ALL.
+
+        Empty / whitespace-only → ``None`` (evaluate every known event category).
+        Otherwise split on commas, strip, lowercase, and drop blanks. Unknown names
+        are harmlessly ignored downstream (``detect_event_categories`` intersects with
+        the known catalogue), so a typo silently narrows rather than crashes startup.
+        """
+        raw = self.event_value_categories.strip()
+        if not raw:
+            return None
+        names = {part.strip().lower() for part in raw.split(",") if part.strip()}
+        return frozenset(names) if names else None
 
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:

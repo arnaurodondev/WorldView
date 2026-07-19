@@ -52,6 +52,12 @@ def _make_settings() -> MagicMock:
     # short-circuits before any score comparison).
     s.deep_extraction_value_gate_enabled = False
     s.deep_extraction_score_floor = 0.45
+    # Event-type VALUE-signal override — disabled here (concrete values, not truthy
+    # Mocks) so has_high_value_event short-circuits before any text scan/comparison.
+    s.event_value_override_enabled = False
+    s.event_value_categories_set = None
+    s.event_value_min_hits = 1
+    s.event_value_scan_chars = 600
     return s
 
 

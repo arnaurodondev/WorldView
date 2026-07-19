@@ -86,6 +86,10 @@ async def run_ml_phase(
     routing_decision: RoutingDecision,
     initial_path: ProcessingPath,
     source_type: str | None,
+    # VALUE-signal override (2026-07-18): precomputed by the article consumer from the
+    # title + lede (cheap deterministic event-type match, NO extra LLM call). Threaded
+    # in — rather than recomputed here — so both gate call sites use the SAME decision.
+    high_value_event: bool = False,
     published_at: datetime | None,
     extracted_at: datetime,
     settings: Settings,
@@ -162,6 +166,7 @@ async def run_ml_phase(
             enabled=settings.deep_extraction_value_gate_enabled,
             score_floor=settings.deep_extraction_score_floor,
             filing_sources=_AUTHORITATIVE_FILING_SOURCES,
+            high_value_event=high_value_event,
         )
 
     extraction_result: dict[str, Any] = {"events": [], "claims": [], "relations": []}

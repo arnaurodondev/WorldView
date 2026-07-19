@@ -92,6 +92,7 @@ class TestApplyDeepExtractionValueGate:
         source_type: str | None = "eodhd",
         enabled: bool = True,
         floor: float = _FLOOR,
+        high_value_event: bool = False,
     ) -> ProcessingPath:
         return apply_deep_extraction_value_gate(
             path,
@@ -100,6 +101,7 @@ class TestApplyDeepExtractionValueGate:
             enabled=enabled,
             score_floor=floor,
             filing_sources=_AUTHORITATIVE_FILING_SOURCES,
+            high_value_event=high_value_event,
         )
 
     def test_below_floor_full_pipeline_is_downgraded(self) -> None:
@@ -143,6 +145,41 @@ class TestApplyDeepExtractionValueGate:
             ProcessingPath.SECTION_EMBEDDINGS_ONLY
         )
 
+    # ── VALUE-signal override (2026-07-18) ──────────────────────────────────────
+
+    def test_high_value_event_below_floor_forces_full_pipeline(self) -> None:
+        # A substantive financial event (earnings/M&A/analyst/contract) in the gated
+        # [0.35, 0.45) density band is KEPT on FULL_PIPELINE — the density score
+        # under-measures its value.
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.38, high_value_event=True) == (
+            ProcessingPath.FULL_PIPELINE
+        )
+        # Even a very low density score is rescued when the event signal fires.
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.10, high_value_event=True) == (
+            ProcessingPath.FULL_PIPELINE
+        )
+
+    def test_low_value_no_event_below_floor_still_gated(self) -> None:
+        # A thin doc (no event signal) below the floor is STILL gated — the throughput
+        # win holds for genuinely low-value docs.
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.38, high_value_event=False) == (
+            ProcessingPath.SECTION_EMBEDDINGS_ONLY
+        )
+
+    def test_event_override_only_matters_below_floor(self) -> None:
+        # At/above the floor the doc is kept anyway — the event flag is a no-op there.
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.60, high_value_event=True) == (
+            ProcessingPath.FULL_PIPELINE
+        )
+
+    def test_event_override_does_not_resurrect_light_path(self) -> None:
+        # The override never UPGRADES an already-cheap path — only MEDIUM/DEEP
+        # (FULL_PIPELINE) docs are in scope.
+        assert self._gate(ProcessingPath.SECTION_EMBEDDINGS_ONLY, score=0.10, high_value_event=True) == (
+            ProcessingPath.SECTION_EMBEDDINGS_ONLY
+        )
+        assert self._gate(ProcessingPath.HALT, score=0.10, high_value_event=True) == ProcessingPath.HALT
+
 
 @pytest.mark.unit
 class TestValueGateConfigDefaults:
@@ -166,6 +203,22 @@ class TestValueGateConfigDefaults:
 
         s = Settings()  # type: ignore[call-arg]
         assert s.deep_extraction_score_floor <= s.routing_tier_deep
+
+    def test_event_value_override_defaults(self) -> None:
+        # VALUE-signal override defaults: ON, any single event rescues, all categories.
+        from nlp_pipeline.config import Settings
+
+        s = Settings()  # type: ignore[call-arg]
+        assert s.event_value_override_enabled is True
+        assert s.event_value_min_hits == 1
+        assert s.event_value_scan_chars == 600
+        assert s.event_value_categories_set is None  # empty string → all categories
+
+    def test_event_value_categories_env_parse(self) -> None:
+        from nlp_pipeline.config import Settings
+
+        s = Settings(event_value_categories="earnings, M_AND_A ,,")  # type: ignore[call-arg]
+        assert s.event_value_categories_set == frozenset({"earnings", "m_and_a"})
 
 
 @pytest.mark.unit
