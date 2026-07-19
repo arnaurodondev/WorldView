@@ -374,15 +374,26 @@ class TestC2ToolResultItemsHistogram:
         # directly without calling execute_all again.  Both turns emit a tool_result
         # event and record rag_tool_result_items — so over 2 turns we expect count==2
         # (one observation per call site, not zero or four from double-counting).
+        #
+        # Chat-latency lever B (2026-07-19) added an all-cached early-stop: a hop
+        # requesting ONLY already-answered tools breaks the loop. To keep the
+        # dedup-replay path under test (rather than tripping the early-stop),
+        # iter 1 requests a MIXED batch — the same tool (cache hit → replay) PLUS
+        # a fresh tool — so at least one call is fresh and the loop proceeds.
         tool_block = _make_tool_use_block("c2_dedup_tool", inp={"ticker": "AAPL"})
+        fresh_block = _make_tool_use_block("c2_fresh_tool", inp={"ticker": "MSFT"})
         items = [_make_retrieved_item()]
         call_count = [0]
 
         async def _two_call_llm(messages, tools=None, **kwargs):
             call_count[0] += 1
-            if call_count[0] <= 2:
-                # Iter 0 + 1: same tool call → iter 1 triggers cache hit.
+            if call_count[0] == 1:
+                # Iter 0: the tracked tool runs fresh and is cached.
                 return _make_llm_tool_response(tool_calls=[tool_block])
+            if call_count[0] == 2:
+                # Iter 1: MIXED batch — tracked tool is a cache-hit replay,
+                # c2_fresh_tool is genuinely fresh (prevents the early-stop).
+                return _make_llm_tool_response(tool_calls=[tool_block, fresh_block])
             # Iter 2: direct answer stops the loop.
             return _make_llm_tool_response(text="Done.", tool_calls=[])
 

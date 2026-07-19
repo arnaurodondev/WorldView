@@ -539,3 +539,77 @@ async def test_stream_chat_omits_tools_and_seed_when_not_passed() -> None:
     assert "tools" not in captured[0]
     assert "seed" not in captured[0]
     await client.aclose()
+
+
+# ── Chat-latency lever C: env-tunable gpt-oss reasoning_effort ────────────────
+# (docs/audits/2026-07-19-chat-latency-profile.md)
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_reasoning_effort_defaults_to_medium_for_gpt_oss() -> None:
+    """Default ``reasoning_effort`` stays 'medium' on the gpt-oss streaming path.
+
+    Preserves the historic behaviour exactly when the knob is unset.
+    """
+    captured: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured.append(_json.loads(request.content))
+        return httpx.Response(200, content=_sse_with_content("ok"))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    adapter = DeepInfraCompletionAdapter(api_key="x", model="openai/gpt-oss-120b", http_client=client)
+    async for _ in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+        pass
+    assert captured[0]["reasoning_effort"] == "medium"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_reasoning_effort_env_override_applied_for_gpt_oss() -> None:
+    """A configured ``reasoning_effort='low'`` is forwarded to gpt-oss synthesis."""
+    captured: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured.append(_json.loads(request.content))
+        return httpx.Response(200, content=_sse_with_content("ok"))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="openai/gpt-oss-120b",
+        http_client=client,
+        reasoning_effort="low",
+    )
+    async for _ in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+        pass
+    assert captured[0]["reasoning_effort"] == "low"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_reasoning_effort_omitted_for_non_gpt_oss() -> None:
+    """The knob is a no-op for non gpt-oss models (guarded on the model id)."""
+    captured: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured.append(_json.loads(request.content))
+        return httpx.Response(200, content=_sse_with_content("ok"))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="Qwen/Qwen3-235B-A22B",
+        http_client=client,
+        reasoning_effort="low",
+    )
+    async for _ in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+        pass
+    assert "reasoning_effort" not in captured[0]
+    await client.aclose()
