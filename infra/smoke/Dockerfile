@@ -1,3 +1,7 @@
+# Built + pushed by CI (.github/workflows/deploy.yml, job build-smoke) on every
+# main push touching infra/smoke/** or scripts/prod_e2e_smoke.py — never build
+# this by hand (a manual build rots and ships a stale migration-head map).
+#
 # Minimal image for the in-cluster prod smoke CronJob: python3 (runs the harness)
 # + kubectl (the harness shells out to it; in-cluster it uses the pod's
 # ServiceAccount token automatically, no kubeconfig needed).
