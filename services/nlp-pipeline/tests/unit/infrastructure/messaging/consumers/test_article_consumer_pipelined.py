@@ -118,6 +118,22 @@ def test_ledger_partitions_advance_independently() -> None:
     assert targets == [(1, 1)]
 
 
+def test_ledger_pending_counts_retained_offsets() -> None:
+    """pending() reflects retained (registered + settled-uncommitted) offsets."""
+    ledger = _PartitionCommitLedger()
+    assert ledger.pending() == 0
+    msgs = [_FakeMsg(0, off) for off in range(3)]
+    for m in msgs:
+        ledger.register(m)
+    assert ledger.pending() == 3  # all in flight
+    # Head barrier: settle 0 handled, 1 as barrier(False), 2 handled.
+    ledger.settle(msgs[0], True)
+    ledger.settle(msgs[1], False)
+    ledger.settle(msgs[2], True)
+    ledger.drain()  # commits only offset 0; 1(barrier) + 2 stay retained
+    assert ledger.pending() == 2  # offset 0 forgotten, 1 and 2 held behind barrier
+
+
 def test_ledger_cursor_anchors_to_first_seen_offset() -> None:
     """The commit cursor starts at the first offset seen (mid-partition resume)."""
     ledger = _PartitionCommitLedger()
@@ -301,3 +317,88 @@ async def test_run_respects_concurrency_bound() -> None:
     assert peak <= concurrency
     assert peak == concurrency  # actually saturated the window
     assert len(c._consumer.committed) == total  # type: ignore[attr-defined]
+
+
+def _drain_source_poll_batch(source: deque[_FakeMsg], idle_sleep: float = 0.002) -> Any:
+    """Return a ``_poll_batch`` stub that drains up to ``max_records`` from a deque."""
+
+    def fake_poll_batch(_loop: Any, max_records: int) -> Any:
+        async def _poll() -> list[_FakeMsg]:
+            out: list[_FakeMsg] = []
+            while source and len(out) < max_records:
+                out.append(source.popleft())
+            if not out:
+                await asyncio.sleep(idle_sleep)
+            return out
+
+        return _poll()
+
+    return fake_poll_batch
+
+
+async def test_run_poison_storm_cap_triggers_clean_shutdown_not_barrier() -> None:
+    """The base dead_letter_cap RuntimeError must RESTART the consumer, not silently barrier.
+
+    ``_settle_message`` deliberately re-raises the poison-storm cap RuntimeError
+    (via ``_dead_letter_poison``).  The pipelined ``_worker`` must (a) NOT swallow
+    it into a per-partition ``handled=False`` hold, (b) set the stop event for a
+    clean drain, and (c) let ``run`` RE-RAISE it so the supervisor exits non-zero
+    and the container restarts.
+    """
+    concurrency = 4
+    c = _make_consumer(concurrency)
+    # offset 0 OK; offset 1 trips the cap; offset 2 would be fine.
+    source: deque[_FakeMsg] = deque([_FakeMsg(0, 0), _FakeMsg(0, 1), _FakeMsg(0, 2)])
+
+    async def fake_settle(msg: Any) -> bool:
+        if msg.offset() == 1:
+            # Exact shape of messaging.kafka.consumer.base.dead_letter's cap raise.
+            raise RuntimeError("Dead-letter cap 5000 exceeded — forcing restart")
+        return True
+
+    c._settle_message = fake_settle  # type: ignore[attr-defined,method-assign]
+    c._poll_batch = _drain_source_poll_batch(source)  # type: ignore[attr-defined,method-assign]
+
+    with pytest.raises(RuntimeError, match="Dead-letter cap"):
+        await asyncio.wait_for(c.run(), timeout=5.0)
+
+    # (b) clean-shutdown signal set — not a silent degraded barrier.
+    assert c._stop_event.is_set()  # type: ignore[attr-defined]
+    # (a)/(c) the capped offset (1) and everything after it were NOT acked; only
+    # the contiguous prefix before the poison (offset 0) committed.
+    committed_offsets = sorted(o for (_p, o) in c._consumer.committed)  # type: ignore[attr-defined]
+    assert committed_offsets == [0]
+
+
+async def test_run_backpressures_on_sustained_barrier_bounds_memory() -> None:
+    """A sustained commit barrier must NOT let the ledger retain messages unbounded.
+
+    offset 0 is a permanent barrier (DLQ/DB outage → handled=False); every later
+    offset settles fine but is stuck behind it.  The loop must stop admitting once
+    the ledger hits its cap so retained Message payloads stay bounded (no OOM),
+    rather than draining all 400 available messages into memory.
+    """
+    concurrency = 4
+    c = _make_consumer(concurrency)
+    max_pending = max(concurrency * 8, 64)  # mirrors run()'s bound
+    total_available = 400
+    source: deque[_FakeMsg] = deque(_FakeMsg(0, off) for off in range(total_available))
+    settled = {"count": 0}
+
+    async def fake_settle(msg: Any) -> bool:
+        settled["count"] += 1
+        return msg.offset() != 0  # offset 0 is the permanent barrier
+
+    c._settle_message = fake_settle  # type: ignore[attr-defined,method-assign]
+    c._poll_batch = _drain_source_poll_batch(source, idle_sleep=0.001)  # type: ignore[attr-defined,method-assign]
+
+    # The loop never self-stops under a sustained barrier; time-box it.
+    with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+        await asyncio.wait_for(c.run(), timeout=0.5)
+
+    # Backpressure held: admitted (== settle calls) is bounded by the ledger cap
+    # plus at most one window of overshoot — NOT the full 400.
+    assert settled["count"] <= max_pending + concurrency
+    assert settled["count"] < total_available
+    # Nothing committed: offset 0's barrier blocks the whole partition.
+    assert c._consumer.committed == []  # type: ignore[attr-defined]

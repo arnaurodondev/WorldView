@@ -454,6 +454,18 @@ class _PartitionCommitLedger:
         tp = (msg.topic(), msg.partition())
         self._slots[tp][msg.offset()] = (msg, bool(handled))
 
+    def pending(self) -> int:
+        """Total offsets retained across all partitions (registered + settled-uncommitted).
+
+        Each retained slot holds a Message ref (payload bytes).  Under normal
+        operation this is bounded by the in-flight window plus the modest
+        out-of-order tail behind a slow head.  During a SUSTAINED commit barrier
+        (a ``handled=False`` head from a DLQ/DB outage that stops ``drain`` from
+        ever advancing) it would otherwise grow unbounded-by-outage-duration —
+        the caller uses this to apply poll backpressure and cap memory.
+        """
+        return sum(len(slots) for slots in self._slots.values())
+
     def drain(self) -> list[Any]:
         """Advance every partition's contiguous settled prefix; return commit targets."""
         targets: list[Any] = []
@@ -710,17 +722,48 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         ledger = _PartitionCommitLedger()
         inflight: set[asyncio.Task[None]] = set()
         loop = asyncio.get_event_loop()
+        # Captured when the poison-storm circuit breaker trips (see _worker); the
+        # run loop re-raises it AFTER draining so the supervisor exits non-zero
+        # and the container restarts — preserving the base ``dead_letter_cap``
+        # crash-to-restart intent, just gracefully instead of a hard crash.
+        poison_storm_exc: RuntimeError | None = None
+        # Cap the offsets the ledger retains so a SUSTAINED commit barrier (a
+        # DLQ/DB outage that holds a partition's head offset) cannot pile up
+        # Message payloads unbounded-by-outage-duration and OOM the consumer.  A
+        # generous multiple of the window covers every healthy out-of-order tail.
+        max_pending = max(concurrency * 8, 64)
 
         async def _worker(message: Any) -> None:
-            # ``_settle_message`` is contractually non-raising (it succeeds,
-            # retries in place, or durably dead-letters), but guard anyway: an
-            # unexpected escape must NOT leave the offset un-settled forever and
-            # pin its partition's commit cursor.  Recording ``False`` holds a
-            # commit barrier so the message is re-read after a restart/rebalance
-            # rather than silently acked (at-least-once preserved).
+            nonlocal poison_storm_exc
+            # ``_settle_message`` settles in place (success / retry / durable
+            # dead-letter) and returns True/False — it does NOT raise for the
+            # ordinary poison path.  It DOES deliberately propagate ONE thing: the
+            # base ``dead_letter_cap`` ``RuntimeError`` re-raised by
+            # ``_dead_letter_poison`` (every other DLQ failure returns False).
+            # That RuntimeError is the poison-storm CIRCUIT BREAKER and must
+            # RESTART the consumer, not be silently downgraded to a per-partition
+            # barrier — so catch it distinctly, hold this offset (handled=False:
+            # the capped message was NOT dead-lettered, so never ack past it), and
+            # signal a clean shutdown that the run loop turns into a loud non-zero
+            # exit.
             try:
                 handled = await self._settle_message(message)
+            except RuntimeError as cap_exc:
+                if poison_storm_exc is None:
+                    poison_storm_exc = cap_exc
+                logger.critical(  # type: ignore[no-any-return]
+                    "article_consumer.dead_letter_cap_shutdown",
+                    topic=message.topic(),
+                    partition=message.partition(),
+                    offset=message.offset(),
+                    error=str(cap_exc),
+                )
+                self._stop_event.set()  # break the loop → drain → re-raise below
+                handled = False
             except Exception as settle_exc:
+                # Truly unexpected escape (should not happen): do NOT leave the
+                # offset un-settled forever pinning its partition; record a barrier
+                # so it is re-read after restart/rebalance, never silently acked.
                 logger.critical(  # type: ignore[no-any-return]
                     "article_consumer.settle_unexpected_error",
                     topic=message.topic(),
@@ -755,12 +798,23 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 # Honour the opt-in backpressure pause exactly like the base loop.
                 self._maybe_apply_backpressure()
 
-                if len(inflight) >= concurrency:
-                    # Window full: park until a handler frees a slot (done tasks
-                    # remove themselves via the add_done_callback below), then
-                    # commit whatever newly-contiguous prefix completed and refill.
-                    await asyncio.wait(inflight, return_when=asyncio.FIRST_COMPLETED)
-                    # BP-704 liveness: a completed handler is real progress.
+                if len(inflight) >= concurrency or ledger.pending() >= max_pending:
+                    # Stop admitting work and wait for a completion when EITHER:
+                    #   * the concurrency window is full, OR
+                    #   * the commit ledger is barrier-backlogged — a sustained
+                    #     DLQ/DB outage holds a partition's head offset, so settled
+                    #     offsets pile up uncommitted.  Backpressuring the poll
+                    #     bounds retained Message payloads (no OOM) until the
+                    #     barrier clears or the drain-health alert / operator acts.
+                    # If nothing is in flight (all held behind a barrier with the
+                    # window drained) idle one poll_timeout rather than busy-spin or
+                    # crash on ``asyncio.wait`` of an empty set.
+                    if inflight:
+                        await asyncio.wait(inflight, return_when=asyncio.FIRST_COMPLETED)
+                    else:
+                        await asyncio.sleep(self._config.poll_timeout_seconds)
+                    # BP-704 liveness: the consumer is alive (a completed handler or
+                    # a correct barrier hold), so heartbeat.
                     self._record_progress()
                     await _commit_ready()
                     continue
@@ -799,8 +853,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             # re-paid to DeepInfra) on the next start.
             if inflight:
                 await asyncio.gather(*inflight, return_exceptions=True)
-                with contextlib.suppress(Exception):
-                    await _commit_ready()
+            # ALWAYS flush the final contiguous prefix — even if every worker had
+            # already completed before the loop exited (e.g. a poison-storm stop),
+            # the last settled offsets are only committed here.
+            with contextlib.suppress(Exception):
+                await _commit_ready()
             retry_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await retry_task
@@ -808,6 +865,14 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             with contextlib.suppress(asyncio.CancelledError):
                 await probe_task
             self._shutdown_kafka()
+
+        # POISON-STORM CIRCUIT BREAKER: if the base ``dead_letter_cap`` tripped in
+        # a worker, re-raise it now that in-flight work has drained and Kafka is
+        # shut down cleanly.  The supervisor (run_consumer_supervised) turns this
+        # into ``ConsumerExited`` → ``sys.exit(1)`` → container restart — the
+        # intended force-restart, reached gracefully rather than via a hard crash.
+        if poison_storm_exc is not None:
+            raise poison_storm_exc
 
     async def _poll_batch(self, loop: Any, max_records: int) -> list[Any]:
         """Drain up to ``max_records`` messages without blocking on an empty topic.
