@@ -77,6 +77,7 @@ def _build_retention_workers(settings: Settings) -> list[RetentionCleanupWorker]
                 service_name="content-ingestion",
                 batch_size=settings.outbox_prune_batch_size,
                 max_batches=settings.outbox_prune_max_batches,
+                interval_seconds=settings.outbox_prune_interval_seconds,
             )
         )
 
@@ -96,6 +97,9 @@ def _build_retention_workers(settings: Settings) -> list[RetentionCleanupWorker]
                 service_name="content-ingestion",
                 batch_size=settings.prediction_fetch_log_prune_batch_size,
                 max_batches=settings.prediction_fetch_log_prune_max_batches,
+                # Dedup log grows slowly and is large — prune hourly, not every
+                # 5 min like the hot outbox (wires the previously-unused setting).
+                interval_seconds=settings.prediction_fetch_log_prune_interval_seconds,
             )
         )
 
@@ -144,7 +148,6 @@ async def main() -> None:
     retention_coros = build_retention_loop_coros(
         workers=retention_workers,
         session_factory=write_factory,
-        interval_seconds=settings.outbox_prune_interval_seconds,
         stop_event=stop_event,
     )
     for worker in retention_workers:

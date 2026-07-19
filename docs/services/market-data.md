@@ -288,6 +288,12 @@ CREATE TABLE failed_tasks (
 );
 
 CREATE TABLE outbox_events (...);  -- same pattern as Portfolio
+-- RETENTION (2026-07-18 disk-full fix): like content-ingestion's, this outbox
+-- marks published rows status='delivered' (mark_dispatched) but the claimable
+-- index does not cover them, so delivered rows would pile up. The
+-- dispatcher_main process prunes delivered rows older than
+-- MARKET_DATA_OUTBOX_RETENTION_SECONDS (default 3600) on dispatched_at — NEVER
+-- pending/processing/failed/dead_letter. See docs/libs/messaging.md.
 
 -- Read-optimized projection: one row per (instrument_id, as_of_date, metric, period_type)
 -- Source of truth remains the 18 section tables; this is a derived projection.

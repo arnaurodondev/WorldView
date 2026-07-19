@@ -139,11 +139,18 @@ class RetentionCleanupWorker:
         max_batches: Safety cap on batches per :meth:`run_once` call so a huge
             backlog is drained across several scheduled runs rather than in one
             unbounded burst. ``None`` means "drain until caught up".
+        interval_seconds: How often :func:`run_retention_loop` /
+            :func:`build_retention_loop_coros` schedule this worker (delay
+            between the end of one pass and the start of the next). Each worker
+            owns its own cadence so tables with different growth rates can be
+            pruned at different frequencies (e.g. a hot outbox every few minutes
+            vs a slow dedup log hourly). Default 300s.
         inter_batch_sleep_seconds: Cooperative yield between batches so the
             event loop and DB get breathing room during a large catch-up.
     """
 
     DEFAULT_BATCH_SIZE = 10_000
+    DEFAULT_INTERVAL_SECONDS = 300.0
     INTER_BATCH_SLEEP_SECONDS = 0.1
 
     def __init__(
@@ -153,22 +160,31 @@ class RetentionCleanupWorker:
         service_name: str,
         batch_size: int = DEFAULT_BATCH_SIZE,
         max_batches: int | None = None,
+        interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
         inter_batch_sleep_seconds: float = INTER_BATCH_SLEEP_SECONDS,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0")
         if max_batches is not None and max_batches <= 0:
             raise ValueError("max_batches must be > 0 or None")
+        if interval_seconds <= 0:
+            raise ValueError("interval_seconds must be > 0")
         self._policy = policy
         self._service_name = service_name
         self._batch_size = batch_size
         self._max_batches = max_batches
+        self._interval_seconds = interval_seconds
         self._inter_batch_sleep = inter_batch_sleep_seconds
 
     @property
     def policy(self) -> RetentionPolicy:
         """The retention policy this worker enforces (read-only)."""
         return self._policy
+
+    @property
+    def interval_seconds(self) -> float:
+        """Scheduling cadence for this worker's periodic loop (read-only)."""
+        return self._interval_seconds
 
     def _build_delete_sql(self, *, use_row_locks: bool) -> str:
         """Build the batched DELETE statement text for the active dialect.
@@ -310,14 +326,16 @@ def build_retention_loop_coros(
     *,
     workers: list[RetentionCleanupWorker],
     session_factory: async_sessionmaker[AsyncSession],
-    interval_seconds: float,
     stop_event: asyncio.Event,
 ) -> list[Callable[[], Coroutine[Any, Any, None]]]:
     """Return zero-arg coroutine factories, one per worker's retention loop.
 
     Thin convenience wrapper for host processes that want to
-    ``asyncio.create_task(coro())`` one background loop per worker. Staggers
-    the initial delay so loops sharing a process do not all fire at once.
+    ``asyncio.create_task(coro())`` one background loop per worker. Each loop
+    runs at its worker's own :attr:`RetentionCleanupWorker.interval_seconds`
+    cadence, so tables with different growth rates prune at different
+    frequencies. Staggers the initial delay so loops sharing a process do not
+    all fire at once.
     """
     coros: list[Callable[[], Coroutine[Any, Any, None]]] = []
     for idx, worker in enumerate(workers):
@@ -327,7 +345,7 @@ def build_retention_loop_coros(
                 await run_retention_loop(
                     worker=worker,
                     session_factory=session_factory,
-                    interval_seconds=interval_seconds,
+                    interval_seconds=worker.interval_seconds,
                     stop_event=stop_event,
                     initial_delay_seconds=delay,
                 )

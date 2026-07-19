@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     ingestion_events_prune_interval_seconds: float = Field(default=3600.0, ge=1.0)
     ingestion_events_prune_max_batches: int = Field(default=200, ge=1)
 
+    # market-data's OWN ``outbox_events`` has the identical status/dispatched_at
+    # schema and the identical delivered-pileup failure mode as content-ingestion
+    # (the dispatcher marks rows 'delivered' but the claimable index does not
+    # cover them). Only ~24 MB today but it WILL grow, so prune it pre-emptively
+    # on the same short window. NEVER deletes pending/processing/failed/dead_letter.
+    # Set to 0 to DISABLE.
+    outbox_retention_seconds: int = Field(default=3600, ge=0)
+    outbox_prune_batch_size: int = Field(default=10_000, ge=1)
+    outbox_prune_interval_seconds: float = Field(default=300.0, ge=1.0)
+    outbox_prune_max_batches: int = Field(default=200, ge=1)
+
     # PLAN-0113 FIX-2: static-membership instance ids (opt-in). Empty default =
     # dynamic membership (no-op). Setting a stable, per-replica value enables Kafka
     # static membership so a rolling restart does not trigger a full group rebalance.

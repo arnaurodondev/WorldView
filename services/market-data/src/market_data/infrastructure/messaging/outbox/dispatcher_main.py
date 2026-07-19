@@ -49,6 +49,32 @@ def _build_retention_workers(settings: Settings) -> list[RetentionCleanupWorker]
     can be turned off via env without a redeploy.
     """
     workers: list[RetentionCleanupWorker] = []
+
+    # ── outbox_events: prune delivered rows only ────────────────────────────
+    # market-data's own outbox has the identical status/dispatched_at schema and
+    # the identical delivered-pileup failure mode as content-ingestion's — the
+    # dispatcher marks rows status='delivered' (mark_dispatched) but the
+    # claimable index does not cover them. Prune pre-emptively before it grows.
+    if settings.outbox_retention_seconds > 0:
+        workers.append(
+            RetentionCleanupWorker(
+                policy=RetentionPolicy(
+                    table="outbox_events",
+                    pk_column="id",
+                    age_column="dispatched_at",
+                    retention=timedelta(seconds=settings.outbox_retention_seconds),
+                    # CRITICAL: only ever delete delivered rows.
+                    status_column="status",
+                    status_value="delivered",
+                ),
+                service_name="market-data",
+                batch_size=settings.outbox_prune_batch_size,
+                max_batches=settings.outbox_prune_max_batches,
+                interval_seconds=settings.outbox_prune_interval_seconds,
+            )
+        )
+
+    # ── ingestion_events: prune old idempotency rows ────────────────────────
     if settings.ingestion_events_retention_days > 0:
         workers.append(
             RetentionCleanupWorker(
@@ -62,6 +88,7 @@ def _build_retention_workers(settings: Settings) -> list[RetentionCleanupWorker]
                 service_name="market-data",
                 batch_size=settings.ingestion_events_prune_batch_size,
                 max_batches=settings.ingestion_events_prune_max_batches,
+                interval_seconds=settings.ingestion_events_prune_interval_seconds,
             )
         )
     return workers
@@ -85,7 +112,6 @@ class DispatcherProcess:
         self._retention_coros = build_retention_loop_coros(
             workers=self._retention_workers,
             session_factory=write_factory,
-            interval_seconds=settings.ingestion_events_prune_interval_seconds,
             stop_event=self._stop_event,
         )
 

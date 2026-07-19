@@ -267,7 +267,6 @@ class TestRetentionLoop:
         coros = build_retention_loop_coros(
             workers=workers,
             session_factory=None,  # type: ignore[arg-type]  # not invoked in this test
-            interval_seconds=1.0,
             stop_event=stop_event,
         )
         assert len(coros) == 1
@@ -332,3 +331,23 @@ class TestValidation:
         )
         with pytest.raises(ValueError, match="max_batches"):
             RetentionCleanupWorker(policy=policy, service_name="test", max_batches=0)
+
+    def test_rejects_non_positive_interval(self) -> None:
+        policy = RetentionPolicy(
+            table="outbox_events",
+            pk_column="id",
+            age_column="dispatched_at",
+            retention=timedelta(hours=1),
+        )
+        with pytest.raises(ValueError, match="interval_seconds"):
+            RetentionCleanupWorker(policy=policy, service_name="test", interval_seconds=0)
+
+    def test_worker_exposes_interval(self) -> None:
+        policy = RetentionPolicy(
+            table="outbox_events",
+            pk_column="id",
+            age_column="dispatched_at",
+            retention=timedelta(hours=1),
+        )
+        worker = RetentionCleanupWorker(policy=policy, service_name="test", interval_seconds=42.0)
+        assert worker.interval_seconds == 42.0

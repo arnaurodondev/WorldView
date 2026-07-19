@@ -635,27 +635,32 @@ worker = RetentionCleanupWorker(
     service_name="content-ingestion",
     batch_size=10_000,                # rows per committed transaction
     max_batches=200,                  # per-pass safety cap (drains huge backlogs across passes)
+    interval_seconds=300.0,           # this worker's own scheduling cadence
 )
 ```
 
 | Member | Purpose |
 |--------|---------|
 | `RetentionPolicy(table, pk_column, age_column, retention, status_column=None, status_value=None)` | Declarative prune spec. Identifiers are validated against `^[A-Za-z_][A-Za-z0-9_]*$`; `retention` must be positive; `status_value` required when `status_column` set. |
-| `RetentionCleanupWorker(*, policy, service_name, batch_size=10_000, max_batches=None, inter_batch_sleep_seconds=0.1)` | Batched pruner; commits per batch (autocommit-per-batch → flat WAL). |
+| `RetentionCleanupWorker(*, policy, service_name, batch_size=10_000, max_batches=None, interval_seconds=300.0, inter_batch_sleep_seconds=0.1)` | Batched pruner; commits per batch (autocommit-per-batch → flat WAL). Each worker owns its `interval_seconds` cadence, so hot tables prune more often than slow ones. |
 | `async run_once(session, *, now=None) -> int` | One pass; `DELETE ... WHERE pk IN (SELECT pk ... WHERE age_column < cutoff [AND status=...] ORDER BY age_column LIMIT n [FOR UPDATE SKIP LOCKED])`. `FOR UPDATE SKIP LOCKED` emitted for PostgreSQL only (dialect-detected; SQLite tests omit it). |
 | `async run_retention_loop(*, worker, session_factory, interval_seconds, stop_event, initial_delay_seconds=0.0)` | Fail-open periodic loop; fresh session per pass; stops on `stop_event`. |
-| `build_retention_loop_coros(*, workers, session_factory, interval_seconds, stop_event)` | Returns one zero-arg coroutine factory per worker (for `asyncio.create_task`), staggered. |
+| `build_retention_loop_coros(*, workers, session_factory, stop_event)` | Returns one zero-arg coroutine factory per worker (for `asyncio.create_task`), each running at its own `worker.interval_seconds`, staggered. |
 
 **Wiring (no new deployment):** each owning service hosts the pruner inside its
 already-running **outbox dispatcher process** (`*/outbox/dispatcher_main.py`),
 using the dispatcher's write session factory:
 
-- `content-ingestion` dispatcher_main → `outbox_events` (delivered, 1h default) +
-  `prediction_market_fetch_log` (14d default). Env: `CONTENT_INGESTION_OUTBOX_RETENTION_SECONDS`,
+- `content-ingestion` dispatcher_main → `outbox_events` (delivered, 1h retention /
+  300s cadence) + `prediction_market_fetch_log` (14d retention / 3600s cadence).
+  Env: `CONTENT_INGESTION_OUTBOX_RETENTION_SECONDS`,
   `..._OUTBOX_PRUNE_{BATCH_SIZE,INTERVAL_SECONDS,MAX_BATCHES}`,
-  `..._PREDICTION_FETCH_LOG_RETENTION_DAYS` (+ batch/interval/max_batches).
-- `market-data` dispatcher_main → `ingestion_events` (14d default). Env:
-  `MARKET_DATA_INGESTION_EVENTS_RETENTION_DAYS` (+ batch/interval/max_batches).
+  `..._PREDICTION_FETCH_LOG_RETENTION_DAYS` (+ `..._PRUNE_{BATCH_SIZE,INTERVAL_SECONDS,MAX_BATCHES}`).
+- `market-data` dispatcher_main → `outbox_events` (delivered, 1h retention /
+  300s cadence — same latent delivered-pileup bug, pruned pre-emptively) +
+  `ingestion_events` (14d retention / 3600s cadence). Env:
+  `MARKET_DATA_OUTBOX_RETENTION_SECONDS` (+ `..._OUTBOX_PRUNE_{BATCH_SIZE,INTERVAL_SECONDS,MAX_BATCHES}`),
+  `MARKET_DATA_INGESTION_EVENTS_RETENTION_DAYS` (+ `..._PRUNE_{BATCH_SIZE,INTERVAL_SECONDS,MAX_BATCHES}`).
 
 Set any retention window to `0` to disable that table's pruner. **The outbox
 pruner NEVER deletes `pending`/`processing`/`failed`/`dead_letter` rows.**
