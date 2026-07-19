@@ -424,18 +424,33 @@ class Settings(BaseSettings):
     #   * retrieval is preserved for every skipped doc (chunk embeddings still written;
     #     KG extraction remains backfillable from the persisted chunks/mentions).
     #
-    # DEFAULT FLOOR 0.50 (env-tunable, NO rebuild): under the live prod score
-    # distribution this gates the [0.35, 0.50) score band (~41% of recent intake, the
-    # low-value tail just above the LIGHT cutoff) OUT of deep extraction. Combined with
-    # the ~31% already-LIGHT, ~72% of intake then skips the LLM chain and only ~28%
-    # runs it — a ~59% cut in deep-extraction volume + DeepInfra spend, flipping drain
-    # rate comfortably above intake. Tune DOWN to 0.45 (gentler: gates only [0.35,0.45),
-    # ~28% of intake) or UP to 0.55 to drain faster. Set the enabled flag False to
+    # DEFAULT FLOOR 0.45 (env-tunable, NO rebuild): the default is set to EXACTLY the
+    # live-prod DEEP tier boundary (configs/docker.env: NLP_PIPELINE_ROUTING_TIER_DEEP
+    # = 0.45). This is deliberate — at floor == the DEEP boundary, NO DEEP-tier doc is
+    # ever gated (a DEEP doc scores >= 0.45 == floor → kept); only the [0.35, 0.45)
+    # MEDIUM band is gated (~26-28% of recent intake, the low-value tail just above the
+    # LIGHT cutoff). Combined with the ~31% already-LIGHT, ~59% of intake then skips the
+    # LLM chain and ~41% runs it — deep-extraction volume + DeepInfra spend drop ~41%
+    # (from ~69% of intake to ~41%), flipping drain rate above intake.
+    #
+    # WARNING — the floor is only "never gates DEEP-tier docs" when it is set at or
+    # BELOW the live DEEP threshold. A floor > that threshold (e.g. 0.50 while DEEP=0.45)
+    # WOULD gate DEEP-tier docs in the [DEEP_threshold, floor) band and wrongly skip real
+    # earnings/M&A/analyst/contract news (observed: PulteGroup Q1 miss @0.497, Nebius
+    # stake disclosure, a $186M Army contract). Keep floor <= NLP_PIPELINE_ROUTING_TIER_DEEP.
+    # Tune UP toward that boundary for gentler gating; set the enabled flag False to
     # restore the pre-gate behaviour (every MEDIUM/DEEP doc runs the full chain).
+    #
+    # FOLLOW-UP (do not build here): the composite routing score is an entity-DENSITY
+    # proxy, NOT a VALUE proxy — a focused single-company earnings/M&A/contract story has
+    # few org mentions and scores LOW despite high value, so even a 0.45 floor gates some
+    # substantive MEDIUM news out of KG extraction. The durable fix is a VALUE signal
+    # (event-type detection: earnings / M&A / analyst-rating / contract) that force-
+    # extracts substantive MEDIUM docs regardless of density. Tracked as a follow-up.
     # NLP_PIPELINE_DEEP_EXTRACTION_VALUE_GATE_ENABLED
     deep_extraction_value_gate_enabled: bool = True
     # NLP_PIPELINE_DEEP_EXTRACTION_SCORE_FLOOR
-    deep_extraction_score_floor: float = Field(default=0.50, ge=0.0, le=1.0)
+    deep_extraction_score_floor: float = Field(default=0.45, ge=0.0, le=1.0)
 
     # ── Learned routing classifier (PLAN-0111 C-2 / C-6) ─────────────────────
     # Controls the EmbeddingGemma-based learned router that runs ALONGSIDE the

@@ -86,12 +86,24 @@ def apply_deep_extraction_value_gate(
         deep-extracted regardless of score (their low entity-density score is a
         structural artefact of raw HTML, not low informational value);
       * the composite routing score is BELOW ``score_floor`` — every doc scoring at or
-        above the floor (all genuinely high-value news + all DEEP-tier docs above it)
-        is always fully extracted.
+        above the floor is always fully extracted.
 
     Keying on the raw composite score (not the tier label) keeps the gate independent
-    of the DEEP/MEDIUM tier cutoffs (which prod tunes at runtime): the floor IS the
-    value line. Returns the (possibly downgraded) ``ProcessingPath``.
+    of the DEEP/MEDIUM tier cutoffs: the floor IS the value line. IMPORTANT — whether a
+    DEEP-tier doc can be gated depends entirely on where the floor sits relative to the
+    live DEEP tier boundary (``settings.routing_tier_deep``): with ``score_floor`` set at
+    or BELOW that boundary (the default 0.45 == the live-prod DEEP boundary), NO DEEP-tier
+    doc is ever gated (DEEP docs score >= the boundary >= the floor → kept). A floor set
+    ABOVE the boundary WOULD gate DEEP-tier docs in the ``[boundary, floor)`` band — so
+    the caller must keep ``score_floor <= settings.routing_tier_deep``.
+
+    CAVEAT (tracked follow-up): the composite score is an entity-DENSITY proxy, not a
+    VALUE proxy. A focused single-company earnings / M&A / contract story has few org
+    mentions and scores low despite high value, so even at the aligned 0.45 floor some
+    substantive MEDIUM news is gated out of KG extraction. A value signal (event-type
+    detection) to force-extract such docs is a planned follow-up, not implemented here.
+
+    Returns the (possibly downgraded) ``ProcessingPath``.
     """
     if not enabled:
         return path

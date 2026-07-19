@@ -51,7 +51,7 @@ def _make_settings() -> MagicMock:
     # so keep it disabled here (a concrete bool, not a truthy Mock, so the gate
     # short-circuits before any score comparison).
     s.deep_extraction_value_gate_enabled = False
-    s.deep_extraction_score_floor = 0.50
+    s.deep_extraction_score_floor = 0.45
     return s
 
 

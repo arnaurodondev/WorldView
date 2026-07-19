@@ -208,17 +208,26 @@ to `FULL_PIPELINE`, ~69% of intake ran the full DeepInfra deep-extraction chain 
 and only ~31% (LIGHT) skipped it — extraction throughput (~10-14/min) trailed intake (~15-18/min), so
 the ~192k-article backlog never drained (see `docs/audits/2026-07-17-article-backlog-lever.md`).
 `apply_deep_extraction_value_gate` reclassifies genuinely LOW-VALUE docs (composite routing score below
-`NLP_PIPELINE_DEEP_EXTRACTION_SCORE_FLOOR`, default **0.50**) from `FULL_PIPELINE` to
+`NLP_PIPELINE_DEEP_EXTRACTION_SCORE_FLOOR`, default **0.45**) from `FULL_PIPELINE` to
 `SECTION_EMBEDDINGS_ONLY` — the same cheap path as LIGHT: **chunk embeddings are still written (doc stays
 fully searchable), only the costly entity resolution + LLM extraction is skipped** (and remains
 backfillable). Conservative by construction — never touches a doc already on a cheap path, an
 authoritative regulatory filing (`_AUTHORITATIVE_FILING_SOURCES`), or any doc scoring at/above the floor.
 Applied at both the initial-path decision (so section embeddings are skipped too) and re-applied in
-`ml_phase` after the novelty gate (the authoritative decision for extraction). Under the live prod score
-distribution the default floor gates the `[0.35, 0.50)` band (~41% of recent intake) out of deep
-extraction → ~72% of intake then skips the LLM chain (a ~59% cut in deep-extraction volume + DeepInfra
-spend), flipping drain rate above intake. Toggle with `NLP_PIPELINE_DEEP_EXTRACTION_VALUE_GATE_ENABLED`
-(default on); tune the floor down to 0.45 (gentler) or up to 0.55 (faster drain) with no rebuild.
+`ml_phase` after the novelty gate (the authoritative decision for extraction). The default floor is set to
+**exactly the live-prod DEEP tier boundary** (`configs/docker.env` `NLP_PIPELINE_ROUTING_TIER_DEEP=0.45`),
+so **no DEEP-tier doc is ever gated** — only the `[0.35, 0.45)` MEDIUM band (~26-28% of recent intake) is
+skipped. Combined with the ~31% already-LIGHT, ~59% of intake then skips the LLM chain and ~41% runs it
+(deep-extraction volume + DeepInfra spend drop ~41%, from ~69% of intake to ~41%), flipping drain rate
+above intake. **Keep the floor `<= NLP_PIPELINE_ROUTING_TIER_DEEP`**: a higher floor (e.g. 0.50 while
+DEEP=0.45) gates DEEP-tier docs in `[0.45, floor)` and wrongly skips real earnings/M&A/analyst/contract
+news. Toggle with `NLP_PIPELINE_DEEP_EXTRACTION_VALUE_GATE_ENABLED` (default on); no rebuild needed.
+
+> **Follow-up (not built):** the composite routing score is an entity-DENSITY proxy, not a VALUE proxy — a
+> focused single-company earnings/M&A/contract story has few org mentions and scores low despite high
+> value, so even the aligned 0.45 floor gates some substantive MEDIUM news out of KG extraction. The
+> durable fix is a VALUE signal (event-type detection: earnings / M&A / analyst-rating / contract) that
+> force-extracts substantive MEDIUM docs regardless of density.
 
 **PLAN-0111 B (universal chunk embedding, 2026-06-12):** LIGHT now generates **chunk** embeddings
 so every non-SUPPRESS article is semantically retrievable (chat retrieval queries chunk

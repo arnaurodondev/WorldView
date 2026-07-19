@@ -82,7 +82,7 @@ class TestApplyDeepExtractionValueGate:
     downgrading FULL_PIPELINE → SECTION_EMBEDDINGS_ONLY (chunk embeddings only).
     """
 
-    _FLOOR = 0.50
+    _FLOOR = 0.45  # the safe default: == the live-prod DEEP tier boundary
 
     def _gate(
         self,
@@ -103,13 +103,16 @@ class TestApplyDeepExtractionValueGate:
         )
 
     def test_below_floor_full_pipeline_is_downgraded(self) -> None:
-        # A low-value MEDIUM/DEEP news doc (score < floor) is routed to the cheap
-        # LIGHT path — chunk embeddings only, no deep extraction.
+        # A low-value MEDIUM news doc (score < floor, in the [0.35, 0.45) band) is
+        # routed to the cheap LIGHT path — chunk embeddings only, no deep extraction.
         assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.40) == ProcessingPath.SECTION_EMBEDDINGS_ONLY
 
     def test_at_or_above_floor_full_pipeline_is_kept(self) -> None:
-        # High-value docs (score >= floor) are ALWAYS fully extracted.
-        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.50) == ProcessingPath.FULL_PIPELINE
+        # Docs scoring >= floor are ALWAYS fully extracted. At the default floor 0.45
+        # (== the live DEEP boundary), this includes EVERY DEEP-tier doc (score >= 0.45),
+        # so no DEEP-tier doc is gated — the exact boundary (0.45) and above stay.
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.45) == ProcessingPath.FULL_PIPELINE
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.497) == ProcessingPath.FULL_PIPELINE
         assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.85) == ProcessingPath.FULL_PIPELINE
 
     def test_filing_source_below_floor_is_kept(self) -> None:
@@ -139,6 +142,30 @@ class TestApplyDeepExtractionValueGate:
         assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.30, source_type=None) == (
             ProcessingPath.SECTION_EMBEDDINGS_ONLY
         )
+
+
+@pytest.mark.unit
+class TestValueGateConfigDefaults:
+    """Lock the safe-by-default invariant: the floor must never gate DEEP-tier docs.
+
+    That holds iff ``deep_extraction_score_floor <= routing_tier_deep`` (a DEEP doc
+    scores >= the DEEP boundary, so a floor at/below the boundary keeps it). The
+    default floor 0.45 is chosen to equal the live-prod DEEP boundary.
+    """
+
+    def test_default_floor_is_045(self) -> None:
+        from nlp_pipeline.config import Settings
+
+        s = Settings()  # type: ignore[call-arg]
+        assert s.deep_extraction_score_floor == 0.45
+        assert s.deep_extraction_value_gate_enabled is True
+
+    def test_default_floor_does_not_gate_deep_tier(self) -> None:
+        # Invariant: floor <= the DEEP tier boundary → no DEEP-tier doc is ever gated.
+        from nlp_pipeline.config import Settings
+
+        s = Settings()  # type: ignore[call-arg]
+        assert s.deep_extraction_score_floor <= s.routing_tier_deep
 
 
 @pytest.mark.unit
