@@ -400,6 +400,43 @@ class Settings(BaseSettings):
     routing_tier_medium: float = 0.35  # score >= this → MEDIUM processing
     routing_tier_light: float = 0.20  # score >= this → LIGHT processing
 
+    # ── Deep-extraction VALUE gate (backlog-drain lever, 2026-07-17) ─────────────
+    # Ref: docs/audits/2026-07-17-article-backlog-lever.md.
+    #
+    # PROBLEM the gate solves: the per-article cost is dominated by the DeepInfra
+    # deep-extraction LLM chain (~2.9 calls/article: DeepSeek-V4-Flash extraction +
+    # relation/claim entailment). The routing tier router does NOT gate that load —
+    # BOTH the MEDIUM and DEEP tiers map to ProcessingPath.FULL_PIPELINE, so every
+    # non-LIGHT article runs the full chain. Measured on prod (nlp_db.routing_decisions,
+    # recent 3k rows under the live thresholds DEEP=0.45/MEDIUM=0.35/LIGHT=0.20):
+    # ~69% of intake ran the full deep-extraction chain, only ~31% (LIGHT) skipped.
+    # Deep-extraction throughput (~10-14/min) trailed intake (~15-18/min) → the
+    # ~192k-article backlog never drained.
+    #
+    # THE GATE: skip the expensive chain (entity resolution + LLM extraction + guards)
+    # for genuinely LOW-VALUE docs whose composite routing score is below
+    # ``deep_extraction_score_floor`` — routing them to the SAME cheap path LIGHT
+    # already uses (chunk embeddings ONLY → still fully searchable, no KG extraction).
+    # It is conservative by construction (see apply_deep_extraction_value_gate):
+    #   * never touches a doc already on a cheap path (LIGHT/SUPPRESS),
+    #   * never touches an authoritative regulatory filing (always extracted),
+    #   * never touches a doc scoring at/above the floor (high-value always extracted),
+    #   * retrieval is preserved for every skipped doc (chunk embeddings still written;
+    #     KG extraction remains backfillable from the persisted chunks/mentions).
+    #
+    # DEFAULT FLOOR 0.50 (env-tunable, NO rebuild): under the live prod score
+    # distribution this gates the [0.35, 0.50) score band (~41% of recent intake, the
+    # low-value tail just above the LIGHT cutoff) OUT of deep extraction. Combined with
+    # the ~31% already-LIGHT, ~72% of intake then skips the LLM chain and only ~28%
+    # runs it — a ~59% cut in deep-extraction volume + DeepInfra spend, flipping drain
+    # rate comfortably above intake. Tune DOWN to 0.45 (gentler: gates only [0.35,0.45),
+    # ~28% of intake) or UP to 0.55 to drain faster. Set the enabled flag False to
+    # restore the pre-gate behaviour (every MEDIUM/DEEP doc runs the full chain).
+    # NLP_PIPELINE_DEEP_EXTRACTION_VALUE_GATE_ENABLED
+    deep_extraction_value_gate_enabled: bool = True
+    # NLP_PIPELINE_DEEP_EXTRACTION_SCORE_FLOOR
+    deep_extraction_score_floor: float = Field(default=0.50, ge=0.0, le=1.0)
+
     # ── Learned routing classifier (PLAN-0111 C-2 / C-6) ─────────────────────
     # Controls the EmbeddingGemma-based learned router that runs ALONGSIDE the
     # static weighted-sum router:

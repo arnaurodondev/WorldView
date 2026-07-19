@@ -203,6 +203,23 @@ Dispatches to a `ProcessingPath` based on routing tier:
 
 After Block 8 (novelty correction), the `final_routing_tier` field overrides `routing_tier`.
 
+**Deep-extraction VALUE gate (backlog-drain lever, 2026-07-17):** because BOTH MEDIUM and DEEP map
+to `FULL_PIPELINE`, ~69% of intake ran the full DeepInfra deep-extraction chain (~2.9 LLM calls/article)
+and only ~31% (LIGHT) skipped it — extraction throughput (~10-14/min) trailed intake (~15-18/min), so
+the ~192k-article backlog never drained (see `docs/audits/2026-07-17-article-backlog-lever.md`).
+`apply_deep_extraction_value_gate` reclassifies genuinely LOW-VALUE docs (composite routing score below
+`NLP_PIPELINE_DEEP_EXTRACTION_SCORE_FLOOR`, default **0.50**) from `FULL_PIPELINE` to
+`SECTION_EMBEDDINGS_ONLY` — the same cheap path as LIGHT: **chunk embeddings are still written (doc stays
+fully searchable), only the costly entity resolution + LLM extraction is skipped** (and remains
+backfillable). Conservative by construction — never touches a doc already on a cheap path, an
+authoritative regulatory filing (`_AUTHORITATIVE_FILING_SOURCES`), or any doc scoring at/above the floor.
+Applied at both the initial-path decision (so section embeddings are skipped too) and re-applied in
+`ml_phase` after the novelty gate (the authoritative decision for extraction). Under the live prod score
+distribution the default floor gates the `[0.35, 0.50)` band (~41% of recent intake) out of deep
+extraction → ~72% of intake then skips the LLM chain (a ~59% cut in deep-extraction volume + DeepInfra
+spend), flipping drain rate above intake. Toggle with `NLP_PIPELINE_DEEP_EXTRACTION_VALUE_GATE_ENABLED`
+(default on); tune the floor down to 0.45 (gentler) or up to 0.55 (faster drain) with no rebuild.
+
 **PLAN-0111 B (universal chunk embedding, 2026-06-12):** LIGHT now generates **chunk** embeddings
 so every non-SUPPRESS article is semantically retrievable (chat retrieval queries chunk
 granularity; previously LIGHT — ~21% of the corpus — was invisible to ANN and reachable only via

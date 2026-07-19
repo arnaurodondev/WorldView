@@ -46,6 +46,12 @@ def _make_settings() -> MagicMock:
     # RC-1: disable stub filter in these tests — they use placeholder text
     # and are not testing the word-count gate.
     s.min_word_count = 0
+    # These tests drive _run_pipeline with a MagicMock routing_decision (no real
+    # composite_score); they are not exercising the low-value deep-extraction gate,
+    # so keep it disabled here (a concrete bool, not a truthy Mock, so the gate
+    # short-circuits before any score comparison).
+    s.deep_extraction_value_gate_enabled = False
+    s.deep_extraction_score_floor = 0.50
     return s
 
 

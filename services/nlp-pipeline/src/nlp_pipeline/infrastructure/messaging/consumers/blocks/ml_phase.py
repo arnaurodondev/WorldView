@@ -17,8 +17,10 @@ from typing import TYPE_CHECKING, Any
 from nlp_pipeline.application.blocks.deep_extraction import run_deep_extraction_block
 from nlp_pipeline.application.blocks.entity_resolution import run_entity_resolution_block
 from nlp_pipeline.application.blocks.novelty import run_novelty_gate
+from nlp_pipeline.application.blocks.routing import _AUTHORITATIVE_FILING_SOURCES
 from nlp_pipeline.application.blocks.suppression import (
     ProcessingPath,
+    apply_deep_extraction_value_gate,
     apply_suppression_gate,
     should_run_deep_extraction,
     should_run_entity_resolution,
@@ -83,6 +85,7 @@ async def run_ml_phase(
     mentions: list[EntityMention],
     routing_decision: RoutingDecision,
     initial_path: ProcessingPath,
+    source_type: str | None,
     published_at: datetime | None,
     extracted_at: datetime,
     settings: Settings,
@@ -146,6 +149,20 @@ async def run_ml_phase(
             embedding_threshold=settings.novelty_embedding_threshold,
         )
         final_path = apply_suppression_gate(routing_decision)
+        # Backlog-drain lever (docs/audits/2026-07-17-article-backlog-lever.md):
+        # re-apply the low-value gate AFTER the novelty gate so this is the
+        # authoritative decision for entity resolution + deep extraction below.
+        # (apply_suppression_gate re-derives FULL_PIPELINE from the MEDIUM/DEEP tier,
+        # so any downgrade the article-consumer applied to ``initial_path`` must be
+        # recomputed here from the same routing score + source_type.)
+        final_path = apply_deep_extraction_value_gate(
+            final_path,
+            routing_decision,
+            source_type,
+            enabled=settings.deep_extraction_value_gate_enabled,
+            score_floor=settings.deep_extraction_score_floor,
+            filing_sources=_AUTHORITATIVE_FILING_SOURCES,
+        )
 
     extraction_result: dict[str, Any] = {"events": [], "claims": [], "relations": []}
     final_mentions = list(mentions)

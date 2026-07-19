@@ -52,6 +52,7 @@ from nlp_pipeline.application.blocks.ner import run_ner_block
 from nlp_pipeline.application.blocks.routing import _AUTHORITATIVE_FILING_SOURCES, compute_routing_score
 from nlp_pipeline.application.blocks.sectioning import section_document
 from nlp_pipeline.application.blocks.suppression import (
+    apply_deep_extraction_value_gate,
     apply_suppression_gate,
     should_generate_chunk_embeddings,
     should_generate_section_embeddings,
@@ -1482,6 +1483,21 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # controls processing; the shadow only needs to precede extraction.
 
         initial_path = apply_suppression_gate(routing_decision)
+        # Backlog-drain lever (docs/audits/2026-07-17-article-backlog-lever.md):
+        # gate genuinely low-value MEDIUM/DEEP docs OUT of the expensive deep-extraction
+        # chain, dropping them to the LIGHT path (chunk embeddings only → still fully
+        # searchable). Applied here so the embeddings block below ALSO skips the (unused)
+        # section embeddings for gated docs; ml_phase re-applies it post-novelty as the
+        # authoritative gate for entity resolution + deep extraction. Filings and any doc
+        # scoring >= the floor are never gated.
+        initial_path = apply_deep_extraction_value_gate(
+            initial_path,
+            routing_decision,
+            source_type,
+            enabled=self._settings.deep_extraction_value_gate_enabled,
+            score_floor=self._settings.deep_extraction_score_floor,
+            filing_sources=_AUTHORITATIVE_FILING_SOURCES,
+        )
 
         # Block 7: Embeddings + denorm fields (PLAN-0063 W5-2)
         chunks, chunk_embs, section_embs, pending = await run_embeddings_block(
@@ -1602,6 +1618,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 mentions=mentions,
                 routing_decision=routing_decision,
                 initial_path=initial_path,
+                source_type=source_type,
                 published_at=published_at,
                 extracted_at=extracted_at,
                 settings=self._settings,

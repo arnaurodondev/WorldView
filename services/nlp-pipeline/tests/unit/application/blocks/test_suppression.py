@@ -5,8 +5,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from nlp_pipeline.application.blocks.routing import _AUTHORITATIVE_FILING_SOURCES
 from nlp_pipeline.application.blocks.suppression import (
     ProcessingPath,
+    apply_deep_extraction_value_gate,
     apply_suppression_gate,
     should_generate_chunk_embeddings,
     should_generate_section_embeddings,
@@ -19,12 +21,14 @@ from nlp_pipeline.domain.models import RoutingDecision
 pytestmark = pytest.mark.unit
 
 
-def _decision(tier: RoutingTier, final_tier: RoutingTier | None = None) -> RoutingDecision:
+def _decision(
+    tier: RoutingTier, final_tier: RoutingTier | None = None, *, composite_score: float = 0.5
+) -> RoutingDecision:
     return RoutingDecision(
         decision_id=uuid.uuid4(),
         doc_id=uuid.uuid4(),
         routing_tier=tier,
-        composite_score=0.5,
+        composite_score=composite_score,
         feature_scores={},
         final_routing_tier=final_tier,
     )
@@ -68,6 +72,73 @@ class TestApplySuppressionGate:
         for tier in RoutingTier:
             path = apply_suppression_gate(_decision(tier))
             assert path in ProcessingPath  # just verify it returns a valid path
+
+
+@pytest.mark.unit
+class TestApplyDeepExtractionValueGate:
+    """Backlog-drain lever (docs/audits/2026-07-17-article-backlog-lever.md).
+
+    Skips the expensive deep-extraction chain for genuinely low-value docs by
+    downgrading FULL_PIPELINE → SECTION_EMBEDDINGS_ONLY (chunk embeddings only).
+    """
+
+    _FLOOR = 0.50
+
+    def _gate(
+        self,
+        path: ProcessingPath,
+        *,
+        score: float,
+        source_type: str | None = "eodhd",
+        enabled: bool = True,
+        floor: float = _FLOOR,
+    ) -> ProcessingPath:
+        return apply_deep_extraction_value_gate(
+            path,
+            _decision(RoutingTier.MEDIUM, composite_score=score),
+            source_type,
+            enabled=enabled,
+            score_floor=floor,
+            filing_sources=_AUTHORITATIVE_FILING_SOURCES,
+        )
+
+    def test_below_floor_full_pipeline_is_downgraded(self) -> None:
+        # A low-value MEDIUM/DEEP news doc (score < floor) is routed to the cheap
+        # LIGHT path — chunk embeddings only, no deep extraction.
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.40) == ProcessingPath.SECTION_EMBEDDINGS_ONLY
+
+    def test_at_or_above_floor_full_pipeline_is_kept(self) -> None:
+        # High-value docs (score >= floor) are ALWAYS fully extracted.
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.50) == ProcessingPath.FULL_PIPELINE
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.85) == ProcessingPath.FULL_PIPELINE
+
+    def test_filing_source_below_floor_is_kept(self) -> None:
+        # Authoritative regulatory filings are always extracted regardless of score
+        # (their low entity-density score is a raw-HTML artefact, not low value).
+        for src in ("sec_10q", "sec_8k", "sec_edgar", "tenant_upload"):
+            assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.10, source_type=src) == ProcessingPath.FULL_PIPELINE
+
+    def test_disabled_is_noop(self) -> None:
+        # enabled=False restores the pre-gate behaviour (nothing downgraded).
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.10, enabled=False) == ProcessingPath.FULL_PIPELINE
+
+    def test_non_full_pipeline_paths_are_untouched(self) -> None:
+        # LIGHT (already cheap), HALT (discarded) are never modified.
+        assert self._gate(ProcessingPath.SECTION_EMBEDDINGS_ONLY, score=0.10) == ProcessingPath.SECTION_EMBEDDINGS_ONLY
+        assert self._gate(ProcessingPath.HALT, score=0.10) == ProcessingPath.HALT
+
+    def test_floor_is_configurable(self) -> None:
+        # A doc at 0.47 is gated at floor 0.50 but kept at a lower floor 0.45.
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.47, floor=0.50) == (
+            ProcessingPath.SECTION_EMBEDDINGS_ONLY
+        )
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.47, floor=0.45) == ProcessingPath.FULL_PIPELINE
+
+    def test_none_source_type_below_floor_is_downgraded(self) -> None:
+        # A missing source_type is not a filing → low-value doc is still gated.
+        assert self._gate(ProcessingPath.FULL_PIPELINE, score=0.30, source_type=None) == (
+            ProcessingPath.SECTION_EMBEDDINGS_ONLY
+        )
 
 
 @pytest.mark.unit
