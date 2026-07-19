@@ -135,9 +135,9 @@ EXPECTED_ALEMBIC_HEADS: dict[str, str] = {
     # services use bare numbers ("0011"), others the full slug — match EXACTLY.
     "content_ingestion_db": "0011_seed_pm_wave2_sources",
     "content_store_db": "0006",
-    "ingestion_db": "0024",  # market-ingestion
+    "ingestion_db": "0025",  # market-ingestion
     "intelligence_db": "0067",  # intelligence-migrations (Job-run, no owner pod)
-    "market_data_db": "044",
+    "market_data_db": "045",
     "nlp_db": "0024",
     "portfolio_db": "0027",
     "rag_db": "0010",
