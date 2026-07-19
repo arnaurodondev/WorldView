@@ -52,6 +52,28 @@ _TOPIC = "portfolio.holding.recompute_requested.v1"
 # file for this topic is portfolio_holding_recompute_requested.v1.avsc.
 _SCHEMA_DIR = find_schema_dir()
 
+# EXPLICIT topic → schema-filename map (audit 2026-07-19).
+#
+# WHY NOT a string transform: the previous implementation derived the filename
+# with ``topic.replace('.', '_')`` which turns
+#   portfolio.holding.recompute_requested.v1
+# into
+#   portfolio_holding_recompute_requested_v1.avsc   (WRONG — trailing "_v1")
+# but the real file (and the producer's explicit map in serialization.py) is
+#   portfolio_holding_recompute_requested.v1.avsc   (the version dot is kept)
+# The dot-before-``v1`` is preserved by convention, so the lossy replace-all
+# produced a non-existent path → get_schema_path returned None → the consumer
+# fell back to json.loads() on Confluent-Avro bytes → UnicodeDecodeError →
+# every recompute event dead-lettered → the holdings table stayed empty.
+#
+# This map mirrors serialization.py's producer map (keyed there by event_type
+# ``portfolio.holding.recompute_requested`` → same filename), keyed here by the
+# full Kafka topic so serialization and deserialization stay in lock-step. Add
+# a new topic here the moment this consumer subscribes to one.
+_TOPIC_SCHEMA_FILES: dict[str, str] = {
+    _TOPIC: "portfolio_holding_recompute_requested.v1.avsc",
+}
+
 
 class ManualHoldingsRecomputeConsumer(BaseKafkaConsumer[None]):
     """Consume recompute requests and rebuild MANUAL portfolio holdings.
@@ -236,34 +258,89 @@ class ManualHoldingsRecomputeConsumer(BaseKafkaConsumer[None]):
         that have a registered .avsc schema. The producer (RecordTransactionUseCase
         / ManualHoldingsOutboxDispatcher) serialises via serialization.py which
         emits Confluent-Avro wire format (magic byte 0x00 + 4-byte schema ID +
-        Avro payload). A bare json.loads() call would break on that prefix and
-        silently discard all messages once the producer moves to SR registration.
+        Avro payload). A bare json.loads() call breaks on that prefix — Python's
+        JSON codec auto-detects the leading 0x00 as UTF-32-BE and raises a cryptic
+        ``UnicodeDecodeError`` (positions 4-7). That is exactly the silent failure
+        the audit (2026-07-19) traced: a missing schema path → json fallback on
+        Avro bytes → dead-letter → empty holdings.
 
-        We fall back to JSON only if no schema_path is found (e.g. during local
-        dev with the schema registry disabled) — this mirrors the pattern used by
-        InstrumentEventConsumer and other portfolio consumers.
+        FAIL LOUD (audit 2026-07-19): we do NOT silently fall back to json.loads()
+        on bytes that look like Confluent-Avro. If the schema path is unresolved
+        or the Avro decode fails on a Confluent-framed payload, we raise a clear,
+        explicit error so a future schema-name mismatch is immediately
+        diagnosable instead of dead-lettering with a UnicodeDecodeError.
+
+        The ONLY json path that remains is the local-dev convenience where the
+        producer genuinely emits plain JSON (no Confluent magic byte 0x00) AND no
+        schema path was resolved — that payload is unambiguously not Avro.
         """
         if schema_path:
             try:
                 return cast("dict[str, Any]", deserialize_confluent_avro(schema_path, raw))
-            except Exception:
-                logger.debug(  # type: ignore[no-any-return]
-                    "manual_holdings_consumer_avro_deserialize_failed_falling_back_to_json",
+            except Exception as exc:
+                logger.error(  # type: ignore[no-any-return]
+                    "manual_holdings_consumer_avro_deserialize_failed",
                     schema_path=schema_path,
+                    error=str(exc),
                 )
+                raise
+        # No schema path resolved. If the payload carries the Confluent-Avro
+        # magic byte (0x00), a json.loads() here would raise a cryptic
+        # UnicodeDecodeError and dead-letter the event — the original bug. Fail
+        # loud with an actionable message instead.
+        if raw[:1] == b"\x00":
+            logger.error(  # type: ignore[no-any-return]
+                "manual_holdings_consumer_avro_without_schema",
+                topic=_TOPIC,
+                expected_schema_file=_TOPIC_SCHEMA_FILES.get(_TOPIC),
+                schema_dir=str(_SCHEMA_DIR),
+            )
+            raise MalformedDataError(
+                f"Received Confluent-Avro payload for {_TOPIC!r} but no schema path "
+                f"could be resolved (expected {_TOPIC_SCHEMA_FILES.get(_TOPIC)!r} in "
+                f"{_SCHEMA_DIR}). Refusing to json.loads() Avro bytes."
+            )
         return cast("dict[str, Any]", json.loads(raw))
 
     def get_schema_path(self, topic: str) -> str | None:
-        """Return the canonical Avro schema path for portfolio.holding.recompute_requested.v1.
+        """Return the canonical Avro schema path for *topic*, or fail loud.
 
-        WHY dot-to-underscore mapping: the schema registry and local schema files
-        use underscores (portfolio_holding_recompute_requested.v1.avsc) while
-        Kafka topic names use dots. This matches the find_schema_dir() convention.
+        Resolution uses the EXPLICIT ``_TOPIC_SCHEMA_FILES`` map (mirroring the
+        producer's serialization.py map) rather than a lossy string transform.
+        The previous ``topic.replace('.', '_')`` derivation produced
+        ``portfolio_holding_recompute_requested_v1.avsc`` (trailing ``_v1``) while
+        the real file keeps the version dot
+        (``portfolio_holding_recompute_requested.v1.avsc``) — the mismatch was the
+        root cause of the empty-holdings bug (audit 2026-07-19).
+
+        FAIL LOUD: if the topic is known but its schema file is absent from the
+        schema dir (a packaging/deploy regression), we log at ERROR with the topic
+        and the expected path and raise, so the failure is immediately
+        diagnosable rather than silently returning None → json fallback →
+        UnicodeDecodeError dead-letter.
         """
-        # Convert dot-separated topic name to the underscore filename used by avsc files.
-        schema_file = f"{topic.replace('.', '_')}.avsc"
+        schema_file = _TOPIC_SCHEMA_FILES.get(topic)
+        if schema_file is None:
+            # Unknown topic — this consumer only subscribes to _TOPIC, so this is
+            # a wiring mistake. Log loudly and let the base consumer surface it.
+            logger.error(  # type: ignore[no-any-return]
+                "manual_holdings_consumer_unknown_topic_no_schema",
+                topic=topic,
+                known_topics=sorted(_TOPIC_SCHEMA_FILES),
+            )
+            return None
         path = _SCHEMA_DIR / schema_file
-        return str(path) if path.exists() else None
+        if not path.exists():
+            logger.error(  # type: ignore[no-any-return]
+                "manual_holdings_consumer_schema_file_missing",
+                topic=topic,
+                expected_path=str(path),
+            )
+            raise FileNotFoundError(
+                f"Avro schema file for topic {topic!r} not found at {path}. "
+                f"This breaks holdings recomputation — deploy is missing the schema."
+            )
+        return str(path)
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
         return str(value.get("event_id", ""))
