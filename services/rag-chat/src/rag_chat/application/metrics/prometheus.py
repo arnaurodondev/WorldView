@@ -356,6 +356,16 @@ rag_tool_dedup_terminal_total = Counter(
     "Tool-call batches skipped because every call already returned empty this turn",
 )
 
+# Chat-latency lever B early-stop (docs/audits/2026-07-19-chat-latency-profile.md):
+# a planning hop requested ONLY tool calls that were already executed this turn
+# with non-empty results. Re-running them yields identical data, so the loop
+# stops early and goes straight to final synthesis instead of burning another
+# ~2-6s planner hop. Each increment is one avoided redundant re-plan iteration.
+rag_agent_early_stop_total = Counter(
+    "rag_agent_early_stop_total",
+    "Agent loops stopped early because a hop re-requested only already-answered tools",
+)
+
 # C1 #1 (FINAL-67 numeric fidelity): a response number drifted within 1% of a
 # tool value but was not exact (e.g. rounded $111.184B -> $111.200B) and was
 # deterministically pinned back to the exact tool value. Each increment is one

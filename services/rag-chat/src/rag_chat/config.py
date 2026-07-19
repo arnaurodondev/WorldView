@@ -193,6 +193,45 @@ class Settings(BaseSettings):
         validation_alias="RAG_CHAT_MAX_CONSECUTIVE_ERRORS",
     )
 
+    # ── Chat-latency lever B (docs/audits/2026-07-19-chat-latency-profile.md) ──
+    #
+    # ``chat_max_agent_iterations``: HARD cap on the number of ReAct planning
+    # hops (``for iteration in range(budget.max_iterations)``). Each hop runs
+    # the planner model (Qwen3-235B) ONCE, non-streaming — the profile measured
+    # this loop at ~90% of chat TTFT (median 22.8s, max 85.9s), and an
+    # analytical query burns the full cap. Cutting hops multiplies the dominant
+    # cost down directly (~6.2s/hop on a large context).
+    #
+    # DEFAULT kept at 8 so an unset env is byte-for-byte the historic behaviour
+    # (this was previously a hardcoded ``AgentBudget`` dataclass default). Ops
+    # can then dial it down (a value of ~4 was projected to save ~25s on
+    # analytical queries) per-environment WITHOUT a redeploy, guarded by the
+    # chat-eval harness. Bounded ge=1 (at least one planning turn is required to
+    # answer) / le=8 (the historic ceiling; the loop was never wider).
+    # RAG_CHAT_MAX_AGENT_ITERATIONS.
+    chat_max_agent_iterations: int = Field(
+        default=8,
+        ge=1,
+        le=8,
+        validation_alias="RAG_CHAT_MAX_AGENT_ITERATIONS",
+    )
+
+    # ``chat_synthesis_reasoning_effort`` (lever C): the ``reasoning_effort``
+    # passed to gpt-oss-* synthesis/rewrite completions on the DeepInfra
+    # adapter. gpt-oss reasoning models emit an (invisible) reasoning preamble
+    # BEFORE the first visible content token; on long analytical answers the
+    # profile measured that preamble delaying first-visible-token by ~20s at
+    # ``medium``. Exposing the knob lets ops A/B ``low`` later WITHOUT a code
+    # change. DEFAULT "medium" preserves current behaviour exactly. Only ever
+    # applied when the active model id contains ``gpt-oss`` (guarded in the
+    # adapter); a no-op for Qwen3/DeepSeek/others.
+    # RAG_CHAT_SYNTHESIS_REASONING_EFFORT.
+    chat_synthesis_reasoning_effort: str = Field(
+        default="medium",
+        pattern="^(low|medium|high)$",
+        validation_alias="RAG_CHAT_SYNTHESIS_REASONING_EFFORT",
+    )
+
     # ── Auth (PRD-0025): RS256 internal JWT via api-gateway JWKS ─────────────
     api_gateway_url: str = "http://api-gateway:8000"
 

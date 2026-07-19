@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from rag_chat.application.metrics.prometheus import (
+    rag_agent_early_stop_total,
     rag_agent_iterations,
     rag_budget_exceeded_total,
     rag_cache_hits,
@@ -120,7 +121,13 @@ class AgentBudget:
         value from ``Settings.chat_max_tool_latency_s`` (env var
         ``RAG_CHAT_MAX_TOOL_LATENCY_S``).
       - max_per_tool_s=30.0: per-tool asyncio.wait_for (handled in executor)
-      - max_iterations=8: allows up to 8 tool rounds before forcing an answer
+      - max_iterations=8: allows up to 8 tool rounds before forcing an answer.
+        Chat-latency lever B (docs/audits/2026-07-19-chat-latency-profile.md):
+        this dataclass default is now overridable from
+        ``Settings.chat_max_agent_iterations`` (env var
+        ``RAG_CHAT_MAX_AGENT_ITERATIONS``) so ops can cap the ReAct hop count —
+        the dominant TTFT cost — per-environment without a redeploy. Default
+        stays 8 to preserve the historic behaviour when unset.
       - max_consecutive_errors=3: 3 rounds of all-fail → surrender. PLAN-0107
         raised this from 2 → 3 because the legitimate ReAct fallback chain
         (search_documents → search_claims → get_entity_intelligence) can
@@ -3837,6 +3844,34 @@ class ChatOrchestratorUseCase:
                 audit.increment_iteration()
                 iteration_count += 1
                 continue
+
+            # ── Chat-latency lever B: already-answered early-stop ────────────
+            # (docs/audits/2026-07-19-chat-latency-profile.md). If this hop
+            # requested tool calls but EVERY one is a cache hit — already
+            # executed this turn (``_fresh_calls`` empty) and NOT the
+            # all-empty case handled just above (which nudges + continues) —
+            # then at least one prior call returned data and re-running the
+            # batch cannot add information. We already have enough to answer, so
+            # stop the loop and fall through to final synthesis instead of
+            # burning another ~2-6s planner hop. ``had_tool_calls`` is already
+            # True and ``_skip_final_stream`` is False, so the post-loop
+            # synthesis turn runs over the gathered tool data as normal.
+            #
+            # This is a strict optimisation: the answer is synthesised from the
+            # same cached results the extra hop would have re-fetched — no
+            # completeness is lost. It complements the LLM-driven early-stop
+            # (a no-tool-call planning turn already breaks the loop above).
+            if tool_calls and not _fresh_calls:
+                log.info(  # type: ignore[no-any-return]
+                    "agent_early_stop_all_cached",
+                    tools=sorted({tc.name for tc in tool_calls}),
+                    iteration=iteration,
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+                rag_agent_early_stop_total.inc()
+                audit.increment_iteration()
+                iteration_count += 1
+                break
 
             # Execute fresh tool calls concurrently.
             _tool_t0 = time.monotonic()

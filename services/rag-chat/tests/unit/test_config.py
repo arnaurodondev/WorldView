@@ -285,3 +285,63 @@ def test_trust_weight_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.trust_w_source == pytest.approx(0.6)
     assert s.trust_w_corroboration == pytest.approx(0.2)
     assert s.trust_w_extraction == pytest.approx(0.15)
+
+
+# ── Chat-latency lever B/C: hop cap + synthesis reasoning-effort knobs ────────
+# (docs/audits/2026-07-19-chat-latency-profile.md)
+
+
+def _clear_rag_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+
+def test_max_agent_iterations_default_is_8(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lever B: default hop cap stays 8 so an unset env preserves historic behaviour."""
+    _clear_rag_env(monkeypatch)
+    s = _make_settings()
+    assert s.chat_max_agent_iterations == 8
+
+
+def test_max_agent_iterations_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lever B: RAG_CHAT_MAX_AGENT_ITERATIONS caps the ReAct hop count."""
+    _clear_rag_env(monkeypatch)
+    monkeypatch.setenv("RAG_CHAT_MAX_AGENT_ITERATIONS", "4")
+    s = _make_settings()
+    assert s.chat_max_agent_iterations == 4
+
+
+def test_max_agent_iterations_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lever B: hop cap is bounded ge=1 / le=8 (at least one hop; historic ceiling)."""
+    _clear_rag_env(monkeypatch)
+    monkeypatch.setenv("RAG_CHAT_MAX_AGENT_ITERATIONS", "0")
+    with pytest.raises(ValidationError):
+        _make_settings()
+    monkeypatch.setenv("RAG_CHAT_MAX_AGENT_ITERATIONS", "9")
+    with pytest.raises(ValidationError):
+        _make_settings()
+
+
+def test_synthesis_reasoning_effort_default_is_medium(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lever C: default synthesis reasoning_effort stays 'medium' (unchanged behaviour)."""
+    _clear_rag_env(monkeypatch)
+    s = _make_settings()
+    assert s.chat_synthesis_reasoning_effort == "medium"
+
+
+def test_synthesis_reasoning_effort_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lever C: RAG_CHAT_SYNTHESIS_REASONING_EFFORT exposes the low/medium/high knob."""
+    _clear_rag_env(monkeypatch)
+    monkeypatch.setenv("RAG_CHAT_SYNTHESIS_REASONING_EFFORT", "low")
+    s = _make_settings()
+    assert s.chat_synthesis_reasoning_effort == "low"
+
+
+def test_synthesis_reasoning_effort_rejects_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lever C: only low/medium/high are accepted (pattern-validated)."""
+    _clear_rag_env(monkeypatch)
+    monkeypatch.setenv("RAG_CHAT_SYNTHESIS_REASONING_EFFORT", "extreme")
+    with pytest.raises(ValidationError):
+        _make_settings()

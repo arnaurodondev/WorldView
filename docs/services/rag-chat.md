@@ -310,6 +310,15 @@ Two tools differ from the rest: they interact with user-owned state rather than 
 
 **Same-provider stream fallback** (PLAN-0104 W43): when DeepInfra returns HTTP 200 + empty SSE on a long multi-tool synthesis, the adapter retries once with `RAG_CHAT_DEEPINFRA_STREAM_FALLBACK_MODEL` (default `deepseek-ai/DeepSeek-V4-Flash`) on the SAME provider. Set to `""` to disable.
 
+**Chat-latency tuning knobs** (`docs/audits/2026-07-19-chat-latency-profile.md`): the agentic planning loop runs the planner once per hop and is ~90% of TTFT. Two env knobs govern it (both default to the historic behaviour, so unset = no change):
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `RAG_CHAT_MAX_AGENT_ITERATIONS` | `8` (bounded 1–8) | Hard cap on ReAct planner hops. Wired into `AgentBudget.max_iterations`. Lowering to ~4 was projected to save ~25 s on analytical queries (the parallel planner fans out the substantive tool batch at hop 0; later hops were measured as non-productive re-plans). Flip to 4 in prod **only after** the chat-eval harness (κ=0.7953 DeepSeek-V4-Flash judge) confirms no multi-tool truncation. |
+| `RAG_CHAT_SYNTHESIS_REASONING_EFFORT` | `medium` (`low`/`medium`/`high`) | `reasoning_effort` for gpt-oss-* synthesis/rewrite on the DeepInfra adapter. gpt-oss emits an invisible reasoning preamble before the first visible token (~20 s on long answers at `medium`); knob exposed to A/B `low` later. No-op for non gpt-oss models. |
+
+The loop also has a deterministic **already-answered early-stop**: a planner hop that re-requests ONLY tools already executed this turn (all cache hits, non-empty) stops the loop and goes straight to synthesis instead of burning another hop (`rag_agent_early_stop_total`). This complements the LLM-driven early-stop (a no-tool-call planning turn) and the `max_iterations` cap.
+
 **Intent classification**: `Qwen/Qwen3.5-9B` via DeepInfra (`RAG_CHAT_DEEPINFRA_CLASSIFICATION_MODEL`); Ollama `qwen3:0.6b` fallback.
 
 **Reranker**: Cohere Rerank v2 (requires `RAG_CHAT_COHERE_API_KEY`); falls back to fusion_score ordering when absent. Ollama `bge-reranker-v2-m3` is a legacy option but no longer in the Ollama registry.

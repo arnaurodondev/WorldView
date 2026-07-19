@@ -817,6 +817,29 @@ class TestAgentBudget:
 
         assert orch._budget.max_iterations == 3
 
+    def test_max_iterations_sourced_from_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Chat-latency lever B: RAG_CHAT_MAX_AGENT_ITERATIONS flows into AgentBudget.
+
+        Mirrors the app.py wiring exactly (Settings → AgentBudget) so a future
+        refactor that drops ``max_iterations=settings.chat_max_agent_iterations``
+        is caught before the env knob becomes a silent no-op. Default stays 8.
+        """
+        monkeypatch.setenv("RAG_CHAT_DATABASE_URL", "postgresql+asyncpg://x:y@localhost:5432/test")
+        monkeypatch.setenv("RAG_CHAT_MAX_AGENT_ITERATIONS", "4")
+
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+        from rag_chat.config import Settings
+
+        settings = Settings()
+        assert settings.chat_max_agent_iterations == 4
+
+        budget = AgentBudget(
+            max_tool_latency_s=settings.chat_max_tool_latency_s,
+            max_consecutive_errors=settings.chat_max_consecutive_errors,
+            max_iterations=settings.chat_max_agent_iterations,
+        )
+        assert budget.max_iterations == 4
+
 
 class TestMultiIterationBehavior:
     def test_multi_iteration_tools_then_answer(self) -> None:
@@ -1017,6 +1040,90 @@ class TestMaxIterationsSurrender:
         # not "execute_all is called N times" — assert >= 1 and leave the
         # iteration-count assertion to the surrender event itself.
         assert executor.execute_all.call_count >= 1
+
+
+class TestHopCapAndEarlyStop:
+    """Chat-latency lever B (docs/audits/2026-07-19-chat-latency-profile.md).
+
+    The ReAct planning loop runs the planner once per hop (~90% of TTFT). Two
+    guarantees are pinned here:
+      1. the loop NEVER runs more than ``max_iterations`` planner hops (cap);
+      2. when a hop re-requests ONLY already-answered tools, the loop stops
+         early rather than burning another hop.
+    """
+
+    def test_loop_stops_at_cap(self) -> None:
+        """With a cap of 3 and the LLM always requesting FRESH tools, the planner
+        runs exactly 3 times — never more. Distinct tool inputs each hop avoid
+        the dedup/early-stop path, isolating the hard cap.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget, ChatOrchestratorUseCase
+
+        call_count = [0]
+
+        async def _fresh_tools_each_hop(messages, tools=None, **kwargs):
+            call_count[0] += 1
+            # Unique ticker per hop → unique cache key → always a fresh call,
+            # so neither tool-dedup nor the all-cached early-stop can fire.
+            block = _make_tool_use_block("get_price_history", {"ticker": f"T{call_count[0]}"})
+            return _make_llm_tool_response(tool_calls=[block])
+
+        item = _make_retrieved_item()
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _fresh_tools_each_hop
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        budget = AgentBudget(max_iterations=3)
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory, budget=budget)
+        request = _make_chat_request()
+
+        events = asyncio.run(_collect_events(orch, request, MagicMock()))
+        event_types = [e.get("event") for e in events]
+
+        assert "done" in event_types or "error" in event_types
+        # Hard cap: the planner is invoked exactly max_iterations times, no more.
+        assert call_count[0] == 3
+        assert executor.execute_all.call_count == 3
+
+    def test_early_stop_when_all_calls_already_answered(self) -> None:
+        """Lever B early-stop: a hop that re-requests ONLY already-executed,
+        non-empty tool calls stops the loop instead of running the full cap.
+
+        The LLM always returns the SAME (name+input) tool call. Iteration 0
+        executes it (non-empty result → cached); iteration 1 is a pure cache
+        hit with no fresh calls, so the loop breaks early. With max_iterations=8
+        this proves the early-stop fired: the planner ran only twice (not 8x)
+        and the executor ran only once.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget, ChatOrchestratorUseCase
+
+        call_count = [0]
+        same_block = _make_tool_use_block("get_price_history", {"ticker": "AAPL"})
+
+        async def _always_same_tool(messages, tools=None, **kwargs):
+            call_count[0] += 1
+            return _make_llm_tool_response(tool_calls=[same_block])
+
+        item = _make_retrieved_item()  # non-empty → not the redundant-empty path
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _always_same_tool
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        budget = AgentBudget(max_iterations=8)
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory, budget=budget)
+        request = _make_chat_request()
+
+        events = asyncio.run(_collect_events(orch, request, MagicMock()))
+        event_types = [e.get("event") for e in events]
+
+        assert "done" in event_types or "error" in event_types
+        # Early-stop: planner ran iter-0 (fresh) + iter-1 (all-cached → break),
+        # NOT the full 8-hop cap.
+        assert call_count[0] == 2
+        # Executor ran only on iteration 0; iteration 1 was served from cache.
+        assert executor.execute_all.call_count == 1
 
 
 # ---------------------------------------------------------------------------

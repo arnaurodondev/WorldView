@@ -90,6 +90,7 @@ class DeepInfraCompletionAdapter:
         chat_with_tools_timeout: float | None = None,
         thinking: bool = True,
         stream_chat_fallback_model: str | None = "deepseek-ai/DeepSeek-V4-Flash",
+        reasoning_effort: str = "medium",
         metrics: MLMetrics | None = None,
         cost_recorder: CostRecorder | None = None,
     ) -> None:
@@ -108,6 +109,14 @@ class DeepInfraCompletionAdapter:
         # answers without requiring extra API keys.  Set to ``None`` to
         # disable (legacy behaviour).
         self._stream_chat_fallback_model = stream_chat_fallback_model
+        # Chat-latency lever C (docs/audits/2026-07-19-chat-latency-profile.md):
+        # ``reasoning_effort`` for gpt-oss-* completions. gpt-oss reasoning
+        # models emit an invisible reasoning preamble BEFORE the first visible
+        # content token; on long synthesis answers "medium" was measured
+        # delaying first-visible-token by ~20s. Env-tunable (default "medium",
+        # byte-for-byte historic behaviour) so ops can A/B "low" later WITHOUT a
+        # code change. Only applied when the model id contains "gpt-oss".
+        self._reasoning_effort = reasoning_effort
         self._timeout = timeout
         # FIX-LIVE-X (2026-05-25): split timeout so the heavier chat-with-tools
         # second turn isn't bound by the 30s stream() default.  If the caller
@@ -348,7 +357,7 @@ class DeepInfraCompletionAdapter:
             # reasoning_effort is set explicitly. Guarded on the model id so it is a
             # no-op for Qwen3/others. Enables gpt-oss as completion or grounding-rewrite model.
             if "gpt-oss" in model.lower():
-                payload["reasoning_effort"] = "medium"
+                payload["reasoning_effort"] = self._reasoning_effort
             resp = await self._client.post(
                 f"{_BASE_URL}/chat/completions",
                 json=payload,
@@ -499,7 +508,7 @@ class DeepInfraCompletionAdapter:
         # gpt-oss reasoning models emit empty content without reasoning_effort — set it on
         # the streaming path too (covers synthesis AND the grounding-rewrite). Guarded.
         if "gpt-oss" in model.lower():
-            payload["reasoning_effort"] = "medium"
+            payload["reasoning_effort"] = self._reasoning_effort
         async with self._client.stream(
             "POST",
             f"{_BASE_URL}/chat/completions",

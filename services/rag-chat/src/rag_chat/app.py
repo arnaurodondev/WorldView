@@ -299,6 +299,10 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
                 # zero-chunk SSE.  Empty string disables (W40 chain failover +
                 # W36 degraded-synthesis fallback still apply).
                 stream_chat_fallback_model=settings.deepinfra_stream_chat_fallback_model or None,
+                # Chat-latency lever C: env-tunable gpt-oss reasoning_effort so
+                # ops can A/B "low" against "medium" on the synthesis turn
+                # without a redeploy. Default "medium" = historic behaviour.
+                reasoning_effort=settings.chat_synthesis_reasoning_effort,
                 # rag-chat-ml-metrics: feed chat_with_tools latency/requests/
                 # status into ``rag_chat_ml_api_*`` so the Grafana panels light up.
                 metrics=ml_metrics,
@@ -649,14 +653,19 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     # PLAN-0107: AgentBudget sourced from env (Settings) rather than dataclass
     # defaults so ops can tune the ReAct soft budgets per-environment without
     # redeploying. The dataclass defaults (90s / 3 errors) are kept as the
-    # last-line fallback when Settings has not been touched. Other fields
-    # (max_iterations, max_tokens_*) are still dataclass defaults — they are
-    # less sensitive to env tuning and have not been observed limiting prod.
+    # last-line fallback when Settings has not been touched.
+    #
+    # Chat-latency lever B (docs/audits/2026-07-19-chat-latency-profile.md):
+    # ``max_iterations`` is now ALSO env-sourced (RAG_CHAT_MAX_AGENT_ITERATIONS,
+    # default 8). The planning loop runs the planner once per hop and is ~90% of
+    # TTFT, so capping hops is the safest large TTFT win. Default 8 keeps the
+    # historic behaviour until ops choose a lower value.
     from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
 
     _agent_budget = AgentBudget(
         max_tool_latency_s=settings.chat_max_tool_latency_s,
         max_consecutive_errors=settings.chat_max_consecutive_errors,
+        max_iterations=settings.chat_max_agent_iterations,
     )
     orchestrator = ChatOrchestratorUseCase(
         pipeline=pipeline,
