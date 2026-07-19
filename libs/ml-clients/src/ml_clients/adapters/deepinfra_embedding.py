@@ -31,7 +31,15 @@ import httpx
 import structlog
 
 from ml_clients.dataclasses import EmbeddingInput, EmbeddingOutput
-from ml_clients.errors import FatalError, RateLimitError, RetryableError, parse_retry_after
+from ml_clients.errors import (
+    FatalError,
+    ProviderBillingError,
+    RateLimitError,
+    RetryableError,
+    is_billing_status,
+    is_transient_status,
+    parse_retry_after,
+)
 from ml_clients.pricing import compute_cost, provider_cost_to_decimal
 from ml_clients.text_budget import truncate_for_bge
 
@@ -94,8 +102,12 @@ class DeepInfraEmbeddingAdapter:
         the same semantic space.
 
         Raises:
-            RetryableError: 5xx or network error — safe to retry.
-            FatalError:     4xx, unexpected dimension, or malformed response.
+            RateLimitError:      HTTP 429 — retry honouring Retry-After.
+            ProviderBillingError: HTTP 401/402/403 (spend-cap / auth refusal) —
+                retryable, self-heals when the operator raises the cap.
+            RetryableError:      5xx / 408 / 409 / 425 or network error — safe to retry.
+            FatalError:          other 4xx (bad input), unexpected dimension, or
+                malformed response — never succeeds on retry.
         """
         if not inputs:
             return []
@@ -142,16 +154,29 @@ class DeepInfraEmbeddingAdapter:
             except httpx.TimeoutException as exc:
                 raise RetryableError(f"DeepInfra embedding timeout: {exc}") from exc
             except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
                 # 429 (rate-limited) is RETRYABLE — surface RateLimitError so the
                 # Kafka consumer/back-off layer can honour Retry-After (LIB-005).
-                if exc.response.status_code == 429:
+                if status_code == 429:
                     retry_after = parse_retry_after(exc.response.headers)
                     raise RateLimitError(
                         f"DeepInfra embedding rate-limited (429): {exc}",
                         retry_after=retry_after,
                     ) from exc
-                if exc.response.status_code >= 500:
-                    raise RetryableError(f"DeepInfra embedding 5xx: {exc}") from exc
+                # Spend-cap / auth refusal (401/402/403) is RETRYABLE but must NOT
+                # be treated as terminal (the 2026-07-18 incident: HTTP 402 on a hit
+                # spend cap abandoned 2,383 embeddings). ProviderBillingError lets the
+                # retry worker re-attempt without burning its budget, so the queue
+                # self-heals the moment the operator raises the cap.
+                if is_billing_status(status_code):
+                    raise ProviderBillingError(
+                        f"DeepInfra embedding billing/auth refusal (HTTP {status_code}): {exc}"
+                    ) from exc
+                # 5xx / 408 / 409 / 425 — a normal bounded-retry transient failure.
+                if is_transient_status(status_code):
+                    raise RetryableError(f"DeepInfra embedding transient HTTP {status_code}: {exc}") from exc
+                # Genuine bad request (400/404/413/422/…) — can never succeed on
+                # retry (e.g. the 513>512 token overflow), so drop it as fatal.
                 raise FatalError(f"DeepInfra embedding 4xx: {exc}") from exc
             except (httpx.RequestError, Exception) as exc:
                 raise RetryableError(f"DeepInfra embedding network error: {exc}") from exc

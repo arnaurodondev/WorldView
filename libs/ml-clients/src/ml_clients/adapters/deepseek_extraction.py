@@ -13,7 +13,15 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from ml_clients.dataclasses import ExtractionInput, ExtractionOutput
-from ml_clients.errors import FatalError, RateLimitError, RetryableError, parse_retry_after
+from ml_clients.errors import (
+    FatalError,
+    ProviderBillingError,
+    RateLimitError,
+    RetryableError,
+    is_billing_status,
+    is_transient_status,
+    parse_retry_after,
+)
 from ml_clients.pricing import provider_cost_to_decimal
 
 if TYPE_CHECKING:
@@ -277,10 +285,16 @@ class DeepSeekExtractionAdapter:
           * ``openai.APITimeoutError`` / ``openai.APIConnectionError`` (network/TTFT).
           * ``asyncio.TimeoutError`` / builtin ``TimeoutError`` (our per-attempt
             ``asyncio.wait_for`` wall-clock cap firing).
-          * ``openai.APIStatusError`` with status >= 500 (provider 5xx).
+          * ``openai.APIStatusError`` with status >= 500 (provider 5xx) or a
+            transient 4xx (408/409/425).
+          * ``openai.APIStatusError`` with a BILLING/auth status (401/402/403) —
+            promoted to :class:`ProviderBillingError`. HTTP 402 is the DeepInfra
+            spend-cap refusal (the 2026-07-18 incident that silently empty-committed
+            693 article extractions); it clears when the operator raises the cap, so
+            it MUST redeliver rather than drop.
 
-        Fatal (NOT retry-worthy — a retry cannot fix bad input/auth):
-          * ``openai.APIStatusError`` with a 4xx status (400/401/403/422).
+        Fatal (NOT retry-worthy — a retry cannot fix bad input):
+          * ``openai.APIStatusError`` with a bad-input 4xx (400/404/413/422/…).
           * Anything else unexpected.
         """
         # NOTE: RateLimitError subclasses APIStatusError in the openai SDK, so it
@@ -297,8 +311,18 @@ class DeepSeekExtractionAdapter:
             return RetryableError(f"DeepSeek wall-clock timeout after {self._timeout_s}s")
         if isinstance(exc, self._openai.APIStatusError):
             status_code = getattr(exc, "status_code", 0)
-            if status_code >= 500:
-                return RetryableError(f"DeepSeek 5xx: {exc}")
+            # Billing/auth refusal (401/402/403) — retry, but self-heal only when
+            # the operator raises the spend cap. ProviderBillingError is a
+            # RetryableError so deep_extraction's ``except RetryableError`` re-queues
+            # the doc instead of silently empty-committing it.
+            if is_billing_status(status_code):
+                return ProviderBillingError(f"DeepSeek billing/auth refusal (HTTP {status_code}): {exc}")
+            if is_transient_status(status_code):
+                # Keep the "5xx" marker in the message for >=500 so
+                # ``_reason_for_transient`` still tags fallback_reason=server_error;
+                # transient 4xx (408/409/425) fall back to the generic reason.
+                marker = "5xx" if status_code >= 500 else f"transient {status_code}"
+                return RetryableError(f"DeepSeek {marker} (HTTP {status_code}): {exc}")
             return FatalError(f"DeepSeek 4xx: {exc}")
         return FatalError(f"Unexpected DeepSeek error: {exc}")
 

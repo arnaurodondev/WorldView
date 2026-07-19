@@ -70,6 +70,19 @@ def _make_retryable_embedding_client() -> AsyncMock:
     return client
 
 
+def _make_billing_embedding_client() -> AsyncMock:
+    """Embedding client whose embed() raises ProviderBillingError — the typed
+    exception the adapter surfaces for a spend-cap / auth refusal (HTTP 402/401/403).
+    """
+    from ml_clients.errors import ProviderBillingError
+
+    client = AsyncMock()
+    client.embed = AsyncMock(
+        side_effect=ProviderBillingError("DeepInfra embedding billing/auth refusal (HTTP 402): Payment Required"),
+    )
+    return client
+
+
 def _make_successful_embedding_client(*, vector: list[float] | None = None) -> AsyncMock:
     """Embedding client whose embed() returns a single 1024-dim vector."""
     from ml_clients.dataclasses import EmbeddingOutput
@@ -269,6 +282,61 @@ class TestErrorClassification:
         # retry_count=1 → 60 * 2^1 = 120s backoff.
         assert call.kwargs["backoff_seconds"] == 120.0
         repo_instance.mark_abandoned.assert_not_called()
+
+
+# ── Spend-cap / billing refusal (HTTP 402) — self-heal without abandoning ─────
+
+
+class TestBillingRefusalClassification:
+    """A ProviderBillingError (HTTP 402/401/403 spend-cap / auth refusal) must
+    NOT consume the bounded retry budget: it backs off at the fixed billing
+    cadence WITHOUT incrementing retry_count so the row self-heals when the
+    operator raises the cap (2026-07-18 incident regression guard)."""
+
+    @pytest.mark.asyncio
+    async def test_billing_error_defers_without_incrementing_retry_count(self, monkeypatch) -> None:
+        from nlp_pipeline.infrastructure.workers import embedding_retry_worker as mod
+
+        warning_calls: list[tuple[str, dict]] = []
+        fake_logger = MagicMock()
+        fake_logger.warning = lambda event, **kw: warning_calls.append((event, kw))
+        fake_logger.info = MagicMock()
+        fake_logger.error = MagicMock()
+        monkeypatch.setattr(mod, "logger", fake_logger)
+
+        repo_instance = MagicMock()
+        repo_instance.mark_abandoned = AsyncMock()
+        repo_instance.mark_failure = AsyncMock()
+        repo_cls = MagicMock(return_value=repo_instance)
+
+        worker = mod.EmbeddingRetryWorker(
+            nlp_session_factory=_make_session_factory(),
+            embedding_client=_make_billing_embedding_client(),
+            model_id="bge-large",
+            instruction_prefix="Represent this passage: ",
+        )
+
+        # retry_count=4 would ordinarily be the LAST attempt before abandon — but a
+        # billing refusal must NOT abandon it even here.
+        with patch(
+            "nlp_pipeline.infrastructure.nlp_db.repositories.embedding_pending.EmbeddingPendingRepository",
+            repo_cls,
+        ):
+            await worker._process_job(_make_job(retry_count=4))
+
+        events = [e for e, _ in warning_calls]
+        # Distinct billing signal; NONE of the abandon signals may appear.
+        assert "embedding_retry_billing_deferred" in events
+        assert "embedding_retry_abandoned" not in events
+        assert "embedding_retry_abandoned_permanent" not in events
+        assert "embedding_retry_failed" not in events
+
+        # Backed off via mark_failure WITHOUT consuming the budget, and NOT abandoned.
+        repo_instance.mark_abandoned.assert_not_called()
+        repo_instance.mark_failure.assert_awaited_once()
+        call = repo_instance.mark_failure.await_args
+        assert call.kwargs["increment_retry"] is False
+        assert call.kwargs["backoff_seconds"] == mod._BILLING_RETRY_BACKOFF_SECONDS
 
 
 # ── Wave C T-002: success-path + failure-path coverage ───────────────────────

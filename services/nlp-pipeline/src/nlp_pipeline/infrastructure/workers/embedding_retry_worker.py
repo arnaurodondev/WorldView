@@ -10,11 +10,19 @@ triage; they are never automatically deleted.
 
 Error classification: transient failures (5xx / timeout / network / 429) keep
 the exponential-backoff-retry behaviour above.  A *fatal* failure — the
-embedding client raises :class:`ml_clients.errors.FatalError` for HTTP 4xx
-(non-429) bad input — will never succeed on retry, so the row is abandoned
+embedding client raises :class:`ml_clients.errors.FatalError` for a bad-input HTTP
+4xx (400/404/413/422) — will never succeed on retry, so the row is abandoned
 immediately (``retry_count`` jumped to ``max_retries``) with a distinct
 ``embedding_retry_abandoned_permanent`` log instead of wasting all 5 attempts
 over ~2 h.
+
+Spend-cap / auth refusals (HTTP 402/401/403) are a THIRD class:
+:class:`ml_clients.errors.ProviderBillingError`. These clear only when the operator
+raises the DeepInfra spend cap, so they are backed off at a steady cadence WITHOUT
+consuming the retry budget — the row never abandons and self-heals when the cap is
+raised. (The 2026-07-18 incident abandoned 2,383 embeddings because HTTP 402 was
+mis-classified as a fatal 4xx.) Use ``requeue_abandoned`` to recover rows abandoned
+before this fix shipped.
 
 Typical usage::
 
@@ -29,7 +37,7 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-from ml_clients.errors import FatalError  # type: ignore[import-not-found]
+from ml_clients.errors import FatalError, ProviderBillingError  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
@@ -49,6 +57,12 @@ _BACKOFF_BASE_SECONDS: float = 60.0
 _MAX_BACKOFF_SECONDS: float = 3_600.0
 _POLL_INTERVAL_SECONDS: float = 30.0
 _BATCH_SIZE: int = 16
+# Fixed backoff for a spend-cap / auth refusal (ProviderBillingError). Retried at a
+# steady, low-frequency cadence (NOT exponential, and WITHOUT consuming the retry
+# budget) so the row self-heals the moment the operator raises the cap while never
+# hammering the provider with a flood of 402s. 5 min is a reasonable "cap likely
+# still down" poll.
+_BILLING_RETRY_BACKOFF_SECONDS: float = 300.0
 
 
 class EmbeddingRetryWorker:
@@ -141,6 +155,38 @@ class EmbeddingRetryWorker:
             if not outputs:
                 raise RuntimeError("Empty embedding response")
             vec = outputs[0].embedding
+        except ProviderBillingError as exc:
+            # Spend-cap / auth refusal (HTTP 402/401/403). NOT the row's fault and
+            # clears only when the operator raises the cap. Back off WITHOUT
+            # incrementing retry_count so the bounded 5-attempt budget is never spent
+            # on a cap-down — the row keeps re-attempting and self-heals the moment the
+            # cap is raised (the 2026-07-18 incident: 402 abandoned 2,383 embeddings
+            # because it was mis-classified as a fatal 4xx). Distinct log so operators
+            # can see cap pressure without it masquerading as a genuine failure.
+            logger.warning(  # type: ignore[no-any-return]
+                "embedding_retry_billing_deferred",
+                pending_id=str(job.pending_id),
+                doc_id=str(job.doc_id),
+                retry_count=job.retry_count,
+                reason="provider_billing",
+                error=str(exc),
+            )
+            try:
+                async with self._nlp_sf() as session:
+                    repo = EmbeddingPendingRepository(session)
+                    await repo.mark_failure(
+                        job.pending_id,
+                        backoff_seconds=_BILLING_RETRY_BACKOFF_SECONDS,
+                        increment_retry=False,
+                    )
+                    await session.commit()
+            except Exception as defer_exc:  # pragma: no cover — last resort
+                logger.error(  # type: ignore[no-any-return]
+                    "embedding_retry_billing_defer_mark_failed",
+                    pending_id=str(job.pending_id),
+                    error=str(defer_exc),
+                )
+            return
         except FatalError as exc:
             # Permanent failure — the embedding client raises FatalError only for
             # HTTP 4xx (non-429): bad/degenerate input (empty text, still >512

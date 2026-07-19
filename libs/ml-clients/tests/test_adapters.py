@@ -1174,11 +1174,16 @@ class TestDeepInfraEmbeddingAdapter:
             )
 
             adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
-            with pytest.raises(RetryableError, match="5xx"):
+            with pytest.raises(RetryableError, match="transient"):
                 await adapter.embed(inputs)
 
     async def test_4xx_raises_fatal_error(self) -> None:
-        """HTTP 4xx response → FatalError (bad request, do not retry)."""
+        """A genuine bad-input HTTP 4xx (400) → FatalError (do not retry).
+
+        NOTE: 401/402/403 are NOT bad-input — they are billing/auth refusals and
+        now raise ProviderBillingError (see TestBillingRefusalClassification). A
+        400 (e.g. the 513>512 token overflow) is the real can-never-succeed case.
+        """
         import httpx
         from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
         from ml_clients.dataclasses import EmbeddingInput
@@ -1190,12 +1195,12 @@ class TestDeepInfraEmbeddingAdapter:
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            err_resp = MagicMock(status_code=401)
+            err_resp = MagicMock(status_code=400)
             mock_client.post.side_effect = httpx.HTTPStatusError(
-                message="401 Unauthorized", request=MagicMock(), response=err_resp
+                message="400 Bad Request", request=MagicMock(), response=err_resp
             )
 
-            adapter = DeepInfraEmbeddingAdapter(api_key="bad-key")
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
             with pytest.raises(FatalError, match="4xx"):
                 await adapter.embed(inputs)
 
@@ -1412,33 +1417,41 @@ class TestDeepInfraEmbeddingAdapter:
             )
 
             adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
-            with pytest.raises(RetryableError, match="5xx") as exc_info:
+            with pytest.raises(RetryableError, match="transient") as exc_info:
                 await adapter.embed(inputs)
 
         # Must NOT be misclassified as a rate-limit error
         assert not isinstance(exc_info.value, RateLimitError)
 
-    async def test_401_still_fatal_non_regression(self) -> None:
-        """401 must continue to raise FatalError (auth bug, retrying won't help)."""
+    async def test_401_402_403_raise_provider_billing_error(self) -> None:
+        """401/402/403 are BILLING/auth refusals — retryable, NOT fatal (2026-07-18).
+
+        Supersedes the old ``test_401_still_fatal_non_regression`` which encoded the
+        bug: a hit spend cap (HTTP 402) and auth refusals were treated as terminal,
+        abandoning work indefinitely. They now raise ProviderBillingError (a
+        RetryableError) so the queue self-heals when the operator raises the cap.
+        """
         import httpx
         from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
         from ml_clients.dataclasses import EmbeddingInput
-        from ml_clients.errors import FatalError, RetryableError
+        from ml_clients.errors import FatalError, ProviderBillingError, RetryableError
 
         inputs = [EmbeddingInput(text="test text", model_id="BAAI/bge-large-en-v1.5")]
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            err_resp = MagicMock(status_code=401, headers={})
-            mock_client.post.side_effect = httpx.HTTPStatusError(
-                message="401 Unauthorized", request=MagicMock(), response=err_resp
-            )
+        for status_code in (401, 402, 403):
+            with patch("httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+                err_resp = MagicMock(status_code=status_code, headers={})
+                mock_client.post.side_effect = httpx.HTTPStatusError(
+                    message=f"{status_code}", request=MagicMock(), response=err_resp
+                )
 
-            adapter = DeepInfraEmbeddingAdapter(api_key="bad-key")
-            with pytest.raises(FatalError, match="4xx") as exc_info:
-                await adapter.embed(inputs)
+                adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+                with pytest.raises(ProviderBillingError) as exc_info:
+                    await adapter.embed(inputs)
 
-        # Must NOT be a retryable error
-        assert not isinstance(exc_info.value, RetryableError)
+            # Retryable (so the retry worker re-attempts), never fatal (never abandoned).
+            assert isinstance(exc_info.value, RetryableError)
+            assert not isinstance(exc_info.value, FatalError)
