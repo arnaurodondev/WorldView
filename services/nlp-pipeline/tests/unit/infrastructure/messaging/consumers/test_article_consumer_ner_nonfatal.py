@@ -54,6 +54,14 @@ def _make_settings() -> MagicMock:
     s.routing_tier_deep = 0.7
     s.routing_tier_medium = 0.4
     s.routing_tier_light = 0.1
+    # VALUE-signal override (feat/value-signal-routing): the consumer now reads these
+    # in the hot path; a bare MagicMock returns a MagicMock for event_value_min_hits and
+    # breaks the ``len(matched) >= min_hits`` comparison. Mirror the real production
+    # defaults (signal ON, all categories) so this NER-nonfatal test exercises the real path.
+    s.event_value_override_enabled = True
+    s.event_value_categories_set = None
+    s.event_value_min_hits = 1
+    s.event_value_scan_chars = 600
     return s
 
 
@@ -111,7 +119,7 @@ class TestNerFailureNonFatal:
 
         with (
             patch.object(consumer, "_download_article", new=AsyncMock(return_value=_real_text())),
-            patch(f"{_CONSUMER_MOD}.section_document", MagicMock(return_value=[MagicMock()])),
+            patch(f"{_CONSUMER_MOD}.section_document", MagicMock(return_value=[MagicMock(text="Acme beats revenue")])),
             patch(f"{_CONSUMER_MOD}.run_ner_block", new=ner_mock),
             patch(f"{_CONSUMER_MOD}.run_embeddings_block", new=embeddings_mock),
         ):
@@ -145,7 +153,7 @@ class TestNerFailureNonFatal:
         with (
             capture_logs() as logs,
             patch.object(consumer, "_download_article", new=AsyncMock(return_value=_real_text())),
-            patch(f"{_CONSUMER_MOD}.section_document", MagicMock(return_value=[MagicMock()])),
+            patch(f"{_CONSUMER_MOD}.section_document", MagicMock(return_value=[MagicMock(text="Acme beats revenue")])),
             patch(f"{_CONSUMER_MOD}.run_ner_block", new=ner_mock),
             patch(f"{_CONSUMER_MOD}.run_embeddings_block", new=embeddings_mock),
         ):

@@ -37,6 +37,13 @@ def _make_settings() -> MagicMock:
     s.embedding_model_id = "bge-large-en-v1.5"
     s.embedding_instruction_prefix = "Represent: "
     s.learned_router_mode = "off"  # skip the learned-router shadow entirely
+    # VALUE-signal override (feat/value-signal-routing): the consumer reads these in the
+    # hot path; a bare MagicMock would make event_value_min_hits a MagicMock and break the
+    # ``len(matched) >= min_hits`` comparison. Mirror the real production defaults.
+    s.event_value_override_enabled = True
+    s.event_value_categories_set = None
+    s.event_value_min_hits = 1
+    s.event_value_scan_chars = 600
     return s
 
 
