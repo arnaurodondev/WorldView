@@ -48,7 +48,18 @@ def _build_factories(
     """
     # BP-502: application_name surfaces this service in pg_stat_activity for
     # connection debugging; pool_recycle=300 defends against stale DNS sockets.
-    _connect_args: dict[str, object] = {"server_settings": {"application_name": "content-store"}}
+    # PgBouncer transaction-pooling compatibility (2026-07-19 Postgres-OOM fix):
+    # this service routes through ``pgbouncer.infra.svc:6432`` (pool_mode=transaction).
+    # Server-side prepared statements DO NOT survive across transaction-pooled
+    # server connections, so they MUST be disabled or asyncpg raises
+    # "prepared statement ... does not exist". ``statement_cache_size=0`` disables
+    # asyncpg's own cache; ``prepared_statement_cache_size=0`` disables the
+    # SQLAlchemy asyncpg dialect cache. Both are harmless when connecting direct.
+    _connect_args: dict[str, object] = {
+        "server_settings": {"application_name": "content-store"},
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+    }
     write_engine = create_async_engine(
         settings.database_url.get_secret_value(),
         echo=False,

@@ -46,6 +46,15 @@ def test_connect_args_sets_statement_timeout_and_app_name() -> None:
     assert server_settings["application_name"] == "market-data"
 
 
+def test_connect_args_disables_prepared_statements_for_pgbouncer() -> None:
+    # PgBouncer transaction pooling (2026-07-19 Postgres-OOM fix): server-side
+    # prepared statements must be disabled or asyncpg errors on a reused pooled
+    # server connection. Both asyncpg's and the SQLAlchemy dialect's caches off.
+    args = _connect_args()
+    assert args["statement_cache_size"] == 0
+    assert args["prepared_statement_cache_size"] == 0
+
+
 @pytest.mark.parametrize("builder", [build_write_engine, build_read_engine])
 def test_engine_pool_is_fail_fast(builder) -> None:
     engine = builder(_settings())

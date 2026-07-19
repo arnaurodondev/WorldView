@@ -58,7 +58,17 @@ def create_rag_session_factory(
     """
     # BP-502: application_name surfaces this service in pg_stat_activity for
     # connection debugging; pool_recycle=300 defends against stale DNS sockets.
-    _connect_args: dict[str, object] = {"server_settings": {"application_name": "rag-chat"}}
+    # PgBouncer transaction-pooling compatibility (2026-07-19 Postgres-OOM fix):
+    # this service routes through ``pgbouncer.infra.svc:6432`` (pool_mode=transaction).
+    # Server-side prepared statements DO NOT survive across transaction-pooled
+    # server connections, so disable both asyncpg's cache (``statement_cache_size=0``)
+    # and the SQLAlchemy asyncpg dialect cache (``prepared_statement_cache_size=0``).
+    # Both are harmless when connecting direct.
+    _connect_args: dict[str, object] = {
+        "server_settings": {"application_name": "rag-chat"},
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+    }
     write_engine = create_async_engine(
         settings.database_url.get_secret_value(),
         echo=False,

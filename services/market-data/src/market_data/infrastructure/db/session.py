@@ -81,7 +81,7 @@ def _instrument_pool(engine: AsyncEngine, *, role: str) -> None:
     event.listen(sync_engine, "checkin", _update)
 
 
-def _connect_args() -> dict[str, dict[str, str]]:
+def _connect_args() -> dict[str, object]:
     """Shared asyncpg connect args: application_name + server-side timeout.
 
     ``statement_timeout`` is applied as an asyncpg server setting so it is set
@@ -92,8 +92,23 @@ def _connect_args() -> dict[str, dict[str, str]]:
             # BP-502: application_name surfaces this service in pg_stat_activity.
             "application_name": "market-data",
             # Fail-fast at the DB layer (BP-720 amplifier fix).
+            # NOTE: under PgBouncer transaction pooling, ``statement_timeout`` is a
+            # non-native startup parameter — PgBouncer must list it in
+            # ``ignore_startup_parameters`` or it rejects the connection. When
+            # ignored, this GUC is NOT applied, so the server-side backstop is
+            # instead set at the database level via
+            # ``ALTER DATABASE market_data_db SET statement_timeout = '8000'``
+            # (survives ``DISCARD ALL`` reset). See gitops fix/pgbouncer-routing.
             "statement_timeout": _STATEMENT_TIMEOUT_MS,
-        }
+        },
+        # PgBouncer transaction-pooling compatibility (2026-07-19 Postgres-OOM fix):
+        # market_data_db routes through ``pgbouncer.infra.svc:6432``
+        # (pool_mode=transaction). Server-side prepared statements DO NOT survive
+        # across transaction-pooled server connections, so disable both asyncpg's
+        # cache (``statement_cache_size=0``) and the SQLAlchemy asyncpg dialect
+        # cache (``prepared_statement_cache_size=0``). Both are harmless direct.
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
     }
 
 

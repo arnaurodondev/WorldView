@@ -72,6 +72,13 @@ def _build_factories(
         "server_settings": {
             "application_name": "alert",
         },
+        # PgBouncer transaction-pooling compatibility (2026-07-19 Postgres-OOM fix):
+        # this service routes through ``pgbouncer.infra.svc:6432`` (pool_mode=transaction).
+        # Server-side prepared statements DO NOT survive across transaction-pooled
+        # server connections, so disable both asyncpg's cache and the SQLAlchemy
+        # asyncpg dialect cache. Both are harmless when connecting direct.
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
     }
     write_engine = create_async_engine(
         _get_url(settings.database_url),
