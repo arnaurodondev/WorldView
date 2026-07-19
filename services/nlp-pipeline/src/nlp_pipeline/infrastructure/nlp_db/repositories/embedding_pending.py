@@ -18,6 +18,8 @@ import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import EmbeddingPendingModel
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import EmbeddingPendingEntry
@@ -33,6 +35,11 @@ class RetryJob:
     chunk_id: UUID | None
     embedding_text: str
     retry_count: int
+    # BP-729: original enqueue time (row age anchor). Billing/auth deferrals do NOT
+    # consume the retry budget, so the worker uses ``now() - created_at`` — not
+    # retry_count — to decide when a PERSISTENT billing/auth refusal (revoked key) has
+    # gone on long enough to abandon + alert instead of looping forever.
+    created_at: datetime
 
 
 class EmbeddingPendingRepository:
@@ -76,7 +83,7 @@ class EmbeddingPendingRepository:
         """
         result = await self._session.execute(
             text(
-                "SELECT pending_id, doc_id, section_id, chunk_id, embedding_text, retry_count "
+                "SELECT pending_id, doc_id, section_id, chunk_id, embedding_text, retry_count, created_at "
                 "FROM embedding_pending "
                 "WHERE retry_count < :max_retries "
                 "  AND next_retry_at <= now() "
@@ -97,6 +104,7 @@ class EmbeddingPendingRepository:
                 chunk_id=UUID(str(row[3])) if row[3] else None,
                 embedding_text=str(row[4]),
                 retry_count=int(row[5]),
+                created_at=row[6],
             )
             for row in rows
         ]
@@ -108,17 +116,26 @@ class EmbeddingPendingRepository:
             {"pending_id": str(pending_id)},
         )
 
-    async def mark_failure(self, pending_id: UUID, backoff_seconds: float) -> None:
-        """Increment retry_count, schedule the next retry, and stamp last_attempted_at.
+    async def mark_failure(self, pending_id: UUID, backoff_seconds: float, *, increment_retry: bool = True) -> None:
+        """Schedule the next retry, stamp last_attempted_at, and (by default) bump retry_count.
 
         ``last_attempted_at`` (added in migration 0016, PLAN-0057 Wave E-4)
         captures wall-clock time of the most recent attempt so operators can
         diagnose stuck queues without having to infer from ``next_retry_at``.
+
+        ``increment_retry`` (default ``True``): pass ``False`` for a
+        :class:`ml_clients.errors.ProviderBillingError` (HTTP 402 spend-cap / 401/403
+        auth refusal). Such a failure is NOT the row's fault and clears only when the
+        operator raises the cap, so consuming the bounded 5-attempt budget on it would
+        permanently abandon otherwise-valid work during a multi-hour cap-down. Leaving
+        ``retry_count`` untouched lets the row keep re-attempting (bounded only by the
+        backoff schedule) so it self-heals the instant the cap is raised.
         """
+        retry_count_expr = "retry_count + 1" if increment_retry else "retry_count"
         await self._session.execute(
             text(
                 "UPDATE embedding_pending "
-                "SET retry_count = retry_count + 1, "
+                f"SET retry_count = {retry_count_expr}, "
                 "    next_retry_at = now() + cast(:backoff AS float) * interval '1 second', "
                 "    last_attempted_at = now() "
                 "WHERE pending_id = :pending_id"
@@ -175,3 +192,43 @@ class EmbeddingPendingRepository:
         """Return total count of rows still in the retry queue."""
         result = await self._session.execute(text("SELECT COUNT(*) FROM embedding_pending"))
         return int(result.scalar_one())
+
+    async def requeue_abandoned(self, *, max_retries: int = 5, limit: int = 500) -> int:
+        """Reset up to *limit* abandoned rows so ``claim_batch`` picks them up again.
+
+        An "abandoned" row is one with ``retry_count >= max_retries`` — silently
+        skipped by ``claim_batch`` forever. This resets ``retry_count`` to 0 and
+        ``next_retry_at`` to ``now()`` so the retry worker re-attempts it on its next
+        poll. Used to recover the 2,383 embeddings abandoned on the 2026-07-18 HTTP
+        402 spend-cap hit, once the operator has raised the cap.
+
+        Idempotent + throttle-friendly: it only touches rows that are STILL
+        abandoned, so a row already re-queued (or since drained) is invisible to a
+        second call. ``limit`` bounds the batch so a caller can throttle the flood of
+        re-attempts (call repeatedly with a sleep between batches). Returns the number
+        of rows reset this call — 0 means nothing left to re-queue.
+
+        NOTE: run this ONLY after confirming the spend cap is raised (recent
+        embedding successes, no fresh 402); otherwise the re-queued rows immediately
+        re-fail. With the ProviderBillingError fix in place they will no longer be
+        re-abandoned, but they will churn 402s until the cap clears.
+        """
+        result = await self._session.execute(
+            text(
+                "UPDATE embedding_pending "
+                # BP-729: also reset created_at so the billing/auth-deferral age clock
+                # restarts for a re-queued row — otherwise a row re-queued long after its
+                # original enqueue would immediately trip the persistent-billing abandon
+                # ceiling on its first refusal if the cap were briefly down again.
+                "SET retry_count = 0, next_retry_at = now(), last_attempted_at = now(), created_at = now() "
+                "WHERE pending_id IN ( "
+                "    SELECT pending_id FROM embedding_pending "
+                "    WHERE retry_count >= :max_retries "
+                "    ORDER BY next_retry_at ASC "
+                "    LIMIT :limit "
+                "    FOR UPDATE SKIP LOCKED "
+                ")"
+            ),
+            {"max_retries": max_retries, "limit": limit},
+        )
+        return int(result.rowcount or 0)  # type: ignore[attr-defined]

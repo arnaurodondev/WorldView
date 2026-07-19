@@ -113,6 +113,7 @@ async def main() -> None:
         else settings.embedding_model_id,
         instruction_prefix=settings.embedding_instruction_prefix,
         max_retries=max_retries,
+        billing_defer_max_age_s=settings.embedding_billing_defer_max_age_s,
     )
 
     log.info("embedding_retry_worker_ready", provider=settings.embedding_provider)

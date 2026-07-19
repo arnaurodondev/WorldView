@@ -127,9 +127,12 @@ class TestClaimBatch:
         pending_id = uuid.uuid4()
         session = _make_session()
 
+        created_at = datetime.now(tz=UTC)
         mock_result = MagicMock()
+        # BP-729: claim_batch now also SELECTs created_at (7th column) so the worker
+        # can age-out a persistent billing/auth deferral.
         mock_result.fetchall.return_value = [
-            (str(pending_id), str(doc_id), str(section_id), None, "Some text", 1),
+            (str(pending_id), str(doc_id), str(section_id), None, "Some text", 1, created_at),
         ]
         session.execute = AsyncMock(return_value=mock_result)
 
@@ -144,6 +147,7 @@ class TestClaimBatch:
         assert jobs[0].chunk_id is None
         assert jobs[0].embedding_text == "Some text"
         assert jobs[0].retry_count == 1
+        assert jobs[0].created_at == created_at
 
     @pytest.mark.asyncio
     async def test_uses_for_update_skip_locked_for_concurrency_safety(self) -> None:
@@ -228,6 +232,70 @@ class TestMarkFailure:
         # a missing assignment was the regression that the migration guards against.
         assert "last_attempted_at" in sql_text
         assert "now()" in sql_text
+
+
+class TestMarkFailureIncrementFlag:
+    """The billing-refusal path (HTTP 402) must be able to back off WITHOUT
+    consuming the retry budget — mark_failure(increment_retry=False)."""
+
+    @pytest.mark.asyncio
+    async def test_default_increments_retry_count(self) -> None:
+        session = _make_session()
+        session.execute = AsyncMock(return_value=MagicMock())
+        repo = EmbeddingPendingRepository(session)
+
+        await repo.mark_failure(uuid.uuid4(), backoff_seconds=60.0)
+
+        sql_text = str(session.execute.call_args[0][0])
+        assert "retry_count + 1" in sql_text
+
+    @pytest.mark.asyncio
+    async def test_increment_false_keeps_retry_count(self) -> None:
+        session = _make_session()
+        session.execute = AsyncMock(return_value=MagicMock())
+        repo = EmbeddingPendingRepository(session)
+
+        await repo.mark_failure(uuid.uuid4(), backoff_seconds=300.0, increment_retry=False)
+
+        sql_text = str(session.execute.call_args[0][0])
+        # retry_count is set to itself (no bump) so a cap-down never abandons the row.
+        assert "retry_count + 1" not in sql_text
+        assert "SET retry_count = retry_count," in sql_text
+
+
+class TestRequeueAbandoned:
+    @pytest.mark.asyncio
+    async def test_resets_abandoned_rows_and_returns_rowcount(self) -> None:
+        """requeue_abandoned must UPDATE abandoned rows (retry_count>=max) back to 0
+        and return the number of rows reset."""
+        session = _make_session()
+        result = MagicMock()
+        result.rowcount = 42
+        session.execute = AsyncMock(return_value=result)
+        repo = EmbeddingPendingRepository(session)
+
+        reset = await repo.requeue_abandoned(max_retries=5, limit=200)
+
+        assert reset == 42
+        call_args = session.execute.call_args
+        sql_text = str(call_args[0][0])
+        assert "UPDATE" in sql_text.upper()
+        assert "retry_count = 0" in sql_text
+        assert "retry_count >= :max_retries" in sql_text
+        assert "FOR UPDATE SKIP LOCKED" in sql_text
+        # BP-729: created_at is reset so the billing-deferral age clock restarts.
+        assert "created_at = now()" in sql_text
+        assert call_args[0][1] == {"max_retries": 5, "limit": 200}
+
+    @pytest.mark.asyncio
+    async def test_returns_zero_when_nothing_abandoned(self) -> None:
+        session = _make_session()
+        result = MagicMock()
+        result.rowcount = 0
+        session.execute = AsyncMock(return_value=result)
+        repo = EmbeddingPendingRepository(session)
+
+        assert await repo.requeue_abandoned() == 0
 
 
 class TestCountAbandoned:

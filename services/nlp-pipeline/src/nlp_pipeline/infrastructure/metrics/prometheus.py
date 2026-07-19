@@ -201,6 +201,38 @@ s6_ollama_queue_depth_current = prometheus_client.Gauge(
 )
 
 
+# BP-729: embedding-retry billing/auth deferrals + permanent abandons. A spend-cap /
+# auth refusal (HTTP 402/401/403) is deferred without consuming the retry budget so a
+# transient cap self-heals — but that made a PERSISTENT auth failure (revoked key) loop
+# invisibly (structlog line only, no metric). These counters make sustained billing/auth
+# deferral alertable and every permanent abandon (fatal 4xx, persistent billing/auth,
+# retry exhaustion) observable with a reason label.
+s6_embedding_retry_billing_deferred_total = prometheus_client.Counter(
+    "s6_embedding_retry_billing_deferred_total",
+    "Embedding-retry jobs deferred on a provider billing/auth refusal (HTTP 402/401/403) "
+    "WITHOUT consuming the retry budget. A sustained non-zero rate means the DeepInfra "
+    "spend cap is hit or the key is refused — raise the cap / fix the key.",
+)
+
+s6_embedding_retry_abandoned_total = prometheus_client.Counter(
+    "s6_embedding_retry_abandoned_total",
+    "Embedding-retry jobs permanently abandoned (skipped by claim_batch forever), by reason: "
+    "fatal_4xx (bad input) | billing_auth_persistent (revoked key / cap down past the ceiling) "
+    "| retry_exhausted (transient failures exceeded max attempts).",
+    ["reason"],
+)
+
+
+def record_embedding_retry_billing_deferred() -> None:
+    """Increment the embedding-retry billing/auth-deferral counter (BP-729)."""
+    s6_embedding_retry_billing_deferred_total.inc()
+
+
+def record_embedding_retry_abandoned(reason: str) -> None:
+    """Increment the permanent-abandon counter for the embedding-retry worker (BP-729)."""
+    s6_embedding_retry_abandoned_total.labels(reason=reason).inc()
+
+
 def record_article_processed(routing_tier: str) -> None:
     """Increment per-tier article counter."""
     s6_articles_processed_total.labels(routing_tier=routing_tier).inc()

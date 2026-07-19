@@ -25,7 +25,75 @@ from email.utils import parsedate_to_datetime
 
 from messaging.kafka.consumer.errors import FatalError, RateLimitedError, RetryableError
 
-__all__ = ["FatalError", "RateLimitError", "RetryableError", "parse_retry_after"]
+__all__ = [
+    "FatalError",
+    "ProviderBillingError",
+    "RateLimitError",
+    "RetryableError",
+    "is_billing_status",
+    "is_transient_status",
+    "parse_retry_after",
+]
+
+# ── HTTP status classification (2026-07-18 spend-cap self-heal) ────────────────
+#
+# Root cause of the 402/spend-cap incident: adapters mapped EVERY non-429 4xx to
+# ``FatalError`` (terminal). When the DeepInfra spend cap was hit, the provider
+# returned HTTP 402 ``Payment Required`` — a purely BILLING refusal that clears
+# the instant the operator raises the cap — yet it was treated as a permanent
+# bad-request. Result: 693 article extractions silently empty-committed and 2,383
+# embeddings were abandoned after their retry budget, both indefinitely lost.
+#
+# The fix splits 4xx into three buckets:
+#   * BILLING/auth refusals (401/402/403) → :class:`ProviderBillingError`
+#     (a ``RetryableError``). These clear only when the operator acts, so callers
+#     that keep a bounded retry budget MUST NOT consume it here — otherwise a
+#     multi-hour cap-down abandons all in-flight work. See EmbeddingRetryWorker.
+#   * Other transient statuses (408/409/425/429) + all 5xx → bounded RetryableError.
+#   * Everything else (genuine bad input: 400/404/413/422/…) → FatalError (drop).
+
+#: Billing / auth refusals — retryable, but self-heal only when the operator acts.
+_BILLING_HTTP_STATUSES = frozenset({401, 402, 403})
+
+#: Other transient 4xx worth a bounded retry (timeout/conflict/too-early/rate-limit).
+_TRANSIENT_4XX_HTTP_STATUSES = frozenset({408, 409, 425, 429})
+
+
+def is_billing_status(status_code: int) -> bool:
+    """True for a spend-cap / auth refusal (HTTP 401/402/403).
+
+    These are retryable but distinct from generic transient errors: they clear
+    only when the operator raises the spend cap or restores the key, so a bounded
+    retry budget must not be spent on them (they would exhaust it and dead-end).
+    """
+    return status_code in _BILLING_HTTP_STATUSES
+
+
+def is_transient_status(status_code: int) -> bool:
+    """True for a generic transient status worth a bounded retry (5xx or 408/409/425/429).
+
+    Excludes the billing statuses (see :func:`is_billing_status`) which callers
+    should classify first so they can apply the no-budget-consumption policy.
+    """
+    return status_code >= 500 or status_code in _TRANSIENT_4XX_HTTP_STATUSES
+
+
+class ProviderBillingError(RetryableError):
+    """Spend-cap / billing / auth refusal from an upstream ML provider (HTTP 401/402/403).
+
+    A :class:`RetryableError` subclass, so every existing ``except RetryableError``
+    retry loop — Kafka consumer redelivery, the embedding retry worker — already
+    treats it as transient (no new call sites required to stop the silent data
+    loss). What sets it apart from a generic transient error is *when* it clears:
+    only when the operator raises the DeepInfra spend cap or restores the API key.
+
+    Consequently, callers that enforce a bounded retry budget (e.g.
+    ``EmbeddingRetryWorker``'s max-5-attempts-then-abandon) MUST NOT count a
+    ``ProviderBillingError`` against that budget — otherwise a cap-down lasting
+    longer than the backoff schedule (~2 h) abandons all queued work permanently
+    and it never self-heals when the cap is finally raised. Instead they should
+    back off and re-attempt indefinitely until the cap clears.
+    """
 
 
 def parse_retry_after(headers: Mapping[str, str] | None) -> int | None:
