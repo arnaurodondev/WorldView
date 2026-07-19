@@ -119,8 +119,19 @@ class FallbackEmbeddingClient:
     async def embed(self, inputs: list[EmbeddingInput]) -> list[EmbeddingOutput]:
         """Embed via primary; on RetryableError, retry once via fallback.
 
-        FatalError (4xx auth/validation) propagates without invoking the
-        fallback — bad input won't get better on a second backend.
+        FatalError (genuine bad input: 400/404/413/422) propagates without invoking
+        the fallback — bad input won't get better on a second backend.
+
+        BP-729 author-awareness: ``ProviderBillingError`` (HTTP 402/401/403) is a
+        ``RetryableError`` subclass, so a primary spend-cap / auth refusal now ALSO
+        triggers fallback-to-secondary. For 402 (spend-cap) this is desirable — a
+        free/local secondary (e.g. Ollama) keeps embeddings flowing while the cap is
+        raised. The trade-off: a PERMANENT primary 401/403 (revoked key) is silently
+        served from the fallback instead of surfacing. The embedding retry worker's
+        billing-defer metric + persistent-abandon escalation (BP-729) covers the
+        retry-queue path; if a primary key can be revoked long-term while a fallback
+        masks it here, add primary-health alerting rather than relying on this wrapper
+        to surface it.
         """
         try:
             return await self._primary.embed(inputs)

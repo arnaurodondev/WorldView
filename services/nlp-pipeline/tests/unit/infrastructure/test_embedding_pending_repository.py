@@ -127,9 +127,12 @@ class TestClaimBatch:
         pending_id = uuid.uuid4()
         session = _make_session()
 
+        created_at = datetime.now(tz=UTC)
         mock_result = MagicMock()
+        # BP-729: claim_batch now also SELECTs created_at (7th column) so the worker
+        # can age-out a persistent billing/auth deferral.
         mock_result.fetchall.return_value = [
-            (str(pending_id), str(doc_id), str(section_id), None, "Some text", 1),
+            (str(pending_id), str(doc_id), str(section_id), None, "Some text", 1, created_at),
         ]
         session.execute = AsyncMock(return_value=mock_result)
 
@@ -144,6 +147,7 @@ class TestClaimBatch:
         assert jobs[0].chunk_id is None
         assert jobs[0].embedding_text == "Some text"
         assert jobs[0].retry_count == 1
+        assert jobs[0].created_at == created_at
 
     @pytest.mark.asyncio
     async def test_uses_for_update_skip_locked_for_concurrency_safety(self) -> None:
@@ -279,6 +283,8 @@ class TestRequeueAbandoned:
         assert "retry_count = 0" in sql_text
         assert "retry_count >= :max_retries" in sql_text
         assert "FOR UPDATE SKIP LOCKED" in sql_text
+        # BP-729: created_at is reset so the billing-deferral age clock restarts.
+        assert "created_at = now()" in sql_text
         assert call_args[0][1] == {"max_retries": 5, "limit": 200}
 
     @pytest.mark.asyncio

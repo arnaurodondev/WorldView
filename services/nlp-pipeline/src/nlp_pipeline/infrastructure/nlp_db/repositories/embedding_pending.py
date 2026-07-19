@@ -18,6 +18,8 @@ import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import EmbeddingPendingModel
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import EmbeddingPendingEntry
@@ -33,6 +35,11 @@ class RetryJob:
     chunk_id: UUID | None
     embedding_text: str
     retry_count: int
+    # BP-729: original enqueue time (row age anchor). Billing/auth deferrals do NOT
+    # consume the retry budget, so the worker uses ``now() - created_at`` — not
+    # retry_count — to decide when a PERSISTENT billing/auth refusal (revoked key) has
+    # gone on long enough to abandon + alert instead of looping forever.
+    created_at: datetime
 
 
 class EmbeddingPendingRepository:
@@ -76,7 +83,7 @@ class EmbeddingPendingRepository:
         """
         result = await self._session.execute(
             text(
-                "SELECT pending_id, doc_id, section_id, chunk_id, embedding_text, retry_count "
+                "SELECT pending_id, doc_id, section_id, chunk_id, embedding_text, retry_count, created_at "
                 "FROM embedding_pending "
                 "WHERE retry_count < :max_retries "
                 "  AND next_retry_at <= now() "
@@ -97,6 +104,7 @@ class EmbeddingPendingRepository:
                 chunk_id=UUID(str(row[3])) if row[3] else None,
                 embedding_text=str(row[4]),
                 retry_count=int(row[5]),
+                created_at=row[6],
             )
             for row in rows
         ]
@@ -208,7 +216,11 @@ class EmbeddingPendingRepository:
         result = await self._session.execute(
             text(
                 "UPDATE embedding_pending "
-                "SET retry_count = 0, next_retry_at = now(), last_attempted_at = now() "
+                # BP-729: also reset created_at so the billing/auth-deferral age clock
+                # restarts for a re-queued row — otherwise a row re-queued long after its
+                # original enqueue would immediately trip the persistent-billing abandon
+                # ceiling on its first refusal if the cap were briefly down again.
+                "SET retry_count = 0, next_retry_at = now(), last_attempted_at = now(), created_at = now() "
                 "WHERE pending_id IN ( "
                 "    SELECT pending_id FROM embedding_pending "
                 "    WHERE retry_count >= :max_retries "

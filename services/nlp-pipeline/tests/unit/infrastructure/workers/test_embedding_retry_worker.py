@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -103,8 +104,13 @@ def _make_empty_embedding_client() -> AsyncMock:
     return client
 
 
-def _make_job(retry_count: int, *, kind: str = "section") -> MagicMock:
-    """Build a fake claimed RetryJob.  ``kind`` controls section vs chunk."""
+def _make_job(retry_count: int, *, kind: str = "section", age_seconds: float = 0.0) -> MagicMock:
+    """Build a fake claimed RetryJob.  ``kind`` controls section vs chunk.
+
+    ``age_seconds`` sets ``created_at`` to that many seconds in the past (BP-729:
+    the billing-deferral escalation uses ``now() - created_at``). Default 0 = a
+    freshly-enqueued row that is well within the tolerance window.
+    """
     job = MagicMock()
     job.pending_id = uuid.uuid4()
     job.doc_id = uuid.uuid4()
@@ -118,6 +124,7 @@ def _make_job(retry_count: int, *, kind: str = "section") -> MagicMock:
         raise ValueError(f"unknown job kind: {kind}")
     job.embedding_text = "Apple posted Q3 earnings."
     job.retry_count = retry_count
+    job.created_at = datetime.now(tz=UTC) - timedelta(seconds=age_seconds)
     return job
 
 
@@ -304,6 +311,12 @@ class TestBillingRefusalClassification:
         fake_logger.error = MagicMock()
         monkeypatch.setattr(mod, "logger", fake_logger)
 
+        # BP-729: assert the billing-deferred Prometheus counter is incremented.
+        billing_metric = MagicMock()
+        abandoned_metric = MagicMock()
+        monkeypatch.setattr(mod, "record_embedding_retry_billing_deferred", billing_metric)
+        monkeypatch.setattr(mod, "record_embedding_retry_abandoned", abandoned_metric)
+
         repo_instance = MagicMock()
         repo_instance.mark_abandoned = AsyncMock()
         repo_instance.mark_failure = AsyncMock()
@@ -317,7 +330,7 @@ class TestBillingRefusalClassification:
         )
 
         # retry_count=4 would ordinarily be the LAST attempt before abandon — but a
-        # billing refusal must NOT abandon it even here.
+        # billing refusal must NOT abandon it even here. Fresh row (age 0) → deferred.
         with patch(
             "nlp_pipeline.infrastructure.nlp_db.repositories.embedding_pending.EmbeddingPendingRepository",
             repo_cls,
@@ -337,6 +350,59 @@ class TestBillingRefusalClassification:
         call = repo_instance.mark_failure.await_args
         assert call.kwargs["increment_retry"] is False
         assert call.kwargs["backoff_seconds"] == mod._BILLING_RETRY_BACKOFF_SECONDS
+        # Observability: billing-deferred counter incremented, abandon counter NOT.
+        billing_metric.assert_called_once()
+        abandoned_metric.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_persistent_billing_escalates_to_abandon_with_metric(self, monkeypatch) -> None:
+        """A billing/auth refusal on a row OLDER than billing_defer_max_age_s (e.g. a
+        revoked key that never clears) must ABANDON + emit the permanent-abandon
+        signal/metric instead of looping forever."""
+        from nlp_pipeline.infrastructure.workers import embedding_retry_worker as mod
+
+        warning_calls: list[tuple[str, dict]] = []
+        fake_logger = MagicMock()
+        fake_logger.warning = lambda event, **kw: warning_calls.append((event, kw))
+        fake_logger.info = MagicMock()
+        fake_logger.error = MagicMock()
+        monkeypatch.setattr(mod, "logger", fake_logger)
+
+        billing_metric = MagicMock()
+        abandoned_metric = MagicMock()
+        monkeypatch.setattr(mod, "record_embedding_retry_billing_deferred", billing_metric)
+        monkeypatch.setattr(mod, "record_embedding_retry_abandoned", abandoned_metric)
+
+        repo_instance = MagicMock()
+        repo_instance.mark_abandoned = AsyncMock()
+        repo_instance.mark_failure = AsyncMock()
+        repo_cls = MagicMock(return_value=repo_instance)
+
+        worker = mod.EmbeddingRetryWorker(
+            nlp_session_factory=_make_session_factory(),
+            embedding_client=_make_billing_embedding_client(),
+            model_id="bge-large",
+            instruction_prefix="Represent this passage: ",
+            billing_defer_max_age_s=3600.0,  # 1 h ceiling for the test
+        )
+
+        # Row first enqueued 2 h ago → age (7200s) > ceiling (3600s) → escalate.
+        with patch(
+            "nlp_pipeline.infrastructure.nlp_db.repositories.embedding_pending.EmbeddingPendingRepository",
+            repo_cls,
+        ):
+            await worker._process_job(_make_job(retry_count=0, age_seconds=7200))
+
+        # Abandoned (not deferred): permanent signal + metric with the distinct reason.
+        events = [e for e, _ in warning_calls]
+        assert "embedding_retry_abandoned_permanent" in events
+        assert "embedding_retry_billing_deferred" not in events
+        kw = next(kw for e, kw in warning_calls if e == "embedding_retry_abandoned_permanent")
+        assert kw["reason"] == "billing_auth_persistent"
+        repo_instance.mark_abandoned.assert_awaited_once()
+        repo_instance.mark_failure.assert_not_called()
+        abandoned_metric.assert_called_once_with("billing_auth_persistent")
+        billing_metric.assert_not_called()
 
 
 # ── Wave C T-002: success-path + failure-path coverage ───────────────────────

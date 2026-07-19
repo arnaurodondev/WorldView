@@ -24,6 +24,15 @@ raised. (The 2026-07-18 incident abandoned 2,383 embeddings because HTTP 402 was
 mis-classified as a fatal 4xx.) Use ``requeue_abandoned`` to recover rows abandoned
 before this fix shipped.
 
+BP-729 observability + escalation: each billing deferral increments
+``s6_embedding_retry_billing_deferred_total`` (alertable) and every permanent abandon
+increments ``s6_embedding_retry_abandoned_total{reason}``. Because a billing deferral
+does NOT consume the retry budget, a PERMANENT auth failure (revoked key, HTTP 401/403)
+would otherwise loop forever invisibly — so once a row has been unembeddable for longer
+than ``billing_defer_max_age_s`` (default 24 h), it is abandoned with the
+``billing_auth_persistent`` reason so a genuinely stuck key surfaces. A real 402 spend-
+cap self-heals long before that ceiling.
+
 Typical usage::
 
     worker = EmbeddingRetryWorker(nlp_sf, embedding_client, model_id="bge-large-en-v1.5", ...)
@@ -40,6 +49,11 @@ from typing import TYPE_CHECKING, Any
 from ml_clients.errors import FatalError, ProviderBillingError  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
+import common.time  # type: ignore[import-untyped]
+from nlp_pipeline.infrastructure.metrics.prometheus import (
+    record_embedding_retry_abandoned,
+    record_embedding_retry_billing_deferred,
+)
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -63,6 +77,11 @@ _BATCH_SIZE: int = 16
 # hammering the provider with a flood of 402s. 5 min is a reasonable "cap likely
 # still down" poll.
 _BILLING_RETRY_BACKOFF_SECONDS: float = 300.0
+# BP-729: max age (since first enqueue) a row may keep billing-deferring before the
+# worker abandons it with a permanent-abandon signal. A transient spend-cap (402)
+# self-heals well before this; only a genuinely stuck key (permanent 401/403) reaches
+# it. Kept as a module constant for test import; production passes settings value.
+_BILLING_DEFER_MAX_AGE_SECONDS: float = 86_400.0
 
 
 class EmbeddingRetryWorker:
@@ -76,6 +95,7 @@ class EmbeddingRetryWorker:
         instruction_prefix: str,
         poll_interval: float = _POLL_INTERVAL_SECONDS,
         max_retries: int = _MAX_RETRIES,
+        billing_defer_max_age_s: float = _BILLING_DEFER_MAX_AGE_SECONDS,
     ) -> None:
         self._nlp_sf = nlp_session_factory
         self._embedding_client = embedding_client
@@ -87,6 +107,26 @@ class EmbeddingRetryWorker:
         # the constant without updating the callers silently broke parity. Now
         # the worker carries the value and threads it through every call.
         self._max_retries = max_retries
+        # BP-729: escalation ceiling for persistent billing/auth deferral.
+        self._billing_defer_max_age_s = billing_defer_max_age_s
+
+    # ── Metrics (fail-safe — must never break the poll loop) ───────────────────
+
+    @staticmethod
+    def _safe_record_billing_deferred() -> None:
+        """Increment the billing-deferral counter; swallow any metrics error."""
+        try:
+            record_embedding_retry_billing_deferred()
+        except Exception:  # pragma: no cover — metrics must never break retries
+            logger.debug("embedding_retry_metric_inc_failed", metric="billing_deferred")
+
+    @staticmethod
+    def _safe_record_abandoned(reason: str) -> None:
+        """Increment the permanent-abandon counter by reason; swallow any metrics error."""
+        try:
+            record_embedding_retry_abandoned(reason)
+        except Exception:  # pragma: no cover — metrics must never break retries
+            logger.debug("embedding_retry_metric_inc_failed", metric="abandoned", reason=reason)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -161,16 +201,58 @@ class EmbeddingRetryWorker:
             # incrementing retry_count so the bounded 5-attempt budget is never spent
             # on a cap-down — the row keeps re-attempting and self-heals the moment the
             # cap is raised (the 2026-07-18 incident: 402 abandoned 2,383 embeddings
-            # because it was mis-classified as a fatal 4xx). Distinct log so operators
-            # can see cap pressure without it masquerading as a genuine failure.
+            # because it was mis-classified as a fatal 4xx).
+            #
+            # BP-729 escalation: 402 (spend-cap) is transient, but 401/403 can be a
+            # PERMANENT auth failure (revoked/misconfigured key) that would otherwise
+            # loop forever at the billing cadence, invisibly. So once a row has been
+            # unembeddable for longer than ``billing_defer_max_age_s`` (age since first
+            # enqueue), abandon it with the permanent-abandon signal + metric so a
+            # genuinely stuck key surfaces instead of hiding. A real spend-cap clears
+            # well before the (24 h default) ceiling.
+            age_s = (common.time.utc_now() - job.created_at).total_seconds()
+            if age_s > self._billing_defer_max_age_s:
+                logger.warning(  # type: ignore[no-any-return]
+                    "embedding_retry_abandoned_permanent",
+                    pending_id=str(job.pending_id),
+                    doc_id=str(job.doc_id),
+                    section_id=str(job.section_id) if job.section_id else None,
+                    chunk_id=str(job.chunk_id) if job.chunk_id else None,
+                    retry_count=job.retry_count,
+                    reason="billing_auth_persistent",
+                    age_seconds=int(age_s),
+                    max_age_seconds=int(self._billing_defer_max_age_s),
+                    error=str(exc),
+                )
+                self._safe_record_abandoned("billing_auth_persistent")
+                try:
+                    async with self._nlp_sf() as session:
+                        repo = EmbeddingPendingRepository(session)
+                        await repo.mark_abandoned(
+                            job.pending_id,
+                            max_retries=self._max_retries,
+                            error_detail=f"billing_auth_persistent after {int(age_s)}s: {exc}",
+                        )
+                        await session.commit()
+                except Exception as mark_exc:  # pragma: no cover — last resort
+                    logger.error(  # type: ignore[no-any-return]
+                        "embedding_retry_abandon_mark_failed",
+                        pending_id=str(job.pending_id),
+                        error=str(mark_exc),
+                    )
+                return
+            # Still within the tolerance window — defer without consuming budget.
+            # Distinct log + metric so sustained cap pressure is observable/alertable.
             logger.warning(  # type: ignore[no-any-return]
                 "embedding_retry_billing_deferred",
                 pending_id=str(job.pending_id),
                 doc_id=str(job.doc_id),
                 retry_count=job.retry_count,
                 reason="provider_billing",
+                age_seconds=int(age_s),
                 error=str(exc),
             )
+            self._safe_record_billing_deferred()
             try:
                 async with self._nlp_sf() as session:
                     repo = EmbeddingPendingRepository(session)
@@ -210,6 +292,7 @@ class EmbeddingRetryWorker:
                 reason="fatal_4xx",
                 error=str(exc),
             )
+            self._safe_record_abandoned("fatal_4xx")
             # Fail-open: a DB error while abandoning must never crash the poll
             # loop — worst case the row keeps its old next_retry_at and is
             # retried once more later, which is still safe.
@@ -256,6 +339,7 @@ class EmbeddingRetryWorker:
                     max_retries=self._max_retries,
                     final_error=str(exc),
                 )
+                self._safe_record_abandoned("retry_exhausted")
             return
 
         # ── Write the embedding and delete the pending row ────────────────

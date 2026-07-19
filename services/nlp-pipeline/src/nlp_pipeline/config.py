@@ -232,6 +232,18 @@ class Settings(BaseSettings):
     # error-rate from DeepInfra can be tolerated without a code change.
     embedding_retry_max_attempts: int = 5
 
+    # BP-729: a spend-cap / auth refusal (HTTP 402/401/403 → ProviderBillingError)
+    # is deferred WITHOUT consuming the retry budget so a transient spend-cap self-heals
+    # when the operator raises it. But a PERMANENT auth failure (e.g. a revoked/
+    # misconfigured key) would then loop forever, invisibly. This ceiling is the max
+    # age (since the pending row was first enqueued) a row may keep billing-deferring
+    # before the worker ABANDONS it with a distinct ``billing_auth_persistent`` signal
+    # + the permanent-abandon metric — so a genuinely stuck key surfaces instead of
+    # hiding. A real 402 spend-cap self-heals well before this ceiling; only a truly
+    # stuck key reaches it. Default 24h; operator-tunable via
+    # NLP_PIPELINE_EMBEDDING_BILLING_DEFER_MAX_AGE_S.
+    embedding_billing_defer_max_age_s: float = 86_400.0
+
     # ── Startup stale-embedding expiry (PRE-1 / PLAN-0031 B-2) ───────────────
     # ``_expire_stale_embeddings`` runs on boot and sets ``expires_at = now()`` on
     # embeddings whose ``model_id`` is not one of the CURRENTLY configured model
