@@ -1,0 +1,76 @@
+# promtool unit tests for the nlp-pipeline drain-health alerts.
+# Run: promtool test rules infra/prometheus/tests/nlp_drain_health_test.yml
+#
+# Validates the two behaviours that matter:
+#   * STALL  → NlpPipelineBacklogNotDraining (critical→Brevo) AND
+#              NlpPipelinePartitionStalled (warning) both fire.
+#   * HEALTHY (draining) and LOW-BACKLOG → NEITHER fires (0 false-fire).
+rule_files:
+  - nlp_drain_health.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── 1. STALL: 30k lag, committed offset frozen for the whole window ────────
+  - name: backlog high and committed offset frozen -> both alerts fire
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "30000+0x45"
+      - series: 'kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "1000+0x45"  # offset never advances → stalled
+    alert_rule_test:
+      # 15m of history needed for `offset 15m`, then for:20m → fires by ~36m.
+      - eval_time: 37m
+        alertname: NlpPipelineBacklogNotDraining
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              team: platform
+              subsystem: nlp-pipeline
+            exp_annotations:
+              summary: "nlp-pipeline-group backlog is high and NOT draining"
+      - eval_time: 37m
+        alertname: NlpPipelinePartitionStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              team: platform
+              subsystem: nlp-pipeline
+              consumergroup: nlp-pipeline-group
+              topic: content.article.stored.v1
+              partition: "0"
+            exp_annotations:
+              summary: "nlp-pipeline-group partition stalled"
+
+  # ── 2. HEALTHY: high lag but committed offset advancing 600/min → no fire ──
+  - name: backlog high but draining -> no alert (0 false-fire)
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "30000+0x45"
+      - series: 'kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "1000+600x45"  # +600/min → 9000 per 15m, well above thresholds
+    alert_rule_test:
+      - eval_time: 37m
+        alertname: NlpPipelineBacklogNotDraining
+        exp_alerts: []
+      - eval_time: 37m
+        alertname: NlpPipelinePartitionStalled
+        exp_alerts: []
+
+  # ── 3. LOW BACKLOG: frozen offset but tiny lag → no fire ───────────────────
+  - name: low backlog frozen -> no alert
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "500+0x45"
+      - series: 'kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "1000+0x45"
+    alert_rule_test:
+      - eval_time: 37m
+        alertname: NlpPipelineBacklogNotDraining
+        exp_alerts: []
+      - eval_time: 37m
+        alertname: NlpPipelinePartitionStalled
+        exp_alerts: []

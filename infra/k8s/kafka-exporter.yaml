@@ -1,0 +1,96 @@
+# Kafka consumer-group lag exporter (fix/nlp-throughput, 2026-07-19).
+#
+# PREREQUISITE for infra/k8s/prometheusrule-nlp-pipeline-drain-health.yaml (and
+# the pre-existing, currently-inert kafka_stalled / retry_storm rules).  The
+# cluster has NO Kafka metrics source, so consumer-group lag / committed offset
+# are invisible to Prometheus — which is why the 2026-07 backlog stall had no
+# alert.  This deploys the standard danielqsj kafka-exporter and a ServiceMonitor
+# so the operator scrapes:
+#   kafka_consumergroup_lag{consumergroup,topic,partition}
+#   kafka_consumergroup_current_offset{consumergroup,topic,partition}
+#   kafka_topic_partition_current_offset{topic,partition}
+#
+# NOT auto-applied by this change (deploy is a deliberate op action):
+#   kubectl apply -f infra/k8s/kafka-exporter.yaml
+# Footprint is tiny (~32Mi/50m) and read-only against the broker.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+  namespace: infra
+  labels:
+    app.kubernetes.io/name: kafka-exporter
+    app.kubernetes.io/part-of: worldview
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka-exporter
+    spec:
+      containers:
+        - name: kafka-exporter
+          image: docker.io/danielqsj/kafka-exporter:v1.8.0
+          args:
+            # Cluster-internal bootstrap Service (see `kubectl -n infra get svc kafka`).
+            - --kafka.server=kafka.infra.svc:9092
+            # Consumer-group lag is the whole point — enable the group collectors.
+            - --group.filter=.*
+            - --topic.filter=.*
+            - --web.listen-address=:9308
+          ports:
+            - name: metrics
+              containerPort: 9308
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-exporter
+  namespace: infra
+  labels:
+    app.kubernetes.io/name: kafka-exporter
+    app.kubernetes.io/part-of: worldview
+spec:
+  selector:
+    app.kubernetes.io/name: kafka-exporter
+  ports:
+    - name: metrics
+      port: 9308
+      targetPort: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kafka-exporter
+  namespace: infra
+  labels:
+    app.kubernetes.io/name: kafka-exporter
+    app.kubernetes.io/part-of: worldview
+    # Operator serviceMonitorSelector is empty (selects all), but keep the
+    # release label for consistency with the other worldview monitors.
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics

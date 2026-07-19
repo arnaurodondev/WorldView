@@ -1,0 +1,135 @@
+# Drain-health alert for the article pipeline (fix/nlp-throughput, 2026-07-19).
+#
+# WHY THIS EXISTS
+# ---------------
+# On 2026-07-18/19 the ``nlp-pipeline-group`` consumer backlog on
+# ``content.article.stored.v1`` sat at ~177k and drained at only ~5 msg/min
+# net for days with NO alert.  The article-consumer StatefulSet is not a
+# Prometheus scrape target (the ``nlp-pipeline`` ServiceMonitor fronts only the
+# API Deployment), and the repo's older ``infra/grafana/alerts/kafka_stalled.yml``
+# / ``infra/prometheus/rules/nlp_pipeline_retry_storm.yml`` are RAW-Prometheus
+# files that the kube-prometheus-stack operator never loads — so a stalled
+# backlog was completely invisible.  This is a PrometheusRule CRD (operator-
+# selected via ``release: monitoring``, exactly like ``worldview-storage-alerts``)
+# so it is actually evaluated, and it pages via Brevo email (``severity: critical``
+# → the ``email-operator`` receiver).
+#
+# BACKING METRICS  (PREREQUISITE)
+# -------------------------------
+# The committed-offset / lag signals come from the standard danielqsj
+# ``kafka-exporter`` consumer-group gauges:
+#   * kafka_consumergroup_lag{consumergroup,topic,partition}            — messages behind
+#   * kafka_consumergroup_current_offset{consumergroup,topic,partition} — committed offset
+# Deploy ``infra/k8s/kafka-exporter.yaml`` (Deployment + Service + ServiceMonitor,
+# ``release: monitoring``) so these series exist; the same exporter also
+# re-activates the pre-existing (currently inert) Kafka stall alerts.  Until it is
+# deployed these rules evaluate to an empty vector and never fire — safe, but
+# also blind, hence the exporter is part of the same change.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: worldview-nlp-pipeline-drain-health
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: worldview
+    # The operator's ruleSelector is matchLabels{release: monitoring}; without
+    # this label the rule is silently ignored (the trap that left the raw
+    # kafka_stalled.yml inert).
+    release: monitoring
+spec:
+  groups:
+    - name: worldview.nlp.drain
+      rules:
+        # ── PAGE: whole-group backlog is high AND not draining ──────────────
+        - alert: NlpPipelineBacklogNotDraining
+          # Two AND-joined conditions, matching "lag high AND committed-offset
+          # rate ~0":
+          #   1. Total consumer-group lag > 20k messages (a genuine backlog; the
+          #      2026-07 incident sat at ~177k).  A small transient lag never pages.
+          #   2. The group's committed offset advanced < 45 in the last 15m — i.e.
+          #      the drain rate is < 3 msg/min platform-wide.  We use a gauge-safe
+          #      15m delta (now minus 15m-ago) rather than rate(), because
+          #      current_offset is a monotonic GAUGE and a rebalance can reset it;
+          #      the delta with the lag AND-guard avoids both false pages and
+          #      being fooled by a reset.
+          expr: |
+            (
+              sum(kafka_consumergroup_lag{consumergroup="nlp-pipeline-group"}) > 20000
+            )
+            and
+            (
+              (
+                sum(kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"})
+                -
+                sum(kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"} offset 15m)
+              ) < 45
+            )
+          # 20m of sustained stall before paging: longer than a rolling deploy /
+          # rebalance (<2m) so a routine consumer restart never pages, but fast
+          # enough that a real freeze is caught the same shift.
+          for: 20m
+          labels:
+            severity: critical
+            team: platform
+            subsystem: nlp-pipeline
+          annotations:
+            summary: >-
+              nlp-pipeline-group backlog is {{ with query "sum(kafka_consumergroup_lag{consumergroup='nlp-pipeline-group'})" }}{{ . | first | value | printf "%.0f" }}{{ end }} and NOT draining
+            description: >-
+              The nlp-pipeline-group consumer of content.article.stored.v1 has a
+              large backlog while its committed offset has advanced < 45 messages
+              (< 3 msg/min) over the last 15 minutes — the article pipeline is
+              stalled or crawling.  This is the 2026-07 incident signature (177k
+              backlog draining at ~5/min with no alert).
+            runbook: |-
+              1) Confirm the stall + which partitions are stuck:
+                 kubectl -n infra exec kafka-broker-0 -- \
+                   /opt/bitnami/kafka/bin/kafka-consumer-groups.sh \
+                   --bootstrap-server localhost:9092 --describe --group nlp-pipeline-group
+                 (LAG high AND CURRENT-OFFSET not advancing between two runs).
+              2) Are the consumers alive & doing work (not just idle)?
+                 kubectl -n worldview get pods -l app=nlp-pipeline-article-consumer
+                 kubectl -n worldview logs nlp-pipeline-article-consumer-0 --tail=100 \
+                   | grep -E 'article_processed|deepseek_extraction_completed|offset_commit_failed'
+              3) Rule out DeepInfra 402 (spend-cap) / 429 (rate-limit) in those logs
+                 — a spend-cap freezes extraction AND embeddings.
+              4) Throughput lever (evidence-based): the dispatch loop is a
+                 continuously-refilled window (fix/nlp-throughput). If drain is
+                 real-load-bound, scale replicas (StatefulSet nlp-pipeline-article-consumer,
+                 ~384Mi each, node has headroom) or raise
+                 NLP_PIPELINE_ARTICLE_CONSUMER_CONCURRENCY — both increase DeepInfra
+                 spend proportionally (watch the 402 cap).
+        # ── WARN (not paged): a specific partition is stuck ─────────────────
+        # severity=warning routes to "null" (not emailed) by the live
+        # Alertmanager config, so this is a low-noise Grafana/Prometheus signal
+        # that pinpoints WHICH partition is wedged (per-partition progress-based
+        # detection) without adding pager noise on top of the aggregate page.
+        - alert: NlpPipelinePartitionStalled
+          expr: |
+            (
+              kafka_consumergroup_lag{consumergroup="nlp-pipeline-group"} > 2000
+            )
+            and
+            (
+              (
+                kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"}
+                -
+                kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"} offset 15m
+              ) < 1
+            )
+          for: 20m
+          labels:
+            severity: warning
+            team: platform
+            subsystem: nlp-pipeline
+          annotations:
+            summary: >-
+              nlp-pipeline-group partition {{ $labels.topic }}/{{ $labels.partition }} is stalled (lag {{ printf "%.0f" $value }})
+            description: >-
+              Partition {{ $labels.partition }} of {{ $labels.topic }} has lag
+              > 2000 while its committed offset has not advanced for 15 minutes —
+              this single partition (or the consumer pod that owns it) is wedged
+              while others may still drain. Check the owning consumer's assignment
+              and logs; a poison message or a hung DeepInfra call pins one
+              partition's head-of-line offset.

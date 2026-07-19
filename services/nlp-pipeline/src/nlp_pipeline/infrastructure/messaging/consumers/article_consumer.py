@@ -397,6 +397,86 @@ async def _maybe_emit_temporal_events(
         )
 
 
+class _PartitionCommitLedger:
+    """Stream-spanning, per-partition contiguous-offset commit tracker.
+
+    THROUGHPUT FIX (fix/nlp-throughput, 2026-07-19)
+    ----------------------------------------------------------------
+    The previous dispatch path (:meth:`ArticleProcessingConsumer._dispatch_batch`)
+    processed a *whole* poll batch of up to ``article_consumer_concurrency``
+    messages and BLOCKED on ``asyncio.gather`` until every one settled before
+    polling the next batch — a batch barrier.  Because ~40% of live articles
+    route to the DEEP tier (Qwen3-235B, p50 161s / p95 179s) a 16-message batch
+    has a ~97% chance of containing at least one DEEP article, so nearly every
+    batch was gated by ~170s while the 15 fast LIGHT/MEDIUM slots sat idle.
+    Measured effect: ~16 / ~170s ≈ 5.6 articles/min/replica (~11/min platform),
+    which matched prod exactly and defeated the value-gate's predicted speed-up
+    (reducing DEEP *volume* does not help while a single DEEP article per batch
+    still gates the barrier).
+
+    The continuously-refilled loop admits a replacement message the instant any
+    handler completes, so a fast LIGHT article never waits behind a slow DEEP
+    one.  That requires committing offsets across the WHOLE stream rather than
+    per batch, which this ledger does while preserving at-least-once:
+
+      * :meth:`register` — called when a message is ADMITTED (Kafka guarantees
+        per-partition offset order, so the first offset seen sets the cursor).
+      * :meth:`settle` — called when its handler returns ``handled`` (True once
+        the message succeeded OR durably dead-lettered; see ``_settle_message``).
+      * :meth:`drain` — returns, per partition, the message at the top of the
+        unbroken run of *settled-and-handled* offsets starting just after the
+        last committed offset, and forgets those offsets.  A partition whose
+        head offset is still in flight (registered, not settled) or settled
+        ``False`` (barrier) yields nothing — the head-of-line guard that stops
+        us ever committing past an un-settled offset (no silent-drop hole).
+    """
+
+    def __init__(self) -> None:
+        # per (topic, partition): offset -> (msg, handled) where handled is
+        # None while the offset is in flight, else the bool from ``_settle_message``.
+        self._slots: dict[tuple[str, int], dict[int, tuple[Any, bool | None]]] = defaultdict(dict)
+        # per (topic, partition): the next offset eligible to commit (the cursor
+        # walks forward as the contiguous settled prefix fills in).
+        self._cursor: dict[tuple[str, int], int] = {}
+
+    def register(self, msg: Any) -> None:
+        tp = (msg.topic(), msg.partition())
+        offset = msg.offset()
+        slots = self._slots[tp]
+        if offset not in slots:
+            slots[offset] = (msg, None)  # in flight
+        # The first offset ever seen on a partition anchors the commit cursor to
+        # exactly where our fetch position began — we never ack anything below it.
+        if tp not in self._cursor:
+            self._cursor[tp] = offset
+
+    def settle(self, msg: Any, handled: bool) -> None:
+        tp = (msg.topic(), msg.partition())
+        self._slots[tp][msg.offset()] = (msg, bool(handled))
+
+    def drain(self) -> list[Any]:
+        """Advance every partition's contiguous settled prefix; return commit targets."""
+        targets: list[Any] = []
+        for tp, slots in self._slots.items():
+            cursor = self._cursor.get(tp)
+            if cursor is None:
+                continue
+            high_water: Any = None
+            while cursor in slots:
+                msg, handled = slots[cursor]
+                if handled is not True:
+                    # None  → head still in flight (stop; do not ack past it).
+                    # False → settle asked for a commit barrier (retry on restart).
+                    break
+                high_water = msg
+                del slots[cursor]  # committed prefix → forget to bound memory
+                cursor += 1
+            self._cursor[tp] = cursor
+            if high_water is not None:
+                targets.append(high_water)
+        return targets
+
+
 class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     """Orchestrates S6 Blocks 3-10.  Processing logic is in ``blocks/`` modules.
 
@@ -612,35 +692,115 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         probe_task.add_done_callback(_on_task_done)
 
         concurrency = max(1, int(getattr(self._settings, "article_consumer_concurrency", 16)))
-        sem = asyncio.Semaphore(concurrency)
         logger.info(  # type: ignore[no-any-return]
             "article_consumer_concurrency_enabled",
             concurrency=concurrency,
+            mode="pipelined",  # continuously-refilled window (fix/nlp-throughput)
             group_id=self._config.group_id,
         )
 
+        # THROUGHPUT FIX (fix/nlp-throughput): a CONTINUOUSLY-REFILLED window
+        # instead of the old poll-a-batch → gather-whole-batch → poll-next barrier.
+        # ``inflight`` holds at most ``concurrency`` handler tasks; the instant one
+        # finishes we poll+admit a replacement, so a fast LIGHT article never idles
+        # behind a slow DEEP (Qwen3-235B ~170s) article that happened to share its
+        # poll batch.  ``ledger`` commits offsets across the whole stream (not per
+        # batch) while preserving the SAME at-least-once contract: an offset is
+        # acked only once every lower offset on its partition has settled.
+        ledger = _PartitionCommitLedger()
+        inflight: set[asyncio.Task[None]] = set()
+        loop = asyncio.get_event_loop()
+
+        async def _worker(message: Any) -> None:
+            # ``_settle_message`` is contractually non-raising (it succeeds,
+            # retries in place, or durably dead-letters), but guard anyway: an
+            # unexpected escape must NOT leave the offset un-settled forever and
+            # pin its partition's commit cursor.  Recording ``False`` holds a
+            # commit barrier so the message is re-read after a restart/rebalance
+            # rather than silently acked (at-least-once preserved).
+            try:
+                handled = await self._settle_message(message)
+            except Exception as settle_exc:
+                logger.critical(  # type: ignore[no-any-return]
+                    "article_consumer.settle_unexpected_error",
+                    topic=message.topic(),
+                    partition=message.partition(),
+                    offset=message.offset(),
+                    exc_info=settle_exc,
+                )
+                handled = False
+            ledger.settle(message, handled)
+
+        async def _commit_ready() -> None:
+            for target in ledger.drain():
+                if self._config.enable_auto_commit:
+                    continue
+                try:
+                    # SYNCHRONOUS commit on the executor thread (see _commit_sync):
+                    # a rejected offset commit is logged, never silently dropped.
+                    await loop.run_in_executor(None, self._commit_sync, target)
+                except Exception as commit_exc:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "article_consumer.offset_commit_failed",
+                        topic=target.topic(),
+                        partition=target.partition(),
+                        offset=target.offset(),
+                        error=str(commit_exc),
+                    )
+            with contextlib.suppress(Exception):
+                await loop.run_in_executor(None, self._record_consumer_lag)
+
         try:
-            loop = asyncio.get_event_loop()
             while not self._stop_event.is_set():
                 # Honour the opt-in backpressure pause exactly like the base loop.
                 self._maybe_apply_backpressure()
-                batch = await self._poll_batch(loop, concurrency)
-                # BUG-1 (2026-06-22 e2e-coverage audit): the base poll loop calls
-                # ``_record_progress()`` on EVERY healthy poll cycle (idle OR
-                # message) so the BP-704 liveness probe sees a fresh heartbeat.
-                # This overridden ``run()`` previously never recorded progress,
-                # so ``seconds_since_progress()`` stayed ``None`` forever; once
-                # the 90s startup grace elapsed the probe logged
-                # ``consumer_liveness_unhealthy_no_progress`` and ``/healthz``
-                # returned 503 PERMANENTLY — even while articles were being
-                # processed successfully. We mirror the base loop here: a
-                # completed poll cycle (whether or not it yielded a batch) is
-                # real liveness, so heartbeat right after the poll returns.
-                self._record_progress()
-                if not batch:
+
+                if len(inflight) >= concurrency:
+                    # Window full: park until a handler frees a slot (done tasks
+                    # remove themselves via the add_done_callback below), then
+                    # commit whatever newly-contiguous prefix completed and refill.
+                    await asyncio.wait(inflight, return_when=asyncio.FIRST_COMPLETED)
+                    # BP-704 liveness: a completed handler is real progress.
+                    self._record_progress()
+                    await _commit_ready()
                     continue
-                await self._dispatch_batch(loop, batch, sem)
+
+                # Poll only up to the free slots so ``inflight`` never exceeds the
+                # concurrency bound.  ``_poll_batch`` blocks up to poll_timeout on
+                # its first poll (idle topic → no busy-spin) then drains buffered.
+                free = concurrency - len(inflight)
+                batch = await self._poll_batch(loop, free)
+                # BUG-1 (2026-06-22 e2e-coverage audit): heartbeat on EVERY poll
+                # cycle (idle OR message) so ``seconds_since_progress`` never
+                # stays None and /healthz does not falsely 503.
+                self._record_progress()
+
+                for message in batch:
+                    ledger.register(message)  # register BEFORE dispatch: preserves
+                    task = asyncio.create_task(_worker(message))  # per-partition
+                    inflight.add(task)  # offset order for the commit cursor
+                    task.add_done_callback(inflight.discard)
+
+                await _commit_ready()
+
+                if not batch and inflight:
+                    # Nothing new to admit but slots are still draining: wait for a
+                    # completion (bounded by poll_timeout) so we neither busy-spin
+                    # nor delay committing offsets that finish during the lull.
+                    await asyncio.wait(
+                        inflight,
+                        timeout=self._config.poll_timeout_seconds,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    await _commit_ready()
         finally:
+            # Drain in-flight handlers so their offsets settle and commit before we
+            # tear down Kafka — otherwise at-shutdown work would be re-read (and
+            # re-paid to DeepInfra) on the next start.
+            if inflight:
+                await asyncio.gather(*inflight, return_exceptions=True)
+                with contextlib.suppress(Exception):
+                    await _commit_ready()
             retry_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await retry_task

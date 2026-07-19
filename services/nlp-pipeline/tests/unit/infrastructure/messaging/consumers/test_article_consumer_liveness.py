@@ -33,6 +33,23 @@ from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
 pytestmark = pytest.mark.asyncio
 
 
+class _FakeMsg:
+    """Minimal confluent_kafka.Message stand-in for the pipelined dispatch path."""
+
+    def __init__(self, partition: int = 0, offset: int = 0) -> None:
+        self._partition = partition
+        self._offset = offset
+
+    def topic(self) -> str:
+        return "content.article.stored.v1"
+
+    def partition(self) -> int:
+        return self._partition
+
+    def offset(self) -> int:
+        return self._offset
+
+
 class _FakeConfig:
     enable_auto_commit = False
     poll_timeout_seconds = 0.01
@@ -77,8 +94,8 @@ async def _run_one_cycle(c: ArticleProcessingConsumer, batch: list[Any]) -> None
 
     ``_poll_batch`` is patched to return ``batch`` once, then set the stop event
     so the ``while not self._stop_event.is_set()`` loop exits after this cycle.
-    ``_dispatch_batch`` is stubbed so we isolate the heartbeat behaviour (the
-    dispatch path itself is covered by the concurrency tests).
+    The settle/commit hooks are stubbed so we isolate the heartbeat behaviour
+    (the dispatch path itself is covered by the concurrency/pipelined tests).
     """
     calls = {"poll": 0}
 
@@ -88,11 +105,13 @@ async def _run_one_cycle(c: ArticleProcessingConsumer, batch: list[Any]) -> None
         c._stop_event.set()  # type: ignore[attr-defined]
         return batch
 
-    async def fake_dispatch(loop: Any, b: list[Any], sem: Any) -> None:
-        return None
+    async def fake_settle(msg: Any) -> bool:
+        return True
 
     c._poll_batch = fake_poll_batch  # type: ignore[attr-defined,method-assign]
-    c._dispatch_batch = fake_dispatch  # type: ignore[attr-defined,method-assign]
+    c._settle_message = fake_settle  # type: ignore[attr-defined,method-assign]
+    c._commit_sync = lambda msg: None  # type: ignore[attr-defined,method-assign]
+    c._record_consumer_lag = lambda: None  # type: ignore[attr-defined,method-assign]
 
     await asyncio.wait_for(c.run(), timeout=2.0)
     assert calls["poll"] >= 1
@@ -115,7 +134,7 @@ async def test_run_records_progress_on_batch_poll() -> None:
     c = _make_consumer()
     assert c.seconds_since_progress() is None  # no tick yet
 
-    await _run_one_cycle(c, batch=[object()])
+    await _run_one_cycle(c, batch=[_FakeMsg(partition=0, offset=0)])
 
     assert c.seconds_since_progress() is not None
     assert c.seconds_since_progress() < 5.0
