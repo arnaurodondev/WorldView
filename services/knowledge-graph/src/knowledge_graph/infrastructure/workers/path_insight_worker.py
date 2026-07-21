@@ -72,6 +72,16 @@ _IDLE_SLEEP_SECONDS = 30
 # Reclaim loop interval.
 _RECLAIM_INTERVAL_SECONDS = 300  # 5 minutes
 
+# BP-XXX (path-insight crashloop 2026-07-21): transient-error backoff for the
+# top-level claim-and-process loop.  ``_claim_batch`` opens a fresh DB session,
+# so a Postgres restart / PgBouncer blip (ConnectionDoesNotExistError, Errno 111)
+# raised there used to bubble out of ``run_loop`` → ``main`` → ``sys.exit(1)`` →
+# k8s CrashLoopBackOff (restartCount 226 over ~4.5 days).  The loop now catches
+# non-cancellation exceptions, logs them, and sleeps with capped exponential
+# backoff so a brief DB outage self-heals instead of taking the pod down.
+_ERROR_BACKOFF_INITIAL_SECONDS = 5
+_ERROR_BACKOFF_MAX_SECONDS = 300
+
 
 def _safe_uuid(value: object) -> UUID | None:
     """Parse a UUID string, returning None on malformed input (no raise)."""
@@ -184,18 +194,42 @@ class PathInsightWorker:
         stuck jobs are automatically recovered (BP-112).
         """
         reclaim_task = asyncio.create_task(self._reclaim_loop(), name="path_insight_reclaim")
+        # Current backoff for transient loop errors; reset to the initial value
+        # after every clean cycle so isolated blips never accumulate delay.
+        backoff = _ERROR_BACKOFF_INITIAL_SECONDS
         try:
             while True:
-                jobs = await self._claim_batch()
-                if not jobs:
-                    await asyncio.sleep(_IDLE_SLEEP_SECONDS)
-                    continue
-                logger.info(  # type: ignore[no-any-return]
-                    "path_insight_worker_claimed_batch",
-                    count=len(jobs),
-                    instance_uuid=str(self._instance_uuid),
-                )
-                await asyncio.gather(*[self._process_job(job) for job in jobs])
+                # BP path-insight crashloop 2026-07-21: the whole cycle is guarded
+                # so a transient DB error in ``_claim_batch`` (which opens its own
+                # session — the exact unguarded call that crashed the pod when
+                # Postgres restarted) degrades to a logged retry with backoff
+                # instead of propagating to ``main`` and exiting the process.
+                # ``asyncio.CancelledError`` is a ``BaseException`` (not
+                # ``Exception``) so graceful shutdown via task cancellation is
+                # unaffected and still unwinds through the ``finally`` below.
+                try:
+                    jobs = await self._claim_batch()
+                    if not jobs:
+                        await asyncio.sleep(_IDLE_SLEEP_SECONDS)
+                        continue
+                    logger.info(  # type: ignore[no-any-return]
+                        "path_insight_worker_claimed_batch",
+                        count=len(jobs),
+                        instance_uuid=str(self._instance_uuid),
+                    )
+                    # _process_job swallows its own errors (BP-113); gather here
+                    # therefore only raises on programmer error, still caught below.
+                    await asyncio.gather(*[self._process_job(job) for job in jobs])
+                    backoff = _ERROR_BACKOFF_INITIAL_SECONDS
+                except Exception:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "path_insight_worker_loop_error",
+                        instance_uuid=str(self._instance_uuid),
+                        backoff_seconds=backoff,
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, _ERROR_BACKOFF_MAX_SECONDS)
         finally:
             reclaim_task.cancel()
             with __import__("contextlib").suppress(asyncio.CancelledError):

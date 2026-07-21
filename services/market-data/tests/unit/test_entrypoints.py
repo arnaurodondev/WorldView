@@ -358,6 +358,14 @@ async def test_fundamentals_consumer_main_engine_disposed() -> None:
             "market_data.infrastructure.messaging.consumers.prediction_market_consumer_main",
             "market_data.infrastructure.messaging.consumers.prediction_market_consumer.PredictionMarketConsumer",
         ),
+        # fix/earnings-consumer-ci: the earnings-calendar consumer main ships a
+        # compose container (docker-compose.test.yml) but was never exercised
+        # by an entrypoint test. Assert it boots and wires the stall-aware
+        # /healthz probe like every other consumer so CI catches a broken start.
+        (
+            "market_data.infrastructure.messaging.consumers.earnings_calendar_consumer_main",
+            "market_data.infrastructure.messaging.consumers.earnings_calendar_consumer.EarningsCalendarConsumer",
+        ),
     ],
 )
 async def test_consumer_main_wires_stall_aware_healthz(main_module: str, consumer_path: str) -> None:
