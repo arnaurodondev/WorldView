@@ -29,10 +29,14 @@
 BEGIN;
 
 -- Diagnostic: current empty count (expect ~15,325 before apply)
+-- NOTE: Postgres allows only ONE FILTER per aggregate — the second condition is
+-- ANDed inside a single FILTER, not chained.
 SELECT
     count(*) FILTER (WHERE source_name IS NULL OR source_name = '') AS empty_before,
-    count(*) FILTER (WHERE source_name IS NULL OR source_name = '')
-             FILTER (WHERE source_type IS NULL OR source_type = '') AS empty_and_no_source_type,
+    count(*) FILTER (
+        WHERE (source_name IS NULL OR source_name = '')
+          AND (source_type IS NULL OR source_type = '')
+    ) AS empty_and_no_source_type,
     count(*) AS total_rows
 FROM document_source_metadata;
 

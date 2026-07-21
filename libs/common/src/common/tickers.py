@@ -138,42 +138,147 @@ def strip_exchange_qualifier(symbol: str | None) -> str | None:
     return candidate
 
 
-# Leading ``EXCHANGE:`` prefix as it appears in raw news/GLiNER mention spans:
-# ``"NYSE: BCS"``, ``"NASDAQ:AAPL"``, ``"LSE: TSCO"``. This is the venue-qualified
-# TICKER *alias* form and must NEVER leak into a canonical_name (R2:
-# docs/audits/2026-07-16-kg-data-quality-eval.md flagged 87 junk
+# Known securities-venue prefixes as they appear in raw news / GLiNER mention
+# spans: ``"NYSE: BCS"``, ``"NASDAQ:AAPL"``, ``"LSE: TSCO"``. This is the
+# venue-qualified TICKER *alias* form and must NEVER leak into a canonical_name
+# (R2: docs/audits/2026-07-16-kg-data-quality-eval.md flagged 87 junk
 # ``^(NYSE|NASDAQ|LSE|NSE): …`` canonical entities minted from the news backfill).
-# Matches 2-6 uppercase letters (an MIC/venue code) + ``:`` + optional whitespace
-# at the START of the string only. Kept deliberately narrow so a legitimate name
-# containing a colon (e.g. "Vroom: The Car Company") is not mangled — a real
-# company name does not begin with an all-caps 2-6 letter token immediately
-# followed by a colon.
-_EXCHANGE_PREFIX_RE = re.compile(r"^[A-Z]{2,6}:\s*")
+#
+# DESIGN — allowlist, NOT "strip any UPPERCASE token before a colon":
+#   The naive ``^[A-Z]{2,6}:`` rule is a KNOWN false-positive generator on the
+#   ``TOKEN: REST`` shape shared by financial ratios and shorthand labels —
+#   ``"EV:EBITDA"`` (enterprise-value / EBITDA), ``"EV:Sales"``, ``"P:E"``,
+#   ``"AI: Foundry"``. Blindly stripping would corrupt a legitimate canonical
+#   into ``"EBITDA"`` / ``"Foundry"``. We therefore ONLY strip when the leading
+#   token is a recognised exchange/venue code. Anything else is returned verbatim.
+#   Residual (documented, accepted): an obscure venue not in this set leaves its
+#   prefix in place — fail-safe (an ugly-but-honest name, never a corrupted one).
+_EXCHANGE_PREFIX_CODES: frozenset[str] = frozenset(
+    {
+        # North America
+        "NYSE",
+        "NASDAQ",
+        "NYSEARCA",
+        "NYSEAMERICAN",
+        "AMEX",
+        "ARCA",
+        "BATS",
+        "CBOE",
+        "OTC",
+        "OTCMKTS",
+        "OTCBB",
+        "PINK",
+        "TSX",
+        "TSXV",
+        "CVE",
+        "NEO",
+        # Europe
+        "LSE",
+        "LON",
+        "AIM",
+        "EURONEXT",
+        "EPA",
+        "AMS",
+        "EBR",
+        "ELI",
+        "XETRA",
+        "ETR",
+        "FRA",
+        "BME",
+        "BIT",
+        "SIX",
+        "SWX",
+        "WSE",
+        "MOEX",
+        "OMX",
+        "CPH",
+        "STO",
+        "HEL",
+        "OSL",
+        "IST",
+        "BATS-CHIXE",
+        # Asia-Pacific
+        "HKEX",
+        "SEHK",
+        "HKG",
+        "SSE",
+        "SHA",
+        "SZSE",
+        "SHE",
+        "TSE",
+        "TYO",
+        "JPX",
+        "SGX",
+        "KRX",
+        "KOSDAQ",
+        "KOSPI",
+        "ASX",
+        "NSE",
+        "BSE",
+        "NSEI",
+        "IDX",
+        "SET",
+        "BKK",
+        "KLSE",
+        "TWSE",
+        "TPE",
+        # Middle East / Africa / LatAm
+        "TASE",
+        "TADAWUL",
+        "DFM",
+        "ADX",
+        "QSE",
+        "EGX",
+        "JSE",
+        "BMV",
+        "B3",
+        "BVMF",
+        "BCBA",
+        "BVL",
+    }
+)
+# Pre-filter: a leading ``TOKEN:`` where TOKEN is 2-10 chars, starts with a
+# letter, and is all-caps alnum (plus ``-``, for hyphenated MICs). The captured
+# TOKEN is then checked against ``_EXCHANGE_PREFIX_CODES`` — the regex alone
+# never decides to strip.
+_EXCHANGE_PREFIX_RE = re.compile(r"^([A-Z][A-Z0-9-]{1,9}):\s*")
 
 
 def strip_exchange_prefix(name: str | None) -> str | None:
-    """Strip a leading ``EXCHANGE:`` venue prefix from a would-be canonical name.
+    """Strip a leading recognised ``EXCHANGE:`` venue prefix from a canonical name.
 
     ``"NYSE: BCS"`` -> ``"BCS"``; ``"NASDAQ:AAPL"`` -> ``"AAPL"``;
-    ``"LSE: TSCO"`` -> ``"TSCO"``. Strings without a leading exchange prefix are
-    returned unchanged (aside from a surrounding strip):
+    ``"LSE: TSCO"`` -> ``"TSCO"``. Strings without a leading *recognised* venue
+    prefix are returned unchanged (aside from a surrounding strip):
 
     * ``"Apple Inc."`` -> ``"Apple Inc."`` (no prefix)
-    * ``"Vroom: The Car Company"`` -> unchanged (``Vroom`` is not all-caps 2-6)
+    * ``"Vroom: The Car Company"`` -> unchanged (``Vroom`` is not all-caps)
+    * ``"EV:EBITDA"`` -> unchanged (``EV`` is a ratio operand, NOT a venue code)
+    * ``"AI: Foundry"`` -> unchanged (``AI`` is not a venue code)
     * ``""`` / ``None`` -> returned as-is
 
-    Only a SINGLE leading prefix is removed (never recurses). If stripping would
-    leave an empty string the original (stripped) value is returned so we never
-    manufacture a blank canonical name.
+    The leading token is stripped ONLY when it is a member of
+    ``_EXCHANGE_PREFIX_CODES`` — this deliberately avoids mangling the
+    ``TOKEN: REST`` shape shared by financial ratios (``EV:EBITDA``) and
+    shorthand labels. Only a SINGLE leading prefix is removed (never recurses).
+    If stripping would leave an empty string the original (stripped) value is
+    returned so we never manufacture a blank canonical name.
 
     Args:
         name: Raw canonical-name candidate, possibly an exchange-prefixed ticker.
 
     Returns:
-        The name with any leading ``EXCHANGE:`` prefix removed.
+        The name with a recognised leading ``EXCHANGE:`` prefix removed, else the
+        input unchanged.
     """
     if not name:
         return name
     candidate = name.strip()
-    stripped = _EXCHANGE_PREFIX_RE.sub("", candidate, count=1).strip()
+    match = _EXCHANGE_PREFIX_RE.match(candidate)
+    if match is None:
+        return candidate
+    if match.group(1) not in _EXCHANGE_PREFIX_CODES:
+        # Not a recognised securities venue → leave verbatim (ratio/label guard).
+        return candidate
+    stripped = candidate[match.end() :].strip()
     return stripped or candidate
