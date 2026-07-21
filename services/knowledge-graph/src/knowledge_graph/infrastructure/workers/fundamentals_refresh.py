@@ -151,6 +151,14 @@ class FundamentalsRefreshError(StrEnum):
     TRANSPORT_ERROR = "fundamentals_transport_error"
     HTTP_4XX = "fundamentals_http_4xx"
     HTTP_5XX = "fundamentals_http_5xx"
+    # R3 fail-loud (2026-07-21): the refresh reached the success upsert but
+    # produced nothing usable. EMPTY_SOURCE_TEXT = narrative was "" (empty but
+    # not None, so it slipped past the None-guard at line ~612); EMBEDDING_FAILED
+    # = embedding is None. Both previously stamped last_refreshed_at as success
+    # and deferred +30d, faking "done" on 65% of fundamentals_ohlcv rows
+    # (docs/audits/2026-07-16-kg-data-quality-eval.md R3).
+    EMPTY_SOURCE_TEXT = "fundamentals_empty_source_text"
+    EMBEDDING_FAILED = "fundamentals_embedding_failed"
 
 
 # Sections we need to walk on the canonical ``records[]`` shape returned by
@@ -697,19 +705,50 @@ class FundamentalsRefreshWorker:
                             continue
                         continue  # Don't update next_refresh_at — will retry next cycle
 
-                    # When embedding fails (e.g. transient DeepInfra error), retry
-                    # in 6 hours instead of deferring 30 days (BP-351).
+                    # ── R3 FAIL-LOUD guard (2026-07-21) ────────────────────────
+                    # A refresh is only a SUCCESS when it produced BOTH a usable
+                    # embedding AND a non-empty source_text. Previously this
+                    # success upsert ran with the default ``touch_last_refreshed=
+                    # True`` even when the embedding was None or the narrative was
+                    # an empty string (""), which slipped past the ``narrative is
+                    # None`` guard above. That stamped ``last_refreshed_at=now()``
+                    # and pushed ``next_refresh_at`` +30d, making the row LOOK done
+                    # while persisting NULL embedding + empty source_text — the
+                    # silent-defer that left 971/1,498 (65%) of fundamentals_ohlcv
+                    # rows permanently unembedded (kg-data-quality-eval R3). We now
+                    # (1) log at ERROR level (fail-loud, greppable), (2) DON'T stamp
+                    # last_refreshed_at (touch_last_refreshed=refresh_ok), and
+                    # (3) keep the row re-eligible via a short 6h next_refresh_at
+                    # instead of the 30d success interval.
+                    #
+                    # WHY still upsert on failure (vs skip): writing embedding=None
+                    # + the short retry interval is how the row stays re-eligible
+                    # WITHOUT faking success. ``touch_last_refreshed=False`` means
+                    # the honest "never successfully refreshed" signal is preserved.
                     embedding_ok = result["embedding"] is not None
+                    narrative_text = result["narrative"]
+                    narrative_ok = bool(narrative_text and str(narrative_text).strip())
+                    refresh_ok = embedding_ok and narrative_ok
                     next_at = (
                         utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS)  # type: ignore[no-any-return, operator]
-                        if embedding_ok
+                        if refresh_ok
                         else utc_now() + timedelta(hours=6)  # type: ignore[no-any-return, operator]
                     )
-                    if not embedding_ok:
-                        logger.warning(  # type: ignore[no-any-return]
-                            "fundamentals_refresh_embedding_failed",
+                    if not refresh_ok:
+                        reason = (
+                            FundamentalsRefreshError.EMBEDDING_FAILED
+                            if not embedding_ok
+                            else FundamentalsRefreshError.EMPTY_SOURCE_TEXT
+                        )
+                        failure_counts[reason.value] = failure_counts.get(reason.value, 0) + 1
+                        fundamentals_refresh_failed_total.labels(error_kind=reason.value).inc()
+                        logger.error(  # type: ignore[no-any-return]
+                            "fundamentals_refresh_produced_nothing",
                             entity_id=str(entity_id),
                             ticker=result["ticker"],
+                            failure_reason=reason.value,
+                            embedding_ok=embedding_ok,
+                            narrative_ok=narrative_ok,
                             retry_in_hours=6,
                         )
                     await emb_repo.upsert(
@@ -720,8 +759,13 @@ class FundamentalsRefreshWorker:
                         source_text=result["narrative"],
                         source_hash=result["source_hash"],
                         next_refresh_at=next_at,
+                        # FAIL-LOUD: only mark a real success as refreshed. On empty
+                        # embedding/source_text leave last_refreshed_at untouched so
+                        # the row is not falsely reported as done (D1/R3 fix).
+                        touch_last_refreshed=refresh_ok,
                     )
-                    refreshed += 1
+                    if refresh_ok:
+                        refreshed += 1
 
                 await session.commit()
 

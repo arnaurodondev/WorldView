@@ -607,6 +607,38 @@ class TestPersistEnrichment:
         # Only the canonical alias should be inserted (no ticker, no ISIN, no LLM aliases).
         assert repos.alias_insert.await_count == 1
 
+    async def test_exchange_prefixed_mention_is_stripped_from_canonical_name(self) -> None:
+        """R2: a ``"NYSE: BCS"`` GLiNER span must NOT become the canonical_name.
+
+        Regression for the 87 junk ``EXCHANGE: TICKER`` canonical entities minted
+        from the news backfill (docs/audits/2026-07-16-kg-data-quality-eval.md R2).
+        When the LLM profile supplies no ``canonical_name`` we fall back to
+        ``mention_text``; the leading exchange prefix must be stripped so the row
+        (and its EXACT alias) is written under the bare ``BCS``.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        # No canonical_name in the profile → mention_text is the fallback source.
+        profile = {
+            "entity_type": "financial_instrument",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="NYSE: BCS",
+                profile=profile,
+                embedding=None,
+            )
+
+        repos.canonical_create_or_get.assert_awaited_once()
+        assert repos.canonical_create_or_get.call_args.kwargs["canonical_name"] == "BCS"
+
     async def test_alias_collision_skips_llm_alias(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 

@@ -38,8 +38,12 @@ class SQLAlchemyDocumentSourceMetadataRepository(DocumentSourceMetadataRepositor
             word_count=metadata.word_count,
             created_at=metadata.created_at,
         )
-        # On conflict: update title and url only if they were previously NULL,
-        # so backfilled values are never overwritten by subsequent NULL events.
+        # On conflict: update title, url and source_name only if they were
+        # previously NULL, so backfilled values are never overwritten by
+        # subsequent NULL events. ISSUE-B: including source_name here lets rows
+        # inserted before the derive-from-source_type fix self-heal when the
+        # article is re-processed (the derived label is non-NULL for any known
+        # source_type), without clobbering an already-populated value.
         stmt = insert_stmt.on_conflict_do_update(
             index_elements=["doc_id"],
             set_={
@@ -50,6 +54,10 @@ class SQLAlchemyDocumentSourceMetadataRepository(DocumentSourceMetadataRepositor
                 "url": sa.case(
                     (DocumentSourceMetadataModel.url.is_(None), insert_stmt.excluded.url),
                     else_=DocumentSourceMetadataModel.url,
+                ),
+                "source_name": sa.case(
+                    (DocumentSourceMetadataModel.source_name.is_(None), insert_stmt.excluded.source_name),
+                    else_=DocumentSourceMetadataModel.source_name,
                 ),
             },
         )

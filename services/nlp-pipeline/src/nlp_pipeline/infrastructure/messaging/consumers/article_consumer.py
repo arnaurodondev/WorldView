@@ -176,6 +176,55 @@ _DEFAULT_SOURCE_TRUST = 0.5
 _BILLING_RETRY_BACKOFF_SECONDS: float = 300.0
 _BILLING_DEFER_MAX_IN_PLACE: int = 3
 
+# ── source_type → human-readable source_name display label ────────────────────
+# ISSUE-B fix (re-applied 2026-07-21; the original c31966b74 was lost from this
+# branch's lineage and the news backfill re-produced 15,325 rows with a NULL
+# source_name — docs/audits/2026-07-16-kg-data-quality-eval.md R7). The
+# ``content.article.stored.v1`` Avro event carries only ``source_type`` (the
+# canonical ContentSourceType adapter literal) and has NO ``source_name`` field,
+# so ``value.get("source_name")`` in ``process_message`` is ALWAYS None and
+# ``document_source_metadata.source_name`` was written NULL for 100% of rows.
+# Downstream — the S6 ``/v1/news`` endpoints select ``dsm.source_name`` verbatim
+# and the rag-chat news handler reads it for the citation badge (falling back to
+# the literal ``"news"``) — so every news citation degraded to a generic label.
+#
+# The pipeline data plane carries NO richer per-article publisher, and the domain
+# model documents the intended semantics as a prettified label of the same source
+# (``# e.g. "SEC EDGAR", "Finnhub"``). We derive the label deterministically from
+# ``source_type`` at write time. Any real ``source_name`` on the event still wins.
+# Unknown/future source_types fall back to a title-cased form of the literal so
+# the column is never NULL again (forward-compatible — a new adapter still gets a
+# sensible label without a code change).
+_SOURCE_TYPE_DISPLAY_NAME: dict[str, str] = {
+    "eodhd": "EODHD",
+    "eodhd_ticker_news": "EODHD",
+    "finnhub": "Finnhub",
+    "newsapi": "NewsAPI",
+    "sec_edgar": "SEC EDGAR",
+    "polymarket": "Polymarket",
+    "manual": "Manual Upload",
+    "tenant_upload": "Tenant Upload",
+}
+
+
+def _display_source_name(source_type: str | None) -> str | None:
+    """Return a human-readable ``source_name`` for a canonical ``source_type``.
+
+    Falls back to a title-cased version of the raw literal (``sec_edgar`` →
+    ``"Sec Edgar"``) for any source_type not in the explicit map, so the
+    ``document_source_metadata.source_name`` column is always populated for a
+    known source_type. Returns None only when ``source_type`` itself is
+    None/blank (in which case there is nothing to label).
+    """
+    if not source_type:
+        return None
+    mapped = _SOURCE_TYPE_DISPLAY_NAME.get(source_type)
+    if mapped is not None:
+        return mapped
+    # Unknown/future adapter: derive a readable label from the literal itself.
+    return source_type.replace("_", " ").title()
+
+
 # Re-export block helpers so existing imports from this module remain valid.
 __all__ = [
     "_SCHEMA_DIR",
@@ -1385,13 +1434,19 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         """
         from nlp_pipeline.domain.models import DocumentSourceMetadata
 
+        # ISSUE-B: the stored.v1 event has no source_name field, so the caller's
+        # ``source_name`` is virtually always None. Derive a human-readable label
+        # from source_type as a fallback so the column is populated for every row
+        # (a real source_name on the event, if ever added, still wins).
+        effective_source_name = source_name if source_name is not None else _display_source_name(source_type)
+
         try:
             metadata = DocumentSourceMetadata(
                 doc_id=doc_id,
                 title=str(title) if title is not None else None,
                 url=str(url) if url is not None else None,
                 published_at=published_at,
-                source_name=str(source_name) if source_name is not None else None,
+                source_name=str(effective_source_name) if effective_source_name is not None else None,
                 source_type=str(source_type) if source_type is not None else None,
                 word_count=int(word_count) if word_count is not None else None,
                 created_at=common.time.utc_now(),
@@ -1410,7 +1465,12 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         source_type = str(value["source_type"])
         is_backfill = bool(value.get("is_backfill", False))
         correlation_id: str | None = value.get("correlation_id") or None
-        source_name: str | None = value.get("source_name")
+        # ISSUE-B (2026-07-21): derive the display source_name from source_type when
+        # the event omits it (it always does — stored.v1 has no source_name field).
+        # Deriving HERE — not only in _write_source_metadata — means the same label
+        # flows onto the nlp.article.enriched.v1 event, so the KG evidence sink
+        # (relation_evidence_rows.source_name) is populated too, not just DSM.
+        source_name: str | None = value.get("source_name") or _display_source_name(source_type)
         # PLAN-0056 Wave C2b: upstream market/source identity (e.g.
         # "polymarket:<condition_id>"), threaded verbatim from content.article.stored.v1
         # onto the enriched event so the KG can resolve prediction docs to a real

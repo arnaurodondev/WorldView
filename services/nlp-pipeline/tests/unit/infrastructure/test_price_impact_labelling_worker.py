@@ -250,6 +250,34 @@ class TestWindowComputation:
         repo.upsert_batch.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_zero_windows_for_candidates_logs_error(self) -> None:
+        """FAIL-LOUD: candidates present but every get_ohlcv returns None must ERROR-log.
+
+        Regression for the globally-empty ``article_impact_windows`` table: the worker
+        stayed healthy for weeks writing nothing (systemic market-data 401/404) while
+        silently returning 0. When rows were selected but zero windows were produced the
+        worker MUST emit ``price_impact_labelling_zero_windows_for_candidates`` at ERROR
+        so ops alerting can catch a persistently non-productive worker.
+        """
+        repo = AsyncMock()
+        repo.get_articles_needing_windows = AsyncMock(return_value=[(_DOC_ID, _ENTITY_ID, "AAPL", _PUBLISHED_AT_OLD)])
+        repo.upsert_batch = AsyncMock()
+
+        client = AsyncMock()
+        client.get_ohlcv = AsyncMock(return_value=None)  # systemic failure → no bars
+
+        with (
+            _make_worker(repo, client) as (worker, _),
+            patch("nlp_pipeline.infrastructure.workers.price_impact_labelling_worker.logger") as mock_logger,
+        ):
+            count = await worker.run_once()
+
+        assert count == 0
+        mock_logger.error.assert_called_once()
+        assert mock_logger.error.call_args[0][0] == "price_impact_labelling_zero_windows_for_candidates"
+        assert mock_logger.error.call_args.kwargs["candidates"] == 1
+
+    @pytest.mark.asyncio
     async def test_day_t1_skipped_when_bar_missing(self) -> None:
         """day_t1 bar returns None → day_t1 window not created, others proceed."""
         repo = AsyncMock()

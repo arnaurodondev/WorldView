@@ -267,6 +267,71 @@ class TestFundamentalsRefreshWorkerS3Failure:
         delta = next_at - now_utc
         assert delta < timedelta(hours=12), f"BP-351: embedding failure should retry in <12h, got {delta}"
 
+    def test_embedding_failure_does_not_stamp_last_refreshed(self) -> None:
+        """R3 fail-loud: an embedding failure must upsert with ``touch_last_refreshed=False``.
+
+        Regression for the silent-success signature (docs/audits/2026-07-16-kg-data-quality-eval R3):
+        971/1,498 (65%) of ``fundamentals_ohlcv`` rows had NULL embedding + empty source_text yet a
+        fresh ``last_refreshed_at`` because the success upsert ran with the default
+        ``touch_last_refreshed=True`` even when the embedding was None. The fix must NOT stamp
+        ``last_refreshed_at`` so the row stays honestly "never successfully refreshed" and
+        re-eligible.
+        """
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "AAPL",
+                "canonical_name": "Apple Inc.",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000001001")
+        instrument_resp = MagicMock()
+        instrument_resp.status_code = 200
+        instrument_resp.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "AAPL"})
+
+        fundamentals_resp = MagicMock()
+        fundamentals_resp.status_code = 200
+        fundamentals_resp.json = MagicMock(
+            return_value={
+                "security_id": str(_INSTRUMENT_ID),
+                "records": [
+                    {
+                        "section": "highlights",
+                        "period_end": "2024-09-30T00:00:00",
+                        "data": {"RevenueTTM": 390000000000.0, "Price": 189.0},
+                    },
+                ],
+            }
+        )
+
+        def _route_get(url: str, **_kwargs: object) -> object:
+            if "/instruments/lookup" in url:
+                return instrument_resp
+            return fundamentals_resp
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(side_effect=_route_get)
+        http_client.aclose = AsyncMock()
+
+        # Simulate embedding failure — embed returns empty list -> embedding None.
+        llm = AsyncMock()
+        llm.embed = AsyncMock(return_value=[])
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
+            asyncio.run(worker.run())
+
+        emb_repo.upsert.assert_awaited_once()
+        call = emb_repo.upsert.call_args
+        assert (
+            call.kwargs.get("touch_last_refreshed") is False
+        ), "R3: a refresh that produced no embedding must NOT stamp last_refreshed_at as success"
+
 
 # ── T-C-4-01: Earnings event insertion ───────────────────────────────────────
 

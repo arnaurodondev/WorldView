@@ -50,6 +50,27 @@ async def main() -> None:
     log = get_logger("nlp_pipeline.price_impact_worker_main")  # type: ignore[no-any-return]
     log.info("price_impact_worker_starting")
 
+    # ── FAIL-LOUD startup guard (2026-07-21) ──────────────────────────────────
+    # Root cause of the globally-empty ``article_impact_windows`` table: in
+    # production this worker needs ``NLP_PIPELINE_SERVICE_ACCOUNT_TOKEN`` to mint
+    # an X-Internal-JWT via S9's ``POST /internal/v1/service-token``. When it is
+    # unset, ``MarketDataClient`` falls back to ``POST /v1/auth/dev-login`` — which
+    # S9 hard-blocks when APP_ENV=production — so every OHLCV call 401s and the
+    # table stays empty forever, silently. Surface that misconfiguration at
+    # startup instead of discovering an empty table weeks later.
+    _app_env = os.getenv("APP_ENV", "").strip().lower()
+    if _app_env in {"production", "prod"} and not (settings.service_account_token or "").strip():
+        log.error(
+            "price_impact_worker_missing_service_account_token",
+            app_env=_app_env,
+            impact=(
+                "NLP_PIPELINE_SERVICE_ACCOUNT_TOKEN is unset in production; dev-login "
+                "fallback is blocked, so every market-data OHLCV call will 401 and "
+                "article_impact_windows will stay empty. Set it from the same sealed "
+                "secret as API_GATEWAY_SERVICE_ACCOUNT_TOKEN."
+            ),
+        )
+
     # Phase 3 worker-metrics rollout — expose Prometheus /metrics.
     metrics_handle = start_metrics_server(
         service_name="nlp-pipeline-price-impact-worker",

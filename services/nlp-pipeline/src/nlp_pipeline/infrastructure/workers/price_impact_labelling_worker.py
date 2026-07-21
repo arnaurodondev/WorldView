@@ -117,6 +117,21 @@ class PriceImpactLabellingWorker:
             await asyncio.sleep(0.1)  # throttle between entities (PRD §9)
 
         if not all_windows:
+            # FAIL-LOUD (2026-07-21): candidates existed this cycle but produced
+            # ZERO windows — every ``get_ohlcv`` returned None. This is the exact
+            # signature of the globally-empty ``article_impact_windows`` table:
+            # the worker was healthy for weeks writing nothing while silently
+            # returning 0. The usual cause is a systemic market-data dependency
+            # failure — a missing ``NLP_PIPELINE_SERVICE_ACCOUNT_TOKEN`` so every
+            # OHLCV call 401s (dev-login is blocked in production), or an
+            # unresolvable ``symbol`` (mention_text) 404ing. Log at ERROR so ops
+            # alerting can catch a persistently non-productive worker instead of
+            # the previous silent ``return 0``.
+            logger.error(  # type: ignore[no-any-return]
+                "price_impact_labelling_zero_windows_for_candidates",
+                candidates=len(rows),
+                hint="all get_ohlcv calls returned None — check market-data auth (401) / symbol resolution (404)",
+            )
             return 0
 
         # ── Phase 3 — Write: upsert windows AND update impact_score headline ──

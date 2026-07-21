@@ -42,6 +42,7 @@ from uuid import UUID
 import httpx
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.tickers import strip_exchange_prefix  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import OutboxRepository
 from knowledge_graph.infrastructure.metrics.prometheus import (
     s7_provisional_enrichment_failed_total,
@@ -374,7 +375,11 @@ WHERE queue_id = ANY(CAST(:ids AS uuid[]))
                     profile = await self._extract_entity_profile(mention_text, mention_class, context_snippet)
                     embedding: list[float] | None = None
                     if profile is not None:
-                        canonical_name = profile.get("canonical_name") or mention_text
+                        # R2: strip any leading ``EXCHANGE:`` prefix so a GLiNER
+                        # span like "NYSE: BCS" is embedded (and later persisted)
+                        # under the bare canonical name, not the venue-qualified
+                        # alias form. See common.tickers.strip_exchange_prefix.
+                        canonical_name = strip_exchange_prefix(profile.get("canonical_name") or mention_text)
                         if canonical_name:
                             embedding = await self._compute_embedding(None, canonical_name)
                     return (queue_id, mention_text, mention_class, context_snippet, retry_count, profile, embedding)

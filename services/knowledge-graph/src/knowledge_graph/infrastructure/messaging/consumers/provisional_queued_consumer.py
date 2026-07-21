@@ -27,6 +27,7 @@ import json
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
+from common.tickers import strip_exchange_prefix  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.metrics.prometheus import s7_provisional_queue_stuck_total
 from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -221,7 +222,10 @@ WHERE queue_id = :queue_id
         try:
             profile = await core.extract_entity_profile(self._llm, mention_text, mention_class or "", context_snippet)
             if profile is not None:
-                canonical_name = profile.get("canonical_name") or mention_text
+                # R2: strip a leading ``EXCHANGE:`` prefix (e.g. "NYSE: BCS") so the
+                # embedding matches the bare canonical name that persist_enrichment
+                # will write. See common.tickers.strip_exchange_prefix.
+                canonical_name = strip_exchange_prefix(profile.get("canonical_name") or mention_text)
                 if canonical_name:
                     embedding = await core.compute_embedding(self._llm, None, canonical_name, self._embed_model_id)
         except Exception as exc:

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
-from common.tickers import strip_exchange_qualifier  # type: ignore[import-untyped]
+from common.tickers import strip_exchange_prefix, strip_exchange_qualifier  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
     EntityEmbeddingStateRepository,
@@ -359,7 +359,14 @@ async def persist_enrichment(
     )
     from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 
-    canonical_name: str = profile.get("canonical_name") or mention_text
+    # R2 (2026-07-16 kg-data-quality-eval): when the LLM profile omits a
+    # canonical_name we fall back to the raw ``mention_text``. GLiNER spans like
+    # ``"NYSE: BCS"`` / ``"NASDAQ:AAPL"`` then leaked verbatim as canonical names
+    # (87 junk ``EXCHANGE: TICKER`` canonical entities from the news backfill).
+    # Strip any leading exchange prefix so the venue-qualified *alias* form never
+    # becomes the *canonical* name. A real LLM-supplied canonical_name (which
+    # would not carry an exchange prefix) is unaffected.
+    canonical_name: str = strip_exchange_prefix(profile.get("canonical_name") or mention_text) or mention_text
 
     # Clamp ticker/isin to DB column widths (varchar(20)); discard if malformed.
     # Qwen3.5-0.8B occasionally returns oversized values despite prompt instructions.

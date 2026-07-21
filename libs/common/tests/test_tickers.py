@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from common.tickers import strip_exchange_qualifier
+from common.tickers import strip_exchange_prefix, strip_exchange_qualifier
 
 
 class TestStripsExchangeSuffix:
@@ -67,3 +67,49 @@ class TestEdgeCases:
     def test_unknown_suffix_is_unchanged(self) -> None:
         # ".XYZ" is not a known exchange code.
         assert strip_exchange_qualifier("FOO.XYZ") == "FOO.XYZ"
+
+
+class TestStripsExchangePrefix:
+    """R2: a leading ``EXCHANGE:`` prefix must never become a canonical_name.
+
+    docs/audits/2026-07-16-kg-data-quality-eval.md flagged 87 junk canonical
+    entities (``NYSE: BCS``, ``NASDAQ:GDDY`` …) minted from raw GLiNER spans.
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("NYSE: BCS", "BCS"),
+            ("NASDAQ:AAPL", "AAPL"),
+            ("NASDAQ: AAPL", "AAPL"),
+            ("LSE: TSCO", "TSCO"),
+            ("NSE: INFY", "INFY"),
+            ("NYSE:GDDY", "GDDY"),
+            ("  NYSE: BCS  ", "BCS"),  # surrounding whitespace tolerated
+        ],
+    )
+    def test_leading_exchange_prefix_is_stripped(self, raw: str, expected: str) -> None:
+        assert strip_exchange_prefix(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "Apple Inc.",  # ordinary company name
+            "Vroom: The Car Company",  # colon but leading token is not all-caps 2-6
+            "British Land",
+            "AXA SA",
+            "BCS",  # already bare
+            "S&P Global",
+        ],
+    )
+    def test_non_prefixed_name_is_unchanged(self, raw: str) -> None:
+        assert strip_exchange_prefix(raw) == raw
+
+    def test_none_and_empty_pass_through(self) -> None:
+        assert strip_exchange_prefix(None) is None
+        assert strip_exchange_prefix("") == ""
+
+    def test_prefix_only_does_not_manufacture_blank(self) -> None:
+        # "NYSE:" with nothing after would strip to "" — keep the original instead
+        # so we never write a blank canonical name.
+        assert strip_exchange_prefix("NYSE:") == "NYSE:"
