@@ -32,6 +32,15 @@ def _patched_gates(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(ml_phase, "run_novelty_gate", _passthrough_novelty)
     monkeypatch.setattr(ml_phase, "apply_suppression_gate", lambda rd: ProcessingPath.FULL_PIPELINE)
+    # The backlog-drain VALUE gate (apply_deep_extraction_value_gate) runs AFTER the
+    # suppression gate inside run_ml_phase and, when enabled (its config default),
+    # compares ``routing_decision.composite_score >= score_floor``. These tests inject a
+    # bare ``MagicMock()`` routing_decision (its ``composite_score`` is itself a MagicMock),
+    # so that ``>=`` raises ``TypeError`` for every non-filing doc — masking the Block 10
+    # routing/provenance assertions this module exists to make. Patch the value gate to a
+    # passthrough (identical treatment to the other Block 8/9 gates above) so only Block 10
+    # (extraction-model selection + provenance stamping) is exercised here.
+    monkeypatch.setattr(ml_phase, "apply_deep_extraction_value_gate", lambda path, *a, **k: path)
     monkeypatch.setattr(ml_phase, "should_run_entity_resolution", lambda _p: False)
     monkeypatch.setattr(ml_phase, "should_run_deep_extraction", lambda _p: True)
     monkeypatch.setattr(ml_phase, "synthesize_provisional_refs", AsyncMock(return_value=None))
@@ -156,6 +165,35 @@ async def test_routing_disabled_forces_primary(_patched_gates: None, settings: S
     assert cap["extraction_client"] is cap["_primary_client"]
     assert cap["model_id"] == "deepseek-ai/DeepSeek-V4-Flash"
     assert result.extraction_model_id == "deepseek-ai/DeepSeek-V4-Flash"
+
+
+@pytest.mark.asyncio
+async def test_stamped_model_is_resolved_api_model_not_stale_ollama_default(
+    _patched_gates: None, settings: Settings
+) -> None:
+    """Provenance regression guard: the stamped id is the RESOLVED extractor, never the
+    stale ``settings.extraction_model_id`` Ollama-era default (``qwen2.5:7b-instruct``).
+
+    Root cause (docs/audits 2026-07): 100% of extracted claims were mis-stamped with the
+    ``extraction_model_id`` DEFAULT constant — a $0/0-token Ollama tag that never runs —
+    instead of the real DeepInfra API model that produced them. run_ml_phase now derives
+    the stamp from the routed API model (DeepSeek primary / Qwen high-recall), so the
+    stamp must equal the resolved API slug AND differ from the stale default on BOTH
+    routes, whatever ``extraction_model_id`` is set to.
+    """
+    # Pin the stale Ollama-era default explicitly so the assertion is unambiguous.
+    settings.extraction_model_id = "qwen2.5:7b-instruct"
+    high_recall = MagicMock(name="high_recall")
+
+    # Short doc → DeepSeek primary (the resolved API model), not the Ollama default.
+    ds_result, _ = await _run(source_type="eodhd", word_count=300, ext_high_recall=high_recall, settings=settings)
+    assert ds_result.extraction_model_id == settings.extraction_api_model_id == "deepseek-ai/DeepSeek-V4-Flash"
+    assert ds_result.extraction_model_id != settings.extraction_model_id
+
+    # Filing → Qwen high-recall (the resolved API model), not the Ollama default.
+    qwen_result, _ = await _run(source_type="sec_edgar", word_count=100, ext_high_recall=high_recall, settings=settings)
+    assert qwen_result.extraction_model_id == settings.extraction_high_recall_model_id
+    assert qwen_result.extraction_model_id != settings.extraction_model_id
 
 
 @pytest.mark.asyncio
