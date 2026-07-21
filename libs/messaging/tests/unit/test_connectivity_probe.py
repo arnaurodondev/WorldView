@@ -525,15 +525,18 @@ class TestLagStallSelfHeal:
     """
 
     async def test_frozen_position_broker_reachable_self_heals(self) -> None:
-        """Frozen committed position + reachable broker → force-exit(2) after N probes."""
+        """Frozen consume position + reachable broker + ACTIVE poll loop → force-exit(2)."""
         consumer = _build_selfheal_consumer()
-        # Committed position FROZEN at 1_000 with high lag on every probe.
+        # Consume position FROZEN at 1_000 with high lag on every probe, AND the
+        # poll loop is actively cycling (seconds_since_progress fresh) — the
+        # wedged-Kafka-fetch signature.
         with (
             patch.object(
                 type(consumer),
                 "_compute_partition_lag_progress",
                 return_value={"t:0": (9_000, 1_000)},
             ),
+            patch.object(type(consumer), "seconds_since_progress", return_value=0.0),
             patch.object(type(consumer), "_force_process_exit") as exit_mock,
         ):
             task = asyncio.create_task(consumer._connectivity_probe_loop())
@@ -578,9 +581,9 @@ class TestLagStallSelfHeal:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-        assert not exit_mock.called, (
-            "self-heal FALSE-FIRED on a slow-but-advancing consumer " f"(call_args_list={exit_mock.call_args_list})"
-        )
+        assert (
+            not exit_mock.called
+        ), f"self-heal FALSE-FIRED on a slow-but-advancing consumer (call_args_list={exit_mock.call_args_list})"
 
     async def test_broker_unreachable_uses_connectivity_path_not_lag_path(self) -> None:
         """A DOWN broker force-exits via the connectivity counter, not the lag path.
@@ -618,6 +621,7 @@ class TestLagStallSelfHeal:
                 "_compute_partition_lag_progress",
                 return_value={"t:0": (9_000, 1_000)},
             ),
+            patch.object(type(consumer), "seconds_since_progress", return_value=0.0),
             patch("messaging.kafka.consumer.base.logger") as logger_mock,
             patch.object(type(consumer), "_force_process_exit") as exit_mock,
         ):
@@ -643,12 +647,15 @@ class TestLagStallSelfHeal:
         """``_lag_stall_selfheal_enabled=False`` → log but do NOT force-exit."""
         consumer = _build_selfheal_consumer()
         consumer._lag_stall_selfheal_enabled = False
+        # Poll loop active + frozen position → WOULD fire if enabled; proves the
+        # kill-switch (not the poll-liveness gate) is what blocks the exit.
         with (
             patch.object(
                 type(consumer),
                 "_compute_partition_lag_progress",
                 return_value={"t:0": (9_000, 1_000)},
             ),
+            patch.object(type(consumer), "seconds_since_progress", return_value=0.0),
             patch.object(type(consumer), "_force_process_exit") as exit_mock,
         ):
             task = asyncio.create_task(consumer._connectivity_probe_loop())
@@ -659,3 +666,74 @@ class TestLagStallSelfHeal:
                 await task
 
         assert not exit_mock.called, "kill-switch must disable the self-heal force-exit (advisory-only)"
+
+    async def test_paused_partition_frozen_does_not_self_heal(self) -> None:
+        """Gate 1: a partition PAUSED for backpressure is frozen by design → no exit.
+
+        The base ``BackpressurePolicy`` calls ``consumer.pause(tp)`` when a
+        partition's lag crosses ``pause_lag_threshold``; its consume position
+        then freezes on PURPOSE while the poll loop keeps spinning.  A paused
+        partition must be EXCLUDED from the self-heal even though its position is
+        frozen and the broker is reachable.
+        """
+        from collections import namedtuple
+
+        # Hashable stand-in for confluent_kafka.TopicPartition — the self-heal
+        # only reads ``.topic`` / ``.partition`` and stores these in a set.
+        _TP = namedtuple("_TP", ["topic", "partition"])
+
+        consumer = _build_selfheal_consumer()
+        # The stalled partition "t:0" is currently paused for backpressure.
+        consumer._paused_partitions = {_TP(topic="t", partition=0)}
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            # Poll loop is actively cycling — isolates the pause gate as the
+            # sole reason no exit fires.
+            patch.object(type(consumer), "seconds_since_progress", return_value=0.0),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, "self-heal must NOT force-exit a deliberately-paused partition"
+
+    async def test_stopped_polling_backpressure_halt_does_not_self_heal(self) -> None:
+        """Gate 2: a consumer that STOPPED polling (downstream outage) → no exit.
+
+        Models the nlp-pipeline halting its poll loop when a pending ledger hits
+        ``max_pending`` during a DB/DLQ outage: consume position frozen, lag high,
+        broker reachable — but the poll loop is NOT cycling, so
+        ``seconds_since_progress`` is stale.  A restart cannot fix a downstream
+        outage (would crashloop), so the self-heal must SUPPRESS the exit and log
+        ``kafka_consumer_lag_stall_selfheal_suppressed`` instead.
+        """
+        consumer = _build_selfheal_consumer()
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            # Poll loop STALE (stopped polling) — far above the probe interval.
+            patch.object(type(consumer), "seconds_since_progress", return_value=9_999.0),
+            patch("messaging.kafka.consumer.base.logger") as logger_mock,
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, "self-heal must NOT force-exit a consumer that has stopped polling"
+        events = [call.args[0] for call in logger_mock.warning.call_args_list]
+        assert "kafka_consumer_lag_stall_selfheal_suppressed" in events, "suppression must be logged"

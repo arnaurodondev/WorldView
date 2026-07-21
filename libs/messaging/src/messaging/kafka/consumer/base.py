@@ -1631,9 +1631,13 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
           behind we are on it).
         * ``position`` — the consumer's *position* on that partition.  This is
           a monotonically-advancing PROGRESS signal: it climbs every time the
-          consumer commits that partition, regardless of how far behind it is
-          or how fast the topic is produced to.  The stall detector keys on
-          this PER PARTITION — see :meth:`_evaluate_lag_stall`.
+          consumer CONSUMES (``poll()`` fetches + delivers) a message on that
+          partition — i.e. it tracks fetch/consume progress, NOT offset commits —
+          regardless of how far behind it is or how fast the topic is produced
+          to.  The stall detector keys on this PER PARTITION — see
+          :meth:`_evaluate_lag_stall`.  A frozen position therefore means the
+          poll loop is delivering nothing on that partition (wedged fetch,
+          paused, or the loop has stopped polling).
 
         Results are keyed PER PARTITION (``"<topic>:<partition>"``), NOT summed,
         so a single wedged partition (frozen position, growing lag) is not
@@ -2085,27 +2089,71 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                         # position has been FROZEN (zero progress) for
                         # ``_lag_stall_probes`` consecutive probes while its lag is
                         # >= ``_lag_stall_threshold``.  Broker-reachable + fetch-
-                        # frozen is the exact broker-recreation signature that the
+                        # frozen is the broker-recreation signature that the
                         # connectivity-failure path can NEVER catch (its metadata
-                        # probes succeed).  Escalate to the proven self-heal:
-                        # force-exit so the orchestrator restarts the container with
-                        # a fresh DNS lookup + group rejoin.  A healthy-but-slow
-                        # consumer can NOT reach here — see the class-attr note on
-                        # ``_lag_stall_selfheal_enabled``.
-                        if self._lag_stall_selfheal_enabled:
+                        # probes succeed).  BUT a frozen position also occurs when
+                        # the consumer has DELIBERATELY stopped consuming — the two
+                        # false-fire vectors we must exclude before force-exiting:
+                        #
+                        #   1. BACKPRESSURE PAUSE (base ``BackpressurePolicy`` →
+                        #      ``consumer.pause(tp)``).  The poll loop keeps
+                        #      spinning but the partition is paused by design, so
+                        #      its position is frozen on PURPOSE.  Exclude any
+                        #      partition currently in ``_paused_partitions``.
+                        #   2. DOWNSTREAM-OUTAGE HALT (a subclass that STOPS polling
+                        #      when a pending ledger hits ``max_pending`` during a
+                        #      DB/DLQ outage — NOT a Kafka problem).  A restart can
+                        #      NOT fix a downstream outage → re-freeze → re-exit →
+                        #      crashloop for the whole outage.  Discriminator:
+                        #      ``_record_progress`` fires on EVERY completed poll,
+                        #      and a wedged Kafka fetch STILL returns an idle
+                        #      ``poll()`` every ``poll_timeout_seconds`` (poll honours
+                        #      its timeout), so a genuinely-wedged loop keeps a FRESH
+                        #      heartbeat.  A loop that has stopped polling goes STALE.
+                        #      Only self-heal when the poll loop is ACTIVELY cycling
+                        #      (``seconds_since_progress`` well under a probe
+                        #      interval).  This same gate also protects the
+                        #      healthy-slow single-message case (a >5-min in-flight
+                        #      handler freezes position but stops polling → stale).
+                        paused_keys = {f"{tp.topic}:{tp.partition}" for tp in self._paused_partitions}
+                        wedged = [(k, lag) for k, lag in stalled if k not in paused_keys]
+                        secs_since_poll = self.seconds_since_progress()
+                        poll_loop_active = (
+                            secs_since_poll is not None and secs_since_poll < self._probe_interval_seconds
+                        )
+                        if self._lag_stall_selfheal_enabled and wedged and poll_loop_active:
                             logger.critical(
                                 "kafka_consumer_lag_stall_selfheal",
                                 group_id=self._config.group_id,
-                                stalled_partitions=[tp_key for tp_key, _lag in stalled],
+                                stalled_partitions=[tp_key for tp_key, _lag in wedged],
                                 broker_reachable=True,
+                                poll_loop_active=True,
+                                seconds_since_poll=round(secs_since_poll, 2) if secs_since_poll is not None else None,
                                 sustained_probes=self._lag_stall_probes,
                                 action="exiting_with_code_2_for_fresh_container_and_group_rejoin",
                             )
                             # Hard process exit (os._exit via _force_process_exit,
                             # NOT sys.exit — same zombie-avoidance as the
-                            # connectivity path).  Unreachable after this returns.
+                            # connectivity path).  NOTE: os._exit skips the graceful
+                            # in-flight drain, so any message mid-handler is redone
+                            # after rejoin (re-paid LLM cost) — acceptable vs. a 2.5h
+                            # freeze, but why we gate this tightly.  Unreachable
+                            # after this returns.
                             self._force_process_exit(2)
                             return
+                        if wedged and not poll_loop_active:
+                            # Frozen position but the poll loop is NOT cycling →
+                            # a downstream-outage halt or a long in-flight handler,
+                            # NOT a wedged Kafka fetch.  Do NOT restart (would
+                            # crashloop through the outage); leave the advisory
+                            # CRITICAL above as the operator signal.
+                            logger.warning(
+                                "kafka_consumer_lag_stall_selfheal_suppressed",
+                                group_id=self._config.group_id,
+                                stalled_partitions=[tp_key for tp_key, _lag in wedged],
+                                reason="poll_loop_not_actively_cycling_downstream_or_slow_handler",
+                                seconds_since_poll=round(secs_since_poll, 2) if secs_since_poll is not None else None,
+                            )
             except Exception as exc:
                 consecutive_failures += 1
                 logger.warning(
