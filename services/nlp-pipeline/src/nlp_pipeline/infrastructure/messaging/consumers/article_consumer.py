@@ -27,6 +27,7 @@ import contextlib
 import dataclasses
 import json
 import sys
+import time
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -1040,6 +1041,17 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         base_attempts = await self._durable_attempt_count(event_id)
         max_retries = max(1, self._config.max_retries)
 
+        # fix/selfheal-db-fence: bound the FAILURE/retry wall time so a dead DB can
+        # NEVER block this handler (and thus the poll loop, via its concurrency
+        # slot) past ``max.poll.interval.ms`` and get the consumer fenced.  The
+        # first attempt always runs to completion (a healthy article SUCCEEDS here
+        # and returns before any ceiling logic — legit slow deep-extraction is
+        # UNAFFECTED); only once attempts start FAILING does this budget cap the
+        # in-place retrying.  ``time.monotonic`` (not wall clock) so an NTP jump
+        # cannot distort the budget.
+        retry_ceiling_s = float(getattr(self._settings, "article_consumer_db_retry_ceiling_s", 120.0))
+        settle_start = time.monotonic()
+
         for local_attempt in range(max_retries):
             attempt = base_attempts + local_attempt + 1
             try:
@@ -1072,6 +1084,31 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     # holds at this offset and the message is retried on the next
                     # rebalance/restart rather than SILENTLY DROPPED.
                     return await self._dead_letter_poison(msg, exc, event_id=event_id, reason="max_retries")
+                # fix/selfheal-db-fence: if the retry window is exhausted, STOP
+                # retrying in place and yield control back to the poll loop with the
+                # offset UNCOMMITTED (barrier) so the message is redelivered later.
+                # This is what keeps ``consumer.poll()`` cycling — and thus the
+                # consumer's group membership + heartbeats — during a sustained DB
+                # outage, instead of a single handler blocking its slot past
+                # ``max.poll.interval.ms`` and getting the whole consumer fenced.
+                # At-least-once is preserved: the offset is NOT committed (redeliver)
+                # and the durable Valkey attempt counter (recorded above) carries the
+                # count across redeliveries so the message still escalates to the DLQ
+                # after ``max_retries`` TOTAL attempts.
+                elapsed = time.monotonic() - settle_start
+                if elapsed >= retry_ceiling_s:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "article_consumer.db_retry_ceiling_reached_yielding_to_poll_loop",
+                        event_id=event_id,
+                        attempt=attempt,
+                        max_retries=max_retries,
+                        elapsed_s=round(elapsed, 2),
+                        retry_ceiling_s=retry_ceiling_s,
+                        topic=msg.topic(),
+                        partition=msg.partition(),
+                        offset=offset,
+                    )
+                    return False  # barrier: uncommitted → redelivered; slot freed → poll resumes
                 logger.warning(  # type: ignore[no-any-return]
                     "article_consumer.transient_retry_in_place",
                     event_id=event_id,
@@ -1084,7 +1121,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 )
                 # Async backoff — does NOT block the event loop (contrast the base
                 # ``_seek_back``'s ``time.sleep``) and does NOT seek the consumer.
-                await asyncio.sleep(self._compute_backoff(attempt))
+                # Clamp the sleep to the remaining retry budget so the backoff itself
+                # cannot push this handler past the ceiling.
+                backoff = self._compute_backoff(attempt)
+                remaining = retry_ceiling_s - (time.monotonic() - settle_start)
+                await asyncio.sleep(max(0.0, min(backoff, remaining)))
 
         # Defensive: the loop always returns above.  Advance rather than risk a
         # silent re-freeze.
@@ -1152,14 +1193,28 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             last_error=exc,
             raw_payload=msg.value() or b"",
         )
+        # fix/selfheal-db-fence: bound the dead-letter WRITE wall time.  The DLQ
+        # store is a Postgres table (``nlp_db.dlq``); during a Postgres outage this
+        # write hangs on the dead DB with NO timeout of its own, which is the exact
+        # frame that blocked a handler for hours (wedging the poll loop → MAXPOLL
+        # fence → 8 h freeze).  Wrap it in a hard timeout so a hung DLQ store can
+        # never block the handler forever — on timeout the offset is HELD (barrier,
+        # redelivered on recovery), never silently dropped.
+        dlq_timeout_s = float(getattr(self._settings, "article_consumer_dlq_write_timeout_s", 30.0))
         try:
-            await self.dead_letter(failure, reason=reason)
+            async with asyncio.timeout(dlq_timeout_s):
+                await self.dead_letter(failure, reason=reason)
         except RuntimeError:
             # dead_letter cap exceeded — intentional force-restart signal.
             raise
-        except Exception:
-            # DLQ WRITE FAILED → do NOT advance: better a temporary head-of-line
-            # block than a silently-dropped article (at-least-once).
+        except Exception as dlq_exc:
+            # DLQ WRITE FAILED or TIMED OUT (asyncio.timeout raises TimeoutError,
+            # itself an Exception) → do NOT advance: better a temporary head-of-line
+            # block than a silently-dropped article (at-least-once).  Log the
+            # DLQ-write failure (``dlq_exc``); a distinct name from the parameter
+            # ``exc`` (the original processing error) is required because ``except
+            # ... as`` deletes its binding at block end — reusing ``exc`` would
+            # delete the parameter the success-path log below still reads.
             logger.error(  # type: ignore[no-any-return]
                 "article_consumer.dead_letter_write_failed_holding_offset",
                 event_id=event_id,
@@ -1167,7 +1222,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 topic=msg.topic(),
                 partition=msg.partition(),
                 offset=msg.offset(),
-                error=str(exc)[:200],
+                original_error=str(exc)[:200],
+                error=str(dlq_exc)[:200],
+                error_type=type(dlq_exc).__name__,
+                dlq_timeout_s=dlq_timeout_s,
                 exc_info=True,
             )
             return False

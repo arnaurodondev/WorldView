@@ -685,6 +685,35 @@ class Settings(BaseSettings):
     #    and per-partition ordering (see ArticleProcessingConsumer.run docstring).
     # NLP_PIPELINE_ARTICLE_CONSUMER_CONCURRENCY
     article_consumer_concurrency: int = 16
+    # fix/selfheal-db-fence (2026-07-21): bound the per-message DB-retry wall time.
+    #
+    # ``_settle_message`` retries a failing message IN PLACE up to ``max_retries``
+    # (5) with exponential backoff and, on exhaustion, DEAD-LETTERS it (a DB write
+    # to ``nlp_db.dlq``).  When Postgres is OOM/dead every one of those steps blocks
+    # on the dead DB: 5 handler attempts (each up to the 900 s watchdog) + backoffs
+    # + an UNBOUNDED dead-letter write.  A single message could then occupy its
+    # concurrency slot for well over ``max.poll.interval.ms`` (30 min), so the run
+    # loop stops calling ``consumer.poll()``, librdkafka fences the consumer out of
+    # the group (``MAXPOLL``), and it never rejoins — the observed 8 h freeze.
+    #
+    # These two ceilings cap that wall time so a dead DB can NEVER block one handler
+    # past ``max.poll.interval.ms``.  ``article_consumer_db_retry_ceiling_s`` bounds
+    # the FAILURE/retry window: a healthy article SUCCEEDS on attempt 1 and returns
+    # before any ceiling logic (so legit slow deep-extraction articles up to the
+    # 900 s watchdog are UNAFFECTED), but once attempts start FAILING the loop stops
+    # retrying and yields control back to the poll loop the moment the elapsed
+    # failure time crosses this ceiling — leaving the offset uncommitted so the
+    # message is redelivered later (at-least-once; the durable Valkey attempt
+    # counter carries the count across redeliveries so it still escalates to the
+    # DLQ after 5 total attempts).  ``article_consumer_dlq_write_timeout_s`` bounds
+    # the dead-letter write itself so a hung DLQ store (dead Postgres) can never
+    # block the handler forever — on timeout the offset is HELD (barrier, redeliver
+    # on recovery), never silently dropped.  Both default well under the 30 min
+    # ``max.poll.interval.ms`` and are env-overridable.
+    # NLP_PIPELINE_ARTICLE_CONSUMER_DB_RETRY_CEILING_S
+    article_consumer_db_retry_ceiling_s: float = 120.0
+    # NLP_PIPELINE_ARTICLE_CONSUMER_DLQ_WRITE_TIMEOUT_S
+    article_consumer_dlq_write_timeout_s: float = 30.0
     # 2. ``deepinfra_max_connections`` — sizes the httpx connection pool inside the
     #    DeepSeekExtractionAdapter so N concurrent extraction calls per replica do
     #    not queue at the client.  Default 64 = 16 concurrent + comfortable headroom
