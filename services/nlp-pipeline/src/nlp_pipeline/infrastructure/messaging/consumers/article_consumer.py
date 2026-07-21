@@ -904,6 +904,13 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             timeout = self._config.poll_timeout_seconds if first else 0.0
             first = False
             msg = await loop.run_in_executor(None, self._consumer.poll, timeout)
+            # fix/consumer-stall-selfheal: an ACTUAL consumer.poll() just
+            # returned (idle or message) → record a real fetch-poll for the
+            # lag-stall self-heal Gate 2.  Deliberately NOT recorded in the
+            # barrier-halt branch (run() ~L832) which stops calling poll during a
+            # DB/DLQ outage, so a downstream halt lets this go stale (→ self-heal
+            # suppressed) even while the BP-700 heartbeat is kept fresh there.
+            self._record_fetch_poll()
             if msg is None:
                 break
             if msg.error():

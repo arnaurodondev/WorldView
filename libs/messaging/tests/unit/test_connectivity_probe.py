@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -525,10 +526,15 @@ class TestLagStallSelfHeal:
     """
 
     async def test_frozen_position_broker_reachable_self_heals(self) -> None:
-        """Frozen consume position + reachable broker + ACTIVE poll loop → force-exit(2)."""
+        """True wedge: frozen position + reachable broker + FRESH fetch-poll → force-exit(2).
+
+        Both liveness signals are fresh here (BP-700 heartbeat AND the real
+        fetch-poll timestamp) — a wedged Kafka fetch still calls
+        ``consumer.poll()`` every cycle — so Gate 2 permits the self-heal.
+        """
         consumer = _build_selfheal_consumer()
         # Consume position FROZEN at 1_000 with high lag on every probe, AND the
-        # poll loop is actively cycling (seconds_since_progress fresh) — the
+        # poll loop is actively fetching (seconds_since_fetch_poll fresh) — the
         # wedged-Kafka-fetch signature.
         with (
             patch.object(
@@ -536,7 +542,7 @@ class TestLagStallSelfHeal:
                 "_compute_partition_lag_progress",
                 return_value={"t:0": (9_000, 1_000)},
             ),
-            patch.object(type(consumer), "seconds_since_progress", return_value=0.0),
+            patch.object(type(consumer), "seconds_since_fetch_poll", return_value=0.0),
             patch.object(type(consumer), "_force_process_exit") as exit_mock,
         ):
             task = asyncio.create_task(consumer._connectivity_probe_loop())
@@ -621,7 +627,7 @@ class TestLagStallSelfHeal:
                 "_compute_partition_lag_progress",
                 return_value={"t:0": (9_000, 1_000)},
             ),
-            patch.object(type(consumer), "seconds_since_progress", return_value=0.0),
+            patch.object(type(consumer), "seconds_since_fetch_poll", return_value=0.0),
             patch("messaging.kafka.consumer.base.logger") as logger_mock,
             patch.object(type(consumer), "_force_process_exit") as exit_mock,
         ):
@@ -655,7 +661,7 @@ class TestLagStallSelfHeal:
                 "_compute_partition_lag_progress",
                 return_value={"t:0": (9_000, 1_000)},
             ),
-            patch.object(type(consumer), "seconds_since_progress", return_value=0.0),
+            patch.object(type(consumer), "seconds_since_fetch_poll", return_value=0.0),
             patch.object(type(consumer), "_force_process_exit") as exit_mock,
         ):
             task = asyncio.create_task(consumer._connectivity_probe_loop())
@@ -691,9 +697,9 @@ class TestLagStallSelfHeal:
                 "_compute_partition_lag_progress",
                 return_value={"t:0": (9_000, 1_000)},
             ),
-            # Poll loop is actively cycling — isolates the pause gate as the
+            # Poll loop is actively fetching — isolates the pause gate as the
             # sole reason no exit fires.
-            patch.object(type(consumer), "seconds_since_progress", return_value=0.0),
+            patch.object(type(consumer), "seconds_since_fetch_poll", return_value=0.0),
             patch.object(type(consumer), "_force_process_exit") as exit_mock,
         ):
             task = asyncio.create_task(consumer._connectivity_probe_loop())
@@ -706,24 +712,38 @@ class TestLagStallSelfHeal:
         assert not exit_mock.called, "self-heal must NOT force-exit a deliberately-paused partition"
 
     async def test_stopped_polling_backpressure_halt_does_not_self_heal(self) -> None:
-        """Gate 2: a consumer that STOPPED polling (downstream outage) → no exit.
+        """Gate 2 (the REAL discriminator): BP-700 heartbeat FRESH but fetch-poll STALE → no exit.
 
-        Models the nlp-pipeline halting its poll loop when a pending ledger hits
-        ``max_pending`` during a DB/DLQ outage: consume position frozen, lag high,
-        broker reachable — but the poll loop is NOT cycling, so
-        ``seconds_since_progress`` is stale.  A restart cannot fix a downstream
-        outage (would crashloop), so the self-heal must SUPPRESS the exit and log
-        ``kafka_consumer_lag_stall_selfheal_suppressed`` instead.
+        Models the nlp-pipeline barrier halt: when a pending ledger hits
+        ``max_pending`` during a DB/DLQ outage the consumer STOPS calling
+        ``consumer.poll()`` but KEEPS refreshing the BP-700 liveness heartbeat on
+        purpose (article_consumer.py ~L832) to prove it is alive.  Consume
+        position is frozen, lag is high, broker is reachable, and
+        ``seconds_since_progress`` (BP-700) is FRESH — the exact conditions where
+        the earlier ``_record_progress``-based gate WOULD have wrongly fired.  The
+        fix keys Gate 2 on the SEPARATE fetch-poll timestamp, which goes STALE the
+        moment poll() stops being called.  A restart cannot fix a downstream
+        outage (would crashloop), so the self-heal must SUPPRESS and log
+        ``kafka_consumer_lag_stall_selfheal_suppressed``.
+
+        Drives the REAL methods (no patch of ``seconds_since_*``): set the two
+        underlying timestamps directly so BP-700 is fresh while fetch-poll is old.
         """
         consumer = _build_selfheal_consumer()
+        now = time.time()
+        consumer._last_progress_ts = now  # BP-700 heartbeat FRESH (barrier keeps it alive)
+        consumer._last_fetch_poll_ts = now - 9_999.0  # real poll() STALE (halt stopped polling)
+        # Sanity: the two signals genuinely diverge — the whole point of the fix.
+        assert consumer.seconds_since_progress() is not None
+        assert consumer.seconds_since_progress() < 1.0
+        assert consumer.seconds_since_fetch_poll() is not None
+        assert consumer.seconds_since_fetch_poll() > consumer._probe_interval_seconds
         with (
             patch.object(
                 type(consumer),
                 "_compute_partition_lag_progress",
                 return_value={"t:0": (9_000, 1_000)},
             ),
-            # Poll loop STALE (stopped polling) — far above the probe interval.
-            patch.object(type(consumer), "seconds_since_progress", return_value=9_999.0),
             patch("messaging.kafka.consumer.base.logger") as logger_mock,
             patch.object(type(consumer), "_force_process_exit") as exit_mock,
         ):
@@ -734,6 +754,9 @@ class TestLagStallSelfHeal:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-        assert not exit_mock.called, "self-heal must NOT force-exit a consumer that has stopped polling"
+        assert not exit_mock.called, (
+            "self-heal FALSE-FIRED on a barrier-halted consumer (BP-700 fresh, fetch-poll stale) — "
+            "this is the DB-outage crashloop the fix must prevent"
+        )
         events = [call.args[0] for call in logger_mock.warning.call_args_list]
         assert "kafka_consumer_lag_stall_selfheal_suppressed" in events, "suppression must be logged"

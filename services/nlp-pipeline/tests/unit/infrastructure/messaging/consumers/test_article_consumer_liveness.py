@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
@@ -73,6 +74,9 @@ def _make_consumer() -> ArticleProcessingConsumer:
     # Base-class liveness state: -1.0 means "no progress tick recorded yet",
     # which makes seconds_since_progress() return None (the wedged-looking state).
     c._last_progress_ts = -1.0  # type: ignore[attr-defined]
+    # fix/consumer-stall-selfheal: separate fetch-poll timestamp, -1.0 → "no real
+    # consumer.poll() return yet" (seconds_since_fetch_poll() returns None).
+    c._last_fetch_poll_ts = -1.0  # type: ignore[attr-defined]
     c._metrics = None  # type: ignore[attr-defined]
     # No-op the kafka/loop plumbing run() calls that we are not exercising.
     c._init_kafka = lambda: None  # type: ignore[attr-defined,method-assign]
@@ -138,3 +142,32 @@ async def test_run_records_progress_on_batch_poll() -> None:
 
     assert c.seconds_since_progress() is not None
     assert c.seconds_since_progress() < 5.0
+
+
+async def test_poll_batch_records_fetch_poll_timestamp() -> None:
+    """The REAL ``_poll_batch`` timestamps a fetch-poll on each ``consumer.poll()`` return.
+
+    fix/consumer-stall-selfheal — this is the load-bearing discriminator for the
+    lag-stall self-heal Gate 2.  ``_last_fetch_poll_ts`` is set ONLY where
+    ``consumer.poll()`` actually returned (here, inside ``_poll_batch``), and is
+    DELIBERATELY NOT set in the barrier-halt branch of ``run()`` (which keeps the
+    BP-700 heartbeat fresh but does NOT call ``_poll_batch``).  So a wedged Kafka
+    fetch — poll still called — keeps this fresh (→ self-heal), while a DB/DLQ
+    outage halt that stops polling lets it go stale (→ self-heal SUPPRESSED, no
+    crashloop).  We drive the real ``_poll_batch`` (not a patched stub).
+    """
+    c = _make_consumer()
+    assert c.seconds_since_fetch_poll() is None  # no real poll yet
+
+    fake_consumer = MagicMock()
+    fake_consumer.poll.return_value = None  # idle poll → one call, then break
+    c._consumer = fake_consumer  # type: ignore[attr-defined]
+
+    loop = asyncio.get_running_loop()
+    batch = await c._poll_batch(loop, max_records=4)
+
+    assert batch == []
+    assert fake_consumer.poll.called, "the real _poll_batch must invoke consumer.poll()"
+    # Fetch-poll timestamp is now fresh — the wedge-vs-halt discriminator.
+    assert c.seconds_since_fetch_poll() is not None
+    assert c.seconds_since_fetch_poll() < 5.0

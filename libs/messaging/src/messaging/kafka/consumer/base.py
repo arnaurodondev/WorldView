@@ -527,6 +527,17 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         # a dead loop goes stale.  ``-1.0`` means "not yet started".  Exposed via
         # :meth:`seconds_since_progress` for an in-process liveness healthcheck.
         self._last_progress_ts: float = -1.0
+        # fix/consumer-stall-selfheal: SEPARATE "last real fetch-poll" timestamp,
+        # set ONLY on the actual ``consumer.poll()`` return path (never in a
+        # deliberate backpressure/barrier halt, and never by the BP-700 liveness
+        # heartbeat).  This is the load-bearing discriminator for the lag-stall
+        # self-heal Gate 2: a WEDGED Kafka fetch still calls ``consumer.poll()``
+        # (returns None every ~poll_timeout) so this stays FRESH → self-heal
+        # fires; a consumer that DELIBERATELY stops polling (e.g. the nlp barrier
+        # halt during a DB/DLQ outage — which keeps the BP-700 heartbeat fresh on
+        # purpose) lets THIS timestamp go STALE → self-heal is suppressed, so a
+        # downstream outage never crashloops.  ``-1.0`` means "no poll yet".
+        self._last_fetch_poll_ts: float = -1.0
         # BP-699 lag-stall detector state, tracked PER PARTITION (not summed)
         # so a single wedged partition is not masked by others advancing.
         # Instance-level (never class-level) because these are MUTABLE — a
@@ -908,6 +919,34 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             return None
         return time.time() - self._last_progress_ts
 
+    def _record_fetch_poll(self) -> None:
+        """Timestamp an ACTUAL ``consumer.poll()`` return (fetch-poll liveness).
+
+        Distinct from :meth:`_record_progress` (the BP-700 liveness heartbeat).
+        This MUST be called ONLY from the real poll return path — where the code
+        actually invoked ``consumer.poll()`` / ``consumer.consume()`` and it
+        returned — and MUST NOT be called from a deliberate backpressure/barrier
+        halt (e.g. ``nlp_pipeline`` ``article_consumer`` line ~832, which keeps
+        the BP-700 heartbeat fresh during a correct DB/DLQ-outage hold).  That
+        asymmetry is exactly what lets the lag-stall self-heal tell a WEDGED
+        fetch (poll still called → fresh) apart from a STOPPED-polling halt
+        (poll not called → stale) — see :meth:`seconds_since_fetch_poll`.
+        """
+        self._last_fetch_poll_ts = time.time()
+
+    def seconds_since_fetch_poll(self) -> float | None:
+        """Return seconds since the last real ``consumer.poll()`` return, or ``None``.
+
+        ``None`` before the first poll (so a just-started consumer is never
+        flagged).  Read by the lag-stall self-heal Gate 2 to require that the
+        poll loop is ACTIVELY fetching before force-exiting: a wedged fetch keeps
+        this fresh (poll still returns idle every ~poll_timeout), a halt that
+        stops calling poll lets it go stale.
+        """
+        if self._last_fetch_poll_ts < 0:
+            return None
+        return time.time() - self._last_fetch_poll_ts
+
     @staticmethod
     def _is_transient_broker_error(exc: BaseException) -> bool:
         """Classify *exc* as a transient broker/transport error worth reconnecting.
@@ -1251,7 +1290,10 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             return True
 
         # Healthy cycle (idle or messages) → heartbeat + reset reconnect budget.
+        # ``consumer.consume()`` actually returned → record a real fetch-poll for
+        # the lag-stall self-heal Gate 2 (see :meth:`_record_fetch_poll`).
         self._record_progress()
+        self._record_fetch_poll()
         self._reconnect_attempts = 0
         if not msgs:
             return True
@@ -2104,20 +2146,21 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                         #      when a pending ledger hits ``max_pending`` during a
                         #      DB/DLQ outage — NOT a Kafka problem).  A restart can
                         #      NOT fix a downstream outage → re-freeze → re-exit →
-                        #      crashloop for the whole outage.  Discriminator:
-                        #      ``_record_progress`` fires on EVERY completed poll,
-                        #      and a wedged Kafka fetch STILL returns an idle
-                        #      ``poll()`` every ``poll_timeout_seconds`` (poll honours
-                        #      its timeout), so a genuinely-wedged loop keeps a FRESH
-                        #      heartbeat.  A loop that has stopped polling goes STALE.
-                        #      Only self-heal when the poll loop is ACTIVELY cycling
-                        #      (``seconds_since_progress`` well under a probe
-                        #      interval).  This same gate also protects the
-                        #      healthy-slow single-message case (a >5-min in-flight
-                        #      handler freezes position but stops polling → stale).
+                        #      crashloop for the whole outage.  Discriminator: the
+                        #      SEPARATE fetch-poll timestamp (``_record_fetch_poll``)
+                        #      set ONLY where ``consumer.poll()`` actually returned —
+                        #      NOT the BP-700 liveness heartbeat, which the nlp
+                        #      barrier halt keeps fresh ON PURPOSE.  A wedged Kafka
+                        #      fetch STILL calls ``consumer.poll()`` (returns idle
+                        #      every ~poll_timeout) → fetch-poll FRESH → self-heal.
+                        #      A halt that STOPS calling ``consumer.poll()`` lets the
+                        #      fetch-poll timestamp go STALE even while the BP-700
+                        #      heartbeat is fresh → self-heal SUPPRESSED.  This gate
+                        #      also protects the healthy-slow single-message case
+                        #      (a >5-min in-flight handler stops polling → stale).
                         paused_keys = {f"{tp.topic}:{tp.partition}" for tp in self._paused_partitions}
                         wedged = [(k, lag) for k, lag in stalled if k not in paused_keys]
-                        secs_since_poll = self.seconds_since_progress()
+                        secs_since_poll = self.seconds_since_fetch_poll()
                         poll_loop_active = (
                             secs_since_poll is not None and secs_since_poll < self._probe_interval_seconds
                         )
@@ -2274,8 +2317,11 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 # Healthy poll cycle (idle OR message) → refresh the liveness
                 # heartbeat and reset the reconnect counter so an isolated blip
                 # does not erode the terminal-stop budget over the consumer's
-                # lifetime.
+                # lifetime.  ``consumer.poll()`` actually returned → also record a
+                # real fetch-poll for the lag-stall self-heal Gate 2 (see
+                # :meth:`_record_fetch_poll`).
                 self._record_progress()
+                self._record_fetch_poll()
                 self._reconnect_attempts = 0
                 if msg is None:
                     continue
