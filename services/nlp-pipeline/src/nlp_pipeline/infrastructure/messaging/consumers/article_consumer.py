@@ -32,6 +32,8 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from ml_clients.errors import ProviderBillingError  # type: ignore[import-not-found]
+
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
 from common.ids import PUBLIC_TENANT_ID, uuid5_from_parts  # type: ignore[import-untyped]
@@ -102,6 +104,7 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.temporal_events impo
     _normalize_temporal_events_for_emit,
 )
 from nlp_pipeline.infrastructure.metrics.prometheus import (
+    record_article_billing_deferred,
     record_article_processed,
     record_learned_router_shadow,
     record_pre_persist_tenant_substituted,
@@ -151,6 +154,26 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 _TOPIC = "content.article.stored.v1"
 _SCHEMA_DIR = find_schema_dir()
 _DEFAULT_SOURCE_TRUST = 0.5
+
+# 402-replay hardening (spend-cap self-heal for extraction).
+#
+# A DeepInfra spend-cap / auth refusal surfaces as HTTP 402/401/403 →
+# :class:`ml_clients.errors.ProviderBillingError` (a ``RetryableError``). Left to the
+# generic transient branch of ``_settle_message`` it would count against ``max_retries``
+# and DEAD-LETTER the article after exhaustion — exactly how the 2026-07-18 incident lost
+# 693 articles. Instead the settle loop DEFERS a billing refusal WITHOUT consuming the
+# retry budget (mirrors ``EmbeddingRetryWorker``): it re-attempts in place at a steady
+# cadence so a short cap self-heals with ZERO operator action the moment funds are
+# restored, and never dead-letters.
+#
+# To bound how long a single message may hold a concurrency slot (a PERMANENT 401/403 —
+# a revoked key — would otherwise pin all slots forever), in-place billing deferrals are
+# capped. Past the cap the message is NOT dead-lettered: the settle returns a commit
+# BARRIER (offset left uncommitted) so the slot frees and the still-unprocessed message is
+# redelivered on the next consumer restart/rebalance once the cap clears. No article is
+# ever lost to a spend cap.
+_BILLING_RETRY_BACKOFF_SECONDS: float = 300.0
+_BILLING_DEFER_MAX_IN_PLACE: int = 3
 
 # Re-export block helpers so existing imports from this module remain valid.
 __all__ = [
@@ -985,6 +1008,19 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         except Exception:
             return f"{msg.topic()}/{msg.partition()}/{msg.offset()}"
 
+    @staticmethod
+    def _safe_record_article_billing_deferred() -> None:
+        """Increment the billing-deferral counter; swallow any metrics error.
+
+        Metrics must NEVER break the settle loop (a Prometheus hiccup cannot be
+        allowed to abandon an article), so this mirrors the fail-safe pattern the
+        ``EmbeddingRetryWorker`` uses for its own billing-deferral counter.
+        """
+        try:
+            record_article_billing_deferred()
+        except Exception:  # pragma: no cover — metrics must never break settle
+            logger.debug("article_billing_deferred_metric_inc_failed")  # type: ignore[no-any-return]
+
     async def _settle_message(self, msg: Any) -> bool:
         """Process one message; return True once its offset MAY advance.
 
@@ -1033,8 +1069,19 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         base_attempts = await self._durable_attempt_count(event_id)
         max_retries = max(1, self._config.max_retries)
 
-        for local_attempt in range(max_retries):
-            attempt = base_attempts + local_attempt + 1
+        # Two INDEPENDENT budgets (402-replay hardening):
+        #   * ``transient_attempts`` — the bounded 5xx/timeout/network budget. On
+        #     exhaustion the message is dead-lettered (poison drain).
+        #   * ``billing_deferrals``  — spend-cap / auth refusals (HTTP 402/401/403 →
+        #     ``ProviderBillingError``). These do NOT consume the transient budget and
+        #     NEVER dead-letter: they defer at a steady cadence so a short cap self-heals
+        #     with zero operator action, and past ``_BILLING_DEFER_MAX_IN_PLACE`` hand off
+        #     to redelivery-on-restart via a commit barrier (see module constants).
+        transient_attempts = 0
+        billing_deferrals = 0
+
+        while True:
+            attempt = base_attempts + transient_attempts + 1
             try:
                 try:
                     await self._handle_message(msg)
@@ -1056,7 +1103,48 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 # ADVANCE only if the DLQ write DURABLY persisted the message —
                 # otherwise return False (barrier) so it is retried, never dropped.
                 return await self._dead_letter_poison(msg, exc, event_id=event_id, reason="fatal")
+            except ProviderBillingError as exc:
+                # Spend-cap / auth refusal (HTTP 402/401/403). NOT this article's fault and
+                # clears only when the operator raises the DeepInfra cap / restores the key.
+                # Defer WITHOUT touching the durable attempt counter so the bounded transient
+                # budget is never spent on a cap-down — the article re-attempts and self-heals
+                # the moment the cap is raised. NEVER dead-letter here: mis-classifying 402 as
+                # a fatal 4xx lost 693 articles on 2026-07-18.
+                billing_deferrals += 1
+                self._safe_record_article_billing_deferred()
+                if billing_deferrals >= _BILLING_DEFER_MAX_IN_PLACE:
+                    # Bound slot occupancy: a PERMANENT 401/403 (revoked key) would otherwise
+                    # pin this concurrency slot forever. Stop holding it and return a commit
+                    # BARRIER — the offset is NOT advanced and NOT dead-lettered, so the
+                    # still-unprocessed message is redelivered on the next restart/rebalance
+                    # once the cap clears. At-least-once preserved; no article is ever lost.
+                    logger.warning(  # type: ignore[no-any-return]
+                        "article_consumer.billing_deferred_barrier",
+                        event_id=event_id,
+                        billing_deferrals=billing_deferrals,
+                        max_in_place=_BILLING_DEFER_MAX_IN_PLACE,
+                        topic=msg.topic(),
+                        partition=msg.partition(),
+                        offset=offset,
+                        error=str(exc)[:200],
+                    )
+                    return False
+                logger.warning(  # type: ignore[no-any-return]
+                    "article_consumer.billing_deferred",
+                    event_id=event_id,
+                    billing_deferrals=billing_deferrals,
+                    max_in_place=_BILLING_DEFER_MAX_IN_PLACE,
+                    topic=msg.topic(),
+                    partition=msg.partition(),
+                    offset=offset,
+                    error=str(exc)[:200],
+                )
+                # Steady low-frequency cadence (NOT exponential): re-attempt until the cap is
+                # raised without flooding the provider with 402s. Does NOT block the event loop.
+                await asyncio.sleep(_BILLING_RETRY_BACKOFF_SECONDS)
+                continue
             except Exception as exc:
+                transient_attempts += 1
                 await self._record_attempt(event_id, attempt, exc)
                 if attempt >= max_retries:
                     # Retries exhausted → dead-letter.  ADVANCE (drain the poison)

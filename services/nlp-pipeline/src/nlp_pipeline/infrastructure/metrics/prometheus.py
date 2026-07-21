@@ -233,6 +233,28 @@ def record_embedding_retry_abandoned(reason: str) -> None:
     s6_embedding_retry_abandoned_total.labels(reason=reason).inc()
 
 
+# 402-replay hardening: the article-processing consumer used to route a provider
+# spend-cap / auth refusal (HTTP 402/401/403 → ``ProviderBillingError``) through its
+# generic transient branch, which counts against ``max_retries`` and DEAD-LETTERS the
+# article after exhaustion (the 2026-07-18 incident: 693 articles lost this way). The
+# consumer now DEFERS a billing refusal WITHOUT consuming the retry budget (mirrors the
+# EmbeddingRetryWorker) so extraction self-heals when the operator raises the cap. This
+# counter makes that deferral observable/alertable exactly like the embedding one — a
+# sustained non-zero rate means the DeepInfra spend cap is hit or the key is refused.
+s6_article_billing_deferred_total = prometheus_client.Counter(
+    "s6_article_billing_deferred_total",
+    "Article-extraction settle attempts deferred on a provider billing/auth refusal "
+    "(HTTP 402/401/403) WITHOUT consuming the retry budget or dead-lettering. A sustained "
+    "non-zero rate means the DeepInfra spend cap is hit or the key is refused — raise the "
+    "cap / fix the key; extraction self-heals once it clears.",
+)
+
+
+def record_article_billing_deferred() -> None:
+    """Increment the article-extraction billing/auth-deferral counter (402-replay hardening)."""
+    s6_article_billing_deferred_total.inc()
+
+
 def record_article_processed(routing_tier: str) -> None:
     """Increment per-tier article counter."""
     s6_articles_processed_total.labels(routing_tier=routing_tier).inc()

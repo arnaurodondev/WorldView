@@ -86,6 +86,60 @@ class DLQRepository(DLQRepositoryPort):
         )
         return new_event_id
 
+    # ── Bulk billing-replay (402-recovery one-shot) ──────────────────────────
+
+    async def count_open(self, *, error_contains: str | None = None) -> int:
+        """Count open (``failed``) DLQ rows, optionally filtered by ``error_detail``.
+
+        ``error_contains`` (case-insensitive substring) narrows the count to
+        entries whose ``error_detail`` matches — e.g. ``"402"`` to size only the
+        spend-cap-caused backlog before a bulk requeue.
+        """
+        stmt = select(func.count()).select_from(DeadLetterQueueModel).where(DeadLetterQueueModel.status == "failed")
+        if error_contains:
+            stmt = stmt.where(DeadLetterQueueModel.error_detail.ilike(f"%{error_contains}%"))
+        return (await self._session.execute(stmt)).scalar() or 0
+
+    async def requeue_open_batch(self, *, error_contains: str | None, limit: int) -> int:
+        """Requeue a batch of open DLQ rows back onto their original topic.
+
+        For each ``failed`` row (optionally filtered by an ``error_detail``
+        substring) this inserts a fresh PENDING outbox event carrying the row's
+        ORIGINAL Avro payload + topic (so the outbox dispatcher republishes it to
+        the input topic the article consumer reads) and flips the DLQ row to
+        ``resolved``. Returns the number of rows requeued in this batch (0 when
+        none remain).
+
+        Idempotent by construction: only ``status='failed'`` rows are selected,
+        and each is marked ``resolved`` in the SAME transaction as its outbox
+        insert, so a re-run (or a concurrent drain) never double-requeues a row.
+        The consuming side is idempotent too (ValkeyDedupMixin + deterministic
+        IDs), so even a redelivered payload cannot create duplicates. This is the
+        bulk form of the proven single-entry ``requeue`` + ``mark_resolved`` path.
+        """
+        stmt = select(DeadLetterQueueModel).where(DeadLetterQueueModel.status == "failed")
+        if error_contains:
+            stmt = stmt.where(DeadLetterQueueModel.error_detail.ilike(f"%{error_contains}%"))
+        stmt = stmt.order_by(DeadLetterQueueModel.created_at.asc()).limit(limit)
+        rows = (await self._session.execute(stmt)).scalars().all()
+
+        now = common.time.utc_now()
+        for row in rows:
+            self._session.add(
+                OutboxEventModel(
+                    event_id=common.ids.new_uuid7(),
+                    topic=row.topic,
+                    # Mirror the single-entry admin path: key by the original event id.
+                    partition_key=str(row.original_event_id),
+                    payload_avro=row.payload_avro,
+                    status="pending",
+                ),
+            )
+            row.status = "resolved"
+            row.resolved_at = now
+            row.resolution_note = "requeue_dlq bulk 402-replay"
+        return len(rows)
+
     async def mark_resolved(self, dlq_id: UUID, note: str) -> None:
         """Mark a DLQ entry as resolved with a resolution note."""
         await self._session.execute(
