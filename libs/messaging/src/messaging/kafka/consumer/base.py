@@ -512,6 +512,19 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         # zero per-poll overhead so existing consumers see no behaviour change.
         self._backpressure_policy: BackpressurePolicy | None = backpressure_policy
         self._paused_partitions: set[TopicPartition] = set()
+        # RC-B barrier heartbeat (fix/pollloop-selfheal-ceiling, 2026-07-21):
+        # partitions a subclass poll loop pauses while it holds a SATURATED
+        # in-flight window open (see :meth:`_pause_all_assigned`).  A paused
+        # partition fetches no new records — so ``consumer.poll()`` can still be
+        # called every cycle to DRIVE THE GROUP HEARTBEAT (keeping the consumer a
+        # live member through a slow batch) WITHOUT admitting work we have no
+        # slots for (at-least-once safe: a paused partition's fetch position does
+        # not advance).  Tracked SEPARATELY from ``_paused_partitions``
+        # (backpressure) so the two mechanisms never resume each other's
+        # partitions, and excluded from the lag-stall self-heal ``wedged`` set
+        # exactly like backpressure pauses (a deliberately-paused partition's
+        # frozen position is not a wedge).
+        self._barrier_paused_partitions: set[TopicPartition] = set()
         # Monotonic timestamp of the last backpressure evaluation; used to
         # rate-limit checks to ``policy.check_interval_seconds``.
         self._last_backpressure_check: float = 0.0
@@ -1892,6 +1905,70 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 error=str(exc),
             )
         self._paused_partitions.clear()
+        # RC-B: also release any barrier-held pauses so a rebalance / shutdown
+        # never hands a paused partition to the next group member.
+        self._resume_barrier_paused()
+
+    def _pause_all_assigned(self) -> None:
+        """Pause every currently-assigned partition (RC-B barrier heartbeat).
+
+        Idempotent: only partitions not already barrier-paused are paused, so
+        calling this every barrier iteration is cheap (pause is a librdkafka-
+        local op, no broker round-trip).  A paused partition returns NO records
+        from ``consumer.poll()`` yet the poll STILL drives the group heartbeat —
+        letting a subclass hold a saturated in-flight window open through a slow
+        batch while remaining a live group member, instead of going silent to
+        the coordinator and being fenced out (``max.poll.interval.ms`` exceeded).
+
+        Best-effort — a failed pause just delays membership-preserving polling by
+        one cycle and must never crash the poll loop.
+        """
+        consumer = self._consumer
+        if consumer is None:
+            return
+        try:
+            assignment = consumer.assignment()
+        except Exception:  # pragma: no cover - broker hiccup; retry next cycle
+            return
+        to_pause = [tp for tp in assignment if tp not in self._barrier_paused_partitions]
+        if not to_pause:
+            return
+        try:
+            consumer.pause(to_pause)
+        except Exception as exc:
+            logger.warning(
+                "consumer.barrier.pause_failed",
+                group_id=self._config.group_id,
+                count=len(to_pause),
+                error=str(exc),
+            )
+            return
+        self._barrier_paused_partitions.update(to_pause)
+
+    def _resume_barrier_paused(self) -> None:
+        """Resume partitions paused by :meth:`_pause_all_assigned` and clear state.
+
+        Only resumes partitions NOT ALSO held by the backpressure pause
+        (``_paused_partitions``) so a barrier resume can never un-pause a
+        partition the backpressure policy still wants paused.  Best-effort —
+        errors are swallowed (teardown / next-cycle re-evaluation).
+        """
+        if not self._barrier_paused_partitions:
+            return
+        # Do not resume partitions the backpressure policy still holds paused.
+        to_resume = [tp for tp in self._barrier_paused_partitions if tp not in self._paused_partitions]
+        if to_resume:
+            try:
+                if self._consumer is not None:
+                    self._consumer.resume(to_resume)
+            except Exception as exc:
+                logger.warning(
+                    "consumer.barrier.resume_failed",
+                    group_id=self._config.group_id,
+                    count=len(to_resume),
+                    error=str(exc),
+                )
+        self._barrier_paused_partitions.clear()
 
     async def _process_retry_batch(self) -> None:
         """Fetch and retry all pending failures once per poll cycle."""
@@ -2193,7 +2270,16 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                         #      heartbeat is fresh → self-heal SUPPRESSED.  This gate
                         #      also protects the healthy-slow single-message case
                         #      (a >5-min in-flight handler stops polling → stale).
-                        paused_keys = {f"{tp.topic}:{tp.partition}" for tp in self._paused_partitions}
+                        #   3. RC-B BARRIER PAUSE (fix/pollloop-selfheal-ceiling):
+                        #      a subclass holding a saturated in-flight window open
+                        #      pauses its assignment (``_barrier_paused_partitions``)
+                        #      and keeps polling so it stays a live group member —
+                        #      its frozen position is on PURPOSE, exactly like a
+                        #      backpressure pause, so exclude it too.
+                        paused_keys = {
+                            f"{tp.topic}:{tp.partition}"
+                            for tp in (self._paused_partitions | self._barrier_paused_partitions)
+                        }
                         wedged = [(k, lag) for k, lag in stalled if k not in paused_keys]
                         secs_since_poll = self.seconds_since_fetch_poll()
                         poll_loop_active = (
@@ -2218,22 +2304,64 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                             and secs_since_progress is not None
                             and secs_since_progress >= self._lag_stall_selfheal_fence_grace_seconds
                         )
-                        if self._lag_stall_selfheal_enabled and wedged and (poll_loop_active or consumer_fenced):
+                        # ── RC-C HARD CEILING (fix/pollloop-selfheal-ceiling) ────
+                        # The FENCE-recovery gate above infers "fenced" from a
+                        # STALE BP-700 heartbeat.  But a subclass whose barrier
+                        # halt keeps that heartbeat fresh ON PURPOSE (nlp
+                        # article_consumer ~L905 refreshes it every idle cycle)
+                        # while it has STOPPED calling ``consumer.poll()`` defeats
+                        # the inference: heartbeat fresh → ``consumer_fenced``
+                        # False → suppressed FOREVER even though the fetch-poll has
+                        # been stale for hours (observed live 2026-07-21:
+                        # ``seconds_since_poll``=8790s, heartbeat ~0 → suppressed
+                        # every probe → 2.4h backlog wedge).  Past
+                        # ``max.poll.interval.ms`` WITHOUT a poll the broker has
+                        # DEFINITIVELY fenced this consumer out of the group — it
+                        # is physically impossible to have heartbeat to the
+                        # coordinator without polling inside that window — so a
+                        # fresh BP-700 heartbeat is MEANINGLESS here (it proves the
+                        # loop is spinning, not that we are still a group member).
+                        # Force-exit REGARDLESS of heartbeat freshness.  The
+                        # heartbeat-fresh SUPPRESSION below therefore only applies
+                        # WHILE ``seconds_since_poll`` is still within
+                        # ``max.poll.interval.ms`` (a legitimately slow in-progress
+                        # batch).  Gated by the SAME kill switch as the rest.
+                        max_poll_interval_seconds = self._config.max_poll_interval_ms / 1000.0
+                        poll_stale_past_max_poll = (
+                            secs_since_poll is not None and secs_since_poll > max_poll_interval_seconds
+                        )
+                        should_force_exit = poll_loop_active or consumer_fenced or poll_stale_past_max_poll
+                        if self._lag_stall_selfheal_enabled and wedged and should_force_exit:
                             logger.critical(
                                 "kafka_consumer_lag_stall_selfheal",
                                 group_id=self._config.group_id,
                                 stalled_partitions=[tp_key for tp_key, _lag in wedged],
                                 broker_reachable=True,
                                 poll_loop_active=poll_loop_active,
-                                # FIX(2): which vector triggered the restart —
-                                # ``wedged_fetch`` (poll still cycling, broker-
-                                # recreation) or ``fenced_out_of_group`` (poll and
-                                # heartbeat both stale, MAXPOLL kicked us out).
-                                trigger=("wedged_fetch" if poll_loop_active else "fenced_out_of_group"),
+                                # Which vector triggered the restart:
+                                #   * ``wedged_fetch`` — poll still cycling, broker-
+                                #     recreation (FIX(1) fix/consumer-stall-selfheal).
+                                #   * ``fenced_out_of_group`` — poll stopped AND the
+                                #     BP-700 heartbeat also stale past the fence grace
+                                #     (FIX(2) fix/selfheal-db-fence).
+                                #   * ``poll_stale_past_max_poll`` — poll stopped for
+                                #     LONGER than ``max.poll.interval.ms`` while the
+                                #     heartbeat is still fresh (RC-C
+                                #     fix/pollloop-selfheal-ceiling): the broker has
+                                #     definitively fenced us; heartbeat freshness is
+                                #     irrelevant and MUST NOT suppress.
+                                trigger=(
+                                    "wedged_fetch"
+                                    if poll_loop_active
+                                    else "fenced_out_of_group"
+                                    if consumer_fenced
+                                    else "poll_stale_past_max_poll"
+                                ),
                                 seconds_since_poll=round(secs_since_poll, 2) if secs_since_poll is not None else None,
                                 seconds_since_progress=(
                                     round(secs_since_progress, 2) if secs_since_progress is not None else None
                                 ),
+                                max_poll_interval_seconds=max_poll_interval_seconds,
                                 sustained_probes=self._lag_stall_probes,
                                 action="exiting_with_code_2_for_fresh_container_and_group_rejoin",
                             )
@@ -2246,15 +2374,18 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                             # after this returns.
                             self._force_process_exit(2)
                             return
-                        if wedged and not poll_loop_active and not consumer_fenced:
-                            # Frozen position, poll loop NOT cycling, BUT the BP-700
-                            # heartbeat is still fresh → a DELIBERATE downstream-
+                        if wedged and not should_force_exit:
+                            # Frozen position, poll loop NOT cycling, heartbeat still
+                            # fresh, AND ``seconds_since_poll`` still within
+                            # ``max.poll.interval.ms`` → a DELIBERATE downstream-
                             # outage halt (still heartbeating, still a group member)
-                            # or a long in-flight handler, NOT a fenced/wedged loop.
-                            # Do NOT restart (would crashloop through the outage);
-                            # leave the advisory CRITICAL above as the operator
-                            # signal.  A fenced loop (heartbeat ALSO stale) took the
-                            # force-exit branch above instead.
+                            # or a legitimately slow in-progress batch, NOT a
+                            # fenced/wedged loop.  Do NOT restart (would crashloop
+                            # through the outage); leave the advisory CRITICAL above
+                            # as the operator signal.  A fenced loop (heartbeat ALSO
+                            # stale) OR one whose poll has been stale past
+                            # ``max.poll.interval.ms`` (RC-C) took the force-exit
+                            # branch above instead.
                             logger.warning(
                                 "kafka_consumer_lag_stall_selfheal_suppressed",
                                 group_id=self._config.group_id,

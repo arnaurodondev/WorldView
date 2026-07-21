@@ -714,6 +714,25 @@ class Settings(BaseSettings):
     article_consumer_db_retry_ceiling_s: float = 120.0
     # NLP_PIPELINE_ARTICLE_CONSUMER_DLQ_WRITE_TIMEOUT_S
     article_consumer_dlq_write_timeout_s: float = 30.0
+    # fix/pollloop-selfheal-ceiling (2026-07-21, RC-B): the concurrency window /
+    # commit ledger can SATURATE and hold the poll loop in a barrier while it
+    # waits for in-flight work to drain.  The barrier now PAUSES the assignment
+    # and KEEPS calling ``consumer.poll()`` (paused → no new records, but the
+    # group heartbeat is maintained) so a slow batch never loses group
+    # membership.  But if the drain makes NO progress for this long — a genuinely
+    # hung window that never completes AND is not resolved by the per-message
+    # retry ceiling above — the barrier STOPS faking liveness (stops polling +
+    # stops the BP-700 heartbeat) so the base lag-stall self-heal force-exits for
+    # a fresh container + group rejoin instead of a silent forever-wedge.  This
+    # clock RESETS on every in-flight completion, so a healthy-but-saturated
+    # window (tasks completing, only a partition head held) never trips it.
+    # Default 1200 s: comfortably above the 900 s per-message watchdog (so the
+    # watchdog resolves a hung handler first, if it can) yet 600 s under the
+    # 30 min ``max.poll.interval.ms`` so recovery is bounded to ~22 min, not
+    # hours.  Env-overridable; set to 0 to disable the ceiling (pure pause/resume,
+    # relying on the base RC-C ``max.poll.interval`` ceiling as the only backstop).
+    # NLP_PIPELINE_ARTICLE_CONSUMER_BARRIER_DRAIN_GRACE_S
+    article_consumer_barrier_drain_grace_s: float = 1200.0
     # 2. ``deepinfra_max_connections`` — sizes the httpx connection pool inside the
     #    DeepSeekExtractionAdapter so N concurrent extraction calls per replica do
     #    not queue at the client.  Default 64 = 16 concurrent + comfortable headroom
