@@ -173,3 +173,100 @@ def test_default_high_risk_predicates_match_audit() -> None:
     assert DEFAULT_HIGH_RISK_PREDICATES == frozenset(
         {"competes_with", "regulates", "produces", "partner_of", "supplier_of"}
     )
+
+
+# ── Usage-log threading (cost visibility) ─────────────────────────────────────
+# The verifier's Qwen3-235B spend was invisible because the block called
+# extract() with NO usage_logger. These prove EVERY verifier call — success and
+# failure — now appends exactly one llm_usage_log row, and that non-risky/skipped
+# relations never touch the logger (no phantom cost).
+_DOC_UUID = "0190bd3e-0000-7000-8000-000000000000"  # valid UUIDv7-shaped string
+
+
+class _FakeUsageLogger:
+    """Captures ``log()`` kwargs so tests can assert what was recorded."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def log(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_usage_logged_on_successful_check() -> None:
+    client = AsyncMock()
+    client.provider = "deepinfra"
+    client.extract.return_value = _make_output(asserted=True, confidence=0.9)
+    usage = _FakeUsageLogger()
+    await check_relation_entailment(
+        [_relation("competes_with")],
+        entailment_client=client,
+        model_id="Qwen3-235B",
+        doc_id=_DOC_UUID,
+        usage_logger=usage,
+    )
+    assert len(usage.calls) == 1
+    call = usage.calls[0]
+    assert call["capability"] == "extraction"
+    assert call["provider"] == "deepinfra"
+    assert call["success"] is True
+    assert call["model_id"] == "Qwen3-235B"
+
+
+@pytest.mark.asyncio
+async def test_usage_logged_on_failed_check_marks_failure() -> None:
+    client = AsyncMock()
+    client.provider = "deepinfra"
+    client.extract.side_effect = RuntimeError("deepinfra 500")
+    usage = _FakeUsageLogger()
+    out = await check_relation_entailment(
+        [_relation("produces")],
+        entailment_client=client,
+        model_id="Qwen3-235B",
+        doc_id=_DOC_UUID,
+        usage_logger=usage,
+    )
+    # Fail-open still keeps the relation, AND the failed call is recorded.
+    assert len(out) == 1
+    assert len(usage.calls) == 1
+    assert usage.calls[0]["success"] is False
+    assert usage.calls[0]["error_code"] == "model_error"
+
+
+@pytest.mark.asyncio
+async def test_no_usage_logged_when_no_llm_call() -> None:
+    client = AsyncMock()
+    usage = _FakeUsageLogger()
+    # Non-risky predicate → skipped → no LLM call → no cost row.
+    await check_relation_entailment(
+        [_relation("listed_on")],
+        entailment_client=client,
+        model_id="Qwen3-235B",
+        doc_id=_DOC_UUID,
+        usage_logger=usage,
+    )
+    assert usage.calls == []
+    client.extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_usage_logger_failure_never_breaks_verdict() -> None:
+    client = AsyncMock()
+    client.provider = "deepinfra"
+    client.extract.return_value = _make_output(asserted=False, confidence=0.95)
+
+    class _BoomLogger:
+        async def log(self, **kwargs: Any) -> None:
+            raise RuntimeError("cost-log db down")
+
+    # A drop must still happen even though the cost logger explodes.
+    out = await check_relation_entailment(
+        [_relation("competes_with")],
+        entailment_client=client,
+        model_id="Qwen3-235B",
+        min_drop_confidence=0.7,
+        doc_id=_DOC_UUID,
+        usage_logger=_BoomLogger(),
+    )
+    assert out == []

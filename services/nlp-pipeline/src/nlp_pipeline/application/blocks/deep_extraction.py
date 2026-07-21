@@ -712,6 +712,7 @@ async def run_deep_extraction_block(
                 min_drop_confidence=entailment_config.min_drop_confidence,
                 max_per_doc=entailment_config.max_per_doc,
                 doc_id=str(doc_id),
+                usage_logger=usage_logger,
             )
             merged = {**merged, "relations": filtered_relations}
         except Exception:
@@ -783,6 +784,7 @@ async def run_deep_extraction_block(
                 min_drop_confidence=claim_entailment_config.min_drop_confidence,
                 max_per_doc=claim_entailment_config.max_per_doc,
                 doc_id=str(doc_id),
+                usage_logger=usage_logger,
             )
             merged = {**merged, "claims": filtered_claims}
         except Exception:

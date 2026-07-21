@@ -47,12 +47,14 @@ Design invariants
 from __future__ import annotations
 
 import json
+import time
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
 if TYPE_CHECKING:
     from ml_clients.protocols import ExtractionClient  # type: ignore[import-not-found]
+    from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
 
 logger = structlog.get_logger(__name__)
 
@@ -160,6 +162,7 @@ async def check_relation_entailment(
     min_drop_confidence: float = 0.7,
     max_per_doc: int = 20,
     doc_id: str | None = None,
+    usage_logger: LlmUsageLogProtocol | None = None,
 ) -> list[dict[str, Any]]:
     """Drop high-risk relations whose evidence merely co-mentions subject and object.
 
@@ -176,12 +179,19 @@ async def check_relation_entailment(
             (the relation is kept) — second guard against false positives.
         max_per_doc: hard cap on LLM calls for this document.
         doc_id: for logging only.
+        usage_logger: optional cost-log repository. When provided, EVERY verifier
+            call (success OR failure) appends one row to ``nlp_db.llm_usage_log``
+            so this Qwen3-235B spend is visible on the cost dashboards instead of
+            only incrementing an unscraped in-process counter. Fail-open: a
+            logging error never affects the returned relations.
 
     Returns:
         A new list with confidently-co-mention relations removed. FAIL-OPEN: on any
         error the relation is kept. Order is preserved.
     """
     from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-not-found]
+
+    from nlp_pipeline.application.blocks.entailment_usage import log_entailment_usage
 
     risky = frozenset(high_risk_predicates)
     kept: list[dict[str, Any]] = []
@@ -200,16 +210,24 @@ async def check_relation_entailment(
             continue
 
         checks_done += 1
+        prompt = _build_prompt(subject_ref, predicate, object_ref, evidence)
+        # Capture latency around the LLM call only (not the parse path) and record
+        # the call in llm_usage_log so the verifier's Qwen3-235B spend is visible on
+        # the cost dashboards — mirrors deep_extraction._run_extraction_window.
+        t0 = time.perf_counter()
+        output = None
+        extract_succeeded = False
         try:
             output = await entailment_client.extract(
                 ExtractionInput(
-                    prompt=_build_prompt(subject_ref, predicate, object_ref, evidence),
+                    prompt=prompt,
                     context="",
                     output_schema=_ENTAILMENT_SCHEMA,
                     model_id=model_id,
                     template_id="relation_entailment_v1",
                 )
             )
+            extract_succeeded = True
         except Exception:
             # Fail-open: infrastructure noise must never destroy a relation.
             logger.warning(
@@ -218,6 +236,20 @@ async def check_relation_entailment(
                 predicate=predicate,
                 exc_info=True,
             )
+        finally:
+            if usage_logger is not None:
+                await log_entailment_usage(
+                    usage_logger,
+                    entailment_client=entailment_client,
+                    model_id=model_id,
+                    prompt=prompt,
+                    output=output,
+                    latency_ms=int((time.perf_counter() - t0) * 1000),
+                    success=extract_succeeded,
+                    doc_id=doc_id,
+                    event_name="relation_entailment.usage_log_failed",
+                )
+        if not extract_succeeded:
             kept.append(relation)
             continue
 
