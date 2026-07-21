@@ -17,6 +17,7 @@ Tests in this module exercise the probe loop in isolation by:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -485,3 +486,176 @@ class TestLagStallDetector:
         c._consumer = fake
         assert c._compute_partition_lag_progress() is None
         assert c._compute_total_lag() is None
+
+
+# ── Lag-stall SELF-HEAL escalation (fix/consumer-stall-selfheal, 2026-07-21) ────
+
+
+def _build_selfheal_consumer() -> _ProbeConsumer:
+    """Probe consumer tuned for fast self-heal escalation tests.
+
+    ``list_topics`` is scripted to ALWAYS succeed (broker reachable for
+    metadata) so the probe stays in its SUCCESS branch — the exact broker-
+    recreation signature where the connectivity-failure force-exit can never
+    fire and only the lag-stall self-heal can unwedge the consumer.
+    """
+    c = _build_consumer()
+    # Broker is reachable for metadata on every probe (returns a truthy mock).
+    fake_kafka = MagicMock()
+    fake_kafka.list_topics.return_value = MagicMock()
+    c._consumer = fake_kafka
+    # Two frozen probes → fire, so the test resolves in a couple of 10 ms ticks
+    # instead of the platform default of five.
+    c._lag_stall_probes = 2
+    c._lag_stall_threshold = 5_000
+    return c
+
+
+class TestLagStallSelfHeal:
+    """A FROZEN-position consumer with a REACHABLE broker self-heals.
+
+    The lag-stall detector was advisory-only; on a single-broker recreation
+    (new broker IP) ``list_topics`` metadata succeeds so the connectivity path
+    never force-exits, yet the poll/fetch loop stays wedged on the stale
+    connection and the committed position freezes indefinitely (observed: 2.5h
+    full consumer freeze on 2026-07-21).  The self-heal escalates a genuinely
+    frozen partition to ``_force_process_exit(2)`` — the same proven recovery
+    the connectivity path uses — while NEVER touching a healthy-but-slow
+    consumer (whose committed position advances every probe).
+    """
+
+    async def test_frozen_position_broker_reachable_self_heals(self) -> None:
+        """Frozen committed position + reachable broker → force-exit(2) after N probes."""
+        consumer = _build_selfheal_consumer()
+        # Committed position FROZEN at 1_000 with high lag on every probe.
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            # _lag_stall_probes=2 → fires on the 2nd probe (2 x 10 ms); pad to 200 ms.
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert exit_mock.called, "self-heal never force-exited a frozen-position consumer"
+        for call in exit_mock.call_args_list:
+            assert call.args == (2,), "self-heal must force-exit with code 2 (same as connectivity path)"
+
+    async def test_slow_but_advancing_consumer_never_self_heals(self) -> None:
+        """The #1 risk: a healthy-but-slow consumer must NEVER be force-exited.
+
+        Models the LLM-bound nlp-pipeline: high lag, but the committed position
+        advances by a few offsets every probe.  ``_evaluate_lag_stall`` resets
+        the stall counter on any advance, so the sustained-freeze count can
+        never accumulate → no escalation.
+        """
+        consumer = _build_selfheal_consumer()
+        position = {"offset": 1_000}
+
+        def _advancing() -> dict[str, tuple[int, int]]:
+            # Advance 5 offsets/probe (~5/min at the 60 s cadence) while staying
+            # far behind — the healthy-but-slow signature.
+            position["offset"] += 5
+            return {"t:0": (9_000, position["offset"])}
+
+        with (
+            patch.object(type(consumer), "_compute_partition_lag_progress", side_effect=_advancing),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            # Run for MANY probes (0.3 s / 10 ms ≈ 30) — far more than
+            # _lag_stall_probes — to prove a slow-advancing consumer never fires.
+            await asyncio.sleep(0.3)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, (
+            "self-heal FALSE-FIRED on a slow-but-advancing consumer " f"(call_args_list={exit_mock.call_args_list})"
+        )
+
+    async def test_broker_unreachable_uses_connectivity_path_not_lag_path(self) -> None:
+        """A DOWN broker force-exits via the connectivity counter, not the lag path.
+
+        When ``list_topics`` raises, the probe increments the connectivity
+        failure counter and never samples lag — proving the lag self-heal is
+        confined to the broker-REACHABLE branch and does not double up with the
+        connectivity path.
+        """
+        consumer = _build_selfheal_consumer()
+        consumer._consumer.list_topics.side_effect = RuntimeError("broker unreachable")
+
+        with (
+            patch.object(type(consumer), "_compute_partition_lag_progress") as lag_mock,
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        # Connectivity path still force-exits after _probe_failure_threshold misses.
+        assert exit_mock.called, "connectivity path must still force-exit an unreachable broker"
+        # Lag sampling must be skipped entirely while the broker is unreachable.
+        assert not lag_mock.called, "lag path must not run when the connectivity probe is failing"
+
+    async def test_advisory_log_emitted_before_force_exit(self) -> None:
+        """The advisory CRITICAL must be logged BEFORE the self-heal acts."""
+        consumer = _build_selfheal_consumer()
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch("messaging.kafka.consumer.base.logger") as logger_mock,
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            manager = MagicMock()
+            manager.attach_mock(logger_mock.critical, "log")
+            manager.attach_mock(exit_mock, "exit")
+
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        events = [call.args[0] for call in logger_mock.critical.call_args_list]
+        assert "kafka_consumer_lag_stalled" in events, "advisory log must fire"
+        assert "kafka_consumer_lag_stall_selfheal" in events, "self-heal log must fire"
+        # Ordering: the advisory log precedes the force-exit call.
+        names = [c[0] for c in manager.mock_calls]
+        assert names.index("log") < names.index("exit"), "advisory log must emit before force-exit"
+
+    async def test_kill_switch_reverts_to_advisory_only(self) -> None:
+        """``_lag_stall_selfheal_enabled=False`` → log but do NOT force-exit."""
+        consumer = _build_selfheal_consumer()
+        consumer._lag_stall_selfheal_enabled = False
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, "kill-switch must disable the self-heal force-exit (advisory-only)"

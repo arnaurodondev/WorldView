@@ -1920,6 +1920,41 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
     _lag_stall_threshold: int = 5_000  # per-partition messages behind before we care
     _lag_stall_probes: int = 5  # consecutive no-progress samples → alert
 
+    # ── Lag-stall SELF-HEAL escalation (2026-07-21, fix/consumer-stall-selfheal) ─
+    # The lag-stall detector above was ADVISORY-ONLY: it logged
+    # ``kafka_consumer_lag_stalled`` and took no action.  That left a real gap.
+    # On a SINGLE-BROKER topology, an ``infra-kafka`` sync / broker replacement
+    # gives the broker a NEW IP.  The connectivity-failure force-exit path never
+    # fires because ``list_topics`` metadata SUCCEEDS once the client refreshes
+    # DNS (``broker.address.ttl``) — ``consecutive_failures`` resets to 0 — yet
+    # the poll/fetch loop can stay wedged on the stale connection, freezing the
+    # committed position INDEFINITELY (observed: every consumer frozen for 2.5h
+    # on 2026-07-21 until a MANUAL restart).  ``_evaluate_lag_stall`` already
+    # detects exactly this — a partition whose committed position has NOT
+    # advanced for ``_lag_stall_probes`` consecutive probes while its lag is
+    # >= ``_lag_stall_threshold`` — so when that fires INSIDE the connectivity-
+    # probe SUCCESS branch (broker reachable for metadata but fetch frozen: the
+    # broker-recreation signature) we escalate to the SAME proven self-heal the
+    # connectivity path uses: ``_force_process_exit(2)`` → the orchestrator
+    # restarts the container with a fresh DNS lookup + group rejoin, unwedging
+    # the stale connection in minutes instead of hours.
+    #
+    # SAFETY (the #1 risk): this must NEVER force-exit a HEALTHY-but-slow
+    # consumer (e.g. the LLM-bound nlp-pipeline at ~5/min).  It cannot:
+    # ``_evaluate_lag_stall`` resets a partition's stall counter to 0 on ANY
+    # committed-position advance, so only a GENUINELY FROZEN (zero-progress)
+    # partition can accumulate the full ``_lag_stall_probes`` sustained count and
+    # reach this escalation.  A slow-but-advancing consumer advances its position
+    # every probe → counter never accumulates → never fires.  Env kill-switch
+    # ``KAFKA_LAG_STALL_SELFHEAL=0`` reverts to advisory-only (log, no action).
+    # Platform-wide class attr for the no-per-service-drift reason as the probe
+    # knobs above.
+    _lag_stall_selfheal_enabled: bool = os.environ.get("KAFKA_LAG_STALL_SELFHEAL", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
     def _force_process_exit(self, code: int) -> None:
         """Terminate the WHOLE process immediately, from any asyncio/task context.
 
@@ -2028,6 +2063,10 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 if samples is not None:
                     stalled = self._evaluate_lag_stall(samples)
                     if stalled:
+                        # Advisory CRITICAL first — unchanged signal operators
+                        # already alert on.  Emitting BEFORE acting guarantees
+                        # the diagnostic is on the wire even though the
+                        # self-heal below terminates the process.
                         logger.critical(
                             "kafka_consumer_lag_stalled",
                             group_id=self._config.group_id,
@@ -2037,8 +2076,36 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                             threshold=self._lag_stall_threshold,
                             sustained_probes=self._lag_stall_probes,
                             probe_interval_seconds=self._probe_interval_seconds,
-                            action="partition_connected_but_position_frozen_check_handler_or_force_recreate",
+                            action="partition_connected_but_position_frozen_self_heal_restart",
                         )
+                        # ── SELF-HEAL escalation (fix/consumer-stall-selfheal) ──
+                        # We are INSIDE the connectivity-probe SUCCESS branch, so
+                        # ``list_topics`` JUST succeeded → the broker is REACHABLE.
+                        # ``stalled`` being non-empty means a partition's committed
+                        # position has been FROZEN (zero progress) for
+                        # ``_lag_stall_probes`` consecutive probes while its lag is
+                        # >= ``_lag_stall_threshold``.  Broker-reachable + fetch-
+                        # frozen is the exact broker-recreation signature that the
+                        # connectivity-failure path can NEVER catch (its metadata
+                        # probes succeed).  Escalate to the proven self-heal:
+                        # force-exit so the orchestrator restarts the container with
+                        # a fresh DNS lookup + group rejoin.  A healthy-but-slow
+                        # consumer can NOT reach here — see the class-attr note on
+                        # ``_lag_stall_selfheal_enabled``.
+                        if self._lag_stall_selfheal_enabled:
+                            logger.critical(
+                                "kafka_consumer_lag_stall_selfheal",
+                                group_id=self._config.group_id,
+                                stalled_partitions=[tp_key for tp_key, _lag in stalled],
+                                broker_reachable=True,
+                                sustained_probes=self._lag_stall_probes,
+                                action="exiting_with_code_2_for_fresh_container_and_group_rejoin",
+                            )
+                            # Hard process exit (os._exit via _force_process_exit,
+                            # NOT sys.exit — same zombie-avoidance as the
+                            # connectivity path).  Unreachable after this returns.
+                            self._force_process_exit(2)
+                            return
             except Exception as exc:
                 consecutive_failures += 1
                 logger.warning(
