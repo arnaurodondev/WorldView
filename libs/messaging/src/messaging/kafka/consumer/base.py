@@ -2001,6 +2001,41 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         "no",
     )
 
+    # ── Lag-stall self-heal FENCE recovery (2026-07-21, fix/selfheal-db-fence) ───
+    # Gate 2 above (``poll_loop_active``) SUPPRESSES the self-heal whenever the
+    # poll loop has stopped calling ``consumer.poll()`` — the DELIBERATE-halt
+    # signature (nlp barrier hold during a DB/DLQ outage) where a restart would
+    # just crashloop through the outage.  But a consumer that librdkafka FENCED
+    # out of the group (``MAXPOLL: maximum poll interval exceeded ... leaving
+    # group`` — a per-message handler that blocked SYNCHRONOUSLY on a dead DB
+    # past ``max.poll.interval.ms``) ALSO stops polling, so Gate 2 alone can't
+    # tell the two apart and wrongly suppresses the fenced case — which is
+    # exactly the class of failure that needs a restart to rejoin the group
+    # (observed live 2026-07-21: an 8h freeze suppressed on every probe with
+    # ``poll_loop_not_actively_cycling_downstream_or_slow_handler``).
+    #
+    # The DISCRIMINATOR is the BP-700 liveness heartbeat (``_record_progress`` /
+    # ``seconds_since_progress``).  A clean DB-outage barrier halt KEEPS that
+    # heartbeat fresh ON PURPOSE (nlp ``run`` ~L832 refreshes it every idle
+    # cycle to prove it is alive and STILL A GROUP MEMBER) — so a fresh heartbeat
+    # means "deliberately holding, still heartbeating → SUPPRESS".  A fenced /
+    # WEDGED poll loop (run loop stuck awaiting a handler blocked on the dead DB,
+    # or kicked from the group) refreshes NEITHER the fetch-poll timestamp NOR
+    # the BP-700 heartbeat — so a heartbeat that has been STALE for longer than
+    # this grace window (while a partition is genuinely frozen with high lag)
+    # marks the fence case → force-exit to restart + rejoin the group (on which
+    # the DB may have recovered).  A ``None`` heartbeat (never recorded) is NOT
+    # treated as fenced — same just-started-consumer safety as the fetch-poll
+    # gate — so the fence branch fails safe toward suppression.  Default 180 s
+    # = 3x the 60 s probe interval: a clean halt heartbeats every ~poll_timeout
+    # (≈1 s) so it never approaches this, while a wedged loop crosses it within
+    # three probes.  Gated behind the SAME ``KAFKA_LAG_STALL_SELFHEAL`` kill
+    # switch as the rest of the self-heal.  Platform-wide class attr for the
+    # no-per-service-drift reason as the probe knobs above.
+    _lag_stall_selfheal_fence_grace_seconds: float = float(
+        os.environ.get("KAFKA_LAG_STALL_SELFHEAL_FENCE_GRACE_S", "180"),
+    )
+
     def _force_process_exit(self, code: int) -> None:
         """Terminate the WHOLE process immediately, from any asyncio/task context.
 
@@ -2164,14 +2199,41 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                         poll_loop_active = (
                             secs_since_poll is not None and secs_since_poll < self._probe_interval_seconds
                         )
-                        if self._lag_stall_selfheal_enabled and wedged and poll_loop_active:
+                        # ── FIX(2) FENCE recovery (fix/selfheal-db-fence) ───────
+                        # Gate 2 (``poll_loop_active``) suppresses whenever poll()
+                        # stopped — but that lumps a DELIBERATE DB-outage halt
+                        # (must suppress) together with a MAXPOLL-FENCED consumer
+                        # (must restart to rejoin).  Split them on the BP-700
+                        # liveness heartbeat: a clean halt keeps it fresh on
+                        # purpose (still a group member, still heartbeating); a
+                        # fenced/wedged loop lets it go STALE.  A heartbeat stale
+                        # for longer than the fence grace, while a partition is
+                        # genuinely frozen + high-lag, is the fence signature →
+                        # force-exit.  ``None`` (never recorded) is NOT fenced —
+                        # same just-started safety as the fetch-poll gate — so this
+                        # fails safe toward suppression.
+                        secs_since_progress = self.seconds_since_progress()
+                        consumer_fenced = (
+                            not poll_loop_active
+                            and secs_since_progress is not None
+                            and secs_since_progress >= self._lag_stall_selfheal_fence_grace_seconds
+                        )
+                        if self._lag_stall_selfheal_enabled and wedged and (poll_loop_active or consumer_fenced):
                             logger.critical(
                                 "kafka_consumer_lag_stall_selfheal",
                                 group_id=self._config.group_id,
                                 stalled_partitions=[tp_key for tp_key, _lag in wedged],
                                 broker_reachable=True,
-                                poll_loop_active=True,
+                                poll_loop_active=poll_loop_active,
+                                # FIX(2): which vector triggered the restart —
+                                # ``wedged_fetch`` (poll still cycling, broker-
+                                # recreation) or ``fenced_out_of_group`` (poll and
+                                # heartbeat both stale, MAXPOLL kicked us out).
+                                trigger=("wedged_fetch" if poll_loop_active else "fenced_out_of_group"),
                                 seconds_since_poll=round(secs_since_poll, 2) if secs_since_poll is not None else None,
+                                seconds_since_progress=(
+                                    round(secs_since_progress, 2) if secs_since_progress is not None else None
+                                ),
                                 sustained_probes=self._lag_stall_probes,
                                 action="exiting_with_code_2_for_fresh_container_and_group_rejoin",
                             )
@@ -2184,18 +2246,24 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                             # after this returns.
                             self._force_process_exit(2)
                             return
-                        if wedged and not poll_loop_active:
-                            # Frozen position but the poll loop is NOT cycling →
-                            # a downstream-outage halt or a long in-flight handler,
-                            # NOT a wedged Kafka fetch.  Do NOT restart (would
-                            # crashloop through the outage); leave the advisory
-                            # CRITICAL above as the operator signal.
+                        if wedged and not poll_loop_active and not consumer_fenced:
+                            # Frozen position, poll loop NOT cycling, BUT the BP-700
+                            # heartbeat is still fresh → a DELIBERATE downstream-
+                            # outage halt (still heartbeating, still a group member)
+                            # or a long in-flight handler, NOT a fenced/wedged loop.
+                            # Do NOT restart (would crashloop through the outage);
+                            # leave the advisory CRITICAL above as the operator
+                            # signal.  A fenced loop (heartbeat ALSO stale) took the
+                            # force-exit branch above instead.
                             logger.warning(
                                 "kafka_consumer_lag_stall_selfheal_suppressed",
                                 group_id=self._config.group_id,
                                 stalled_partitions=[tp_key for tp_key, _lag in wedged],
                                 reason="poll_loop_not_actively_cycling_downstream_or_slow_handler",
                                 seconds_since_poll=round(secs_since_poll, 2) if secs_since_poll is not None else None,
+                                seconds_since_progress=(
+                                    round(secs_since_progress, 2) if secs_since_progress is not None else None
+                                ),
                             )
             except Exception as exc:
                 consecutive_failures += 1

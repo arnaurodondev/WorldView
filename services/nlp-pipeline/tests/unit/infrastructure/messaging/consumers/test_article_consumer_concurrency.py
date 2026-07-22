@@ -95,6 +95,16 @@ def _make_consumer(max_retries: int = 3) -> ArticleProcessingConsumer:
     cfg.max_retries = max_retries
     c._config = cfg  # type: ignore[attr-defined]
     c._consumer = _FakeConfluentConsumer()  # type: ignore[attr-defined]
+    # fix/selfheal-db-fence: ``_settle_message`` / ``_dead_letter_poison`` now read
+    # the DB-retry wall-time ceilings from ``_settings`` (always set in the real
+    # __init__). Generous values here so the ceiling never interferes with the
+    # existing control-flow assertions in this module.
+    from types import SimpleNamespace
+
+    c._settings = SimpleNamespace(  # type: ignore[attr-defined]
+        article_consumer_db_retry_ceiling_s=3600.0,
+        article_consumer_dlq_write_timeout_s=3600.0,
+    )
     # _record_consumer_lag must be a no-op (no metrics/consumer wiring here).
     c._record_consumer_lag = lambda: None  # type: ignore[attr-defined,method-assign]
     # No real backoff sleeps in tests.

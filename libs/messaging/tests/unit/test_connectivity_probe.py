@@ -760,3 +760,112 @@ class TestLagStallSelfHeal:
         )
         events = [call.args[0] for call in logger_mock.warning.call_args_list]
         assert "kafka_consumer_lag_stall_selfheal_suppressed" in events, "suppression must be logged"
+
+
+class TestLagStallSelfHealFenceRecovery:
+    """FIX(2) (fix/selfheal-db-fence): recover a consumer FENCED out of the group.
+
+    Closes the hole that let a real 8 h freeze go unrecovered: a per-message
+    handler that blocked synchronously on a dead DB past ``max.poll.interval.ms``
+    got the consumer fenced (``MAXPOLL ... leaving group``).  A fenced consumer
+    ALSO stops polling, so Gate 2 (``poll_loop_active``) suppressed the self-heal
+    on every probe — yet a fenced consumer NEEDS a restart to rejoin the group.
+
+    The discriminator is the BP-700 liveness heartbeat: a clean DB-outage barrier
+    halt keeps it FRESH on purpose (still a group member, still heartbeating →
+    suppress), whereas a fenced/wedged loop lets BOTH the fetch-poll timestamp AND
+    the heartbeat go STALE (→ force-exit to rejoin).
+    """
+
+    async def test_fenced_consumer_both_signals_stale_self_heals(self) -> None:
+        """FENCE case: frozen position + broker reachable + fetch-poll STALE + BP-700 STALE → force-exit(2).
+
+        The run loop is wedged awaiting a handler blocked on the dead DB, so it
+        refreshes NEITHER liveness signal.  This is the exact 8 h-freeze signature
+        Gate 2 alone wrongly suppressed; the fence gate must FIRE.
+        """
+        consumer = _build_selfheal_consumer()
+        old = time.time() - 9_999.0
+        consumer._last_progress_ts = old  # BP-700 heartbeat STALE (loop wedged, not heartbeating)
+        consumer._last_fetch_poll_ts = old  # real poll() STALE (fenced, stopped polling)
+        # Sanity: both liveness signals are stale beyond their thresholds.
+        assert consumer.seconds_since_fetch_poll() > consumer._probe_interval_seconds
+        assert consumer.seconds_since_progress() > consumer._lag_stall_selfheal_fence_grace_seconds
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch("messaging.kafka.consumer.base.logger") as logger_mock,
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert exit_mock.called, "fenced consumer (both liveness signals stale) must self-heal to rejoin the group"
+        for call in exit_mock.call_args_list:
+            assert call.args == (2,), "fence self-heal must force-exit with code 2"
+        # The self-heal log must tag the FENCE trigger, not the wedged-fetch one.
+        selfheal_calls = [
+            c for c in logger_mock.critical.call_args_list if c.args[0] == "kafka_consumer_lag_stall_selfheal"
+        ]
+        assert selfheal_calls, "self-heal CRITICAL must fire"
+        assert selfheal_calls[0].kwargs.get("trigger") == "fenced_out_of_group"
+        assert selfheal_calls[0].kwargs.get("poll_loop_active") is False
+
+    async def test_fence_gate_respects_kill_switch(self) -> None:
+        """``KAFKA_LAG_STALL_SELFHEAL=0`` must disable the fence force-exit too."""
+        consumer = _build_selfheal_consumer()
+        consumer._lag_stall_selfheal_enabled = False
+        old = time.time() - 9_999.0
+        consumer._last_progress_ts = old
+        consumer._last_fetch_poll_ts = old
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, "kill-switch must disable the fence self-heal"
+
+    async def test_never_polled_consumer_not_treated_as_fenced(self) -> None:
+        """Just-started safety: a NEVER-recorded BP-700 heartbeat (None) must NOT force-exit.
+
+        ``seconds_since_progress`` is None before the first progress tick.  The
+        fence gate must fail safe toward SUPPRESSION rather than restart a
+        consumer that simply has not warmed up yet.
+        """
+        consumer = _build_selfheal_consumer()
+        consumer._last_progress_ts = -1.0  # never recorded → seconds_since_progress() is None
+        consumer._last_fetch_poll_ts = time.time() - 9_999.0  # fetch-poll stale
+        assert consumer.seconds_since_progress() is None
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, "a never-progressed (None heartbeat) consumer must not be treated as fenced"
