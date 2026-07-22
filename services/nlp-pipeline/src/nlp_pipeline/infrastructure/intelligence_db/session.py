@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from nlp_pipeline.domain.errors import IntelligenceDbAlembicError
-from nlp_pipeline.infrastructure.nlp_db.session import build_connect_args, statement_timeout_from_env
+from nlp_pipeline.infrastructure.nlp_db.session import (
+    build_connect_args,
+    command_timeout_from_env,
+    statement_timeout_from_env,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -68,8 +72,13 @@ def _build_intelligence_factories(
     # BP-502: application_name surfaces this service in pg_stat_activity for
     # connection debugging; pool_recycle=300 defends against stale DNS sockets.
     # statement_timeout (from settings) bounds every regular SQL session on
-    # intelligence_db so no query can run unbounded again (2026-06-21 incident).
-    _connect_args: dict[str, object] = build_connect_args(settings.statement_timeout_ms)
+    # intelligence_db so no query can run unbounded again (2026-06-21 incident);
+    # command_timeout (from settings) bounds the CLIENT wait so a dead connection
+    # raises instead of hanging forever (2026-07-21 incident).
+    _connect_args: dict[str, object] = build_connect_args(
+        settings.statement_timeout_ms,
+        command_timeout_s=settings.command_timeout_s,
+    )
     write_engine = create_async_engine(
         settings.intelligence_database_url.get_secret_value(),
         echo=False,
@@ -136,7 +145,10 @@ def create_intelligence_session_factory(
         pool_size=10,
         max_overflow=20,
         pool_recycle=300,
-        connect_args=build_connect_args(statement_timeout_from_env()),
+        connect_args=build_connect_args(
+            statement_timeout_from_env(),
+            command_timeout_s=command_timeout_from_env(),
+        ),
     )
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         bind=engine,

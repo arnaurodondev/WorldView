@@ -26,24 +26,60 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 # Override via the ``NLP_PIPELINE_STATEMENT_TIMEOUT_MS`` env var.
 _DEFAULT_STATEMENT_TIMEOUT_MS = 60_000
 
+# Default client-side asyncpg ``command_timeout`` (seconds) for the raw-URL factory
+# wrappers, which have no Settings object to read from.  The settings-aware factory
+# paths use ``settings.command_timeout_s``.  Override via the
+# ``NLP_PIPELINE_COMMAND_TIMEOUT_S`` env var.  See ``Settings.command_timeout_s`` for
+# the full rationale: this is the CLIENT-side deadline that makes a DB op on a dead
+# (half-open, never-RST) connection RAISE instead of hanging forever — the 2026-07-21
+# 2.4 h article-pipeline wedge.  Kept above every legitimate query ceiling (60 s
+# statement_timeout, 300 s embedding-expiry batch) and below Kafka
+# ``max.poll.interval.ms`` (30 min) so a wedged op raises and the message redelivers.
+_DEFAULT_COMMAND_TIMEOUT_S = 600.0
 
-def build_connect_args(statement_timeout_ms: int, application_name: str = "nlp-pipeline") -> dict[str, object]:
-    """Build asyncpg ``connect_args`` with application_name + statement_timeout.
 
-    The ``statement_timeout`` is set as an asyncpg ``server_settings`` connection
-    parameter so every SQL session is bounded the moment the connection is
-    established — the backstop that prevents a runaway FTS / batch query from
-    pinning the shared Postgres instance (4.5 h / ~5 min incidents, 2026-06-21).
+def build_connect_args(
+    statement_timeout_ms: int,
+    application_name: str = "nlp-pipeline",
+    command_timeout_s: float = _DEFAULT_COMMAND_TIMEOUT_S,
+) -> dict[str, object]:
+    """Build asyncpg ``connect_args`` with application_name + timeouts.
 
-    When *statement_timeout_ms* <= 0 the timeout is omitted (unbounded), matching
-    the previous behaviour for operators who explicitly disable it.  asyncpg
-    requires every ``server_settings`` value to be a string; a bare-integer
-    string is interpreted by Postgres as milliseconds, which is what we want.
+    Two INDEPENDENT timeouts are configured; they defend against different
+    failure modes and neither can substitute for the other:
+
+    * ``statement_timeout`` (server-side, via ``server_settings``) bounds every
+      SQL session the moment the connection is established — the backstop that
+      prevents a runaway FTS / batch query from pinning the shared Postgres
+      instance (4.5 h / ~5 min incidents, 2026-06-21).  It is enforced by the
+      Postgres SERVER, so it does NOTHING when the server is dead.
+
+    * ``command_timeout`` (client-side, top-level asyncpg connect kwarg) bounds
+      how long asyncpg will wait for ANY command to complete, regardless of
+      server state.  This is the backstop for a half-open (dead-but-not-RST)
+      connection after a Postgres OOM-crash: without it asyncpg waits on the
+      socket FOREVER (observed 2.4 h article-pipeline wedge, 2026-07-21).  The
+      firing timeout surfaces as ``asyncio.TimeoutError``, which the article
+      consumer treats as a transient failure → in-place retry / DLQ, preserving
+      at-least-once.
+
+    When *statement_timeout_ms* <= 0 the server-side timeout is omitted
+    (unbounded); when *command_timeout_s* <= 0 the client-side timeout is omitted
+    (unbounded) — both match the previous behaviour for operators who explicitly
+    disable them.  asyncpg requires every ``server_settings`` value to be a
+    string; a bare-integer string is interpreted by Postgres as milliseconds.
     """
     server_settings: dict[str, str] = {"application_name": application_name}
     if statement_timeout_ms > 0:
         server_settings["statement_timeout"] = str(statement_timeout_ms)
-    return {"server_settings": server_settings}
+    connect_args: dict[str, object] = {"server_settings": server_settings}
+    if command_timeout_s > 0:
+        # asyncpg accepts ``command_timeout`` as a top-level connect kwarg (float
+        # seconds); SQLAlchemy's asyncpg dialect forwards connect_args straight to
+        # ``asyncpg.connect``.  It applies per command, so a dead connection makes
+        # the very next query raise instead of hanging.
+        connect_args["command_timeout"] = float(command_timeout_s)
+    return connect_args
 
 
 def statement_timeout_from_env() -> int:
@@ -64,6 +100,28 @@ def statement_timeout_from_env() -> int:
             fallback_ms=_DEFAULT_STATEMENT_TIMEOUT_MS,
         )
         return _DEFAULT_STATEMENT_TIMEOUT_MS
+
+
+def command_timeout_from_env() -> float:
+    """Read the client-side command_timeout (seconds) for the raw-URL wrappers.
+
+    Falls back to ``_DEFAULT_COMMAND_TIMEOUT_S`` when the env var is unset or
+    malformed (fail-safe: a bad value must not silently disable the dead-
+    connection backstop that prevents the 2.4 h hang).  A value <= 0 disables the
+    timeout (explicit operator opt-out).
+    """
+    raw = os.environ.get("NLP_PIPELINE_COMMAND_TIMEOUT_S", "").strip()
+    if not raw:
+        return _DEFAULT_COMMAND_TIMEOUT_S
+    try:
+        return float(raw)
+    except ValueError:
+        _log.warning(
+            "nlp_command_timeout_env_invalid",
+            value=raw,
+            fallback_s=_DEFAULT_COMMAND_TIMEOUT_S,
+        )
+        return _DEFAULT_COMMAND_TIMEOUT_S
 
 
 def _same_db_endpoint(url1: str, url2: str) -> bool:
@@ -95,8 +153,13 @@ def _build_nlp_factories(
     # BP-502: application_name surfaces this service in pg_stat_activity for
     # connection debugging; pool_recycle=300 defends against stale DNS sockets.
     # statement_timeout (from settings) bounds every SQL session so no FTS or
-    # batch query can run unbounded again (2026-06-21 incident).
-    _connect_args: dict[str, object] = build_connect_args(settings.statement_timeout_ms)
+    # batch query can run unbounded again (2026-06-21 incident); command_timeout
+    # (from settings) bounds the CLIENT wait so a dead connection raises instead
+    # of hanging forever (2026-07-21 incident).
+    _connect_args: dict[str, object] = build_connect_args(
+        settings.statement_timeout_ms,
+        command_timeout_s=settings.command_timeout_s,
+    )
     write_engine = create_async_engine(
         settings.database_url.get_secret_value(),
         echo=False,
@@ -158,7 +221,10 @@ def create_session_factory(url: str) -> tuple[AsyncEngine, async_sessionmaker[As
         pool_size=10,
         max_overflow=20,
         pool_recycle=300,
-        connect_args=build_connect_args(statement_timeout_from_env()),
+        connect_args=build_connect_args(
+            statement_timeout_from_env(),
+            command_timeout_s=command_timeout_from_env(),
+        ),
     )
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         bind=engine,
