@@ -391,6 +391,52 @@ class TestPathInsightWorker:
         assert claimed_batch_sizes == [7]
 
     @pytest.mark.asyncio
+    async def test_run_loop_survives_transient_claim_error(self) -> None:
+        """A transient DB error in ``_claim_batch`` must NOT escape ``run_loop``.
+
+        Regression for the path-insight crashloop (2026-07-21): a Postgres
+        restart / PgBouncer blip made ``_claim_batch`` raise a connection error
+        (``ConnectionDoesNotExistError`` / ``[Errno 111] Connect call failed``),
+        which — being outside any try/except — propagated to ``main`` and hit
+        ``sys.exit(1)``, so k8s CrashLoopBackOff'd the pod (restartCount 226 over
+        ~4.5 days).  The loop now catches the error, logs it, and backs off.
+        """
+        worker = _make_worker()
+
+        # Keep the reclaim task idle so it never interferes with the assertion.
+        async def _never() -> None:
+            await asyncio.Event().wait()
+
+        worker._reclaim_loop = _never  # type: ignore[method-assign]
+
+        calls = {"n": 0}
+
+        async def _claim() -> list:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # The exact transient failure seen in prod logs.
+                raise ConnectionError("connection was closed in the middle of operation")
+            # Second iteration: stop the loop deterministically. CancelledError is
+            # a BaseException, so ``except Exception`` in run_loop does NOT swallow
+            # it — it unwinds cleanly, exactly like a real graceful shutdown.
+            raise asyncio.CancelledError
+
+        worker._claim_batch = _claim  # type: ignore[method-assign]
+
+        sleeps: list[float] = []
+
+        async def _fake_sleep(secs: float) -> None:
+            sleeps.append(secs)
+
+        with patch("asyncio.sleep", _fake_sleep), pytest.raises(asyncio.CancelledError):
+            await worker.run_loop()
+
+        # The transient error caused a backoff sleep (not a process crash), and
+        # the loop kept going to a second claim attempt.
+        assert calls["n"] == 2
+        assert 5 in sleeps  # _ERROR_BACKOFF_INITIAL_SECONDS
+
+    @pytest.mark.asyncio
     async def test_parallel_workers_claim_disjoint_sets(self) -> None:
         """Two concurrent worker instances claim disjoint job sets.
 
