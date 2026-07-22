@@ -209,6 +209,98 @@ async def test_missing_entity_ref_skips_llm() -> None:
     client.extract.assert_not_awaited()
 
 
+# ── Usage-log threading (cost visibility) ─────────────────────────────────────
+# The verifier spend was invisible because the block called extract() with NO
+# usage_logger. These prove every verifier call (success + failure) appends one
+# llm_usage_log row, skipped claims never touch the logger, and a logger failure
+# never affects the verdict.
+_DOC_UUID = "0190bd3e-0000-7000-8000-000000000000"
+
+
+class _FakeUsageLogger:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def log(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_usage_logged_on_successful_check() -> None:
+    client = AsyncMock()
+    client.provider = "deepinfra"
+    client.extract.return_value = _make_output(entailed=True, confidence=0.9)
+    usage = _FakeUsageLogger()
+    await check_claim_entailment(
+        [_claim("DEBT_CHANGE")],
+        entailment_client=client,
+        model_id="DeepSeek-V4-Flash",
+        doc_id=_DOC_UUID,
+        usage_logger=usage,
+    )
+    assert len(usage.calls) == 1
+    call = usage.calls[0]
+    assert call["capability"] == "extraction"
+    assert call["provider"] == "deepinfra"
+    assert call["success"] is True
+    assert call["model_id"] == "DeepSeek-V4-Flash"
+
+
+@pytest.mark.asyncio
+async def test_usage_logged_on_failed_check_marks_failure() -> None:
+    client = AsyncMock()
+    client.provider = "deepinfra"
+    client.extract.side_effect = RuntimeError("deepinfra 500")
+    usage = _FakeUsageLogger()
+    out = await check_claim_entailment(
+        [_claim("REVENUE_GROWTH")],
+        entailment_client=client,
+        model_id="DeepSeek-V4-Flash",
+        doc_id=_DOC_UUID,
+        usage_logger=usage,
+    )
+    assert len(out) == 1  # fail-open keeps the claim
+    assert len(usage.calls) == 1
+    assert usage.calls[0]["success"] is False
+    assert usage.calls[0]["error_code"] == "model_error"
+
+
+@pytest.mark.asyncio
+async def test_no_usage_logged_when_no_llm_call() -> None:
+    client = AsyncMock()
+    usage = _FakeUsageLogger()
+    await check_claim_entailment(
+        [_claim("PRODUCT_LAUNCH")],  # non-gated → skipped
+        entailment_client=client,
+        model_id="DeepSeek-V4-Flash",
+        doc_id=_DOC_UUID,
+        usage_logger=usage,
+    )
+    assert usage.calls == []
+    client.extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_usage_logger_failure_never_breaks_verdict() -> None:
+    client = AsyncMock()
+    client.provider = "deepinfra"
+    client.extract.return_value = _make_output(entailed=False, confidence=0.95)
+
+    class _BoomLogger:
+        async def log(self, **kwargs: Any) -> None:
+            raise RuntimeError("cost-log db down")
+
+    out = await check_claim_entailment(
+        [_claim("DEBT_CHANGE")],
+        entailment_client=client,
+        model_id="DeepSeek-V4-Flash",
+        min_drop_confidence=0.7,
+        doc_id=_DOC_UUID,
+        usage_logger=_BoomLogger(),
+    )
+    assert out == []
+
+
 def test_default_high_fab_claim_types_match_audit() -> None:
     assert DEFAULT_HIGH_FAB_CLAIM_TYPES == frozenset(
         {"DEBT_CHANGE", "REVENUE_GROWTH", "GUIDANCE_RAISE", "GUIDANCE_CUT", "HEADCOUNT_CHANGE", "EPS_BEAT"}
