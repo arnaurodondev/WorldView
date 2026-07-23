@@ -11,6 +11,7 @@
 - [ ] Async context managers properly used for DB sessions
 - [ ] Advisory/distributed locks do not span external I/O (fetch outside lock, write inside)
 - [ ] Lock duration is bounded and predictable (milliseconds, not seconds)
+- [ ] **GLiNER (or any native-process ML) inference-loop change** (batching, thread count, sequence length): confirm the per-forward-pass activation budget still bounds peak RSS and that no new long-lived per-thread allocation pattern reintroduces glibc-arena fragmentation OOM (distinct mechanism from Postgres pooling OOM — process RSS growth, not DB planner/pooling)
 
 ## 2. Exception Handling
 
@@ -19,6 +20,7 @@
 - [ ] `except` blocks don't swallow errors silently (at minimum, log them)
 - [ ] `finally` blocks don't mask original exceptions with new ones
 - [ ] Async callbacks have proper error handling (not fire-and-forget)
+- [ ] **Standalone daemon-loop workers (own `while True`, not APScheduler, not `BaseKafkaConsumer`)**: the loop body — including any call that opens a fresh DB/broker session — is wrapped in try/except with capped exponential backoff; only `asyncio.CancelledError` propagates for shutdown. APScheduler jobs get crash isolation for free; bespoke loops (e.g. `path_insight_worker.py`) don't unless explicitly added.
 
 ## 3. Storage Atomicity
 
@@ -48,6 +50,8 @@
 - [ ] **Prometheus tests use isolated_registry fixture**: any test that asserts on Prometheus gauge/counter values must use an `isolated_registry` fixture, not the global `REGISTRY` singleton (BP-425, STANDARDS.md §20.6)
 - [ ] **New Kafka consumer writing to a shared table: does the Avro schema carry tenant_id?** — If the event schema has no `tenant_id` field, the consumer cannot populate it in the destination table; the data becomes globally scoped and leaks across tenants. All user-attributable events must carry `{"name": "tenant_id", "type": ["null", "string"], "default": null}`. Market data / instrument discovery events are excluded (global reference data). (HR-054)
 - [ ] **Vector/HNSW search query: is it filtered by tenant_id?** — Any `cosine_distance`, `l2_distance`, or `max_inner_product` query against a table that has a `tenant_id` column MUST include `WHERE tenant_id = :tid OR tenant_id IS NULL`. Missing this filter causes cross-tenant data leaks via semantic similarity. (HR-053)
+- [ ] **Change to `BaseKafkaConsumer` self-heal/connectivity-probe path (`_connectivity_probe_loop`, `_evaluate_lag_stall`, `_force_process_exit`, pause/resume state)**: test matrix covers the cross-product of all known halt reasons (backpressure pause, barrier pause, downstream-outage halt, true fence) — not just the new gate in isolation (messaging-selfheal cluster)
+- [ ] **New sibling tracking collection added as a variant of an existing one** (e.g. `_barrier_paused_partitions` alongside `_paused_partitions`): grep every early-return guard, resume/cleanup path, and exclusion check referencing the ORIGINAL collection and confirm each was updated to also consider the new one — a guard written before the sibling existed silently ignores it forever
 
 ## 4b. Unit of Work / Transaction Integrity (R26)
 
@@ -78,6 +82,7 @@
 - [ ] Error messages don't leak internal details to clients — **`/readyz` and `/healthz` endpoints return opaque `"error"` strings in HTTP body, never raw exception messages** (BP-047, HR-023)
 - [ ] Token comparisons use `hmac.compare_digest()` (not `==`)
 - [ ] Query pagination has upper bound (max limit parameter)
+- [ ] **External-API pagination loop does not treat "page shorter than requested limit" as end-of-data** unless the provider contract guarantees it — some providers (e.g. Polymarket) silently cap page size below the requested limit, which a naive short-page check misreads as pagination end and truncates results (content-ingestion-pagination cluster)
 - [ ] URL inputs validate scheme and reject private IP ranges (SSRF prevention)
 - [ ] **JWT decode passes `issuer=` parameter** — `jwt.decode(token, key, algorithms=["RS256"], issuer=expected_issuer)` — missing issuer= enables issuer-spoofing auth bypass (BP-145, HR-026)
 - [ ] **One-time-use Valkey state (PKCE codes, nonces) uses atomic `GETDEL`**, not `GET` then `DEL` — two-command pipeline creates replay window (BP-146, HR-027)
@@ -106,6 +111,11 @@
 - [ ] **Repositories with read/write session splitting: `get_or_create` reads back via write session after INSERT** — never call `self.get()` (read session) immediately after INSERT on write session (BP-049)
 - [ ] **Kafka `producer.produce(...)` calls pass `key=` for any topic with per-entity ordering semantics** — without `key=`, sticky/round-robin partitioning means two events for the same `entity_id` can land on different partitions and be reordered downstream (F-DATA-06, PLAN-0057 deferred). Acceptable today only because all consumers use ON CONFLICT idempotency; fails the moment a destructive event ships.
 - [ ] **LLM prompts that interpolate untrusted text use explicit delimiters AND validate output charset/length** — `f"... {description} ..."` without `<<<DELIMITER>>>...<<<END>>>` wrappers + an output denylist permits prompt-injection attacks where a poisoned `description` makes the LLM emit attacker-chosen aliases/claims that downstream code persists (F-SEC-02, PLAN-0057 deferred).
+- [ ] **Query against a table with a PARTIAL index** (search migrations for `CREATE INDEX ... WHERE`) that filters on the indexed predicate column: confirm the predicate value is either a literal (allow-listed if user-influenced) or accompanied by an EXPLAIN-verified Index Scan regression test — a bound parameter on that column will NOT match the partial index and silently falls back to Seq Scan / exact-sort, risking `work_mem` OOM (BP-717/BP-730)
+- [ ] **Change to a service's `infrastructure/db/session.py` connect_args** (statement_timeout, command_timeout, prepared-statement caching, pool sizing): check whether the SAME setting needs propagating to the other services with their own hand-rolled `session.py` (no shared session-factory exists yet) — list them and confirm parity or file a follow-up
+- [ ] **Avro schema field appended (even nullable/backward-compatible) for a topic already in production**: verify EVERY consumer group reading that topic has resilient handling for `EOFError`/`struct.error`/malformed-record errors on old-schema backlog records, not just the consumer being actively modified
+- [ ] **New prompt directive added or version bumped in a versioned prompt file** (e.g. `libs/prompts/src/prompts/chat/tool_use.py`): validated via a live A/B run against the existing regression question set — including at least one question shape UNRELATED to the one motivating the change — not just unit tests of the prompt string; broad imperative directives have previously regressed unrelated tool-selection paths one commit later (rag-chat-grounding cluster)
+- [ ] **New APScheduler (or similar) sweep worker that calls an LLM or other paid/rate-limited API per-row on a recurring interval**: confirm it tracks a durable per-row attempt counter, excludes at-cap rows from future sweeps, and does NOT count transient provider errors against the cap — don't reinvent a bespoke mechanism per worker (kg-entity-worker-quality cluster)
 
 ## 7. Architecture Compliance
 
@@ -122,6 +132,7 @@
 - [ ] All `market-ingestion` provider adapters extend `BaseProviderAdapter` (not `ProviderAdapter` directly) — ensures `_record_api_call()` is available and generic metrics are emitted (STANDARDS §18)
 - [ ] `domain/errors.py` defines `DomainError(Exception)` — all other exceptions inherit from it (R21)
 - [ ] Service-specific error alias defined as subclass, not assignment (e.g., `class MyServiceError(DomainError):`)
+- [ ] **New/modified paginated external-API client within a provider family** (e.g. `polymarket*` adapters): check the other clients/adapters for the SAME provider family for pagination invariants already fixed there (`git log --grep=pagination -- <adapter-dir>`) — a fix applied to one client in a family must be ported or verified against its siblings, not left to be independently rediscovered (content-ingestion-pagination cluster)
 
 ## 7b. Docker Compose Completeness
 
@@ -155,6 +166,7 @@
 - [ ] **Full service suite run after fix** (not just touched files) — `python -m pytest tests/ -x -q` from the service root (HR-042, BP-408)
 - [ ] New test failures classified: pre-existing / fix-induced regression / stale expectation
 - [ ] Fix-induced regressions resolved before declaring done
+- [ ] **New/modified external-API pagination or quota logic**: at least one test fixture reproduces the PROVIDER'S OBSERVED live response shape (not just the shape implied by its docs), e.g. a short-but-nonempty first page, and the loop does not terminate early on it; record the live verification (endpoint, params, observed row count vs requested limit) in the commit message or fixture comment (content-ingestion-pagination cluster)
 
 ## 8b. Deployment Verification
 

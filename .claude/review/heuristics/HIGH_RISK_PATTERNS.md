@@ -958,3 +958,291 @@ Any `useState` holding a user-preference value without a corresponding `useEffec
 grep -n "useQuery\b" apps/worldview-web/ -r --include="*.tsx" | grep -v "staleTime"
 ```
 Any `useQuery` call without `staleTime` on a non-price endpoint is a candidate for rate-limit exhaustion under concurrent component mounts.
+
+---
+
+## RED — Added from Fix-Commit Cluster Mining (2026-07-23)
+
+### HR-060: New Self-Heal Tracking Collection Added to `BaseKafkaConsumer` Without Updating Sibling Guards
+
+**Pattern** (RED):
+```python
+# BAD — a new pause-tracking/liveness field is bolted onto the self-heal path
+# without grepping every other guard/resume/exclusion site that touches its siblings
+class BaseKafkaConsumer:
+    def __init__(self, ...):
+        self._paused_partitions: set[TopicPartition] = set()
+        self._barrier_paused_partitions: set[TopicPartition] = set()   # existing sibling
+        self._saturated_paused_partitions: set[TopicPartition] = set()  # ← new, added in isolation
+        self._last_progress_ts: float = ...
+        self._last_fetch_poll_ts: float = ...  # ← new, added in isolation
+
+    async def _resume_all_paused_partitions(self) -> None:
+        # BAD — only resumes the original collection; new sibling never drained
+        for tp in self._paused_partitions:
+            await self._consumer.resume([tp])
+        self._paused_partitions.clear()
+        # _saturated_paused_partitions silently never resumed
+```
+
+**Risk**: `_connectivity_probe_loop`, `_evaluate_lag_stall`, `_resume_all_paused_partitions`, and
+`_force_process_exit` in `libs/messaging/src/messaging/kafka/consumer/base.py` form a
+self-heal/liveness state machine implemented as a set of parallel ad hoc flags and
+partition-tracking collections rather than an explicit state machine. Every new halt reason
+(barrier saturation, connectivity probe failure, lag stall) has historically been added as
+*yet another* sibling `_<adjective>_paused_partitions` set or `_last_<x>_ts` timestamp, without
+updating every pre-existing guard/early-return/resume/exclusion site to know about it. The
+result: partitions get paused by the new mechanism but never resumed by the generic resume path,
+or the self-heal loop misreads one halt reason as another (a real production incident: a fenced
+consumer group was misread as a slow handler and the self-heal suppressed correctly-needed
+action). See BP-590-adjacent messaging incidents (2026-07 barrier/poll-loop fixes).
+**Action**: Any diff that adds a new `_<adjective>_paused_partitions` set, a new `_last_<x>_ts`
+timestamp, or a new boolean halt/liveness flag to `base.py`'s self-heal path — or that touches
+`_connectivity_probe_loop`, `_evaluate_lag_stall`, `_resume_all_paused_partitions`, or
+`_force_process_exit` — requires the reviewer to: (1) grep every other reference to the sibling
+collection(s) it parallels and confirm every guard/early-return/resume/exclusion site was updated
+for **both** the old and new collection; and (2) demand a combinatorial test that asserts
+fire/suppress behavior across the full cross-product of known halt reasons, not just the new one
+tested in isolation.
+**Detection**:
+```bash
+grep -n "_paused_partitions\|_last_.*_ts\b" libs/messaging/src/messaging/kafka/consumer/base.py
+# For every match, confirm _resume_all_paused_partitions (or equivalent) and
+# _connectivity_probe_loop / _evaluate_lag_stall reference the SAME set of names.
+```
+
+---
+
+### HR-061: Query Binds a Partial-Index Predicate Column as a Parameter Instead of a Literal
+
+**Pattern** (RED):
+```python
+# BAD — column has a PARTIAL index (WHERE state = 'active') but the query
+# binds the predicate value as a SQLAlchemy parameter, not a literal
+stmt = (
+    select(EntityEmbeddingState)
+    .where(EntityEmbeddingState.state == bindparam("state"))   # opaque at plan time
+    .order_by(EntityEmbeddingState.embedding.cosine_distance(query_vec))
+    .limit(k)
+)
+await session.execute(stmt, {"state": "active"})
+```
+
+**Risk**: Postgres' `predicate_implied_by` can only prove a partial index's predicate is
+satisfied against **constant literals** visible at plan time. A bound parameter (`:col_name`,
+`bindparam`) is opaque to the planner even when the runtime value always matches the index
+predicate, so the planner silently falls back to a full index/Seq Scan or an exact `Sort`
+instead of the intended partial HNSW/btree index. On ANN/vector-search paths this has caused
+Postgres `work_mem` exhaustion and OOM under load (partial-HNSW indexes on
+`entity_embedding_state` were introduced specifically to bound this). The query still returns
+correct results, so the regression is invisible to functional tests — only `EXPLAIN` reveals it.
+**Action**: Any new or modified ANN/vector-search or filtered-lookup repository method that
+queries a column with a partial index (grep migration files for
+`WHERE <col> = ...` inside `CREATE INDEX ... USING hnsw/btree`) must either (a) inline an
+allow-listed literal value for that predicate, or (b) ship an `EXPLAIN`-backed regression test
+asserting `Index Scan using idx_...` (not `Seq Scan`/`Sort`) for every value the code path can
+pass.
+**Detection**:
+```bash
+# Find partial-index predicates defined in migrations
+grep -rn "CREATE INDEX.*USING \(hnsw\|btree\).*WHERE" services/*/alembic/versions/ \
+  services/intelligence-migrations/alembic/versions/
+# Then check the corresponding repository query binds that same column via bindparam/:name
+# rather than a literal matching the index predicate.
+```
+
+---
+
+## ORANGE — Added from Fix-Commit Cluster Mining (2026-07-23)
+
+### HR-062: New Kafka Consumer Without Resilient Avro-Deserialize Exception Handling
+
+**Pattern** (ORANGE):
+```python
+# BAD — schemaless fastavro decode with no guard against malformed/truncated bytes
+class MyConsumer(BaseKafkaConsumer[MyEvent]):
+    async def deserialize(self, raw: bytes) -> MyEvent:
+        return fastavro.schemaless_reader(io.BytesIO(raw), MY_SCHEMA)  # ← unguarded
+```
+
+**Risk**: Services using schemaless (no-registry) fastavro decoding are exposed to
+`EOFError`/`struct.error`/`MalformedDataError` on truncated or corrupt messages (broker restart
+mid-produce, incompatible producer version). Several `knowledge-graph` consumers
+(`enriched_consumer.py`, `prediction_enriched_consumer.py`) were already patched with an
+explicit `except (MalformedDataError, EOFError, struct.error)` guard after a crash-loop incident;
+sibling consumers on other topics in the same service (`structured_enrichment_consumer.py`,
+`temporal_event_consumer.py`, `instrument_consumer.py`, `entity_consumer.py`,
+`fundamentals_consumer.py`, `instrument_discovered_consumer.py`,
+`provisional_queued_consumer.py`) were verified to still lack it. Any new consumer copy-pasted
+from an unfixed sibling reproduces the same crash-loop exposure.
+**Action**: Any new or modified Kafka consumer's `deserialize()` (or equivalent decode call site)
+in a schemaless-Avro service must wrap the decode in
+`except (MalformedDataError, EOFError, struct.error)` and classify the failure (poison-pill →
+DLQ, not infinite retry). When touching this bug class anywhere in a service, grep all sibling
+consumers in the same service for the same gap.
+**Detection**:
+```bash
+grep -rLn "MalformedDataError\|EOFError" services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/consumers/*.py
+# Any file NOT excluded above that calls fastavro.schemaless_reader is a candidate.
+```
+
+---
+
+### HR-063: Standalone Daemon Loop (`while True`) With Per-Iteration I/O Outside Any Loop-Level `try/except`
+
+**Pattern** (ORANGE):
+```python
+# BAD — no try/except around the loop body; a transient DB/broker blip escalates to process exit
+async def run_loop(self) -> None:
+    while True:
+        await self._db.fetch_batch()      # transient Postgres restart raises here
+        await self._process()
+        await asyncio.sleep(self._interval_s)
+# main() has no outer guard either → sys.exit(1) → CrashLoopBackOff
+```
+
+**Risk**: APScheduler-registered jobs are shielded from crashing the process by
+`AsyncIOScheduler`'s own per-job exception handling; hand-rolled `while True`/`run_loop` workers
+get no such protection unless the author adds it explicitly. When the per-iteration DB/network
+call sits outside any try/except at the loop level (even if an inner per-job try/except exists
+elsewhere in the call chain), a transient infra blip (Postgres restart, PgBouncer drop, broker
+rebalance) propagates through `main()` and exits the process, producing a Kubernetes
+CrashLoopBackOff instead of a bounded backoff-retry.
+**Action**: Any new standalone daemon-loop worker (not registered via APScheduler) must wrap the
+entire loop body in `try/except Exception` with backoff (see HR-052) before the next iteration.
+Verify this at the outermost `while True`, not just inside a sub-call.
+**Detection**:
+```bash
+# Find while-True loops and check the very next lines for a try: before the first await
+grep -n "while True:" services/*/src/*/infrastructure/workers/*.py -A2 | grep -B2 "await" | grep -v "try:"
+```
+
+---
+
+### HR-064: Scheduled Per-Row LLM Sweep Without an Attempt-Count Column in Its `WHERE` Clause
+
+**Pattern** (ORANGE):
+```python
+# BAD — re-selects and re-bills every unprocessed row every interval, forever
+rows = await session.execute(
+    select(Entity).where(Entity.enriched_description.is_(None))
+)
+for row in rows:
+    description = await llm_client.generate(row.name)  # billed every tick, even if row always fails
+```
+
+**Risk**: A per-row external LLM/API call inside a `SELECT`-based sweep loop with no attempt-cap
+predicate re-bills permanently-failing rows (malformed input, entity the LLM refuses to describe,
+schema mismatch) to a paid LLM on every scheduler tick, indefinitely. Each existing sweep worker
+in `knowledge-graph` reinvented its own ad hoc mechanism for this after being bitten
+(`provisional_enrichment.py`'s `retry_count` column + exponential `next_retry_at`,
+`narrative_refresh.py`'s `failure.attempt`, `fundamentals_refresh.py`'s Valkey
+`s7:fundamentals:backoff:{ticker}` key) — `entity_retype.py` shipped without one and was only
+caught in a later cost audit. There is no shared capped-retry utility, so each new sweep worker
+starts from zero.
+**Action**: Any new scheduled worker with a per-row LLM/external-API call inside a sweep `SELECT`
+must reference an attempt-count column (or equivalent backoff key) in its `WHERE` clause, or
+justify in a comment why unbounded re-billing is acceptable (e.g., row count is bounded and
+small). Prefer extracting a shared capped-retry helper over inventing a fourth mechanism.
+**Detection**:
+```bash
+# Find sweep-style SELECTs feeding a per-row LLM call
+grep -rn "async def.*sweep\|async def.*refresh_batch" services/knowledge-graph/src/knowledge_graph/infrastructure/workers/*.py -A15 | \
+  grep "llm_client\.\|generate("
+# Then check whether the corresponding SELECT's WHERE clause references retry_count/attempt/backoff.
+```
+
+---
+
+## YELLOW — Added from Fix-Commit Cluster Mining (2026-07-23)
+
+### HR-065: New Regex/String Matcher Added to Citation/Grounding Files Without Checking for an Existing Normalizer
+
+**Pattern** (YELLOW):
+```python
+# SUSPICIOUS — yet another ad hoc pattern added to detect one more LLM citation-tag variant
+_INFORMAL_CITATION_RE = re.compile(r"\[\s*source\s*[:#]?\s*(\d+)\s*\]", re.IGNORECASE)  # new
+# ... while _CITATION_TAG_RE, _CITATION_TAG_RE_LOOSE, _CITATION_PREFIX_RE already exist above
+```
+
+**Risk**: `numeric_grounding.py` and `chat_orchestrator.py` (the citation/grounding chain in
+`rag-chat`) have accreted detection/normalization functions one LLM output quirk at a time
+(informal tag names, typos, prefixes, whitespace variants) with no single ordering contract.
+`chat_orchestrator.py` is 7,400+ lines and `numeric_grounding.py` is 2,800+ lines — file size in
+this chain is itself a code-shape smell that a structural refactor (a dedicated
+`CitationResolver`/`GroundingValidator` module with an explicit application order) is overdue.
+Each new matcher added without checking existing ones risks double-processing, conflicting
+precedence, or dead code.
+**Action**: Any diff to `numeric_grounding.py` or `chat_orchestrator.py` that adds a new
+regex/string-matching function for a citation-tag format variant must show the reviewer it does
+not duplicate or conflict with an existing normalizer in the same file, and note where in the
+processing order it applies. Treat repeated additions to these two files as a signal to propose
+the `CitationResolver` extraction rather than adding entry number N+1.
+**Detection**:
+```bash
+grep -n "^_[A-Z_]*_RE = re.compile\|^def.*normalize\|^def.*detect" \
+  services/rag-chat/src/rag_chat/application/services/numeric_grounding.py \
+  services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py
+```
+
+---
+
+### HR-066: Prompt Version Bump Adding a Broad Imperative Directive Without a New Regression Case
+
+**Pattern** (YELLOW):
+```python
+# SUSPICIOUS — v1.8 adds a broad "ALWAYS"/"NEVER" rule with no accompanying eval case
+TOOL_USE_SYSTEM_PROMPT_V1_8 = TOOL_USE_SYSTEM_PROMPT_V1_7 + """
+NEVER call get_filings and get_fundamentals in the same turn; ALWAYS batch them.
+"""
+```
+
+**Risk**: `libs/prompts/src/prompts/chat/tool_use.py` is a single large versioned prompt
+(1,400+ lines) where a directive added to fix one failing question shape (motivating case) can
+silently regress a different question shape that depended on the old, narrower behavior — the
+same file has a documented history of fix-induced regressions from broad `ALWAYS`/`NEVER`
+batching/consolidation rules. Because the prompt has no automated per-directive regression suite,
+a regression in an unrelated question shape is only caught by chance in the next live eval run.
+**Action**: Any commit that bumps the `tool_use.py` version constant and adds an imperative
+directive with broad scope (`ALWAYS`, `NEVER`, batching/consolidation rules) must add or update a
+regression case in the chat-quality eval exercising a **different** question shape than the one
+that motivated the change, and should schedule a live A/B run before considering the fix
+complete.
+**Detection**:
+```bash
+git diff -- libs/prompts/src/prompts/chat/tool_use.py | grep -n "^\+.*\(ALWAYS\|NEVER\)"
+# If matched, confirm a corresponding new/updated eval case exists in the same commit or PR.
+```
+
+---
+
+### HR-067: New Adapter in an HTTP-Client Family Reimplements Pagination/Cursor Logic Inline Instead of a Shared Helper
+
+**Pattern** (YELLOW):
+```python
+# SUSPICIOUS — cursor/offset arithmetic and end-of-page detection copy-pasted per client
+class PolymarketDataOiClient:
+    async def fetch_page(self, offset: int, limit: int) -> list[dict]:
+        resp = await self._http.get(self._url, params={"offset": offset, "limit": limit})
+        items = resp.json()
+        return items  # "short page == end of data" reimplemented ad hoc, again
+```
+
+**Risk**: `services/content-ingestion/src/content_ingestion/infrastructure/adapters/polymarket*`
+is a family of near-identical HTTP clients (`client.py`, `polymarket_gamma_events/client.py`,
+`polymarket_clob/client.py`, `polymarket_data_trades/client.py`, `polymarket_data_oi/client.py`)
+each hand-rolling cursor/offset arithmetic and end-of-page detection with no shared abstraction.
+A provider-contract lesson learned in one sibling (page-size caps below the requested limit,
+off-by-one on offset, empty-vs-short-page semantics, non-200 handling) does not propagate to the
+others, so the same bug class recurs per-endpoint over time.
+**Action**: Any new HTTP client module added under an `adapters/<provider>_*` family that
+reimplements pagination/cursor arithmetic structurally identical to a sibling client in the same
+directory tree should extract (or reuse) a shared pagination helper instead of copy-pasting. If
+copy-pasting is unavoidable in the short term, cross-reference the sibling's known gotchas in a
+comment.
+**Detection**:
+```bash
+# Find pagination-shaped loops duplicated across the adapter family
+grep -rn "offset\s*+=\|cursor\s*=.*next\|while.*len(.*)\s*==\s*limit" \
+  services/content-ingestion/src/content_ingestion/infrastructure/adapters/polymarket*/
+```
