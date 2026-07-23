@@ -48,6 +48,34 @@ class Settings(BaseSettings):
     # operate on bounded batches and complete well under 60 s.
     statement_timeout_ms: int = 60_000
 
+    # ── Client-side asyncpg command_timeout (seconds) — dead-connection backstop ─
+    # ``statement_timeout`` above is enforced by the Postgres SERVER: it can only
+    # fire while the server is alive and answering.  When Postgres OOM-crashes and
+    # the TCP connection goes half-open (dead but never RST), the server never
+    # sends a response and asyncpg — which has NO command_timeout by default —
+    # waits on the socket FOREVER.  On 2026-07-21 a processing coroutine hung this
+    # way for 2.4 h, wedging the article pipeline until a manual restart.
+    #
+    # ``command_timeout`` is a CLIENT-side deadline asyncpg applies to every
+    # command regardless of server state, so any DB op on a dead connection RAISES
+    # (asyncio.TimeoutError) instead of hanging.  The article consumer's generic
+    # ``except Exception`` treats that as a transient failure → in-place retry then
+    # DLQ (at-least-once preserved; no silent drop).
+    #
+    # 600 s (10 min) default — chosen ABOVE every legitimate query ceiling so the
+    # backstop only ever fires on a genuinely dead connection, never on slow-but-
+    # live work:
+    #   * server-side ``statement_timeout_ms`` (60 s) fires FIRST for normal OLTP;
+    #   * the one-shot startup embedding-expiry task runs batched UPDATEs under a
+    #     per-statement ``SET LOCAL statement_timeout`` of up to
+    #     ``embedding_expiry_statement_timeout_ms`` (300 s) on this SAME engine, so
+    #     a client deadline below 300 s could preempt legitimate batch work.
+    # 600 s is comfortably under the Kafka ``max.poll.interval.ms`` (1 800 000 ms =
+    # 30 min) so a wedged op raises and the article is redelivered LONG before the
+    # consumer is evicted from its group.  Set to 0 to disable (unbounded — the
+    # pre-2026-07-21 behaviour that caused the 2.4 h hang; not recommended).
+    command_timeout_s: float = 600.0
+
     # ── HNSW ANN candidate-pool size (BUG-3 / feat/fix-s6-search-quality) ──────
     # pgvector applies the WHERE filters (source_type, tenant, entity, date) AFTER
     # the HNSW index returns its candidate set. With the pgvector default
