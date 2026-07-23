@@ -401,7 +401,16 @@ on `(topic, partition)`. If the series is absent (consumer not scraped /
 stall signal. Labels are bounded-cardinality — never message content or keys.
 Consumers that fully override `run()` (e.g. the nlp-pipeline article consumer)
 must call `_publish_pause_state()` once per poll cycle themselves, since the
-base loop that normally does so is bypassed.
+base loop that normally does so is bypassed. If such a consumer's deliberate-
+pause state is not captured by `_paused_partitions` / `_barrier_paused_partitions`
+(the article consumer's barrier pauses are set-and-cleared within a single cycle,
+and its concurrency backpressure is a semaphore, not a Kafka pause), pass the
+paused partitions explicitly — `_publish_pause_state(paused_set)` — so the gauge
+reflects a *sustained* hold rather than the empty snapshot seen at loop top. The
+article consumer passes its assignment while a barrier hold is active
+(`barrier_block_since` set). A 402-billing-defer freeze does not saturate the
+window and is therefore not suppressed here (the aggregate
+`NlpPipelineBacklogNotDraining` critical covers that case).
 
 ### Kafka Producer (`messaging.kafka.producer`)
 

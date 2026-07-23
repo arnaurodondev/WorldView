@@ -894,15 +894,28 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             while not self._stop_event.is_set():
                 # Honour the opt-in backpressure pause exactly like the base loop.
                 self._maybe_apply_backpressure()
-                # Publish the per-partition deliberate-pause gauge every cycle so
-                # the NlpPipelinePartitionStalled alert can EXCLUDE partitions this
-                # loop holds paused on purpose (backpressure OR the barrier hold
-                # below).  This consumer fully overrides the base ``run`` loop, so
-                # without this call the gauge would never be emitted for
-                # nlp-pipeline-group and the alert would keep flapping on healthy
-                # backpressure.  A barrier pause set later in this cycle reflects on
-                # the next iteration (sub-second lag vs the alert's 20m ``for``).
-                self._publish_pause_state()
+                # Publish the per-partition deliberate-pause gauge that feeds the
+                # NlpPipelinePartitionStalled alert's paused-partition exclusion.
+                # This consumer fully overrides the base ``run`` loop, so the base
+                # publish never runs for nlp-pipeline-group.  Its deliberate-freeze
+                # state is NOT the base ``_paused_partitions`` /
+                # ``_barrier_paused_partitions`` sets: concurrency backpressure here
+                # is the ``self._bp`` semaphore (no Kafka pause), and the barrier's
+                # ``_pause_all_assigned`` set is populated AND cleared within one
+                # cycle (the finally-resume below), so at loop top both sets are
+                # empty.  The SUSTAINED signal is ``barrier_block_since`` — set while
+                # the loop is holding a saturated / upstream-stalled window and
+                # deliberately not committing.  While it is held, the whole
+                # assignment is being paused each cycle on purpose, so mark those
+                # partitions paused (alert-suppressed); otherwise clear.  Note: a
+                # 402-billing-defer freeze does NOT saturate the window, so it is
+                # not suppressed here (the aggregate NlpPipelineBacklogNotDraining
+                # critical covers that case).
+                barrier_paused: set[Any] = set()
+                if barrier_block_since is not None and self._consumer is not None:
+                    with contextlib.suppress(Exception):
+                        barrier_paused = set(self._consumer.assignment())
+                self._publish_pause_state(barrier_paused)
 
                 if len(inflight) >= concurrency or ledger.pending() >= max_pending:
                     # Barrier: stop admitting work and wait for a completion when

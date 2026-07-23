@@ -436,6 +436,42 @@ class TestPauseStateMetric:
         assert gauge.calls == []
         assert consumer._pause_state_published == set()
 
+    def test_explicit_paused_set_overrides_the_pause_sets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When an explicit ``paused`` set is passed (the path a subclass whose
+        deliberate-pause state is not in ``_paused_partitions`` uses — e.g. the
+        article consumer publishing its barrier-held assignment), the gauge
+        reflects THAT set, ignoring the (empty) base pause sets, and zeroes it
+        again when a later cycle passes an empty set."""
+        gauge = self._patch_gauge(monkeypatch)
+        consumer = _make_consumer_with_policy(None)
+        # Base pause sets are empty (as they are for the article consumer), yet the
+        # explicit set must still drive the gauge to 1.
+        assert consumer._paused_partitions == set()
+        tp = _TP("content.article.stored.v1", 5)
+
+        consumer._publish_pause_state({tp})
+        assert (
+            {"service": "bp-test", "group_id": "bp-test", "topic": "content.article.stored.v1", "partition": "5"},
+            1,
+        ) in gauge.calls
+        assert consumer._pause_state_published == {tp}
+
+        # Next cycle: barrier released → explicit empty set → gauge zeroed.
+        gauge.calls.clear()
+        consumer._publish_pause_state(set())
+        assert gauge.calls == [
+            (
+                {
+                    "service": "bp-test",
+                    "group_id": "bp-test",
+                    "topic": "content.article.stored.v1",
+                    "partition": "5",
+                },
+                0,
+            )
+        ]
+        assert consumer._pause_state_published == set()
+
     def test_steady_paused_partition_stays_one_across_cycles(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A partition paused across consecutive cycles is re-affirmed as 1 and
         never spuriously zeroed."""

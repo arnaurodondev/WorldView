@@ -494,6 +494,51 @@ async def test_barrier_keeps_polling_to_hold_group_membership_during_slow_drain(
     assert sorted(c._consumer.committed) == [(0, 0), (0, 1)]  # type: ignore[attr-defined]
 
 
+async def test_barrier_hold_publishes_assignment_as_deliberately_paused() -> None:
+    """During a sustained barrier hold the loop marks the assignment paused-on-purpose.
+
+    This is the load-bearing signal for the NlpPipelinePartitionStalled alert's
+    paused-partition exclusion. The article consumer's barrier pauses are set-and-
+    cleared within a single poll cycle, so the base ``_paused_partitions`` /
+    ``_barrier_paused_partitions`` snapshot is empty at loop top; the loop instead
+    publishes its ASSIGNMENT while ``barrier_block_since`` is held. We capture the
+    ``paused`` set handed to ``_publish_pause_state`` each cycle and assert it
+    becomes the held assignment during the barrier and is empty otherwise — the
+    guard that would have caught the "gauge never emitted for nlp-pipeline-group"
+    inertness bug.
+    """
+    c = _make_consumer(concurrency=1)
+    assigned = _TP(_TOPIC, 0)
+    c._consumer._assignment = [assigned]  # type: ignore[attr-defined]
+
+    published: list[set[Any]] = []
+    # Record the paused set each cycle instead of touching the real gauge.
+    c._publish_pause_state = lambda paused=None: published.append(set() if paused is None else set(paused))  # type: ignore[attr-defined,method-assign]
+
+    source: deque[_FakeMsg] = deque([_FakeMsg(0, 0, tier="deep"), _FakeMsg(0, 1, tier="light")])
+    done = {"n": 0}
+
+    async def fake_settle(msg: Any) -> bool:
+        # Offset 0 slow enough to force a sustained barrier while offset 1 waits.
+        await asyncio.sleep(0.20 if msg.offset() == 0 else 0.01)
+        done["n"] += 1
+        if done["n"] >= 2:
+            c._stop_event.set()  # type: ignore[attr-defined]
+        return True
+
+    c._settle_message = fake_settle  # type: ignore[attr-defined,method-assign]
+    c._poll_batch = _drain_source_poll_batch(source, idle_sleep=0.005)  # type: ignore[attr-defined,method-assign]
+
+    await asyncio.wait_for(c.run(), timeout=5.0)
+
+    # At least one cycle published the held assignment as paused-on-purpose.
+    assert any(
+        p == {assigned} for p in published
+    ), f"barrier hold never published the assignment as paused; saw {published}"
+    # And at least one cycle (idle / non-barrier) published an empty set.
+    assert any(p == set() for p in published), "no non-barrier cycle cleared the pause set"
+
+
 async def test_hung_drain_past_grace_stops_faking_liveness_so_selfheal_can_act() -> None:
     """A genuinely hung drain (no completion for the grace) stops polling + heartbeating.
 

@@ -161,10 +161,10 @@ async def test_run_publishes_pause_state_each_cycle() -> None:
     every healthy backpressure/barrier pause — the exact bug this metric fixes.
     """
     c = _make_consumer()
-    published = {"count": 0}
+    calls: list[Any] = []
 
-    def spy_publish() -> None:
-        published["count"] += 1
+    def spy_publish(paused: Any = None) -> None:
+        calls.append(paused)
 
     # Replace with a spy: proves the loop INVOKES it (the wiring). The
     # reconciliation logic itself is unit-tested on the base class.
@@ -172,7 +172,10 @@ async def test_run_publishes_pause_state_each_cycle() -> None:
 
     await _run_one_cycle(c, batch=[])
 
-    assert published["count"] >= 1, "run() must call _publish_pause_state() each poll cycle"
+    assert len(calls) >= 1, "run() must call _publish_pause_state() each poll cycle"
+    # On an idle (non-barrier) cycle the published set is empty — no partition is
+    # being deliberately held, so nothing is suppressed.
+    assert calls[0] == set()
 
 
 async def test_poll_batch_records_fetch_poll_timestamp() -> None:

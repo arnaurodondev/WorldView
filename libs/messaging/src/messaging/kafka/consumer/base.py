@@ -978,16 +978,25 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             group_id=self._config.group_id,
         ).set(now)
 
-    def _publish_pause_state(self) -> None:
+    def _publish_pause_state(self, paused: set[TopicPartition] | None = None) -> None:
         """Reconcile the per-partition ``kafka_consumer_partition_paused`` gauge.
 
         Sets the gauge to 1 for every partition this consumer currently holds
-        paused ON PURPOSE — backpressure (``_paused_partitions``) or barrier hold
-        (``_barrier_paused_partitions``) — and 0 for any partition that was paused
-        on a previous cycle but is now resumed.  Mirrors the self-heal
-        ``wedged = stalled - paused`` distinction into an alertable signal so the
+        paused ON PURPOSE and 0 for any partition that was paused on a previous
+        cycle but is now resumed.  Mirrors the self-heal ``wedged = stalled -
+        paused`` distinction into an alertable signal so the
         ``NlpPipelinePartitionStalled`` warning can EXCLUDE deliberately-paused
-        partitions (healthy backpressure) and fire only on genuinely wedged ones.
+        partitions (healthy backpressure / barrier hold) and fire only on
+        genuinely wedged ones.
+
+        ``paused`` is the set of deliberately-paused partitions.  When ``None``
+        (the base poll loop) it defaults to ``_paused_partitions |
+        _barrier_paused_partitions`` — the backpressure + barrier pause sets.  A
+        subclass whose deliberate-pause state is NOT captured by those sets (e.g.
+        the nlp-pipeline article consumer, whose barrier pauses are set-and-
+        cleared within a single poll cycle and whose concurrency backpressure is a
+        semaphore, not a Kafka pause) passes the set explicitly so the gauge
+        reflects a SUSTAINED hold rather than the empty snapshot seen at loop top.
 
         Called once per poll cycle (cost: a handful of ``gauge.set`` calls); the
         reconciliation against ``_pause_state_published`` guarantees a resumed
@@ -995,7 +1004,7 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         """
         service = self._metrics.service_name if self._metrics is not None else self._config.group_id
         group_id = self._config.group_id
-        current = self._paused_partitions | self._barrier_paused_partitions
+        current = paused if paused is not None else (self._paused_partitions | self._barrier_paused_partitions)
         for tp in current:
             KAFKA_CONSUMER_PARTITION_PAUSED.labels(
                 service=service,
