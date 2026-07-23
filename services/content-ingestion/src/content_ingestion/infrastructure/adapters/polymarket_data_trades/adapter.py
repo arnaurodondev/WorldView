@@ -247,6 +247,15 @@ class PolymarketTradesAdapter:
                     cap_hit = True
                     break
 
+            # KNOWN FOLLOW-UP (BP-740): this advances by the REQUESTED page_size,
+            # not by len(page.trades) (the actual returned count). If the
+            # Data-API ever under-fills a page the way Gamma silently does, this
+            # would skip the un-returned rows between len(page.trades) and
+            # page_size even though the client-level has_more fix (this same
+            # change) correctly reports has_more=True. Out of scope for this
+            # fix (client-level has_more derivation only) but tracked so it
+            # isn't rediscovered as a fourth occurrence of the same bug class —
+            # see docs/audits/2026-07-23-bottleneck-content-ingestion-pagination.md.
             offset += self._settings.page_size
             if cap_hit:
                 # BOUNDED backfill / high-churn backstop: stop at the cap and let
@@ -418,9 +427,10 @@ class PolymarketTradesAdapter:
 
             page_count += 1
 
-            # Empty page → no more trades to paginate. ``has_more`` already
-            # covers the full-page heuristic, but an explicitly empty page is an
-            # unambiguous end-of-data signal; break and keep collected trades.
+            # Empty page → no more trades to paginate. ``has_more`` (BP-740:
+            # derived from "was this page empty," not "was this page full")
+            # would already be False here too, but an explicitly empty page is
+            # an unambiguous end-of-data signal; break and keep collected trades.
             if not page.trades:
                 break
 
@@ -430,6 +440,10 @@ class PolymarketTradesAdapter:
                 if result is not None:
                     results.append(result)
 
+            # KNOWN FOLLOW-UP (BP-740): advances by the REQUESTED page_size, not
+            # by len(page.trades) actually returned — see the matching comment
+            # in fetch_market() above for why this is a tracked, out-of-scope
+            # follow-up rather than a fix in this change.
             offset += self._settings.page_size
             if not page.has_more or page_count >= self._settings.max_pages_per_cycle:
                 break

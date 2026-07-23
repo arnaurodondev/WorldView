@@ -83,6 +83,18 @@ def _make_adapter(client: object, storage: object = None, settings: object = Non
 
 class TestPolymarketTradesClient:
     async def test_parses_trades_page_list(self) -> None:
+        """A non-empty page must report ``has_more=True`` regardless of how it
+        compares to ``limit``.
+
+        NOTE: this assertion was flipped from the original ``has_more is
+        False`` (2 trades, limit=500) as part of the fix documented in
+        docs/audits/2026-07-23-bottleneck-content-ingestion-pagination.md.
+        The old assertion pinned the disproven "short page == last page"
+        heuristic (``has_more = len(trades) >= limit``) -- the exact bug
+        that broke the Gamma clients twice. ``has_more`` now reflects only
+        "was the page empty," so any non-empty page (even far shorter than
+        ``limit``) must report ``has_more=True``.
+        """
         http = AsyncMock()
         http.get = AsyncMock(return_value=_response([_trade("a"), _trade("b")]))
         client = PolymarketTradesClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
@@ -91,7 +103,64 @@ class TestPolymarketTradesClient:
 
         assert isinstance(page, TradesPage)
         assert len(page.trades) == 2
-        assert page.has_more is False
+        assert page.has_more is True
+
+    async def test_short_page_treated_as_more_until_proven_otherwise(self) -> None:
+        """A short-but-nonempty page must not silently end pagination.
+
+        Regression for the disproven "len(trades) < limit == last page"
+        heuristic that had to be fixed TWICE for the Gamma clients
+        (e1745828b -> 4b094c53e) after the Gamma API turned out to silently
+        cap page size below the requested `limit`. This client previously
+        derived has_more the same (disproven) way -- has_more = len(trades)
+        >= limit -- and the Data-API's real page-size contract has NOT been
+        live-verified. This test pins the corrected, conservative contract:
+        any non-empty page reports has_more=True.
+        """
+        # Provider returns fewer rows than requested (e.g. a silent page cap).
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=_response([_trade(f"0x{i}") for i in range(50)]))
+        client = PolymarketTradesClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+
+        page = await client.fetch_trades_page(market="cond_1", limit=500)
+
+        # TODO: replace with live-verified expectation once the Data-API
+        # /trades page-size contract has been confirmed against a live call
+        # (see audit §top-priority action). Until then, the conservative,
+        # always-correct behavior is to treat any non-empty page as "more
+        # may remain."
+        assert page.has_more is True
+        assert len(page.trades) == 50
+
+    async def test_adapter_does_not_stop_early_on_short_page_from_real_client(self) -> None:
+        """End-to-end: drive the adapter against the REAL PolymarketTradesClient
+        (httpx mocked at the transport layer, not TradesPage hand-constructed)
+        so a regression in has_more's derivation is caught at the adapter
+        boundary too -- all the other adapter-level pagination tests in this
+        file construct TradesPage directly and therefore cannot catch a bug
+        in the client's own has_more computation.
+        """
+        http = AsyncMock()
+        # First page: a short-but-nonempty page (50 rows, well under limit=500).
+        # Second page: empty -- genuine end-of-data.
+        http.get = AsyncMock(
+            side_effect=[
+                _response([_trade(f"0xp1_{i}") for i in range(50)]),
+                _response([]),
+            ]
+        )
+        client = PolymarketTradesClient(http_client=http, settings=_client_settings())  # type: ignore[arg-type]
+        adapter = _make_adapter(client, settings=_adapter_settings(page_size=500, max_pages=20))
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source(["cond_real"]))
+
+        # The short first page (50 < 500) must NOT have stopped the walk --
+        # the adapter must have requested a second page, which came back
+        # empty and correctly ended pagination. All 50 trades from the first
+        # page must be collected.
+        assert http.get.await_count == 2
+        assert len(results) == 50
 
     async def test_wrapped_data_and_has_more(self) -> None:
         http = AsyncMock()
