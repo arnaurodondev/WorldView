@@ -9,7 +9,9 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from messaging.pg.engine_factory import build_async_engine
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -67,28 +69,25 @@ def _build_factories(
     #     reactive validation.
     #   * TCP keepalives (``tcp_keepalives_idle``, etc. via server_settings)
     #     keep the kernel-side socket healthy across long idle periods.
-    _connect_args: dict[str, object] = {
-        "timeout": 10,  # asyncpg connect timeout (s); covers DNS + TCP handshake
-        "server_settings": {
-            "application_name": "alert",
-        },
-        # PgBouncer transaction-pooling compatibility (2026-07-19 Postgres-OOM fix):
-        # this service routes through ``pgbouncer.infra.svc:6432`` (pool_mode=transaction).
-        # Server-side prepared statements DO NOT survive across transaction-pooled
-        # server connections, so disable both asyncpg's cache and the SQLAlchemy
-        # asyncpg dialect cache. Both are harmless when connecting direct.
-        "statement_cache_size": 0,
-        "prepared_statement_cache_size": 0,
-    }
-    write_engine = create_async_engine(
+    #
+    # BP-732: the shared factory now assembles the base connect_args
+    # (application_name, PgBouncer prepared-statement disabling, client-side
+    # command_timeout, server-side statement_timeout), so this service picks
+    # up future hardening lessons without a repeat hand-edit. The
+    # alert-specific ``connect_timeout_s=10`` (DNS + TCP handshake bound) is
+    # passed as its own named parameter — it is a DIFFERENT timeout from
+    # command_timeout and must stay independently settable. This service
+    # routes through ``pgbouncer.infra.svc:6432`` (pool_mode=transaction),
+    # hence ``pooled=True``.
+    write_engine = build_async_engine(
         _get_url(settings.database_url),
-        echo=False,
-        future=True,
-        pool_pre_ping=True,
+        pooled=True,
+        application_name="alert",
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
         pool_recycle=300,
-        connect_args=_connect_args,
+        connect_timeout_s=10,
+        pool_pre_ping=True,
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         bind=write_engine,
@@ -103,15 +102,15 @@ def _build_factories(
         read_engine = write_engine
         read_factory = write_factory
     else:
-        read_engine = create_async_engine(
+        read_engine = build_async_engine(
             read_url,
-            echo=False,
-            future=True,
-            pool_pre_ping=True,
+            pooled=True,
+            application_name="alert",
             pool_size=settings.db_pool_size_read,
             max_overflow=settings.db_max_overflow_read,
             pool_recycle=300,
-            connect_args=_connect_args,
+            connect_timeout_s=10,
+            pool_pre_ping=True,
         )
         read_factory = async_sessionmaker(
             bind=read_engine,

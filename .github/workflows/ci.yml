@@ -186,6 +186,28 @@ jobs:
           path: /tmp/import-guards-report.json
 
   # ═══════════════════════════════════════════════════════════════════════════
+  # DB session-bootstrap parity — BP-732 automated backstop, fast path
+  # Warn-only (not --strict): market-data is a KNOWN pre-existing gap
+  # (missing command_timeout) outside this check's remediation scope; failing
+  # CI on it would block unrelated PRs. Flip to --strict once market-data is
+  # migrated onto the shared factory too.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  db-session-parity:
+    name: DB Session Parity (BP-732)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run DB session parity check (warn-only)
+        run: python scripts/check_db_session_parity.py
+
+  # ═══════════════════════════════════════════════════════════════════════════
   # Architecture tests — fast path pytest suite, no infra required
   # ═══════════════════════════════════════════════════════════════════════════
 

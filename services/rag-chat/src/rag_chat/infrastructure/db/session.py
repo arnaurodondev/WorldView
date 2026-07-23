@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from messaging.pg.engine_factory import build_async_engine
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -56,28 +58,22 @@ def create_rag_session_factory(
         When a distinct read URL is configured, both engines are independent
         and the caller is responsible for disposing both.
     """
-    # BP-502: application_name surfaces this service in pg_stat_activity for
-    # connection debugging; pool_recycle=300 defends against stale DNS sockets.
-    # PgBouncer transaction-pooling compatibility (2026-07-19 Postgres-OOM fix):
-    # this service routes through ``pgbouncer.infra.svc:6432`` (pool_mode=transaction).
-    # Server-side prepared statements DO NOT survive across transaction-pooled
-    # server connections, so disable both asyncpg's cache (``statement_cache_size=0``)
-    # and the SQLAlchemy asyncpg dialect cache (``prepared_statement_cache_size=0``).
-    # Both are harmless when connecting direct.
-    _connect_args: dict[str, object] = {
-        "server_settings": {"application_name": "rag-chat"},
-        "statement_cache_size": 0,
-        "prepared_statement_cache_size": 0,
-    }
-    write_engine = create_async_engine(
+    # BP-732: connect_args (application_name, PgBouncer prepared-statement
+    # disabling, client-side command_timeout, server-side statement_timeout)
+    # are now assembled by the shared factory instead of hand-rolled here, so
+    # this service picks up future hardening lessons (e.g. the command_timeout
+    # added by 0d0f27119, previously only applied to nlp-pipeline) without a
+    # repeat hand-edit. This service routes through
+    # ``pgbouncer.infra.svc:6432`` (pool_mode=transaction), hence
+    # ``pooled=True``.
+    write_engine = build_async_engine(
         settings.database_url.get_secret_value(),
-        echo=False,
-        future=True,
-        pool_pre_ping=True,
+        pooled=True,
+        application_name="rag-chat",
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
         pool_recycle=300,
-        connect_args=_connect_args,
+        pool_pre_ping=True,
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         write_engine,
@@ -93,15 +89,14 @@ def create_rag_session_factory(
         read_engine = write_engine
         read_factory = write_factory
     else:
-        read_engine = create_async_engine(
+        read_engine = build_async_engine(
             read_url,
-            echo=False,
-            future=True,
-            pool_pre_ping=True,
+            pooled=True,
+            application_name="rag-chat",
             pool_size=settings.db_pool_size_read,
             max_overflow=settings.db_max_overflow_read,
             pool_recycle=300,
-            connect_args=_connect_args,
+            pool_pre_ping=True,
         )
         read_factory = async_sessionmaker(read_engine, expire_on_commit=False)
 
