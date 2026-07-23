@@ -22,6 +22,8 @@ from nlp_pipeline.application.blocks.suppression import ProcessingPath
 from nlp_pipeline.config import Settings
 from nlp_pipeline.infrastructure.messaging.consumers.blocks import ml_phase
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def _patched_gates(monkeypatch: pytest.MonkeyPatch) -> None:

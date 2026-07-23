@@ -7,10 +7,13 @@ switch and empty high-recall slug both fall back to the primary.
 
 from __future__ import annotations
 
+import pytest
 from nlp_pipeline.application.blocks.extraction_routing import (
     parse_source_types,
     select_extraction_model,
 )
+
+pytestmark = pytest.mark.unit
 
 PRIMARY = "deepseek-ai/DeepSeek-V4-Flash"
 HIGH_RECALL = "Qwen/Qwen3-235B-A22B-Instruct-2507"

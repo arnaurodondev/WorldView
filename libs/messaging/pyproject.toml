@@ -35,6 +35,12 @@ dev = [
     # [dev] keeps CI's fresh ``pip install -e libs/messaging[dev]`` able to
     # collect the test suite (otherwise collection fails with exit 2).
     "asyncpg>=0.29,<1",
+    # aiosqlite backs the in-memory "sqlite+aiosqlite:///:memory:" engine used by
+    # tests/unit/kafka/maintenance/test_table_retention.py to exercise the outbox
+    # retention/vacuum logic against a real (if lightweight) async SQLAlchemy
+    # engine without needing a live Postgres. Missing here since 2026-07-18 broke
+    # CI on every push (ModuleNotFoundError: No module named 'aiosqlite').
+    "aiosqlite>=0.20,<1",
 ]
 
 [tool.hatch.build.targets.wheel]
