@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from structlog.testing import capture_logs
 
 from messaging.kafka.consumer.base import (
     BaseKafkaConsumer,
@@ -192,15 +193,48 @@ class _EmptyErrorConsumer(_OrderingConsumer):
 
 
 class TestDeserializationErrorDetail:
-    async def test_empty_str_exception_still_names_the_type(self) -> None:
-        """MalformedDataError must include the exception TYPE, never be blank.
+    async def test_empty_str_exception_is_skipped_with_type_named_in_the_log(self) -> None:
+        """Recurrence-1 structural fix (2026-07-23 bottleneck audit / BP-736).
 
-        Regression for the empty ``error_detail`` anti-pattern: an exception
-        with an empty ``str()`` must still yield a diagnosable message.
+        Before this fix, an exception with an empty ``str()`` (e.g. bare
+        ``EOFError``/``struct.error`` on truncated Avro) always re-raised as
+        ``MalformedDataError`` and dead-lettered inline — the ORIGINAL
+        anti-pattern this test guarded against was the resulting DLQ row
+        reading only "deserialization failed: " with no diagnosable cause.
+        ``skip_undecodable_records`` (default True) now SKIPS this exact
+        exception shape instead of dead-lettering it (so a burst of them can
+        never trip ``dead_letter_cap`` and crash-loop the consumer) — see
+        ``test_undecodable_still_dead_letters_when_skip_disabled`` below for
+        the still-diagnosable-message behaviour on the explicit opt-out path.
+        The "never blank" diagnosability requirement now applies to the
+        structured SKIP LOG instead of a raised exception's message: the
+        type name must still be present so operators can root-cause a skip
+        burst from the log alone.
+        """
+        consumer = _EmptyErrorConsumer()
+        msg = _make_msg(event_id="evt-bad")
+
+        with capture_logs() as logs:
+            await consumer._handle_message(msg)  # must NOT raise — skipped
+
+        assert any(e["event"] == "kafka_consumer_deserialize_skipped" for e in logs)
+        skip = next(e for e in logs if e["event"] == "kafka_consumer_deserialize_skipped")
+        # The type name is always present even though str(EOFError()) == "".
+        assert skip["error_type"] == "EOFError"
+
+    async def test_undecodable_still_dead_letters_when_skip_disabled(self) -> None:
+        """Opt-out path (``skip_undecodable_records=False``) preserves the
+        original diagnosable-message guarantee: MalformedDataError must
+        include the exception TYPE, never be blank, when a consumer has a
+        deliberate, reviewed reason to dead-letter poison records instead of
+        skipping them (see ``ConsumerConfig.skip_undecodable_records``
+        docstring).
         """
         from messaging.kafka.consumer.errors import MalformedDataError
 
-        consumer = _EmptyErrorConsumer()
+        consumer = _EmptyErrorConsumer(
+            config=ConsumerConfig(message_processing_timeout_s=0, skip_undecodable_records=False),
+        )
         msg = _make_msg(event_id="evt-bad")
 
         with pytest.raises(MalformedDataError) as excinfo:

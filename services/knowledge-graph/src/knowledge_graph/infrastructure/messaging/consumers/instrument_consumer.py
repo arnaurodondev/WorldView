@@ -779,7 +779,28 @@ WHERE entity_id = :entity_id
                     "avro_deserialize_failed_falling_back_to_json",
                     schema_path=schema_path,
                 )
-        return cast("dict[str, Any]", json.loads(raw))
+        try:
+            return cast("dict[str, Any]", json.loads(raw))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            # Recurrence-1 structural fix (2026-07-23 bottleneck audit / BP-736):
+            # the JSON fallback above exists for tooling/test convenience, NOT
+            # as poison-record resilience — for a genuinely truncated/
+            # misaligned Avro payload that is ALSO not valid JSON/UTF-8, this
+            # ``json.loads`` itself raises, and (before this fix) that second
+            # exception propagated out of ``deserialize_value`` UNCAUGHT as a
+            # raw ``UnicodeDecodeError``/``JSONDecodeError`` — a type outside
+            # ``BaseKafkaConsumer``'s decode-poison skip tuple
+            # ``(EOFError, struct.error)``, so it still dead-lettered inline
+            # and could still crash-loop the consumer on a burst of old-schema
+            # backlog, defeating the base-class fix for this consumer
+            # specifically (confirmed live during the 2026-07-23 audit: "looks
+            # protected but isn't"). Re-raise as ``EOFError`` — the canonical
+            # decode-poison shape — so the base class's skip-and-advance path
+            # actually handles it instead of the raw error type slipping past
+            # the skip tuple.
+            raise EOFError(
+                f"undecodable payload (not Avro, not JSON): {type(exc).__name__}: {exc}",
+            ) from exc
 
     def get_schema_path(self, topic: str) -> str | None:
         """Return the canonical Avro schema path for the given topic, or None."""

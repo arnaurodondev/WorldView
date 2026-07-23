@@ -542,13 +542,25 @@ class TestPredictionEnrichedConsumerResilientDeserialize:
 
         consumer, _, _, _ = _make_consumer()
         msg = _FakeKafkaMessage(b"\x00bad")
-        # Force the base path to raise MalformedDataError deterministically.
-        with patch.object(consumer, "deserialize_value", side_effect=ValueError("boom")):
-            # ValueError inside deserialize_value → base raises MalformedDataError →
-            # override catches it. Any OTHER exception would propagate (asserted by
-            # the fact this returns cleanly only for the deserialize path).
+        # Recurrence-1 structural fix (2026-07-23 bottleneck audit / BP-736):
+        # the skip-and-advance behaviour now lives in
+        # ``BaseKafkaConsumer._handle_message`` itself and is DELIBERATELY
+        # SCOPED to decode-poison exception shapes only —
+        # ``(MalformedDataError, EOFError, struct.error)`` — not to
+        # ``Exception`` at large. Previously this consumer's own
+        # ``_handle_message`` override caught the base's WRAPPED
+        # ``MalformedDataError`` regardless of the original exception type,
+        # so ANY bug inside ``deserialize_value`` (including a genuine
+        # business-logic ``ValueError`` unrelated to decode-poison) was
+        # silently swallowed — too broad. The base class intentionally
+        # tightens this: only a genuine decode-poison shape is skipped;
+        # other exceptions still propagate (wrapped as ``MalformedDataError``)
+        # so a real bug is not masked. Use ``EOFError`` here (the canonical
+        # decode-poison shape, matching a truncated/misaligned Avro read) to
+        # exercise the swallow path this test's name promises.
+        with patch.object(consumer, "deserialize_value", side_effect=EOFError("short read")):
             asyncio.run(consumer._handle_message(msg))
-        # Sanity: the base really does classify this as MalformedDataError.
+        # Sanity: the base really does classify a raw decode failure as MalformedDataError.
         assert issubclass(MalformedDataError, Exception)
 
     def test_json_fallback_logs_warning_r28(self) -> None:
@@ -565,7 +577,7 @@ class TestPredictionEnrichedConsumerResilientDeserialize:
 
     def test_non_deserialize_exception_still_propagates(self) -> None:
         """Only deserialize failures are swallowed — genuine processing errors bubble up."""
-        consumer, event_repo, exposure_repo, _ = _make_consumer()
+        consumer, _event_repo, _exposure_repo, _ = _make_consumer()
         good_value = _make_message()
         msg = _FakeKafkaMessage(b"\x00whatever")
         # deserialize_value succeeds, but process_message blows up with a non-Malformed
