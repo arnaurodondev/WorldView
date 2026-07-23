@@ -367,6 +367,137 @@ class TestRunEntityResolutionBlock:
         embedding_repo.ann_search.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_stage4_embeds_all_unresolved_mentions_in_one_batch_call(self) -> None:
+        """2026-07-23 fix: Stage-4 embedding is ONE call for all unresolved
+        mentions, not one sequential call per mention.
+
+        Root cause this locks in: each per-mention ``embed()`` call is a
+        network round-trip that used to run one-at-a-time while the caller's
+        intelligence_session transaction was held open (article_consumer's
+        D-004 dual-session block spans Blocks 8-10), contributing to the
+        idle-in-transaction durations (up to 5m16s) flagged in
+        docs/audits/2026-07-23-three-vertical-prod-investigation.md. Batching
+        collapses N sequential awaits into 1.
+        """
+        from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
+
+        mentions = [
+            _make_mention("Totally Unknown Corp One"),
+            _make_mention("Totally Unknown Corp Two"),
+            _make_mention("Totally Unknown Corp Three"),
+        ]
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos()
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        embedding_client = MagicMock()
+        embedding_client.embed = AsyncMock(
+            return_value=[EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024) for _ in mentions],
+        )
+
+        await run_entity_resolution_block(
+            mentions,
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=embedding_client,
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        # Exactly ONE embed() call, carrying all 3 unresolved mention texts --
+        # not 3 sequential calls.
+        embedding_client.embed.assert_awaited_once()
+        batched_inputs = embedding_client.embed.await_args.args[0]
+        assert len(batched_inputs) == 3
+        assert {inp.text for inp in batched_inputs} == {m.mention_text for m in mentions}
+        # The (cheap, local) ANN search still runs once per mention.
+        assert embedding_repo.ann_search.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_stage4_batch_embedding_failure_downgrades_all_candidates_gracefully(self) -> None:
+        """If the single batched embed() call raises entirely (e.g. provider
+        outage), every Stage-4 candidate degrades to 'embedding_failed' (not
+        an unhandled exception) -- same tag the old per-mention try/except
+        used for this exact failure shape, just applied once for the whole
+        batch instead of mention-by-mention. This is deliberately distinct
+        from 'no_embedding' (a successful batch call that returned a
+        short/missing vector for one mention) -- collapsing the two would
+        be an observability regression: a genuine provider outage would
+        become indistinguishable from a benign short response."""
+        mentions = [_make_mention("Unknown Co A"), _make_mention("Unknown Co B")]
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos()
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        embedding_client = MagicMock()
+        embedding_client.embed = AsyncMock(side_effect=RuntimeError("provider outage"))
+
+        resolved, audit = await run_entity_resolution_block(
+            mentions,
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=embedding_client,
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        assert all(m.resolution_outcome == ResolutionOutcome.UNRESOLVED for m in resolved)
+        stage4_errors = [a for a in audit if a.stage == 4]
+        assert len(stage4_errors) == 2
+        assert all(a.metadata.get("error") == "embedding_failed" for a in stage4_errors)
+        # embedding_repo.ann_search must NOT be called when there's no vector.
+        embedding_repo.ann_search.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stage4_short_provider_response_tagged_no_embedding_not_embedding_failed(self) -> None:
+        """A successful batch call that returns FEWER vectors than requested
+        (provider returned a short response, no exception raised) must be
+        tagged 'no_embedding' for the missing mention(s) -- NOT
+        'embedding_failed' -- preserving the distinction from a total
+        provider-outage failure."""
+        from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
+
+        mentions = [_make_mention("Unknown Co A"), _make_mention("Unknown Co B")]
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos()
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        embedding_client = MagicMock()
+        # Only 1 output for 2 requested inputs -- no exception, just a short response.
+        embedding_client.embed = AsyncMock(
+            return_value=[EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024)],
+        )
+
+        _resolved, audit = await run_entity_resolution_block(
+            mentions,
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=embedding_client,
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        stage4_by_mention = {a.mention_id: a for a in audit if a.stage == 4}
+        # First mention got the one available vector -> reached ANN search (no
+        # candidates configured by default, so it stays unresolved, but NOT
+        # tagged as an embedding error).
+        assert stage4_by_mention[mentions[0].mention_id].metadata.get("error") != "embedding_failed"
+        # Second mention got no vector from the short response -> "no_embedding",
+        # not "embedding_failed" (the call itself succeeded).
+        assert stage4_by_mention[mentions[1].mention_id].metadata.get("error") == "no_embedding"
+        # Only the mention that DID get a vector reaches the ANN search.
+        assert embedding_repo.ann_search.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_multiple_mentions_all_processed(self) -> None:
         """All mentions are processed regardless of individual resolution outcome."""
         entity_id = uuid.uuid4()
@@ -476,6 +607,185 @@ class TestRunEntityResolutionBlock:
         assert resolved == []
         assert audit == []
         alias_repo.batch_exact_match.assert_not_called()
+
+
+class _FakeProvisionalEntityQueueSession:
+    """In-memory stand-in for ``intelligence_session`` that faithfully mirrors
+    the real ``provisional_entity_queue`` UNIQUE-constraint + ON CONFLICT DO
+    NOTHING + fallback-SELECT semantics used by ``_insert_provisional_surface``
+    (see ``_PROVISIONAL_INSERT_SQL`` / ``_PROVISIONAL_SELECT_SQL`` in
+    ``entity_resolution.py``).
+
+    Used by the interrupt-and-resume regression test below (2026-07-23,
+    postgres-0 idle-in-transaction / OOM investigation follow-up): the audit
+    flagged that Block 9's provisional-insert path runs inside a long-lived
+    intelligence_session transaction and asked for a check that a worker
+    killed mid-batch (or a Kafka redelivery of an already-partially-persisted
+    article) cannot duplicate or corrupt ``provisional_entity_queue`` rows.
+    The real safety net is the DB's own UNIQUE constraint on
+    ``(normalized_surface, mention_class)`` plus the ON CONFLICT DO NOTHING +
+    SELECT-fallback pattern already implemented in production code — this
+    fake exercises that exact SQL shape (by matching on the real SQL text
+    constants) so the test fails if that idempotency contract ever regresses.
+    """
+
+    def __init__(self) -> None:
+        # Simulates the persisted table: (normalized_surface, mention_class) -> queue_id.
+        # A dict already "survives" across two separate calls to
+        # run_entity_resolution_block, exactly like a committed Postgres table
+        # would survive a worker crash-and-redeliver cycle.
+        self.rows: dict[tuple[str, str], uuid.UUID] = {}
+        self.insert_count = 0  # counts actual new-row inserts (not conflicts)
+
+    def _key(self, surface: str, mention_class: str) -> tuple[str, str]:
+        return (surface.strip().lower(), mention_class)
+
+    async def execute(self, statement: object, params: dict[str, object] | None = None) -> MagicMock:
+        sql = str(statement)
+        result = MagicMock()
+
+        if "SET LOCAL lock_timeout" in sql:
+            return result
+
+        if "INSERT INTO provisional_entity_queue" in sql:
+            assert params is not None
+            # QA-007 (Reviewer B): pin the exact conflict-handling clause this
+            # fake models. If the real _PROVISIONAL_INSERT_SQL ever changes to
+            # a different ON CONFLICT strategy (e.g. DO UPDATE, or a different
+            # conflict target), this fake would otherwise silently keep passing
+            # with stale semantics -- these asserts fail loudly instead.
+            assert "ON CONFLICT" in sql, "provisional insert must use ON CONFLICT for idempotency"
+            assert "DO NOTHING" in sql, "provisional insert must use DO NOTHING (BP-707 lock-convoy fix)"
+            key = self._key(str(params["surface"]), str(params["mention_class"]))
+            if key in self.rows:
+                # ON CONFLICT DO NOTHING -> RETURNING yields no row.
+                result.scalar_one_or_none = MagicMock(return_value=None)
+            else:
+                new_id = uuid.UUID(str(params["queue_id"]))
+                self.rows[key] = new_id
+                self.insert_count += 1
+                result.scalar_one_or_none = MagicMock(return_value=str(new_id))
+            return result
+
+        if "SELECT queue_id" in sql and "FROM provisional_entity_queue" in sql and "COUNT" not in sql:
+            assert params is not None
+            key = self._key(str(params["surface"]), str(params["mention_class"]))
+            result.scalar_one = MagicMock(return_value=str(self.rows[key]))
+            return result
+
+        if "SELECT COUNT(*) FROM provisional_entity_queue" in sql:
+            assert params is not None
+            key = self._key(str(params["surface"]), str(params["mention_class"]))
+            # All rows are "within the last hour" in this fake -- 1 if the key
+            # already exists, else 0. Far below MAX_PROVISIONAL_PER_HOUR either way.
+            result.scalar_one = MagicMock(return_value=1 if key in self.rows else 0)
+            return result
+
+        msg = f"_FakeProvisionalEntityQueueSession: unhandled SQL: {sql}"
+        raise AssertionError(msg)
+
+    def begin_nested(self) -> AsyncMock:
+        """Savepoint stand-in -- no rollback semantics needed for this test
+        (we're testing idempotency ACROSS two calls, not intra-call rollback)."""
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=None)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+
+@pytest.mark.unit
+class TestProvisionalInsertInterruptAndResumeIdempotency:
+    """Regression guard (2026-07-23): a batch interrupted mid-run and then
+    resumed/redelivered must not duplicate or corrupt provisional_entity_queue
+    rows.
+
+    Background: docs/audits/2026-07-23-three-vertical-prod-investigation.md
+    flagged that Block 9 (entity resolution) runs its SAVEPOINT-guarded
+    provisional inserts inside a long-lived intelligence_session transaction
+    that is only committed once, at the very end of the caller's ML phase
+    (article_consumer's D-004 dual-session block, which also runs the
+    multi-minute deep-extraction LLM phase in the SAME transaction). A worker
+    killed after that final commit (but before the Kafka offset is
+    acknowledged) causes an at-least-once redelivery of the SAME article,
+    which re-runs the ENTIRE entity-resolution batch from scratch against a
+    provisional_entity_queue that already has last time's rows committed.
+
+    This test proves the existing UNIQUE-constraint + ON CONFLICT DO NOTHING
+    + SELECT-fallback design (``_insert_provisional_surface``) already makes
+    that redelivery safe: the second run reuses the SAME queue_id per mention
+    (no duplicate rows) and every mention still lands in a consistent
+    PROVISIONAL state with the correct queue_id stashed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_full_batch_redelivery_reuses_queue_ids_no_duplicates(self) -> None:
+        # Three distinct surfaces, each landing in the PROVISIONAL confidence
+        # band (fuzzy similarity 0.55 -> composite 0.55*0.90 = 0.495, which is
+        # >= PROVISIONAL_THRESHOLD 0.45 and < AUTO_RESOLVE_THRESHOLD 0.62).
+        mentions = [
+            _make_mention("Acme Holdings Inc"),
+            _make_mention("Zenith Robotics Corp"),
+            _make_mention("Northwind Traders Ltd"),
+        ]
+        fuzzy_map = {m.mention_text.lower(): [(uuid.uuid4(), 0.55)] for m in mentions}
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(fuzzy_map=fuzzy_map)
+
+        fake_session = _FakeProvisionalEntityQueueSession()
+
+        # ── Run 1: the "original" attempt that fully completes and commits ──
+        resolved_1, _ = await run_entity_resolution_block(
+            mentions,
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=fake_session,  # type: ignore[arg-type]
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        assert all(m.resolution_outcome == ResolutionOutcome.PROVISIONAL for m in resolved_1)
+        assert all(m.provisional_queue_id is not None for m in resolved_1)
+        queue_ids_run1 = {m.mention_text: m.provisional_queue_id for m in resolved_1}
+        assert fake_session.insert_count == 3
+        assert len(fake_session.rows) == 3
+
+        # ── Run 2: worker crashed AFTER intel_s committed but BEFORE the Kafka
+        # offset was acked -> the consumer redelivers the SAME article and
+        # reprocesses the ENTIRE mention batch from scratch (fresh EntityMention
+        # objects, exactly as a redelivered Kafka message would deserialize).
+        mentions_redelivered = [
+            _make_mention("Acme Holdings Inc"),
+            _make_mention("Zenith Robotics Corp"),
+            _make_mention("Northwind Traders Ltd"),
+        ]
+        alias_repo_2, embedding_repo_2, canonical_repo_2, audit_repo_2 = _make_batch_repos(fuzzy_map=fuzzy_map)
+
+        resolved_2, _ = await run_entity_resolution_block(
+            mentions_redelivered,
+            alias_repo=alias_repo_2,
+            embedding_repo=embedding_repo_2,
+            canonical_entity_repo=canonical_repo_2,
+            resolution_audit_repo=audit_repo_2,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=fake_session,  # type: ignore[arg-type]  # SAME persisted table
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        # No new rows were inserted -- every mention hit the UNIQUE conflict
+        # and fell back to the pre-existing queue_id (ON CONFLICT DO NOTHING
+        # + SELECT fallback), so the table did not grow.
+        assert fake_session.insert_count == 3, "redelivery must not insert new rows"
+        assert len(fake_session.rows) == 3, "redelivery must not duplicate rows"
+
+        assert all(m.resolution_outcome == ResolutionOutcome.PROVISIONAL for m in resolved_2)
+        assert all(m.provisional_queue_id is not None for m in resolved_2)
+        for m in resolved_2:
+            # Same queue_id as the first run for the same surface -- proves the
+            # redelivered batch reused (not duplicated) the existing row.
+            assert m.provisional_queue_id == queue_ids_run1[m.mention_text]
 
 
 @pytest.mark.unit
@@ -1134,5 +1444,5 @@ class TestStage2ClassGateSingleMentionPath:
         mention = _make_mention("AAPL", mention_class=MentionClass.ORGANIZATION)
         alias_repo, _, _, _ = _make_repos(ticker_result=equity_id)
         audit = []
-        result_id, confidence = await _stage2_ticker_isin(mention, alias_repo, audit)
+        result_id, _confidence = await _stage2_ticker_isin(mention, alias_repo, audit)
         assert result_id == equity_id

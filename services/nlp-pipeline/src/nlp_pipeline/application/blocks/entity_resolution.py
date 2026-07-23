@@ -254,39 +254,81 @@ async def _stage3_fuzzy(
     return best_entity_id, composite
 
 
-async def _stage4_ann(
-    mention: EntityMention,
-    embedding_repo: EntityProfileEmbeddingRepository,
+async def _batch_embed_stage4(
+    candidate_mentions: list[EntityMention],
     embedding_client: EmbeddingClient,
     model_id: str,
     instruction_prefix: str,
-    audit: list[MentionResolution],
-) -> tuple[UUID | None, float]:
-    """Stage 4 — ANN HNSW on entity_embedding_state (view_type='definition')."""
+) -> list[list[float] | None]:
+    """Embed every Stage-4 candidate mention text in ONE round-trip.
+
+    2026-07-23 fix (postgres-0 idle-in-transaction / OOM investigation, see
+    ``docs/audits/2026-07-23-three-vertical-prod-investigation.md``): before
+    this fix, every mention that reached Stage 4 triggered its own sequential
+    ``embedding_client.embed([...])`` network call *while the caller's
+    intelligence_session transaction was held open* — article_consumer's
+    D-004 dual-session block (``nlp_s`` + ``intel_s``) spans Blocks 8-10
+    (entity resolution runs BEFORE the multi-minute deep-extraction LLM
+    calls, all inside the same open transaction, committed only once at the
+    very end). For a document with many unresolved mentions, N sequential
+    embedding round-trips serialized directly inside that open Postgres
+    transaction, contributing to the "idle-in-transaction up to 5m16s"
+    connections observed live. The client already accepts a batch
+    (``list[EmbeddingInput]`` -> ``list[EmbeddingOutput]``, the same shape
+    Stages 1-3 already use for their batch DB queries), so collapsing N
+    sequential awaits into 1 removes this block's own contribution to the
+    transaction's held-open duration.
+
+    Returns a list positionally aligned with ``candidate_mentions`` --
+    ``None`` for any mention the provider returned fewer vectors than
+    requested for.
+
+    Raises whatever ``embedding_client.embed`` raises on a total batch
+    failure (e.g. provider outage) -- the caller is responsible for catching
+    it ONCE and tagging every Stage-4 candidate's audit row as
+    ``"embedding_failed"``. This mirrors the pre-batching per-mention
+    try/except (which distinguished "the embed call itself blew up" from
+    "the call succeeded but returned no/short output"), just applied once
+    per batch instead of once per mention -- collapsing the two distinct
+    error tags into one would have been an observability regression (a
+    genuine provider outage would be indistinguishable from a benign short
+    response), so that distinction is preserved deliberately.
+    """
     from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
 
-    # Embed the mention text
-    try:
-        inp = EmbeddingInput(
-            text=mention.mention_text,
-            model_id=model_id,
-            instruction_prefix=instruction_prefix,
-        )
-        outputs = await embedding_client.embed([inp])
-        query_vec = outputs[0].embedding if outputs else None
-    except Exception:
-        audit.append(
-            MentionResolution(
-                mention_id=mention.mention_id,
-                stage=4,
-                score=0.0,
-                is_winner=False,
-                candidate_entity_id=None,
-                metadata={"method": "ann_hnsw", "error": "embedding_failed"},
-            ),
-        )
-        return None, 0.0
+    if not candidate_mentions:
+        return []
+    inputs = [
+        EmbeddingInput(text=m.mention_text, model_id=model_id, instruction_prefix=instruction_prefix)
+        for m in candidate_mentions
+    ]
+    outputs = await embedding_client.embed(inputs)  # may raise; caller catches (see docstring)
 
+    vectors: list[list[float] | None] = [None] * len(candidate_mentions)
+    for idx, out in enumerate(outputs[: len(candidate_mentions)]):
+        vectors[idx] = out.embedding
+    return vectors
+
+
+async def _stage4_ann(
+    mention: EntityMention,
+    embedding_repo: EntityProfileEmbeddingRepository,
+    query_vec: list[float] | None,
+    audit: list[MentionResolution],
+    embedding_error: str | None = None,
+) -> tuple[UUID | None, float]:
+    """Stage 4 — ANN HNSW on entity_embedding_state (view_type='definition').
+
+    ``query_vec`` is precomputed by the caller — batched across every
+    Stage-4 candidate in a single ``embedding_client.embed()`` call via
+    :func:`_batch_embed_stage4` — so this function performs no embedding
+    network call of its own. ``embedding_error`` is set by the caller to
+    ``"embedding_failed"`` when the WHOLE batch call raised (provider
+    outage); when ``None`` and ``query_vec`` is also ``None``, this mention
+    specifically got a short/missing response from an otherwise-successful
+    batch call, tagged ``"no_embedding"`` -- preserving the pre-batching
+    distinction between the two failure shapes.
+    """
     if query_vec is None:
         audit.append(
             MentionResolution(
@@ -295,7 +337,7 @@ async def _stage4_ann(
                 score=0.0,
                 is_winner=False,
                 candidate_entity_id=None,
-                metadata={"method": "ann_hnsw", "error": "no_embedding"},
+                metadata={"method": "ann_hnsw", "error": embedding_error or "no_embedding"},
             ),
         )
         return None, 0.0
@@ -549,8 +591,13 @@ async def run_entity_resolution_block(
     """Run the 4-stage entity resolution cascade for all mentions.
 
     Stages 1-3 use batch DB queries (1 query per stage for N mentions) to avoid
-    O(N*3) round-trips.  Stage 4 (ANN HNSW + embedding) runs per-mention only
-    for mentions that did not resolve in the earlier stages.
+    O(N*3) round-trips.  Stage 4 (ANN HNSW + embedding) batch-embeds every
+    mention that did not resolve in the earlier stages in ONE
+    embedding-client call (2026-07-23 fix — see ``_batch_embed_stage4``),
+    then does a cheap local ANN search per mention; this keeps the number of
+    external network round-trips this block makes independent of how many
+    mentions reach Stage 4, which matters because the whole call happens
+    inside the caller's long-lived intelligence_session transaction.
 
     Critical invariants (PRD §6.7 Block 9):
       - UNRESOLVED mentions are NEVER discarded — they remain in the output list.
@@ -690,7 +737,27 @@ async def run_entity_resolution_block(
         # the trigram signal is genuinely strong without inflating false-pos.
         fuzzy_matches = await alias_repo.batch_fuzzy_trigram(stage3_texts, threshold=0.55, top_k_per_mention=5)
 
-    # ── Per-mention classification + Stage 4 for remaining unresolved ─────────
+    # ── Per-mention stages 1-3 (no per-mention I/O beyond the batch queries
+    # already issued above) ────────────────────────────────────────────────
+    # 2026-07-23 fix (postgres-0 idle-in-transaction / OOM investigation, see
+    # docs/audits/2026-07-23-three-vertical-prod-investigation.md): Stage 4
+    # used to run its embedding-client network call INSIDE this same
+    # per-mention loop, one mention at a time. That serialized N sequential
+    # external HTTP round-trips while the caller's intelligence_session
+    # transaction was held open (article_consumer's D-004 dual-session block
+    # spans Blocks 8-10 — entity resolution runs before the multi-minute
+    # deep-extraction LLM phase, all inside one transaction committed only at
+    # the very end). We now finish stages 1-3 for every mention first
+    # (collecting per-mention audit/resolved_id/confidence state below),
+    # batch-embed every still-unresolved mention in ONE call, then run the
+    # (cheap, local) ANN search + classification per mention. This changes
+    # nothing about resolution outcomes or the per-mention ordering of
+    # MentionResolution rows inside ``all_audit`` — only the wall-clock shape
+    # of the I/O.
+    audits: list[list[MentionResolution]] = []
+    resolved_ids: list[UUID | None] = []
+    confidences: list[float] = []
+
     for mention in mentions:
         audit: list[MentionResolution] = []
         resolved_id: UUID | None = None
@@ -784,17 +851,57 @@ async def run_entity_resolution_block(
                     ),
                 )
 
-        # Stage 4: ANN HNSW — only for mentions still unresolved after stages 1-3
-        if resolved_id is None:
-            resolved_id, confidence = await _stage4_ann(
-                mention,
-                embedding_repo=embedding_repo,
+        audits.append(audit)
+        resolved_ids.append(resolved_id)
+        confidences.append(confidence)
+
+    # ── Stage 4 batch: embed every still-unresolved mention in ONE call ───────
+    # (see the fix note above the stages-1-3 loop for why this is batched.)
+    stage4_indices = [i for i, rid in enumerate(resolved_ids) if rid is None]
+    if stage4_indices:
+        stage4_mentions = [mentions[i] for i in stage4_indices]
+        # Catch a total-batch failure ONCE here (mirrors the pre-batching
+        # per-mention try/except, just applied once instead of N times) so
+        # every Stage-4 candidate's audit row is tagged "embedding_failed" --
+        # distinct from the per-mention "no_embedding" case where the batch
+        # call succeeded but a specific mention's vector was missing/short.
+        stage4_embedding_error: str | None = None
+        try:
+            stage4_vectors = await _batch_embed_stage4(
+                stage4_mentions,
                 embedding_client=embedding_client,
                 model_id=model_id,
                 instruction_prefix=instruction_prefix,
-                audit=audit,
+            )
+        except Exception as exc:
+            stage4_vectors = [None] * len(stage4_mentions)
+            stage4_embedding_error = "embedding_failed"
+            # One batched call now covers N mentions, so its failure downgrades
+            # every Stage-4 candidate to UNRESOLVED at once (was isolated
+            # per-mention before batching). That is a deliberate, safe tradeoff
+            # (no data loss — UnresolvedResolutionWorker re-attempts next cycle),
+            # but log it so a provider outage that silently unresolves a whole
+            # document's tail of mentions is visible (the pre-batching per-mention
+            # path did not log this either — this is a net observability gain).
+            logger.warning(
+                "entity_resolution.stage4_batch_embedding_failed",
+                candidate_count=len(stage4_mentions),
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
+                exc_info=True,
+            )
+        for local_i, global_i in enumerate(stage4_indices):
+            resolved_ids[global_i], confidences[global_i] = await _stage4_ann(
+                mentions[global_i],
+                embedding_repo=embedding_repo,
+                query_vec=stage4_vectors[local_i],
+                audit=audits[global_i],
+                embedding_error=stage4_embedding_error,
             )
 
+    # ── Per-mention resolution classification (unchanged logic; now reads
+    # the stage 1-4 state collected above instead of computing it inline) ───
+    for mention, audit, resolved_id, confidence in zip(mentions, audits, resolved_ids, confidences, strict=True):
         # ── Resolution classification ──────────────────────────────────────
         if resolved_id is not None and confidence >= auto_resolve_threshold:
             mention.resolved_entity_id = resolved_id
