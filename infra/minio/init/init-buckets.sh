@@ -84,7 +84,14 @@ add_expiry_rule() {
 }
 
 echo "=== Applying bronze lifecycle rules ==="
-# Whole-bucket safety net FIRST so no prefix is ever left unbounded (see above).
+# Whole-bucket safety net so no prefix is ever left unbounded (see above).
+# NOTE: add-ORDER here is cosmetic, not load-bearing. S3/MinIO ILM evaluates ALL
+# matching rules for an object and applies the EARLIEST expiry among them (not
+# "most specific prefix wins" and not "first rule added wins") — so the tighter
+# per-prefix rules below (2d EODHD, 1d Polymarket) always win over this 7d
+# catch-all on overlapping objects purely because 7d > 2d > 1d, regardless of
+# which rule was added first. Do not reorder this block expecting it to change
+# precedence; the catch-all's only job is to bound any UNLISTED prefix at 7d.
 add_expiry_rule "worldview-bronze" "$BRONZE_DEFAULT_EXPIRE_DAYS"
 # Polymarket deeper-stream firehose prefixes — short window (writes now disabled).
 # NOTE: the bare `polymarket` prefix is included explicitly; without it those

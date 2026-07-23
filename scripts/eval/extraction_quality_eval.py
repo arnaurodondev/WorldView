@@ -305,7 +305,7 @@ def assemble_golden_set(sample_size: int, pool_multiplier: int = 4) -> list[Gold
             cur.execute(_ASSEMBLE_SQL, {"limit": sample_size * pool_multiplier})
             doc_rows = cur.fetchall()
         if not doc_rows:
-            sys.exit("No DEEP-tier documents found in routing_decisions. " "Is this pointed at a populated nlp_db?")
+            sys.exit("No DEEP-tier documents found in routing_decisions. Is this pointed at a populated nlp_db?")
 
         for doc_id, tier in doc_rows:
             doc_id_s = str(doc_id)
@@ -962,7 +962,7 @@ def aggregate(runs: list[ModelRunResult], scores: list[JudgeScore], model_ids: l
 
 def build_report_md(aggs: list[ModelAggregate], baseline: str) -> str:
     """Render the comparison table + ranked verdict as markdown."""
-    ranked = sorted(aggs, key=lambda a: (a.mean_overall if a.mean_overall is not None else -1.0), reverse=True)
+    ranked = sorted(aggs, key=lambda a: a.mean_overall if a.mean_overall is not None else -1.0, reverse=True)
     lines: list[str] = []
     lines.append("# Extraction-quality A/B — LLM-as-judge report\n")
     lines.append(f"Baseline (production): `{baseline}`\n")
@@ -989,7 +989,7 @@ def build_report_md(aggs: list[ModelAggregate], baseline: str) -> str:
         if base_overall is not None and a.mean_overall is not None and a.model_id != baseline:
             delta = round(a.mean_overall - base_overall, 3)
             if delta >= -0.10:
-                verdict = f" — **MATCHES baseline** (Δoverall={delta:+}); " "viable swap if latency/cost favourable"
+                verdict = f" — **MATCHES baseline** (Δoverall={delta:+}); viable swap if latency/cost favourable"
             else:
                 verdict = f" — **BELOW baseline** (Δoverall={delta:+}); do NOT swap"
         elif a.model_id == baseline:
