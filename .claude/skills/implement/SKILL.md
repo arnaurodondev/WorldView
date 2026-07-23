@@ -1,6 +1,6 @@
 ---
 name: implement
-description: "Implement a wave from a plan, or a standalone change. Follows a strict pipeline: context loading, implementation with tests, lint/mypy/test validation, security review, code review, documentation update, and commit. Use for all feature implementation work."
+description: "Implement a wave from a plan, or a standalone change. Follows a strict pipeline: context loading, implementation with tests, lint/mypy/test validation, a mandatory dual independent-review gate (two blind subagents, not self-review), documentation update, and commit. Use for all feature implementation work."
 user-invocable: true
 argument-hint: "[wave reference (e.g. PLAN-0001 Wave A-1) or standalone task description]"
 effort: killer
@@ -23,9 +23,9 @@ Step 1: Context Loading        → Understand what to build and constraints
 Step 2: Implementation         → Write code, following architecture patterns
 Step 3: Test Design & Writing  → Unit + integration + e2e tests as needed
 Step 4: Validation Gate        → ruff + mypy + pytest (must all pass)
-Step 5: Security Review        → Invoke security analysis
-Step 6: Code Review            → Invoke review agent to question/improve
-Step 7: Fix Loop               → Apply fixes → re-validate → re-review
+Step 5: Independent Review x2  → Two blind subagents review the diff in parallel
+Step 6: Consolidate Findings   → Merge + dedupe both reviewers' findings
+Step 7: Fix Loop               → Fix blocking issues → re-validate → re-review if needed
 Step 8: Documentation Update   → Update all affected docs
 Step 9: Final Validation       → Full validation gate
 Step 10: Commit                → Stage scoped files, conventional commit
@@ -63,7 +63,7 @@ Step 10: Commit                → Stage scoped files, conventional commit
 3. `docs/BUG_PATTERNS.md` — scan for applicable patterns; note BP-XXX IDs
 4. Relevant `docs/libs/<lib>.md` if touching shared libraries
 5. Existing test files in the service to understand test patterns and conventions
-6. `.claude/review/` — skim relevant checklists and protocols for later self-review
+6. `.claude/review/` — skim relevant checklists and protocols; the independent reviewers spawned in Step 5 will read these in full
 7. **Existing mature service code** for implementation patterns (portfolio, market-ingestion, market-data are reference implementations)
 
 ### Define scope:
@@ -179,6 +179,8 @@ This prevents the failure pattern where a schema change passes local validation 
 ---
 
 ## Step 3 — Test Design & Writing
+
+The independent reviewers in Step 5 will specifically check for test-coverage gaps — tests MUST be written now, before the review spawn, not deferred to a later pass.
 
 For each implemented task, write tests immediately (not deferred):
 
@@ -298,75 +300,74 @@ When a test fails — **including pre-existing tests unrelated to your current c
 
 ---
 
-## Step 5 — Security Review
+## Step 5 — Independent Review Pipeline (MANDATORY — not self-review)
 
-Invoke a security analysis on the changes:
+Once Step 4 validation is fully green, the implementing agent MUST spawn **two independent review subagents in a single parallel batch** (one message, two `Agent` tool calls). This is not the same as the implementer re-reading their own diff — a reviewer with no investment in the implementation approach catches different classes of bugs than the author. **Do not skip this step by having the implementing agent produce both review passes itself.**
 
-1. Review all changed files for:
-   - Input validation on all external data entry points
-   - SQL injection (no f-string SQL, use parameterized queries)
-   - No hardcoded secrets
-   - No PII in logs
-   - Multi-tenant data isolation (if applicable)
-   - Authentication/authorization checks on new endpoints
-   - OWASP Top 10 relevance
+The two reviewers run **blind to each other** — neither sees the other's output, and they must not be launched sequentially where one could be conditioned by the other's findings.
 
-2. Cross-reference with `docs/BUG_PATTERNS.md` security-related patterns
+### 5.1 Common Review Package (give to BOTH reviewers)
 
-3. If any security issues found:
-   - Fix them immediately
-   - Re-run validation gate (Step 4)
-   - Document the fix
+Each reviewer receives, verbatim:
+- The full diff: `git diff <base-branch>...HEAD` (or working-tree diff if uncommitted)
+- The original task scope/PRD sections gathered in Step 1 (wave tasks, acceptance criteria, PRD section text — not a paraphrase)
+- An instruction to read `.claude/review/checklists/REVIEW_CHECKLIST.md`, `.claude/review/heuristics/HIGH_RISK_PATTERNS.md`, and `docs/BUG_PATTERNS.md` themselves, not a summary of them
+- The findings taxonomy to report in (§5.4)
 
-**GATE 2 — Security Confirmation**: If the security review produced any CRITICAL or BLOCKING findings, present them to the user before entering the fix loop. Summarize each finding and ask: "Apply these fixes?" Wait for confirmation before proceeding.
+### 5.2 Reviewer A — Correctness & Test Coverage
+
+Frame this subagent (`subagent_type: qa-test-engineer` if available in `.claude/agents/`, otherwise `general-purpose`) around the old PR Investigation Protocol + Failure Mode Analysis:
+- Map the change surface: what functions, classes, files changed
+- Identify side effects: what external state is affected
+- Enumerate failure modes for each new function/method, the system state after each failure, and the recovery path
+- Walk `.claude/review/checklists/REVIEW_CHECKLIST.md` with emphasis on: resource management, exception handling, storage atomicity, idempotency, edge cases (empty input, None, out-of-order)
+- **Explicitly check test coverage gaps** — tests must already exist from Step 3; flag any behavior path the tests don't exercise
+
+### 5.3 Reviewer B — Security & Architecture Compliance
+
+Frame this subagent (`subagent_type: security-engineer` if available in `.claude/agents/`, otherwise `general-purpose`) around the old security checklist:
+- Input validation on all external data entry points
+- SQL injection (no f-string SQL, use parameterized queries)
+- No hardcoded secrets, no PII in logs
+- Multi-tenant data isolation (if applicable)
+- Authentication/authorization checks on new endpoints
+- OWASP Top 10 relevance
+- Cross-reference `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` and architecture rules (R25/R27, layer boundaries, outbox pattern) for compliance signals
+- Cross-reference `docs/BUG_PATTERNS.md` security-related patterns
+
+### 5.4 Issue Report (both reviewers use this taxonomy)
+
+Each reviewer returns a findings list classified:
+- **Blocking**: Must fix before commit (bugs, security, data loss risks, architecture violations)
+- **Improvement**: Should fix (code quality, test gaps, documentation)
+- **Note**: Observations for future reference
+
+**GATE 2 — Security Confirmation**: If Reviewer B's report contains any CRITICAL or BLOCKING findings, present them to the user before entering Step 6. Summarize each finding and ask: "Apply these fixes?" Wait for confirmation before proceeding.
 
 ---
 
-## Step 6 — Code Review
+## Step 6 — Consolidate & Fix
 
-Perform a structured self-review using the `.claude/review/` framework:
-
-### 6.1 PR Investigation Protocol
-- Map the change surface: what functions, classes, files changed
-- Identify side effects: what external state is affected
-- Enumerate failure points: what can go wrong at each step
-
-### 6.2 Review Checklist
-Walk through `.claude/review/checklists/REVIEW_CHECKLIST.md`:
-- Resource management (cleanup, finally blocks)
-- Exception handling (no broad except, proper re-raise)
-- Storage atomicity (staging→final pattern)
-- Idempotency (duplicate detection, retry safety)
-- Edge cases (empty input, None values, out-of-order)
-- Known bug pattern regression
-
-### 6.3 Failure Mode Analysis
-For each new function/method:
-- List all failure modes
-- Determine system state after each failure
-- Assess recovery path
-- Classify severity
-
-### 6.4 Issue Report
-Produce a review findings list:
-- **Blocking**: Must fix before commit (bugs, security, data loss risks)
-- **Improvement**: Should fix (code quality, test gaps, documentation)
-- **Note**: Observations for future reference
+1. **Merge** Reviewer A's and Reviewer B's findings lists into a single consolidated list. **Dedupe** overlapping findings (keep the more detailed description; note both reviewers flagged it — convergent findings are a strong signal).
+2. **Fix every Blocking finding from EITHER reviewer.** A Blocking finding from only one reviewer is still mandatory to fix.
+3. Re-run Step 4 (Validation Gate) after applying fixes.
+4. **If either reviewer's findings materially changed the diff** (not a trivial fix), re-spawn **BOTH** independent reviewers again (Step 5) — not just the one who found the issue, since a fix can introduce a new problem the other reviewer's lens would catch. If the fixes were trivial/mechanical (typo, missing None-check matching the exact suggested fix), a re-review is not required.
+5. Proceed to Step 7 (Fix Loop) to track iteration count and escalation.
 
 ---
 
 ## Step 7 — Fix Loop
 
-If the review found issues:
+Track the consolidated fix-and-re-review cycle from Step 6:
 
 ```
-Fix blocking issues → Re-run Step 4 (Validation Gate) → Re-run Step 6 (Review)
-   ↑                                                           │
-   └───────────── If new issues found ─────────────────────────┘
+Fix all Blocking findings (both reviewers) → Re-run Step 4 (Validation Gate) → Re-run Step 5 (both reviewers, if diff changed materially)
+   ↑                                                                                              │
+   └──────────────────────────────── If new Blocking issues found ─────────────────────────────────┘
 ```
 
 Maximum 3 iterations. If issues persist after 3 loops, report to the user with:
-- What was found
+- What was found (by which reviewer)
 - What was fixed
 - What remains unresolved
 - Proposed resolution
@@ -503,8 +504,8 @@ At any point, if you are blocked for >2 attempts on the same issue:
 - [ ] Integration tests pass (or N/A)
 - [ ] **Docker rebuild + smoke test completed** (if service code changed): container starts clean, health check passes
 - [ ] If parallel subagents were used: all changes committed to main worktree, cross-agent regression check done
-- [ ] Security review completed — no blocking issues
-- [ ] Code review completed — no blocking issues
+- [ ] Both independent reviewers (Reviewer A correctness, Reviewer B security/architecture) spawned and returned findings — no self-review
+- [ ] All Blocking findings from EITHER reviewer fixed; re-review re-spawned if the diff changed materially
 - [ ] Documentation updated (service docs, lib docs, config examples, `.claude-context.md`)
 - [ ] Bug patterns updated (if applicable)
 - [ ] Plan file updated (wave heading ✅, status line, validation checkboxes, frontmatter)
@@ -519,7 +520,7 @@ At any point, if you are blocked for >2 attempts on the same issue:
 ## Workflow Chain — Suggest Next Steps
 
 After completing this skill, suggest the appropriate next skill to the user:
-- **Primary next step**: `/review` — if not already run as part of the pipeline (Step 6)
+- **Primary next step**: `/review` — if not already run as part of the pipeline (Step 5)
 - **If more waves remain**: `/implement <PLAN-ID> Wave <next-wave>` — continue with the next wave
 - **If all waves done**: `/qa` — run full quality assurance pass before PR
 - **If tests feel thin**: `/test-feature` — add comprehensive test coverage for the implemented feature
