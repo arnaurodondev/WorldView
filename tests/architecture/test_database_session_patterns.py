@@ -80,8 +80,19 @@ class _SettingsFieldVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+# BP-732: services may construct their engine either via SQLAlchemy's raw
+# ``create_async_engine`` OR via the shared
+# ``messaging.pg.engine_factory.build_async_engine`` factory (which wraps
+# ``create_async_engine`` internally with the proven-correct connect_args).
+# Both call shapes accept the same ``pool_pre_ping``/``pool_size``/
+# ``max_overflow`` keyword arguments, so the architecture checks below must
+# recognize either name — otherwise a service that (correctly) migrates onto
+# the shared factory would spuriously "lose" its R23 compliance signal.
+_ENGINE_CONSTRUCTOR_NAMES = frozenset({"create_async_engine", "build_async_engine"})
+
+
 class _CreateAsyncEngineVisitor(ast.NodeVisitor):
-    """Find all ``create_async_engine(...)`` calls and extract their keyword args."""
+    """Find all engine-constructor calls and extract their keyword args."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[int, dict[str, bool]]] = []  # (line, {kwarg: present})
@@ -89,9 +100,9 @@ class _CreateAsyncEngineVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         func = node.func
         is_create_engine = False
-        if isinstance(func, ast.Name) and func.id == "create_async_engine":
+        if isinstance(func, ast.Name) and func.id in _ENGINE_CONSTRUCTOR_NAMES:
             is_create_engine = True
-        elif isinstance(func, ast.Attribute) and func.attr == "create_async_engine":
+        elif isinstance(func, ast.Attribute) and func.attr in _ENGINE_CONSTRUCTOR_NAMES:
             is_create_engine = True
 
         if is_create_engine:
@@ -123,9 +134,9 @@ class _DualFactoryVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         func = node.func
-        if isinstance(func, ast.Name) and func.id == "create_async_engine":
+        if isinstance(func, ast.Name) and func.id in _ENGINE_CONSTRUCTOR_NAMES:
             self.engine_call_count += 1
-        elif isinstance(func, ast.Attribute) and func.attr == "create_async_engine":
+        elif isinstance(func, ast.Attribute) and func.attr in _ENGINE_CONSTRUCTOR_NAMES:
             self.engine_call_count += 1
         self.generic_visit(node)
 

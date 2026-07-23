@@ -13,9 +13,10 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from market_ingestion.config import Settings
+from messaging.pg.engine_factory import build_async_engine
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -27,28 +28,22 @@ def _build_factories(
     """Build write + read session factories from *settings*."""
     cfg = settings or Settings()  # type: ignore[call-arg]
 
-    # BP-502: application_name surfaces this service in pg_stat_activity for
-    # connection debugging; pool_recycle=300 defends against stale DNS sockets.
-    # PgBouncer transaction-pooling compatibility (2026-07-19 Postgres-OOM fix):
-    # this service routes through ``pgbouncer.infra.svc:6432`` (pool_mode=transaction).
-    # Server-side prepared statements DO NOT survive across transaction-pooled
-    # server connections, so disable both asyncpg's cache (``statement_cache_size=0``)
-    # and the SQLAlchemy asyncpg dialect cache (``prepared_statement_cache_size=0``).
-    # Both are harmless when connecting direct.
-    _connect_args: dict[str, object] = {
-        "server_settings": {"application_name": "market-ingestion"},
-        "statement_cache_size": 0,
-        "prepared_statement_cache_size": 0,
-    }
-    write_engine = create_async_engine(
+    # BP-732: connect_args (application_name, PgBouncer prepared-statement
+    # disabling, client-side command_timeout, server-side statement_timeout)
+    # are now assembled by the shared factory instead of hand-rolled here, so
+    # this service picks up future hardening lessons (e.g. the command_timeout
+    # added by 0d0f27119, previously only applied to nlp-pipeline) without a
+    # repeat hand-edit. This service routes through
+    # ``pgbouncer.infra.svc:6432`` (pool_mode=transaction), hence
+    # ``pooled=True``.
+    write_engine = build_async_engine(
         cfg.database_url.get_secret_value(),
-        echo=False,
-        future=True,
-        pool_pre_ping=True,
+        pooled=True,
+        application_name="market-ingestion",
         pool_size=10,
         max_overflow=20,
         pool_recycle=300,
-        connect_args=_connect_args,
+        pool_pre_ping=True,
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(write_engine, expire_on_commit=False)
 
@@ -57,15 +52,14 @@ def _build_factories(
     if read_url == _write_url:
         read_factory = write_factory
     else:
-        read_engine = create_async_engine(
+        read_engine = build_async_engine(
             read_url,
-            echo=False,
-            future=True,
-            pool_pre_ping=True,
+            pooled=True,
+            application_name="market-ingestion",
             pool_size=20,
             max_overflow=30,
             pool_recycle=300,
-            connect_args=_connect_args,
+            pool_pre_ping=True,
         )
         read_factory = async_sessionmaker(read_engine, expire_on_commit=False)
 

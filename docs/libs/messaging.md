@@ -20,6 +20,7 @@ The `messaging` library provides these independently usable building blocks:
 | **Table Retention Pruner** | `messaging.kafka.maintenance.table_retention` | Generic batched, per-batch-committing age-based pruner for any unbounded append/log table (outbox delivered rows, dedup/idempotency logs). |
 | **Valkey Client** | `messaging.valkey` | Async Redis/Valkey operations with pooling and structured key taxonomy. |
 | **PostgreSQL Advisory Lock** | `messaging.pg` | Single-leader scheduling across replicas without a dedicated lock service. |
+| **Shared Async Engine Factory** | `messaging.pg.engine_factory` | One place to build a hardened asyncpg `AsyncEngine` (PgBouncer prepared-statement disabling, client-side `command_timeout`, server-side `statement_timeout`) instead of every service hand-rolling its own `connect_args` (BP-732). |
 | **EODHD Quota Service** | `messaging.eodhd_quota` | Shared monthly EODHD credit quota enforcement via Valkey (prevents per-replica over-consumption). |
 
 No service ever writes directly to another service's database. All inter-service
@@ -534,6 +535,73 @@ async with pg_advisory_lock(session, "market-ingestion:eodhd-scheduler") as acqu
 - `pg_advisory_lock(session, name)` — async context manager; yields `True` if
   acquired, `False` otherwise. Uses `pg_try_advisory_lock` (non-blocking).
   Automatically releases on context exit.
+
+### Shared Async Engine Factory (`messaging.pg.engine_factory`)
+
+> Added 2026-07-23 (BP-732 Recurrence 2 fix). See `docs/BUG_PATTERNS.md` BP-732
+> and `docs/audits/2026-07-23-bottleneck-postgres-oom-pooling.md`.
+
+Three independent Postgres connection-hardening passes (`bea446831`,
+`0d0f27119`, `f1d04b8e5`) each landed in only 1-2 services because every
+service hand-rolled its own `connect_args` dict in its own
+`infrastructure/db/session.py`. `build_async_engine` is the ONE place that
+assembles the proven-correct shape, so a future hardening lesson is a
+one-file change instead of an N-service hand-edit.
+
+```python
+from messaging.pg.engine_factory import build_async_engine
+
+engine = build_async_engine(
+    settings.database_url.get_secret_value(),
+    pooled=True,                    # this DB connection routes through PgBouncer
+    application_name="rag-chat",    # required — surfaces in pg_stat_activity (BP-502)
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_recycle=300,
+    pool_pre_ping=True,
+)
+```
+
+```python
+def build_async_engine(
+    dsn: str,
+    *,
+    pooled: bool,
+    command_timeout_s: float = 600.0,      # DEFAULT_COMMAND_TIMEOUT_S
+    statement_timeout_ms: int = 8_000,     # DEFAULT_STATEMENT_TIMEOUT_MS
+    application_name: str,
+    pool_size: int = 10,
+    max_overflow: int = 20,
+    pool_recycle: int = 300,
+    pool_pre_ping: bool = True,
+    pool_timeout: float | None = None,
+    connect_timeout_s: float | None = None,
+    echo: bool = False,
+    extra_connect_args: dict[str, object] | None = None,
+) -> AsyncEngine: ...
+```
+
+| Param | Purpose |
+|-------|---------|
+| `pooled` | `True` disables asyncpg's and SQLAlchemy's prepared-statement caches (`statement_cache_size=0`, `prepared_statement_cache_size=0`) — required because server-side prepared statements do not survive across PgBouncer transaction-pooled connections. `False` omits them (harmless either way when connecting direct). |
+| `command_timeout_s` | Client-side asyncpg `command_timeout` (seconds). Bounds waiting for a command on an ALREADY-established connection — the fix for the 2026-07-21 2.4h article-pipeline wedge (a half-open dead connection hung forever without this). `<= 0` disables it. |
+| `statement_timeout_ms` | Server-side `statement_timeout` (milliseconds), applied via `server_settings`. Caps any single query at the Postgres level. `<= 0` disables it. |
+| `connect_timeout_s` | asyncpg's own connect-level `timeout` (DNS + TCP handshake) — a DIFFERENT knob from `command_timeout_s`. Only pass this if the service needs to bound establishing a NEW connection (e.g. `alert`'s PLAN-0088 P0-4 DNS-hiccup hardening). |
+| `extra_connect_args` | Escape hatch: additional connect kwargs merged on top of (and able to override) the factory's own — use sparingly; prefer promoting a genuinely shared setting into a named parameter. |
+
+**Migrated services** (as of 2026-07-23): `rag-chat`, `content-store`, `alert`,
+`market-ingestion` — all pass `pooled=True`. **Intentionally NOT migrated:**
+`content-ingestion` and `portfolio` stay on direct (non-PgBouncer) connections
+because of session-scoped AGE/advisory-lock state (see BP-732); `market-data`
+has its own independently-hardened session module with Prometheus pool gauges
+and a fail-fast pool and was left as a follow-up.
+
+**CI backstop:** `scripts/check_db_session_parity.py` greps every service's
+`infrastructure/*/session.py` for the pooled signal and the two timeout knobs,
+warning (or `--strict` failing) if a pooled service is missing a knob another
+pooled service already has. Wired into `.github/workflows/ci.yml` as a
+warn-only job (`db-session-parity`) — it currently reports `market-data` as a
+residual gap, which is expected (out of scope for the 2026-07-23 fix).
 
 ### EODHD Quota Service (`messaging.eodhd_quota`)
 
