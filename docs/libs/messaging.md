@@ -261,6 +261,61 @@ Opt-in AIMD-style per-partition pause/resume. Reads four settings attributes:
 
 When `max_retries` is exceeded for a `RetryableError`, the message is dead-lettered.
 
+### Decode-poison skip (`ConsumerConfig.skip_undecodable_records`)
+
+> Added 2026-07-23 (Recurrence-1 structural fix, bottleneck audit / BP-736).
+> **Default: `True`.**
+
+`_handle_message` catches `(EOFError, struct.error)` raised by
+`deserialize_value` — the two exception types a raw-bytes decode failure can
+produce (e.g. a truncated/misaligned Avro record left behind after a
+backward-compatible schema field append, R11) — and, when
+`skip_undecodable_records` is `True` (the default), logs a structured
+`<consumer>_deserialize_skipped` warning (topic, partition, offset,
+`error_type`) and **returns without dead-lettering**. This is deliberately
+**not** the same as catching `MalformedDataError`: several consumers
+(`entity_consumer.py`, `structured_enrichment_consumer.py`,
+`alert/intelligence_consumer.py`) raise `MalformedDataError` from inside
+their own `deserialize_value` for a validated business-rule rejection
+(oversized-payload cap, Avro-magic-byte-without-registered-schema) that must
+stay dead-lettered/DLQ-visible for operator replay — those are unaffected by
+this skip path and continue to flow through the normal `dead_letter()` path
+below.
+
+Why this matters: before this fix, ANY exception from `deserialize_value`
+(including a raw decode failure) was always wrapped into `MalformedDataError`
+and dead-lettered inline with no retry. A burst of poison records — the
+routine result of appending a nullable field to a long-lived Avro schema —
+trips `dead_letter_cap` and force-restarts the container *before* the offset
+commits, so the consumer re-reads the same poison batch forever and can
+never reach the healthy backlog behind it (BP-736). Two consumers
+independently reinvented a hand-rolled `_handle_message` override to fix
+this, two months apart, before the fix was folded into the base class.
+
+A per-subclass class attribute, `_deserialize_skip_log_event: str`
+(default `"kafka_consumer_deserialize_skipped"`), lets a consumer keep a
+bespoke structlog event name for continuity with existing dashboards/alerts
+(e.g. `EnrichedArticleConsumer` sets it to
+`"enriched_consumer_deserialize_skipped"`).
+
+Set `skip_undecodable_records=False` only for a consumer with a deliberate,
+reviewed reason to dead-letter poison records instead of skipping them (e.g.
+a DLQ contract that requires every dropped record to be persisted for manual
+replay) — in that case the historical "wrap into `MalformedDataError` and
+dead-letter" behaviour is preserved byte-for-byte.
+
+**Known gap (flagged during review, not yet fixed)**: the opt-in batched
+path (`_handle_batch`, `consume_batch_size > 1`) has its own, separate,
+unconditional `except Exception: ... continue` per-message skip that is
+**not** scoped to `(EOFError, struct.error)` and is **not** gated by
+`skip_undecodable_records` — it will swallow a deliberate `MalformedDataError`
+too if a batched consumer's `deserialize_value` ever raises one. No current
+consumer combination triggers this (only
+`market-data/prediction_market_consumer_main.py` batches, and its
+`MalformedDataError` raises are outside `deserialize_value`), but it is the
+same class of over-broad-catch bug sitting undocumented next to the fixed
+code — see BP-736's Prevention note.
+
 ### Opt-in persistent retry counter (`ConsumerConfig.enable_persistent_retry`)
 
 > Added 2026-06-11 (F-2 / Fix-3). **Default: `False` → zero behaviour change.**

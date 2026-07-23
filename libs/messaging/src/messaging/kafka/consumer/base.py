@@ -20,6 +20,7 @@ import dataclasses
 import json
 import os
 import random
+import struct
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -365,6 +366,35 @@ class ConsumerConfig:
     # apply while disconnected). Settings-driven so an operator can retune.
     reconnect_backoff_ms: int = 1_000
     reconnect_backoff_max_ms: int = 20_000
+    # Recurrence-1 structural fix (2026-07-23 bottleneck audit, BP-736): when
+    # ``deserialize_value`` raises a RAW ``EOFError``/``struct.error`` (an
+    # un-decodable, old-schema, or otherwise poison record — truncated or
+    # misaligned Avro bytes), ``_handle_message`` used to ALWAYS re-raise as a
+    # ``MalformedDataError`` — a ``FatalError`` that ``run()`` routes straight
+    # to ``dead_letter()`` with no retry. A burst of poison records (the
+    # routine case: a backward-compatible Avro field append under R11) trips
+    # ``dead_letter_cap`` and force-restarts the container BEFORE the offset
+    # commits, so the consumer re-reads the same poison batch forever and can
+    # never reach the healthy backlog behind it.
+    #
+    # Defaulting this to True makes "skip the un-decodable record, log it with
+    # topic/partition/offset, and let the run loop commit past it" the
+    # STRUCTURAL default for every consumer, instead of something each
+    # subclass author must remember to hand-roll (as
+    # ``EnrichedArticleConsumer``/``PredictionEnrichedConsumer`` previously
+    # did, independently, two months apart). Set to False only for a consumer
+    # that has a deliberate, reviewed reason to dead-letter poison records
+    # instead of skipping them (e.g. a consumer whose DLQ contract requires
+    # every dropped record to be persisted for manual replay).
+    #
+    # Deliberately does NOT trigger on a consumer's own ``MalformedDataError``
+    # raise (e.g. a JSON-fallback oversized-payload cap, or an Avro-magic-
+    # byte-present-but-no-schema-registered case) — those are validated
+    # business-rule rejections a consumer author explicitly chose to keep
+    # dead-lettered and DLQ-visible for operator replay, not a raw decode
+    # failure; see ``_handle_message``'s inline comment for the exact
+    # exception-type scoping and the consumers that rely on the distinction.
+    skip_undecodable_records: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict.
@@ -467,6 +497,18 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
     Type parameter *TFailure* is the subclass-defined failure record type
     stored to the dead-letter / retry table.
 
+    Class attributes:
+        _deserialize_skip_log_event: structlog event name emitted when
+            ``skip_undecodable_records`` swallows a poison deserialize
+            failure (Recurrence-1 structural fix, 2026-07-23 bottleneck
+            audit / BP-736). Subclasses that previously hand-rolled their own
+            ``_handle_message`` override with a specific event name (e.g.
+            ``EnrichedArticleConsumer`` → ``"enriched_consumer_deserialize_
+            skipped"``) should set this class attribute instead, so existing
+            log-based dashboards/alerts and tests keep matching the same
+            event name byte-for-byte. Consumers that never had a bespoke name
+            get this generic default.
+
     Args:
         config: Consumer configuration.
         metrics: Pre-created :class:`~observability.metrics.ServiceMetrics`.
@@ -480,6 +522,8 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             namespace — backwards compatible with consumers that have not yet
             opted into the override.
     """
+
+    _deserialize_skip_log_event: str = "kafka_consumer_deserialize_skipped"
 
     def __init__(
         self,
@@ -1095,6 +1139,55 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             # "deserialization failed: " with no diagnosable cause. The type
             # name makes every DLQ ``error_detail`` root-causable.
             detail = str(exc).strip() or repr(exc)
+            # Recurrence-1 structural fix (2026-07-23 bottleneck audit, BP-736):
+            # a genuinely un-decodable/poison record must NOT crash-loop the
+            # consumer. Historically a raw ``EOFError``/``struct.error`` from
+            # ``deserialize_value`` (truncated/misaligned Avro — the routine
+            # result of a backward-compatible field append, R11) always
+            # re-raised as ``FatalError`` — ``run()``'s ``except
+            # ConsumerError`` routes that straight to ``dead_letter()`` with
+            # NO retry, and a burst of poison records trips
+            # ``dead_letter_cap`` and force-restarts the container BEFORE the
+            # offset commits, so the same poison batch is re-read forever and
+            # the consumer can never reach the healthy backlog behind it. Two
+            # consumers (``EnrichedArticleConsumer``,
+            # ``PredictionEnrichedConsumer``) previously fixed this locally
+            # with a hand-rolled ``_handle_message`` override; folding it into
+            # the base class here makes it the default for every consumer so
+            # the fix is structurally impossible to "forget" on a new one.
+            #
+            # Deliberately SCOPED to ``(EOFError, struct.error)`` — the two
+            # exception types that can ONLY originate from a raw-bytes decode
+            # failure — and NOT to ``MalformedDataError``. Several consumers
+            # across the repo (e.g. ``entity_consumer.py``,
+            # ``structured_enrichment_consumer.py``,
+            # ``alert/intelligence_consumer.py``) deliberately raise
+            # ``MalformedDataError`` from inside their own
+            # ``deserialize_value`` for a VALIDATED business-rule rejection
+            # (a JSON-fallback oversized-payload cap, an Avro-magic-byte-
+            # present-but-no-schema-registered case, …) that is explicitly
+            # meant to stay dead-lettered and DLQ-visible for operator
+            # replay — those are not decode-poison and must not be silently
+            # reclassified as a skip just because the exception TYPE happens
+            # to be the same as the one the base wraps genuine decode
+            # failures into a few lines below. Skip + advance: log a
+            # structured skip (topic/partition/offset) and return WITHOUT
+            # dead-lettering, so ``_dead_letter_count`` is never touched and
+            # ``dead_letter_cap`` can never trip on poison records. All other
+            # exception types (including a consumer's own deliberate
+            # ``MalformedDataError`` business-rule raise) are unaffected —
+            # they still wrap into ``MalformedDataError`` and flow through
+            # the normal retry/DLQ path below.
+            if self._config.skip_undecodable_records and isinstance(exc, EOFError | struct.error):
+                logger.warning(
+                    self._deserialize_skip_log_event,
+                    topic=topic,
+                    partition=msg.partition(),
+                    offset=msg.offset(),
+                    error=detail,
+                    error_type=type(exc).__name__,
+                )
+                return
             raise MalformedDataError(
                 f"deserialization failed: {type(exc).__name__}: {detail}",
             ) from exc

@@ -326,3 +326,67 @@ class TestImports:
         """The consumer module must be importable without side effects."""
         with patch.dict("os.environ", {}, clear=False):
             import knowledge_graph.infrastructure.messaging.consumers.structured_enrichment_consumer as mod  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# Recurrence-1 structural fix (2026-07-23 bottleneck audit / BP-736)
+# ---------------------------------------------------------------------------
+
+
+class _FakeKafkaMessage:
+    """Minimal confluent-Kafka message stand-in for ``_handle_message`` tests."""
+
+    def __init__(self, raw_value: bytes, *, offset: int = 777, partition: int = 0) -> None:
+        self._value = raw_value
+        self._offset = offset
+        self._partition = partition
+
+    def topic(self) -> str:
+        return "entity.canonical.created.v1"
+
+    def value(self) -> bytes:
+        return self._value
+
+    def key(self) -> bytes | None:
+        return None
+
+    def headers(self) -> list[tuple[str, bytes]]:
+        return []
+
+    def offset(self) -> int:
+        return self._offset
+
+    def partition(self) -> int:
+        return self._partition
+
+
+class TestStructuredEnrichmentConsumerResilientDeserialize:
+    """An un-decodable/poison record must be SKIPPED, not crash-loop the group.
+
+    This consumer never had its own ``_handle_message`` override for the
+    deserialize-poison case (its override at line 113 only handles
+    ``RetryableEnrichmentError`` from ``process_message`` and calls
+    ``super()._handle_message(msg)`` first), so before the base-class fix a
+    poison Avro record on ``entity.canonical.created.v1`` would wrap into
+    ``MalformedDataError`` and dead-letter inline — a burst of them would
+    trip ``dead_letter_cap`` and crash-loop the consumer. The skip-and-advance
+    behaviour now lives in ``BaseKafkaConsumer._handle_message`` itself
+    (``ConsumerConfig.skip_undecodable_records``, default True), so this
+    consumer is protected automatically with zero source changes; this test
+    guards the regression.
+    """
+
+    async def test_undecodable_old_schema_record_is_skipped_not_raised(self) -> None:
+        from structlog.testing import capture_logs
+
+        consumer = _make_consumer()
+        msg = _FakeKafkaMessage(b"\x00garbage-not-avro")
+        with (
+            patch.object(consumer, "deserialize_value", side_effect=EOFError("short read")),
+            capture_logs() as logs,
+        ):
+            await consumer._handle_message(msg)  # must not raise
+        assert any(e["event"] == "kafka_consumer_deserialize_skipped" for e in logs)
+        skip = next(e for e in logs if e["event"] == "kafka_consumer_deserialize_skipped")
+        assert skip["offset"] == 777
+        assert consumer._dead_letter_count == 0

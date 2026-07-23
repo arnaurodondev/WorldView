@@ -60,7 +60,6 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     UnitOfWorkProtocol,
 )
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
-from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -207,6 +206,16 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     # (one/two docs per market) synthetic-document stream.
     _dedup_prefix: str = "kg:dedup:prediction_enriched_consumer"
     _dedup_ttl_seconds: ClassVar[int] = 7 * 86400
+    # Recurrence-1 structural fix (2026-07-23 bottleneck audit, BP-736): this
+    # class used to hand-roll its own ``_handle_message`` override (see
+    # PLAN-0056 history below) to skip un-decodable/poison records instead of
+    # dead-lettering them. That behaviour is now the DEFAULT at the
+    # ``BaseKafkaConsumer`` level (``ConsumerConfig.skip_undecodable_records``,
+    # default True) — this class attribute only preserves the exact
+    # structlog event name the override used to emit, so existing
+    # dashboards/alerts/tests keep matching byte-for-byte after the override
+    # was removed as redundant.
+    _deserialize_skip_log_event: str = "prediction_enriched_consumer_deserialize_skipped"
 
     def __init__(
         self,
@@ -231,33 +240,19 @@ class PredictionEnrichedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     # ------------------------------------------------------------------
     # Resilient message handling
     # ------------------------------------------------------------------
-
-    async def _handle_message(self, msg: Any) -> None:
-        """Deserialize + dispatch one message, SKIPPING un-decodable records.
-
-        PLAN-0056 deploy-fix (defence-in-depth alongside the start-at-latest
-        offset reset). The base ``_handle_message`` raises ``MalformedDataError``
-        (a ``FatalError``) whenever ``deserialize_value`` fails — e.g. an old-schema
-        record on the shared ``nlp.article.enriched.v1`` topic that misaligns under
-        the new no-registry reader schema. A ``FatalError`` dead-letters immediately,
-        and a burst of them trips ``dead_letter_cap`` → the consumer crash-loops
-        forever on a poison/old-schema message. A single un-decodable record must
-        NEVER wedge this forward-only consumer, so we catch the deserialize failure,
-        log it WITH the offset, and return normally — the run loop then commits the
-        offset and advances past the bad record. All other exceptions propagate
-        unchanged (genuine processing failures still flow through the retry/DLQ path).
-        """
-        try:
-            await super()._handle_message(msg)
-        except MalformedDataError as exc:
-            logger.warning(
-                "prediction_enriched_consumer_deserialize_skipped",
-                topic=msg.topic(),
-                partition=msg.partition(),
-                offset=msg.offset(),
-                error=str(exc),
-            )
-
+    #
+    # PLAN-0056 deploy-fix (defence-in-depth alongside the start-at-latest
+    # offset reset). The base ``_handle_message`` used to raise
+    # ``MalformedDataError`` (a ``FatalError``) whenever ``deserialize_value``
+    # failed — e.g. an old-schema record on the shared
+    # ``nlp.article.enriched.v1`` topic that misaligns under the new
+    # no-registry reader schema. A previous ``_handle_message`` override on
+    # this class caught that and skipped+logged instead of dead-lettering.
+    # That behaviour now lives in ``BaseKafkaConsumer._handle_message`` itself
+    # (Recurrence-1 structural fix, 2026-07-23 bottleneck audit / BP-736) —
+    # see ``_deserialize_skip_log_event`` above for the class attribute that
+    # preserves this consumer's specific log event name.
+    #
     # ------------------------------------------------------------------
     # Core processing
     # ------------------------------------------------------------------

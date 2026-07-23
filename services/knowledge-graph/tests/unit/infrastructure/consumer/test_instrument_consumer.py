@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -1165,3 +1165,155 @@ def test_ticker_notation_variant_swaps_dot_and_dash():
     assert _ticker_notation_variant("bf.b") == "BF-B"  # case-normalised
     assert _ticker_notation_variant("AAPL") is None  # no separator -> no twin
     assert _ticker_notation_variant("") is None
+
+
+# ---------------------------------------------------------------------------
+# Recurrence-1 structural fix (2026-07-23 bottleneck audit / BP-736)
+# ---------------------------------------------------------------------------
+
+
+class _FakeKafkaMessage:
+    """Minimal confluent-Kafka message stand-in for ``_handle_message`` tests."""
+
+    def __init__(self, raw_value: bytes, *, offset: int = 5151, partition: int = 0) -> None:
+        self._value = raw_value
+        self._offset = offset
+        self._partition = partition
+
+    def topic(self) -> str:
+        return "market.instrument.created"
+
+    def value(self) -> bytes:
+        return self._value
+
+    def key(self) -> bytes | None:
+        return None
+
+    def headers(self) -> list[tuple[str, bytes]]:
+        return []
+
+    def offset(self) -> int:
+        return self._offset
+
+    def partition(self) -> int:
+        return self._partition
+
+
+class TestInstrumentConsumerResilientDeserialize:
+    """An un-decodable/poison record must be SKIPPED, not crash-loop the group.
+
+    ``InstrumentEntityConsumer.deserialize_value`` (lines 772-782, now
+    782-800 after the fix below) LOOKS protected — it catches ``Exception``
+    from the Avro path and falls back to ``json.loads(raw)`` — but for a
+    genuinely truncated/misaligned Avro payload, ``json.loads`` itself raises
+    on the non-JSON bytes, and THAT second exception used to propagate out of
+    ``deserialize_value`` UNCAUGHT as a raw ``UnicodeDecodeError``/
+    ``JSONDecodeError`` — a type OUTSIDE ``BaseKafkaConsumer``'s decode-poison
+    skip tuple ``(EOFError, struct.error)``, so the base's ``_handle_message``
+    still wrapped it into ``MalformedDataError`` and dead-lettered inline
+    UNPROTECTED (found during independent review of the base-class fix: the
+    first version of this fix mocked ``deserialize_value`` in its tests,
+    which masked this exact gap). The fix re-raises the JSON fallback's
+    failure as ``EOFError`` so it lands inside the base's skip tuple. This
+    class tests BOTH: the base mechanism in isolation (mocked
+    ``deserialize_value``) AND the real, end-to-end, non-mocked path through
+    ``_handle_message`` with a genuinely undecodable payload — the latter is
+    the one that would have caught the original gap.
+    """
+
+    def test_undecodable_old_schema_record_is_skipped_not_raised(self) -> None:
+        """Base mechanism in isolation: a mocked raw decode-poison exception is skipped."""
+        from knowledge_graph.infrastructure.messaging.consumers.instrument_consumer import (
+            InstrumentEntityConsumer,
+        )
+        from structlog.testing import capture_logs
+
+        from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+        config = ConsumerConfig(
+            bootstrap_servers="localhost:9092",
+            group_id="kg-instrument-test",
+            topics=["market.instrument.created"],
+        )
+        consumer = InstrumentEntityConsumer(
+            config=config,
+            session_factory=MagicMock(),
+            llm_client=MagicMock(),
+        )
+        msg = _FakeKafkaMessage(b"\x00garbage-not-avro-not-json")
+        with (
+            patch.object(consumer, "deserialize_value", side_effect=EOFError("short read")),
+            capture_logs() as logs,
+        ):
+            asyncio.run(consumer._handle_message(msg))  # must not raise
+        assert any(e["event"] == "kafka_consumer_deserialize_skipped" for e in logs)
+        skip = next(e for e in logs if e["event"] == "kafka_consumer_deserialize_skipped")
+        assert skip["offset"] == 5151
+        assert consumer._dead_letter_count == 0
+
+    def test_real_undecodable_payload_is_skipped_end_to_end_not_mocked(self) -> None:
+        """End-to-end regression: a REAL genuinely-undecodable payload (not
+        Avro, not JSON — the exact shape that slipped through the JSON
+        fallback pre-fix) must be skipped by the REAL, un-mocked
+        ``deserialize_value`` → ``_handle_message`` path, not merely by a
+        mocked stand-in. This is the test that would have caught the gap a
+        mocked-``deserialize_value`` test cannot.
+        """
+        from knowledge_graph.infrastructure.messaging.consumers.instrument_consumer import (
+            InstrumentEntityConsumer,
+        )
+        from structlog.testing import capture_logs
+
+        from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+        config = ConsumerConfig(
+            bootstrap_servers="localhost:9092",
+            group_id="kg-instrument-test",
+            topics=["market.instrument.created"],
+        )
+        consumer = InstrumentEntityConsumer(
+            config=config,
+            session_factory=MagicMock(),
+            llm_client=MagicMock(),
+        )
+        # Confluent magic byte + truncated/misaligned Avro body that is ALSO
+        # not valid JSON/UTF-8 — real bytes, real deserialize_value, no mocks.
+        msg = _FakeKafkaMessage(b"\x00\x00\x00\x00\x01not-json-either", offset=6262)
+        with capture_logs() as logs:
+            asyncio.run(consumer._handle_message(msg))  # must not raise
+        assert any(e["event"] == "kafka_consumer_deserialize_skipped" for e in logs)
+        skip = next(e for e in logs if e["event"] == "kafka_consumer_deserialize_skipped")
+        assert skip["offset"] == 6262
+        assert skip["error_type"] == "EOFError"  # re-raised type, not the raw JSONDecodeError
+        assert consumer._dead_letter_count == 0
+
+    def test_json_fallback_re_raises_as_eoferror_on_genuinely_undecodable_payload(self) -> None:
+        """Un-decodable Avro AND non-JSON bytes must not silently succeed.
+
+        Guards against the JSON fallback masking a poison record as a lucky
+        (garbage) parse — ``deserialize_value`` must raise ``EOFError``
+        specifically (not just "any exception") so the base's skip-and-
+        advance path — scoped to ``(EOFError, struct.error)``, deliberately
+        NOT ``MalformedDataError`` — actually handles it.
+        """
+        from knowledge_graph.infrastructure.messaging.consumers.instrument_consumer import (
+            InstrumentEntityConsumer,
+        )
+
+        from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+        config = ConsumerConfig(
+            bootstrap_servers="localhost:9092",
+            group_id="kg-instrument-test",
+            topics=["market.instrument.created"],
+        )
+        consumer = InstrumentEntityConsumer(
+            config=config,
+            session_factory=MagicMock(),
+            llm_client=MagicMock(),
+        )
+        # Confluent magic byte + truncated/misaligned Avro body that is ALSO
+        # not valid JSON — both the Avro decode and the JSON fallback fail.
+        raw = b"\x00\x00\x00\x00\x01not-json-either"
+        with pytest.raises(EOFError):
+            consumer.deserialize_value(raw)
