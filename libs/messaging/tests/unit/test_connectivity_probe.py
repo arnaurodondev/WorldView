@@ -732,12 +732,18 @@ class TestLagStallSelfHeal:
         consumer = _build_selfheal_consumer()
         now = time.time()
         consumer._last_progress_ts = now  # BP-700 heartbeat FRESH (barrier keeps it alive)
-        consumer._last_fetch_poll_ts = now - 9_999.0  # real poll() STALE (halt stopped polling)
+        # real poll() STALE (halt stopped polling) but STILL WITHIN
+        # ``max.poll.interval.ms`` — a legitimately slow in-progress batch, NOT a
+        # fenced consumer.  Beyond max.poll the RC-C ceiling (separate test)
+        # force-exits regardless of heartbeat; suppression is confined to here.
+        stale_within_max_poll = consumer._config.max_poll_interval_ms / 1000.0 / 2  # 300 s (< 600 s)
+        consumer._last_fetch_poll_ts = now - stale_within_max_poll
         # Sanity: the two signals genuinely diverge — the whole point of the fix.
         assert consumer.seconds_since_progress() is not None
         assert consumer.seconds_since_progress() < 1.0
         assert consumer.seconds_since_fetch_poll() is not None
         assert consumer.seconds_since_fetch_poll() > consumer._probe_interval_seconds
+        assert consumer.seconds_since_fetch_poll() < consumer._config.max_poll_interval_ms / 1000.0
         with (
             patch.object(
                 type(consumer),
@@ -851,8 +857,11 @@ class TestLagStallSelfHealFenceRecovery:
         """
         consumer = _build_selfheal_consumer()
         consumer._last_progress_ts = -1.0  # never recorded → seconds_since_progress() is None
-        consumer._last_fetch_poll_ts = time.time() - 9_999.0  # fetch-poll stale
+        # fetch-poll stale (poll stopped) but WITHIN max.poll.interval so the RC-C
+        # ceiling is not reached — isolates the fence gate's None-heartbeat safety.
+        consumer._last_fetch_poll_ts = time.time() - consumer._config.max_poll_interval_ms / 1000.0 / 2
         assert consumer.seconds_since_progress() is None
+        assert consumer.seconds_since_fetch_poll() < consumer._config.max_poll_interval_ms / 1000.0
         with (
             patch.object(
                 type(consumer),
@@ -869,3 +878,122 @@ class TestLagStallSelfHealFenceRecovery:
                 await task
 
         assert not exit_mock.called, "a never-progressed (None heartbeat) consumer must not be treated as fenced"
+
+
+class TestLagStallSelfHealMaxPollCeiling:
+    """RC-C (fix/pollloop-selfheal-ceiling): the HARD ``max.poll.interval`` ceiling.
+
+    The FENCE-recovery gate infers "fenced" from a STALE BP-700 heartbeat.  But a
+    subclass whose barrier halt keeps that heartbeat fresh ON PURPOSE (the nlp
+    article_consumer refreshes it every idle cycle) while it has STOPPED calling
+    ``consumer.poll()`` defeats the inference — heartbeat fresh → not fenced →
+    suppressed forever, even with the fetch-poll stale for HOURS (observed live
+    2026-07-21: ``seconds_since_poll``=8790s, heartbeat ~0 → 2.4 h wedge).  Past
+    ``max.poll.interval.ms`` without a poll the broker has DEFINITIVELY fenced the
+    consumer, so this ceiling force-exits regardless of heartbeat freshness.
+    """
+
+    async def test_poll_stale_past_max_poll_with_fresh_heartbeat_force_exits(self) -> None:
+        """THE WEDGE: poll stale > max.poll.interval + FRESH heartbeat → force-exit(2).
+
+        The exact 2.4 h-wedge signature the fence gate wrongly suppressed: the
+        barrier keeps the BP-700 heartbeat fresh while poll() has not been called
+        for far longer than ``max.poll.interval.ms``.  RC-C must FIRE, tagging
+        ``poll_stale_past_max_poll`` (NOT ``fenced_out_of_group`` — the heartbeat
+        is fresh, so the fence gate did not trigger this).
+        """
+        consumer = _build_selfheal_consumer()
+        now = time.time()
+        max_poll_s = consumer._config.max_poll_interval_ms / 1000.0
+        consumer._last_progress_ts = now  # BP-700 heartbeat FRESH (barrier keeps it alive)
+        consumer._last_fetch_poll_ts = now - (max_poll_s + 100.0)  # poll stale BEYOND max.poll
+        # Sanity: heartbeat fresh, poll stale past the ceiling — the wedge state.
+        assert consumer.seconds_since_progress() < 1.0
+        assert consumer.seconds_since_fetch_poll() > max_poll_s
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch("messaging.kafka.consumer.base.logger") as logger_mock,
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert exit_mock.called, (
+            "RC-C ceiling did NOT force-exit a consumer whose poll has been stale past "
+            "max.poll.interval with a fresh heartbeat — this is the exact 2.4 h wedge"
+        )
+        for call in exit_mock.call_args_list:
+            assert call.args == (2,), "RC-C ceiling must force-exit with code 2"
+        selfheal_calls = [
+            c for c in logger_mock.critical.call_args_list if c.args[0] == "kafka_consumer_lag_stall_selfheal"
+        ]
+        assert selfheal_calls, "self-heal CRITICAL must fire"
+        assert selfheal_calls[0].kwargs.get("trigger") == "poll_stale_past_max_poll"
+        assert selfheal_calls[0].kwargs.get("poll_loop_active") is False
+
+    async def test_within_max_poll_fresh_heartbeat_still_suppresses(self) -> None:
+        """No crashloop on a legit slow batch: poll stale but WITHIN max.poll + fresh heartbeat → SUPPRESS.
+
+        A legitimately slow in-progress batch (the nlp pause/resume barrier keeps
+        polling + heartbeating, or a <max.poll single handler) must NOT be
+        force-exited — the heartbeat-fresh suppression applies while
+        ``seconds_since_fetch_poll`` is still within ``max.poll.interval.ms``.
+        """
+        consumer = _build_selfheal_consumer()
+        now = time.time()
+        max_poll_s = consumer._config.max_poll_interval_ms / 1000.0
+        consumer._last_progress_ts = now  # heartbeat fresh
+        consumer._last_fetch_poll_ts = now - max_poll_s / 2  # stale, but WITHIN max.poll
+        assert consumer.seconds_since_fetch_poll() < max_poll_s
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch("messaging.kafka.consumer.base.logger") as logger_mock,
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, "a legit slow batch (poll within max.poll, heartbeat fresh) must NOT force-exit"
+        events = [call.args[0] for call in logger_mock.warning.call_args_list]
+        assert "kafka_consumer_lag_stall_selfheal_suppressed" in events, "suppression must be logged"
+
+    async def test_max_poll_ceiling_respects_kill_switch(self) -> None:
+        """``KAFKA_LAG_STALL_SELFHEAL=0`` must disable the RC-C ceiling force-exit too."""
+        consumer = _build_selfheal_consumer()
+        consumer._lag_stall_selfheal_enabled = False
+        now = time.time()
+        max_poll_s = consumer._config.max_poll_interval_ms / 1000.0
+        consumer._last_progress_ts = now
+        consumer._last_fetch_poll_ts = now - (max_poll_s + 100.0)
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, "kill-switch must disable the RC-C max.poll ceiling"

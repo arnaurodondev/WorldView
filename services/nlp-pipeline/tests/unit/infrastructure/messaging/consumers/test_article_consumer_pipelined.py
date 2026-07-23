@@ -22,6 +22,7 @@ path touches are wired (mirrors ``test_article_consumer_concurrency.py``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections import deque
 from types import SimpleNamespace
@@ -154,22 +155,56 @@ class _FakeConfig:
     enable_auto_commit = False
     poll_timeout_seconds = 0.02
     group_id = "nlp-pipeline-group"
+    # Only read by the base self-heal (not the run loop); a real value keeps any
+    # incidental base-method call sane.
+    max_poll_interval_ms = 1_800_000
 
 
 class _FakeConfluentConsumer:
     def __init__(self) -> None:
         self.committed: list[tuple[int, int]] = []
+        # RC-B barrier heartbeat instrumentation.
+        self.poll_calls = 0
+        self.paused: list[Any] = []
+        self.resumed: list[Any] = []
+        self._assignment: list[Any] = []
 
     def commit(self, msg: Any) -> None:
         self.committed.append((msg.partition(), msg.offset()))
+
+    # ── RC-B: the barrier pauses the assignment and keeps polling to hold group
+    # membership.  These stubs let the real ``_pause_all_assigned`` /
+    # ``_resume_barrier_paused`` / barrier poll run without a live broker.
+    def assignment(self) -> list[Any]:
+        return list(self._assignment)
+
+    def pause(self, tps: Any) -> None:
+        self.paused.extend(tps)
+
+    def resume(self, tps: Any) -> None:
+        self.resumed.extend(tps)
+
+    def poll(self, _timeout: float) -> None:
+        self.poll_calls += 1
+        return None
 
 
 def _make_consumer(concurrency: int) -> ArticleProcessingConsumer:
     c = object.__new__(ArticleProcessingConsumer)
     c._config = _FakeConfig()  # type: ignore[attr-defined]
     c._consumer = _FakeConfluentConsumer()  # type: ignore[attr-defined]
-    c._settings = SimpleNamespace(article_consumer_concurrency=concurrency)  # type: ignore[attr-defined]
+    c._settings = SimpleNamespace(  # type: ignore[attr-defined]
+        article_consumer_concurrency=concurrency,
+        # Large default → the RC-B grace ceiling never trips in tests that do not
+        # opt into it; the membership-preserving pause/resume path is exercised.
+        article_consumer_barrier_drain_grace_s=1200.0,
+    )
     c._stop_event = asyncio.Event()  # type: ignore[attr-defined]
+    # RC-B state normally set in __init__ (bypassed by object.__new__).
+    c._barrier_paused_partitions = set()  # type: ignore[attr-defined]
+    c._paused_partitions = set()  # type: ignore[attr-defined]
+    c._last_fetch_poll_ts = -1.0  # type: ignore[attr-defined]
+    c._last_progress_ts = -1.0  # type: ignore[attr-defined]
     # No-op the infra hooks the loop calls.
     c._init_kafka = lambda: None  # type: ignore[attr-defined,method-assign]
     c._shutdown_kafka = lambda: None  # type: ignore[attr-defined,method-assign]
@@ -402,3 +437,122 @@ async def test_run_backpressures_on_sustained_barrier_bounds_memory() -> None:
     assert settled["count"] < total_available
     # Nothing committed: offset 0's barrier blocks the whole partition.
     assert c._consumer.committed == []  # type: ignore[attr-defined]
+
+
+# ───────────────── RC-B: barrier keeps group membership ─────────────────────
+# fix/pollloop-selfheal-ceiling.  The OLD saturated-window barrier stopped
+# calling ``consumer.poll()`` entirely while it waited for in-flight work to
+# drain, refreshing only the BP-700 heartbeat.  A hung in-flight coroutine then
+# stalled the barrier forever → no poll → the broker session-timed-out and
+# FENCED the consumer out of the group (0 members → the 2.4 h backlog wedge).
+# The barrier now PAUSES the assignment and KEEPS polling (paused → no records
+# admitted, but the group heartbeat is maintained), and bounds a genuinely hung
+# drain so it eventually stops faking liveness and lets the base self-heal act.
+
+from collections import namedtuple
+
+_TP = namedtuple("_TP", ["topic", "partition"])
+
+
+async def test_barrier_keeps_polling_to_hold_group_membership_during_slow_drain() -> None:
+    """A saturated window KEEPS calling poll() (heartbeat) while the drain runs.
+
+    concurrency=1, so admitting one slow handler saturates the window.  While it
+    drains, the barrier must PAUSE the assignment and keep polling — proving the
+    consumer stays a live group member through a slow batch — and both messages
+    must still commit exactly once (at-least-once preserved, no data loss).
+    """
+    c = _make_consumer(concurrency=1)
+    c._consumer._assignment = [_TP(_TOPIC, 0)]  # type: ignore[attr-defined]
+
+    source: deque[_FakeMsg] = deque([_FakeMsg(0, 0, tier="deep"), _FakeMsg(0, 1, tier="light")])
+    done = {"n": 0}
+
+    async def fake_settle(msg: Any) -> bool:
+        # First (offset 0) is slow enough to force a barrier while offset 1 waits.
+        await asyncio.sleep(0.20 if msg.offset() == 0 else 0.01)
+        done["n"] += 1
+        if done["n"] >= 2:
+            c._stop_event.set()  # type: ignore[attr-defined]
+        return True
+
+    c._settle_message = fake_settle  # type: ignore[attr-defined,method-assign]
+    c._poll_batch = _drain_source_poll_batch(source, idle_sleep=0.005)  # type: ignore[attr-defined,method-assign]
+
+    await asyncio.wait_for(c.run(), timeout=5.0)
+
+    # Membership maintained: the barrier drove real poll() calls (heartbeat) and
+    # paused the assignment while the slow handler drained.
+    assert c._consumer.poll_calls > 0, "barrier never polled → consumer would be fenced out of the group"  # type: ignore[attr-defined]
+    assert c._consumer.paused, "barrier never paused the assignment before polling"  # type: ignore[attr-defined]
+    assert c._consumer.resumed, "barrier never resumed the assignment"  # type: ignore[attr-defined]
+    # At-least-once preserved: both offsets processed and committed exactly once.
+    assert done["n"] == 2
+    assert sorted(c._consumer.committed) == [(0, 0), (0, 1)]  # type: ignore[attr-defined]
+
+
+async def test_hung_drain_past_grace_stops_faking_liveness_so_selfheal_can_act() -> None:
+    """A genuinely hung drain (no completion for the grace) stops polling + heartbeating.
+
+    concurrency=1 with a handler that NEVER completes saturates the window with
+    zero progress.  Within the (tiny) grace the barrier keeps polling +
+    heartbeating; PAST the grace it must stop BOTH so the base lag-stall self-heal
+    (fetch-poll + heartbeat both stale → RC-C / fence force-exit) can escalate,
+    instead of the consumer faking liveness forever (the residual wedge).
+    """
+    c = _make_consumer(concurrency=1)
+    c._consumer._assignment = [_TP(_TOPIC, 0)]  # type: ignore[attr-defined]
+    c._settings.article_consumer_barrier_drain_grace_s = 0.15  # type: ignore[attr-defined]
+
+    # Count real liveness refreshes.  ``_record_fetch_poll`` is a base method;
+    # wrap it so we can see when the barrier stops calling poll (fetch-poll stale).
+    progress_calls = {"n": 0}
+    c._record_progress = lambda: progress_calls.__setitem__("n", progress_calls["n"] + 1)  # type: ignore[attr-defined,method-assign]
+
+    hung = asyncio.Event()  # never set → the handler blocks forever
+
+    async def fake_settle(_msg: Any) -> bool:
+        await hung.wait()  # simulates the hung DB await (never returns)
+        return True
+
+    c._settle_message = fake_settle  # type: ignore[attr-defined,method-assign]
+    source: deque[_FakeMsg] = deque([_FakeMsg(0, 0), _FakeMsg(0, 1)])
+    c._poll_batch = _drain_source_poll_batch(source, idle_sleep=0.005)  # type: ignore[attr-defined,method-assign]
+
+    run_task = asyncio.create_task(c.run())
+    # Let the window saturate and the barrier run WITHIN grace (polls + heartbeats).
+    await asyncio.sleep(0.10)
+    polls_in_grace = c._consumer.poll_calls  # type: ignore[attr-defined]
+    progress_in_grace = progress_calls["n"]
+    assert polls_in_grace > 0, "barrier did not poll during the in-grace window"
+    assert progress_in_grace > 0, "barrier did not heartbeat during the in-grace window"
+
+    # Now cross the grace and let several poll_timeouts elapse.
+    await asyncio.sleep(0.40)
+    polls_after_grace_1 = c._consumer.poll_calls  # type: ignore[attr-defined]
+    progress_after_grace_1 = progress_calls["n"]
+    await asyncio.sleep(0.20)
+    polls_after_grace_2 = c._consumer.poll_calls  # type: ignore[attr-defined]
+    progress_after_grace_2 = progress_calls["n"]
+
+    # Past the grace both liveness signals FREEZE — poll() and the BP-700
+    # heartbeat stop — so ``seconds_since_fetch_poll`` / ``seconds_since_progress``
+    # climb and the base self-heal escalates instead of a silent forever-wedge.
+    assert polls_after_grace_2 == polls_after_grace_1, "barrier still polling past grace → self-heal can never act"
+    assert (
+        progress_after_grace_2 == progress_after_grace_1
+    ), "barrier still heartbeating past grace → self-heal suppressed forever"
+    # The assignment was resumed (not left paused) so its frozen position reads as
+    # a real wedge to the self-heal (paused partitions are excluded).
+    assert not c._barrier_paused_partitions, "assignment must be resumed once the barrier gives up"  # type: ignore[attr-defined]
+    # Nothing was committed (the head never settled) — at-least-once preserved.
+    assert c._consumer.committed == []  # type: ignore[attr-defined]
+
+    # Teardown: release the hung handler and stop the loop.
+    hung.set()
+    c._stop_event.set()  # type: ignore[attr-defined]
+    with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
+        await asyncio.wait_for(run_task, timeout=2.0)
+    run_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await run_task

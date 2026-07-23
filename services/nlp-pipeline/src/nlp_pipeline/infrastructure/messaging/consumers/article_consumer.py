@@ -819,6 +819,16 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # Message payloads unbounded-by-outage-duration and OOM the consumer.  A
         # generous multiple of the window covers every healthy out-of-order tail.
         max_pending = max(concurrency * 8, 64)
+        # RC-B (fix/pollloop-selfheal-ceiling): while the concurrency window /
+        # commit ledger is SATURATED we hold a barrier and stop admitting work.
+        # ``barrier_block_since`` marks when the barrier LAST made no progress;
+        # it is reset to ``None`` on every in-flight completion and whenever the
+        # window drains, so it measures a CONTINUOUS no-progress stretch.  Past
+        # ``barrier_drain_grace_s`` of continuous no-progress the barrier stops
+        # maintaining group membership so the base self-heal can force-exit (see
+        # the barrier branch below).  0 disables the ceiling (pure pause/resume).
+        barrier_drain_grace_s = float(getattr(self._settings, "article_consumer_barrier_drain_grace_s", 1200.0))
+        barrier_block_since: float | None = None
 
         async def _worker(message: Any) -> None:
             nonlocal poison_storm_exc
@@ -886,26 +896,84 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 self._maybe_apply_backpressure()
 
                 if len(inflight) >= concurrency or ledger.pending() >= max_pending:
-                    # Stop admitting work and wait for a completion when EITHER:
-                    #   * the concurrency window is full, OR
-                    #   * the commit ledger is barrier-backlogged — a sustained
-                    #     DLQ/DB outage holds a partition's head offset, so settled
-                    #     offsets pile up uncommitted.  Backpressuring the poll
-                    #     bounds retained Message payloads (no OOM) until the
-                    #     barrier clears or the drain-health alert / operator acts.
-                    # If nothing is in flight (all held behind a barrier with the
-                    # window drained) idle one poll_timeout rather than busy-spin or
-                    # crash on ``asyncio.wait`` of an empty set.
-                    if inflight:
-                        await asyncio.wait(inflight, return_when=asyncio.FIRST_COMPLETED)
+                    # Barrier: stop admitting work and wait for a completion when
+                    # EITHER the concurrency window is full OR the commit ledger is
+                    # barrier-backlogged (a sustained DLQ/DB outage holds a
+                    # partition's head offset, so settled offsets pile up
+                    # uncommitted — bounding retained Message payloads avoids OOM).
+                    #
+                    # RC-B (fix/pollloop-selfheal-ceiling): the OLD barrier simply
+                    # blocked on ``asyncio.wait(inflight)`` and refreshed the BP-700
+                    # heartbeat — it NEVER called ``consumer.poll()``.  When the
+                    # window wedged (a hung in-flight coroutine that never settled)
+                    # the loop stopped polling entirely; the broker session-timed-
+                    # out and FENCED the consumer out of the group (0 members → a
+                    # total backlog stall, the 2.4 h wedge).  We now PAUSE the whole
+                    # assignment and KEEP polling so the group HEARTBEAT is
+                    # maintained through the slow batch (a paused partition returns
+                    # no records → we admit nothing we lack a slot for → at-least-
+                    # once preserved: the fetch position does not advance).
+                    now = time.time()
+                    if barrier_block_since is None:
+                        barrier_block_since = now
+                    within_grace = barrier_drain_grace_s <= 0 or (now - barrier_block_since) < barrier_drain_grace_s
+
+                    if within_grace:
+                        # Maintain membership: pause the assignment, drive one poll
+                        # (heartbeat, no new records), record a REAL fetch-poll so
+                        # the base self-heal sees an actively-cycling loop, and wait
+                        # briefly for an in-flight completion.
+                        self._pause_all_assigned()
+                        try:
+                            with contextlib.suppress(Exception):
+                                await loop.run_in_executor(None, self._consumer.poll, 0.0)
+                                self._record_fetch_poll()
+                            if inflight:
+                                done, _pending = await asyncio.wait(
+                                    inflight,
+                                    timeout=self._config.poll_timeout_seconds,
+                                    return_when=asyncio.FIRST_COMPLETED,
+                                )
+                                if done:
+                                    # Progress → the drain is alive; reset the clock.
+                                    barrier_block_since = None
+                            else:
+                                await asyncio.sleep(self._config.poll_timeout_seconds)
+                        finally:
+                            # Resume BEFORE we might fall through to the normal poll
+                            # path (a freed slot) so real fetches resume immediately.
+                            self._resume_barrier_paused()
+                        # BP-704 liveness: still a live, heartbeating group member.
+                        self._record_progress()
                     else:
-                        await asyncio.sleep(self._config.poll_timeout_seconds)
-                    # BP-704 liveness: the consumer is alive (a completed handler or
-                    # a correct barrier hold), so heartbeat.
-                    self._record_progress()
+                        # Grace exhausted: a genuinely hung drain (no completion for
+                        # ``barrier_drain_grace_s``).  STOP faking liveness — do NOT
+                        # poll, do NOT ``_record_progress`` — so the base lag-stall
+                        # self-heal (fetch-poll + heartbeat both go stale → fence /
+                        # RC-C ceiling) force-exits for a fresh container + group
+                        # rejoin instead of a silent forever-wedge.  Resume the
+                        # assignment first so its frozen position registers as a real
+                        # wedge (barrier-paused partitions are excluded from the
+                        # self-heal), and so a fresh member inherits unpaused state.
+                        self._resume_barrier_paused()
+                        if inflight:
+                            done, _pending = await asyncio.wait(
+                                inflight,
+                                timeout=self._config.poll_timeout_seconds,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            if done:
+                                barrier_block_since = None
+                        else:
+                            await asyncio.sleep(self._config.poll_timeout_seconds)
                     await _commit_ready()
                     continue
 
+                # Not saturated: exit the barrier (resume any held pauses, reset the
+                # no-progress clock) and take the normal admit-and-poll path.
+                if barrier_block_since is not None:
+                    self._resume_barrier_paused()
+                    barrier_block_since = None
                 # Poll only up to the free slots so ``inflight`` never exceeds the
                 # concurrency bound.  ``_poll_batch`` blocks up to poll_timeout on
                 # its first poll (idle topic → no busy-spin) then drains buffered.
