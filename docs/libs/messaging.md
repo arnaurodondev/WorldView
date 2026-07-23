@@ -376,6 +376,33 @@ of `bind`; otherwise healthy iff `seconds_since_progress() <= stale_after_s`. It
 reads the consumer's BP-700 heartbeat (`seconds_since_progress`) but owns none of
 the reconnect logic.
 
+### Consumer Prometheus metrics
+
+`BaseKafkaConsumer` emits these process-wide gauges/counters (scraped on the
+worker `:9100` metrics server via the `worldview-workers-metrics` PodMonitor):
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `kafka_consumer_last_progress_timestamp` | gauge | `service, group_id` | Unix seconds of the last poll-loop progress tick (BP-700 liveness heartbeat); refreshed every poll cycle. |
+| `kafka_messages_dead_lettered_total` | counter | `service, topic, reason` | Messages routed to the dead-letter store. |
+| `kafka_consumer_partition_paused` | gauge | `service, group_id, topic, partition` | `1` while the consumer holds the partition **paused on purpose** (backpressure OR barrier heartbeat hold), else `0`. Reconciled once per poll cycle by `_publish_pause_state()`. |
+
+`kafka_consumer_partition_paused` is the per-partition signal that lets an
+alert distinguish a **deliberately-paused** partition (healthy backpressure /
+an upstream-ML-outage barrier hold — frozen committed offset ON PURPOSE) from a
+**genuinely wedged** one, mirroring the self-heal loop's
+`wedged = stalled - paused` set. The `NlpPipelinePartitionStalled` alert
+(`infra/k8s/prometheusrule-nlp-pipeline-drain-health.yaml`) uses
+`... unless on(topic, partition) (kafka_consumer_partition_paused{...} == 1)`
+to suppress warnings for paused partitions. Its `group_id` label carries the
+same value as the kafka-exporter `consumergroup` label so the two series join
+on `(topic, partition)`. If the series is absent (consumer not scraped /
+`prometheus_client` stripped) the alert safely degrades to firing on the raw
+stall signal. Labels are bounded-cardinality — never message content or keys.
+Consumers that fully override `run()` (e.g. the nlp-pipeline article consumer)
+must call `_publish_pause_state()` once per poll cycle themselves, since the
+base loop that normally does so is bypassed.
+
 ### Kafka Producer (`messaging.kafka.producer`)
 
 | Symbol | Purpose |

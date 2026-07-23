@@ -203,6 +203,9 @@ def _make_consumer(concurrency: int) -> ArticleProcessingConsumer:
     # RC-B state normally set in __init__ (bypassed by object.__new__).
     c._barrier_paused_partitions = set()  # type: ignore[attr-defined]
     c._paused_partitions = set()  # type: ignore[attr-defined]
+    # Pause-gauge reconciliation state read by _publish_pause_state() each cycle.
+    c._pause_state_published = set()  # type: ignore[attr-defined]
+    c._metrics = None  # type: ignore[attr-defined]
     c._last_fetch_poll_ts = -1.0  # type: ignore[attr-defined]
     c._last_progress_ts = -1.0  # type: ignore[attr-defined]
     # No-op the infra hooks the loop calls.

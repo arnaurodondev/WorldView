@@ -335,3 +335,128 @@ class TestBackpressureRebalanceAndShutdown:
         consumer._consumer.resume.assert_called_once()
         consumer._consumer.close.assert_called_once()
         assert consumer._paused_partitions == set()
+
+
+class _RecordingGauge:
+    """Stand-in for the KAFKA_CONSUMER_PARTITION_PAUSED gauge.
+
+    Records ``(labels, value)`` pairs so tests can assert exactly which
+    (topic, partition) the consumer set to 1 or 0. ``labels(**kwargs)`` returns a
+    child bound to those kwargs whose ``set(v)`` appends to the parent log.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[dict[str, str], float]] = []
+
+    def labels(self, **kwargs: str) -> _RecordingGauge._Child:
+        return _RecordingGauge._Child(self, kwargs)
+
+    class _Child:
+        def __init__(self, parent: _RecordingGauge, labels: dict[str, str]) -> None:
+            self._parent = parent
+            self._labels = labels
+
+        def set(self, value: float) -> None:
+            self._parent.calls.append((self._labels, value))
+
+
+class TestPauseStateMetric:
+    """`_publish_pause_state` reconciliation — the signal the
+    NlpPipelinePartitionStalled alert uses to exclude deliberately-paused
+    partitions from the stall warning.
+    """
+
+    def _patch_gauge(self, monkeypatch: pytest.MonkeyPatch) -> _RecordingGauge:
+        gauge = _RecordingGauge()
+        monkeypatch.setattr(
+            "messaging.kafka.consumer.base.KAFKA_CONSUMER_PARTITION_PAUSED",
+            gauge,
+        )
+        return gauge
+
+    def test_backpressure_and_barrier_pauses_set_gauge_to_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every partition in either pause set is published as 1, tagged with
+        the topic/partition (as a string) and the consumer's group_id."""
+        gauge = self._patch_gauge(monkeypatch)
+        consumer = _make_consumer_with_policy(None)
+        tp_bp = _TP("content.article.stored.v1", 0)
+        tp_barrier = _TP("content.article.stored.v1", 3)
+        consumer._paused_partitions.add(tp_bp)
+        consumer._barrier_paused_partitions.add(tp_barrier)
+
+        consumer._publish_pause_state()
+
+        set_to_one = {(c[0]["topic"], c[0]["partition"]) for c in gauge.calls if c[1] == 1}
+        assert set_to_one == {
+            ("content.article.stored.v1", "0"),
+            ("content.article.stored.v1", "3"),
+        }
+        # group_id label carries the consumergroup value the alert joins on.
+        assert all(c[0]["group_id"] == "bp-test" for c in gauge.calls)
+        # Partition label is a string (kafka-exporter emits partition as a string).
+        assert all(isinstance(c[0]["partition"], str) for c in gauge.calls)
+        assert consumer._pause_state_published == {tp_bp, tp_barrier}
+
+    def test_resumed_partition_is_zeroed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A partition paused on a prior cycle but no longer paused is set back
+        to 0 — never left stuck at 1 (which would forever suppress the alert)."""
+        gauge = self._patch_gauge(monkeypatch)
+        consumer = _make_consumer_with_policy(None)
+        tp = _TP("content.article.stored.v1", 0)
+
+        # Cycle 1: paused.
+        consumer._paused_partitions.add(tp)
+        consumer._publish_pause_state()
+        # Cycle 2: resumed (removed from the pause set).
+        consumer._paused_partitions.discard(tp)
+        gauge.calls.clear()
+        consumer._publish_pause_state()
+
+        assert gauge.calls == [
+            (
+                {
+                    "service": "bp-test",
+                    "group_id": "bp-test",
+                    "topic": "content.article.stored.v1",
+                    "partition": "0",
+                },
+                0,
+            )
+        ]
+        assert consumer._pause_state_published == set()
+
+    def test_no_paused_partitions_publishes_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With no paused partitions and nothing previously published, the
+        reconciliation is a no-op — zero gauge writes."""
+        gauge = self._patch_gauge(monkeypatch)
+        consumer = _make_consumer_with_policy(None)
+
+        consumer._publish_pause_state()
+
+        assert gauge.calls == []
+        assert consumer._pause_state_published == set()
+
+    def test_steady_paused_partition_stays_one_across_cycles(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A partition paused across consecutive cycles is re-affirmed as 1 and
+        never spuriously zeroed."""
+        gauge = self._patch_gauge(monkeypatch)
+        consumer = _make_consumer_with_policy(None)
+        tp = _TP("content.article.stored.v1", 2)
+        consumer._paused_partitions.add(tp)
+
+        consumer._publish_pause_state()
+        gauge.calls.clear()
+        consumer._publish_pause_state()
+
+        assert gauge.calls == [
+            (
+                {
+                    "service": "bp-test",
+                    "group_id": "bp-test",
+                    "topic": "content.article.stored.v1",
+                    "partition": "2",
+                },
+                1,
+            )
+        ]
+        assert consumer._pause_state_published == {tp}

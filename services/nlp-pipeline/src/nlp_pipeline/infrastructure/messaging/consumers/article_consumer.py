@@ -894,6 +894,15 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             while not self._stop_event.is_set():
                 # Honour the opt-in backpressure pause exactly like the base loop.
                 self._maybe_apply_backpressure()
+                # Publish the per-partition deliberate-pause gauge every cycle so
+                # the NlpPipelinePartitionStalled alert can EXCLUDE partitions this
+                # loop holds paused on purpose (backpressure OR the barrier hold
+                # below).  This consumer fully overrides the base ``run`` loop, so
+                # without this call the gauge would never be emitted for
+                # nlp-pipeline-group and the alert would keep flapping on healthy
+                # backpressure.  A barrier pause set later in this cycle reflects on
+                # the next iteration (sub-second lag vs the alert's 20m ``for``).
+                self._publish_pause_state()
 
                 if len(inflight) >= concurrency or ledger.pending() >= max_pending:
                     # Barrier: stop admitting work and wait for a completion when

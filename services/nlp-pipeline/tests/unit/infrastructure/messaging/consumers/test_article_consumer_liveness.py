@@ -78,6 +78,12 @@ def _make_consumer() -> ArticleProcessingConsumer:
     # consumer.poll() return yet" (seconds_since_fetch_poll() returns None).
     c._last_fetch_poll_ts = -1.0  # type: ignore[attr-defined]
     c._metrics = None  # type: ignore[attr-defined]
+    # Pause-state tracking the run loop reconciles each cycle via
+    # _publish_pause_state(); the base __init__ sets these but object.__new__
+    # bypasses it, so provide empty sets (no partition paused → gauge no-op).
+    c._paused_partitions = set()  # type: ignore[attr-defined]
+    c._barrier_paused_partitions = set()  # type: ignore[attr-defined]
+    c._pause_state_published = set()  # type: ignore[attr-defined]
     # No-op the kafka/loop plumbing run() calls that we are not exercising.
     c._init_kafka = lambda: None  # type: ignore[attr-defined,method-assign]
     c._shutdown_kafka = lambda: None  # type: ignore[attr-defined,method-assign]
@@ -142,6 +148,31 @@ async def test_run_records_progress_on_batch_poll() -> None:
 
     assert c.seconds_since_progress() is not None
     assert c.seconds_since_progress() < 5.0
+
+
+async def test_run_publishes_pause_state_each_cycle() -> None:
+    """The overridden ``run()`` must reconcile the per-partition pause gauge.
+
+    Regression guard: this consumer fully overrides ``BaseKafkaConsumer.run`` and
+    owns ``nlp-pipeline-group`` — the only consumer the NlpPipelinePartitionStalled
+    alert watches. If the overridden loop does not call ``_publish_pause_state()``,
+    the ``kafka_consumer_partition_paused`` series is never emitted for that group,
+    the alert's paused-partition exclusion has nothing to match, and it flaps on
+    every healthy backpressure/barrier pause — the exact bug this metric fixes.
+    """
+    c = _make_consumer()
+    published = {"count": 0}
+
+    def spy_publish() -> None:
+        published["count"] += 1
+
+    # Replace with a spy: proves the loop INVOKES it (the wiring). The
+    # reconciliation logic itself is unit-tested on the base class.
+    c._publish_pause_state = spy_publish  # type: ignore[attr-defined,method-assign]
+
+    await _run_one_cycle(c, batch=[])
+
+    assert published["count"] >= 1, "run() must call _publish_pause_state() each poll cycle"
 
 
 async def test_poll_batch_records_fetch_poll_timestamp() -> None:

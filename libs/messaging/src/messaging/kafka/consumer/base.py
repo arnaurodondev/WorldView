@@ -165,6 +165,59 @@ except Exception:  # pragma: no cover - defensive (prometheus_client absent)
     KAFKA_CONSUMER_LAST_PROGRESS = _NoOpHeartbeatGauge()  # type: ignore[assignment]
 
 
+# ── Per-partition deliberate-pause state (fix/alert-noise, 2026-07-23) ─────────
+#
+# The self-heal loop distinguishes a GENUINELY WEDGED partition (frozen committed
+# offset, high lag, NOT paused) from one that is FROZEN ON PURPOSE — held by
+# backpressure (``_paused_partitions``) or a barrier heartbeat hold
+# (``_barrier_paused_partitions``) while an upstream ML provider is down — via
+# ``wedged = stalled - paused``.  It only self-heals ``wedged``.  The
+# ``NlpPipelinePartitionStalled`` Prometheus alert had NO equivalent distinction:
+# it fired on the raw kafka-exporter stall signal (committed offset frozen + lag
+# high), so it flapped on every healthy backpressure/barrier hold during a normal
+# upstream hiccup — noisy warnings for a healthy system.
+#
+# This gauge exports that per-partition pause state (1 = deliberately paused,
+# 0 = not) so the alert can EXCLUDE deliberately-paused partitions and fire only
+# on genuinely wedged ones — mirroring the self-heal ``wedged`` set into an
+# alertable signal.  Worker pods are scraped on :9100 by the
+# ``worldview-workers-metrics`` PodMonitor (gitops, 2026-07-21), so this series
+# reaches Prometheus.  Labels are bounded-cardinality (service, group_id, topic,
+# partition) — never message content/keys — matching the existing consumer-metric
+# label discipline.  Same duplicate-registration guard + no-op fallback as the
+# heartbeat gauge so it never crashes a consumer in a stripped-down environment,
+# and if the series is ever absent the alert simply degrades to its old (still
+# safe) behaviour of firing on the raw stall signal.
+try:
+    from prometheus_client import REGISTRY as _PROM_REGISTRY_PAUSE
+    from prometheus_client import Gauge as _PromGaugePause
+
+    try:
+        KAFKA_CONSUMER_PARTITION_PAUSED = _PromGaugePause(
+            "kafka_consumer_partition_paused",
+            "1 if this consumer currently holds the partition paused on purpose "
+            "(backpressure or barrier heartbeat hold), else 0.",
+            labelnames=("service", "group_id", "topic", "partition"),
+        )
+    except ValueError:
+        _existing_pause = _PROM_REGISTRY_PAUSE._names_to_collectors.get("kafka_consumer_partition_paused")
+        if _existing_pause is None:
+            raise
+        KAFKA_CONSUMER_PARTITION_PAUSED = _existing_pause  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive (prometheus_client absent)
+
+    class _NoOpPauseGauge:
+        """Fallback so pause-state updates never raise when prometheus is absent."""
+
+        def labels(self, **_kwargs: str) -> _NoOpPauseGauge:
+            return self
+
+        def set(self, _value: float) -> None:
+            pass
+
+    KAFKA_CONSUMER_PARTITION_PAUSED = _NoOpPauseGauge()  # type: ignore[assignment]
+
+
 # Tuple of exception type NAMES (matched on the class name, since librdkafka
 # wraps everything in ``confluent_kafka.KafkaException``/``KafkaError`` and we
 # do not want a hard import dependency on confluent_kafka at module import time)
@@ -525,6 +578,12 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         # exactly like backpressure pauses (a deliberately-paused partition's
         # frozen position is not a wedge).
         self._barrier_paused_partitions: set[TopicPartition] = set()
+        # Partitions whose ``kafka_consumer_partition_paused`` gauge is currently
+        # set to 1.  Tracked so :meth:`_publish_pause_state` can reconcile — zero
+        # the gauge for a partition that was paused last cycle but has since
+        # resumed — instead of leaking a stale ``1`` that would forever suppress
+        # the stall alert for that partition.
+        self._pause_state_published: set[TopicPartition] = set()
         # Monotonic timestamp of the last backpressure evaluation; used to
         # rate-limit checks to ``policy.check_interval_seconds``.
         self._last_backpressure_check: float = 0.0
@@ -918,6 +977,41 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             service=(self._metrics.service_name if self._metrics is not None else self._config.group_id),
             group_id=self._config.group_id,
         ).set(now)
+
+    def _publish_pause_state(self) -> None:
+        """Reconcile the per-partition ``kafka_consumer_partition_paused`` gauge.
+
+        Sets the gauge to 1 for every partition this consumer currently holds
+        paused ON PURPOSE — backpressure (``_paused_partitions``) or barrier hold
+        (``_barrier_paused_partitions``) — and 0 for any partition that was paused
+        on a previous cycle but is now resumed.  Mirrors the self-heal
+        ``wedged = stalled - paused`` distinction into an alertable signal so the
+        ``NlpPipelinePartitionStalled`` warning can EXCLUDE deliberately-paused
+        partitions (healthy backpressure) and fire only on genuinely wedged ones.
+
+        Called once per poll cycle (cost: a handful of ``gauge.set`` calls); the
+        reconciliation against ``_pause_state_published`` guarantees a resumed
+        partition is zeroed rather than left stuck at 1.
+        """
+        service = self._metrics.service_name if self._metrics is not None else self._config.group_id
+        group_id = self._config.group_id
+        current = self._paused_partitions | self._barrier_paused_partitions
+        for tp in current:
+            KAFKA_CONSUMER_PARTITION_PAUSED.labels(
+                service=service,
+                group_id=group_id,
+                topic=tp.topic,
+                partition=str(tp.partition),
+            ).set(1)
+        # Zero partitions paused last cycle but no longer paused now.
+        for tp in self._pause_state_published - current:
+            KAFKA_CONSUMER_PARTITION_PAUSED.labels(
+                service=service,
+                group_id=group_id,
+                topic=tp.topic,
+                partition=str(tp.partition),
+            ).set(0)
+        self._pause_state_published = set(current)
 
     def seconds_since_progress(self) -> float | None:
         """Return seconds since the last poll-loop progress, or ``None``.
@@ -2475,6 +2569,13 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 # is configured; otherwise rate-limits to once per
                 # ``check_interval_seconds`` so the cost is negligible.
                 self._maybe_apply_backpressure()
+                # Reconcile the per-partition deliberate-pause gauge every cycle
+                # (after backpressure applied, before the batch/single branch so
+                # BOTH paths are covered).  Feeds the NlpPipelinePartitionStalled
+                # alert's paused-partition exclusion; barrier holds set inside the
+                # batch iteration reflect on the next cycle (sub-second lag,
+                # negligible against the alert's 20m ``for``).
+                self._publish_pause_state()
                 # BP-700: a transient broker blip (connection setup timeout,
                 # transport failure, coordinator unavailable) must trigger a
                 # bounded-backoff RECONNECT and resume — NOT a silent terminal

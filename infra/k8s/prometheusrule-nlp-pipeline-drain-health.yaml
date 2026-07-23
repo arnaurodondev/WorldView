@@ -105,18 +105,41 @@ spec:
         # Alertmanager config, so this is a low-noise Grafana/Prometheus signal
         # that pinpoints WHICH partition is wedged (per-partition progress-based
         # detection) without adding pager noise on top of the aggregate page.
+        # The trailing ``unless on(topic, partition)`` clause EXCLUDES any
+        # partition the owning consumer is holding paused ON PURPOSE — either
+        # backpressure or a barrier heartbeat hold while an upstream ML provider
+        # is down.  Without it, this alert fired on a HEALTHY consumer that had
+        # deliberately paused a partition (frozen committed offset looks identical
+        # to a wedge from kafka-exporter alone), flapping every time backpressure
+        # kicked in.  The ``kafka_consumer_partition_paused`` gauge (set to 1 by
+        # the consumer for a deliberately-paused partition — labels group_id/topic/
+        # partition; group_id carries the same value as the exporter's
+        # consumergroup) is the ONLY per-partition signal that distinguishes the
+        # two — mirroring the self-heal's ``wedged = stalled - paused`` set. This
+        # makes the alert fire on GENUINELY WEDGED partitions only. If the gauge
+        # series is absent (consumer not scraped / prometheus_client stripped), the
+        # ``unless`` matches nothing and the alert safely degrades to its prior
+        # raw-stall behaviour.
         - alert: NlpPipelinePartitionStalled
           expr: |
             (
-              kafka_consumergroup_lag{consumergroup="nlp-pipeline-group"} > 2000
-            )
-            and
-            (
               (
-                kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"}
-                -
-                kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"} offset 15m
-              ) < 1
+                kafka_consumergroup_lag{consumergroup="nlp-pipeline-group"} > 2000
+              )
+              and
+              (
+                (
+                  kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"}
+                  -
+                  kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"} offset 15m
+                ) < 1
+              )
+            )
+            unless on(topic, partition)
+            (
+              max by (topic, partition) (
+                kafka_consumer_partition_paused{group_id="nlp-pipeline-group"} == 1
+              )
             )
           for: 20m
           labels:

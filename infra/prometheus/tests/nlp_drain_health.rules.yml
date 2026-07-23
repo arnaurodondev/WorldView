@@ -31,15 +31,23 @@ groups:
       - alert: NlpPipelinePartitionStalled
         expr: |
           (
-            kafka_consumergroup_lag{consumergroup="nlp-pipeline-group"} > 2000
-          )
-          and
-          (
             (
-              kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"}
-              -
-              kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"} offset 15m
-            ) < 1
+              kafka_consumergroup_lag{consumergroup="nlp-pipeline-group"} > 2000
+            )
+            and
+            (
+              (
+                kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"}
+                -
+                kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group"} offset 15m
+              ) < 1
+            )
+          )
+          unless on(topic, partition)
+          (
+            max by (topic, partition) (
+              kafka_consumer_partition_paused{group_id="nlp-pipeline-group"} == 1
+            )
           )
         for: 20m
         labels:

@@ -74,3 +74,91 @@ tests:
       - eval_time: 37m
         alertname: NlpPipelinePartitionStalled
         exp_alerts: []
+
+  # ── 4. PAUSED ON PURPOSE: frozen offset + high lag BUT partition is held ────
+  #    paused (backpressure / barrier hold during an upstream ML outage). The
+  #    consumer reports kafka_consumer_partition_paused=1 → the partition warning
+  #    is SUPPRESSED (healthy backpressure, not a wedge). The aggregate critical
+  #    is intentionally NOT gated (a sustained platform-wide non-drain still
+  #    warrants a look — its runbook explicitly covers the 402/429 upstream case).
+  - name: partition paused on purpose -> partition alert suppressed, aggregate still fires
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "30000+0x45"
+      - series: 'kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "1000+0x45"  # frozen (deliberately paused)
+      - series: 'kafka_consumer_partition_paused{service="nlp-pipeline",group_id="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "1+0x45"  # consumer holds this partition paused ON PURPOSE
+    alert_rule_test:
+      - eval_time: 37m
+        alertname: NlpPipelinePartitionStalled
+        exp_alerts: []  # suppressed by the `unless ... kafka_consumer_partition_paused==1`
+      - eval_time: 37m
+        alertname: NlpPipelineBacklogNotDraining
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              team: platform
+              subsystem: nlp-pipeline
+            exp_annotations:
+              summary: "nlp-pipeline-group backlog is high and NOT draining"
+
+  # ── 5. WEDGED (explicit not-paused): gauge present but 0 → still fires ──────
+  #    Proves the `== 1` filter does NOT exclude a partition that is scraped but
+  #    reported as NOT paused (a genuine wedge, e.g. poison message / hung call).
+  - name: partition wedged with pause gauge at zero -> partition alert fires
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "30000+0x45"
+      - series: 'kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "1000+0x45"
+      - series: 'kafka_consumer_partition_paused{service="nlp-pipeline",group_id="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "0+0x45"  # scraped, NOT paused → genuine wedge
+    alert_rule_test:
+      - eval_time: 37m
+        alertname: NlpPipelinePartitionStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              team: platform
+              subsystem: nlp-pipeline
+              consumergroup: nlp-pipeline-group
+              topic: content.article.stored.v1
+              partition: "0"
+            exp_annotations:
+              summary: "nlp-pipeline-group partition stalled"
+
+  # ── 6. MIXED: one partition paused-on-purpose, one genuinely wedged ─────────
+  #    The strongest test: only the WEDGED partition (1) alerts; the PAUSED
+  #    partition (0) is excluded. Confirms the exclusion is per-partition, not
+  #    all-or-nothing.
+  - name: mixed paused + wedged -> only the wedged partition alerts
+    interval: 1m
+    input_series:
+      # partition 0 — paused on purpose (excluded)
+      - series: 'kafka_consumergroup_lag{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "30000+0x45"
+      - series: 'kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "1000+0x45"
+      - series: 'kafka_consumer_partition_paused{service="nlp-pipeline",group_id="nlp-pipeline-group",topic="content.article.stored.v1",partition="0"}'
+        values: "1+0x45"
+      # partition 1 — genuinely wedged (not paused) → must alert
+      - series: 'kafka_consumergroup_lag{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="1"}'
+        values: "30000+0x45"
+      - series: 'kafka_consumergroup_current_offset{consumergroup="nlp-pipeline-group",topic="content.article.stored.v1",partition="1"}'
+        values: "1000+0x45"
+    alert_rule_test:
+      - eval_time: 37m
+        alertname: NlpPipelinePartitionStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              team: platform
+              subsystem: nlp-pipeline
+              consumergroup: nlp-pipeline-group
+              topic: content.article.stored.v1
+              partition: "1"
+            exp_annotations:
+              summary: "nlp-pipeline-group partition stalled"
