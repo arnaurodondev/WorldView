@@ -121,3 +121,75 @@ class TestBuildFactories:
         settings = _FakeSettings(database_url_read=_READ_URL)
         _we, _re, write_factory, read_factory = _build_factories(settings)  # type: ignore[arg-type]
         assert read_factory is not write_factory
+
+
+# ---------------------------------------------------------------------------
+# PgBouncer transaction-pooling safety (2026-07-23)
+#
+# Portfolio routes through pgbouncer.infra.svc:6432 (pool_mode=transaction) in
+# prod. Under transaction pooling, asyncpg's server-side prepared statements do
+# NOT survive across pooled backends, so the shared factory MUST be called with
+# ``pooled=True`` (which disables both statement caches). These tests pin that
+# contract at the ``_build_factories`` boundary — the single most important
+# invariant of the cutover — by capturing the kwargs handed to the factory.
+# ---------------------------------------------------------------------------
+
+
+def _capture_engine_kwargs(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    """Patch the factory imported into session.py and record each call's kwargs."""
+    import portfolio.infrastructure.db.session as session_mod
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_build_async_engine(dsn: str, **kwargs: object) -> object:
+        calls.append({"dsn": dsn, **kwargs})
+        # Return a real (unconnected) engine so async_sessionmaker binding works.
+        return create_async_engine("postgresql+asyncpg://u:p@localhost:5432/portfolio_db")
+
+    monkeypatch.setattr(session_mod, "build_async_engine", _fake_build_async_engine)
+    return calls
+
+
+class TestPoolingSafety:
+    def test_write_engine_is_pooled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Write engine MUST be built with pooled=True (statement caches disabled)."""
+        from portfolio.infrastructure.db.session import _build_factories
+
+        calls = _capture_engine_kwargs(monkeypatch)
+        _build_factories(_FakeSettings())  # type: ignore[arg-type]
+
+        assert calls, "build_async_engine was never called"
+        assert calls[0]["pooled"] is True
+        assert calls[0]["application_name"] == "portfolio"
+
+    def test_statement_timeout_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """statement_timeout is disabled so long FIFO replay / export queries survive."""
+        from portfolio.infrastructure.db.session import _build_factories
+
+        calls = _capture_engine_kwargs(monkeypatch)
+        _build_factories(_FakeSettings())  # type: ignore[arg-type]
+
+        assert calls[0]["statement_timeout_ms"] == 0
+
+    def test_read_engine_also_pooled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A distinct read replica engine MUST also be pooled=True."""
+        from portfolio.infrastructure.db.session import _build_factories
+
+        calls = _capture_engine_kwargs(monkeypatch)
+        _build_factories(_FakeSettings(database_url_read=_READ_URL))  # type: ignore[arg-type]
+
+        assert len(calls) == 2, "expected separate write + read engine builds"
+        assert all(c["pooled"] is True for c in calls)
+        assert all(c["statement_timeout_ms"] == 0 for c in calls)
+
+    def test_create_session_factory_is_pooled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The thin e2e-test wrapper MUST also build a pooled engine."""
+        from portfolio.infrastructure.db.session import create_session_factory
+
+        calls = _capture_engine_kwargs(monkeypatch)
+        create_session_factory(_BASE_URL)
+
+        assert calls, "build_async_engine was never called"
+        assert calls[0]["pooled"] is True
+        assert calls[0]["statement_timeout_ms"] == 0

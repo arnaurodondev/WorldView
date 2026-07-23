@@ -314,6 +314,40 @@ producing dead-letter outbox rows for an unread topic.
 
 ---
 
+## Connection routing — PgBouncer transaction pooling
+
+In production, portfolio connects to `portfolio_db` **through PgBouncer**
+(`pgbouncer.infra.svc:6432`, `pool_mode=transaction`), not directly to Postgres.
+This collapses the API + 5 worker deployments' many direct backends (each engine
+held up to `pool_size` + `max_overflow` = 30 connections) onto a single shared
+12+5 server-side pool, removing a top Postgres-OOM contributor.
+
+`infrastructure/db/session.py` builds every engine via the shared
+`messaging.pg.engine_factory.build_async_engine(pooled=True, ...)` helper, which
+disables both asyncpg statement caches (`statement_cache_size=0`,
+`prepared_statement_cache_size=0`) — mandatory under transaction pooling because
+server-side prepared statements do not survive across pooled backends. `pooled=True`
+is applied unconditionally (harmless against a direct Postgres URL in dev/e2e), so
+the only environment-specific switch is the `PORTFOLIO_DATABASE_URL` host.
+
+**Pooling-safety invariant.** Portfolio is safe to pool because it uses **no**
+`LISTEN`/`NOTIFY`, **no** session-level `pg_advisory_lock`, **no** `SET SESSION`
+GUCs, **no** temp tables, and **no** server-side cursors. Its only advisory locks
+are `pg_try_advisory_xact_lock` (transaction-scoped, auto-released at commit/
+rollback), which remain correct under transaction pooling. `statement_timeout` is
+left disabled (`statement_timeout_ms=0`) so long FIFO cost-basis replay and CSV
+export queries are not capped; PgBouncer drops the startup param anyway, so a
+server-side backstop, if wanted, must be `ALTER DATABASE portfolio_db SET
+statement_timeout = '<ms>'`.
+
+> When the brokerage-sync worker is re-enabled (currently disabled in
+> `values/portfolio.yaml`), note it holds one xact-scoped advisory lock inside a
+> long-lived "lock UoW" transaction spanning SnapTrade HTTP calls. This pins one
+> pooled backend "idle in transaction" for the sync duration (≤1 at a time, since
+> connections are synced sequentially). If Postgres ever sets
+> `idle_in_transaction_session_timeout`, that lock txn could be killed mid-sync —
+> the same risk exists on a direct connection; pooling does not introduce it.
+
 ## Database Schema (`portfolio_db`)
 
 ```sql
@@ -604,7 +638,7 @@ All env vars use prefix `PORTFOLIO_`.
 |----------|---------|----------|-------------|
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `PORTFOLIO_DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/portfolio_db` | Yes | Write URL |
+| `PORTFOLIO_DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/portfolio_db` | Yes | Write URL. In prod this points at PgBouncer (`pgbouncer.infra.svc:6432`, `pool_mode=transaction`), not Postgres directly — see PgBouncer note below |
 | `PORTFOLIO_DATABASE_URL_READ` | (falls back to write) | No | Read replica URL (R27) |
 | `PORTFOLIO_DB_POOL_SIZE` | `10` | No | Write pool size |
 | `PORTFOLIO_DB_MAX_OVERFLOW` | `20` | No | Write pool max overflow |

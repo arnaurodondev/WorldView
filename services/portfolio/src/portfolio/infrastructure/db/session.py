@@ -12,12 +12,37 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from messaging.pg.engine_factory import build_async_engine
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
     from portfolio.config import Settings
+
+# BP-732 (2026-07-23): portfolio routes through pgbouncer.infra.svc:6432
+# (pool_mode=transaction) in prod, hence ``pooled=True`` — asyncpg's server-side
+# prepared statements do NOT survive across transaction-pooled backends, so the
+# shared factory disables both statement caches. ``pooled=True`` is harmless when
+# a caller (dev docker-compose, e2e tests) still points at postgres directly, so
+# it is applied unconditionally rather than gated on a second env flag that a
+# DATABASE_URL cutover could forget to set.
+#
+# Session-state pooling-safety audit (2026-07-23): portfolio uses NO LISTEN/NOTIFY,
+# NO session-level ``pg_advisory_lock``, NO ``SET SESSION``/GUCs, NO temp tables,
+# and NO server-side cursors. Its only advisory locks are
+# ``pg_try_advisory_xact_lock`` (transaction-scoped, auto-released at commit/
+# rollback) which stay correct under transaction pooling because a backend is
+# pinned to the client for the duration of an open transaction.
+#
+# statement_timeout is deliberately DISABLED (``statement_timeout_ms=0``):
+# portfolio's FIFO cost-basis replay and CSV export can legitimately run longer
+# than the factory's 8s default, and pgbouncer drops the startup param anyway
+# (it is in ``ignore_startup_parameters``). An operator wanting a server-side
+# backstop applies ``ALTER DATABASE portfolio_db SET statement_timeout = '<ms>'``
+# (survives DISCARD ALL) rather than capping every query here.
+_STATEMENT_TIMEOUT_MS = 0
 
 
 def _same_db_endpoint(url1: str, url2: str) -> bool:
@@ -54,16 +79,18 @@ def _build_factories(
     """
     # BP-502: application_name surfaces this service in pg_stat_activity for
     # connection debugging; pool_recycle=300 defends against stale DNS sockets.
-    _connect_args: dict[str, object] = {"server_settings": {"application_name": "portfolio"}}
-    write_engine = create_async_engine(
+    # BP-732: the shared factory now assembles connect_args (application_name,
+    # PgBouncer prepared-statement disabling, client-side command_timeout) so a
+    # future hardening lesson lands in one place instead of N hand-edits.
+    write_engine = build_async_engine(
         settings.database_url.get_secret_value(),
-        echo=False,
-        future=True,
-        pool_pre_ping=True,
+        pooled=True,
+        application_name="portfolio",
+        statement_timeout_ms=_STATEMENT_TIMEOUT_MS,
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
         pool_recycle=300,
-        connect_args=_connect_args,
+        pool_pre_ping=True,
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         write_engine,
@@ -79,15 +106,15 @@ def _build_factories(
         read_engine = write_engine
         read_factory = write_factory
     else:
-        read_engine = create_async_engine(
+        read_engine = build_async_engine(
             read_url,
-            echo=False,
-            future=True,
-            pool_pre_ping=True,
+            pooled=True,
+            application_name="portfolio",
+            statement_timeout_ms=_STATEMENT_TIMEOUT_MS,
             pool_size=settings.db_pool_size_read,
             max_overflow=settings.db_max_overflow_read,
             pool_recycle=300,
-            connect_args=_connect_args,
+            pool_pre_ping=True,
         )
         read_factory = async_sessionmaker(read_engine, expire_on_commit=False)
 
@@ -108,15 +135,15 @@ def create_session_factory(
         lifecycle (``await engine.dispose()`` on shutdown).
 
     """
-    engine = create_async_engine(
+    engine = build_async_engine(
         url,
-        echo=False,
-        future=True,
-        pool_pre_ping=True,
+        pooled=True,
+        application_name="portfolio",
+        statement_timeout_ms=_STATEMENT_TIMEOUT_MS,
         pool_size=10,
         max_overflow=20,
         pool_recycle=300,
-        connect_args={"server_settings": {"application_name": "portfolio"}},
+        pool_pre_ping=True,
     )
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine,
