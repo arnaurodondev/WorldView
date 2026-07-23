@@ -36,7 +36,7 @@ def _load_server(monkeypatch: pytest.MonkeyPatch, **env: str):  # type: ignore[n
             mod = types.ModuleType(name)
             if name == "fastapi":
                 mod.FastAPI = lambda *a, **k: types.SimpleNamespace(  # type: ignore[attr-defined]
-                    get=lambda *a, **k: (lambda f: f), post=lambda *a, **k: (lambda f: f)
+                    get=lambda *a, **k: lambda f: f, post=lambda *a, **k: lambda f: f
                 )
                 mod.Response = object  # type: ignore[attr-defined]
             if name == "pydantic":
@@ -82,3 +82,29 @@ def test_single_thread_inference_executor(monkeypatch: pytest.MonkeyPatch) -> No
     srv = _load_server(monkeypatch)
     # One worker => one glibc arena for tensor allocations (fragmentation bound).
     assert srv._INFERENCE_EXECUTOR._max_workers == 1
+
+
+def test_batch_chars_guard_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    srv = _load_server(monkeypatch)
+    # 0 (default) => pure count batching, guard never fires regardless of size.
+    assert srv.GLINER_MAX_BATCH_CHARS == 0
+    assert srv._would_exceed_batch_chars(7, 100_000, 100_000) is False
+
+
+def test_batch_chars_guard_bounds_padded_activation(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Budget is the padded-activation proxy = batch_size × longest-text-chars.
+    srv = _load_server(monkeypatch, GLINER_MAX_BATCH_CHARS="20000")
+    # Short texts: a full count batch fits (8 × 2000 = 16000 <= 20000).
+    assert srv._would_exceed_batch_chars(7, 2000, 2000) is False
+    # One long (4000-char) text pads the WHOLE batch to 4000: the 5th item
+    # (group_size=4) makes 5 × 4000 = 20000 (ok), the 6th would make 24000 (over).
+    assert srv._would_exceed_batch_chars(4, 4000, 4000) is False
+    assert srv._would_exceed_batch_chars(5, 4000, 4000) is True
+
+
+def test_batch_chars_guard_uses_max_not_sum(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A single long text among short ones must be modelled by the MAX (padding),
+    # not the sum: seed short, adding one 4000-char text to a 6-item group makes
+    # 7 × 4000 = 28000 > 20000 even though the char SUM is tiny.
+    srv = _load_server(monkeypatch, GLINER_MAX_BATCH_CHARS="20000")
+    assert srv._would_exceed_batch_chars(6, 10, 4000) is True

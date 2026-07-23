@@ -123,6 +123,25 @@ GLINER_BATCH_WAIT_MS = float(os.environ.get("GLINER_BATCH_WAIT_MS", "25"))
 GLINER_MAX_INPUT_CHARS = int(os.environ.get("GLINER_MAX_INPUT_CHARS", "4000"))
 GLINER_MAX_INFERENCES = int(os.environ.get("GLINER_MAX_INFERENCES", "0"))
 
+# Adaptive per-forward-pass activation budget (gliner OOM residual, 2026-07-22).
+# The count cap (GLINER_MAX_BATCH) alone does NOT bound peak activation memory:
+# batch_predict_entities pads every text in a group to the LONGEST text, and
+# GLiNER's span-enumeration tensors scale as batch_size × padded_seq_len ×
+# max_span_width. So a batch of 8 SHORT sections and a batch of 8 max-length
+# (GLINER_MAX_INPUT_CHARS) sections have very different peaks for the SAME count.
+# Live evidence: the arena-fragmentation ramp is fixed (working set flat ~2.4Gi),
+# but a FULL batch-8 forward pass peaks at ~6.15Gi anon-rss and occasionally
+# clears the 8Gi cap under a backfill burst of longer sections (~1 OOMKill/day).
+#
+# GLINER_MAX_BATCH_CHARS bounds peak DETERMINISTICALLY by capping the padded-
+# activation proxy (batch_size × longest-text-chars) per forward pass, so a batch
+# adaptively SHRINKS when its texts are long and stays full (up to GLINER_MAX_BATCH)
+# when they are short — bounding memory without sacrificing normal-section
+# throughput. 0 disables it (pure count batching, prior behaviour). The group
+# always keeps at least its seed item (already truncated to GLINER_MAX_INPUT_CHARS),
+# so a single oversized text still runs.
+GLINER_MAX_BATCH_CHARS = int(os.environ.get("GLINER_MAX_BATCH_CHARS", "0"))
+
 # Single-thread pool: all model forward passes run here so their (variable-length)
 # CPU tensors are allocated from ONE glibc malloc arena. run_in_executor(None,...)
 # used the default pool, which can grow to multiple threads over the process
@@ -151,11 +170,29 @@ def _malloc_trim() -> None:
         pass
 
 
+def _would_exceed_batch_chars(group_size: int, current_max_len: int, next_len: int) -> bool:
+    """True if adding a text of ``next_len`` chars would push the group's padded-
+    activation proxy over ``GLINER_MAX_BATCH_CHARS``.
+
+    The proxy is ``batch_size × longest-text-length`` because a batched forward
+    pass pads every text to the longest one — a single long text inflates the peak
+    for the WHOLE batch, so summing lengths would under-count it (a batch of one
+    4000-char text + seven 10-char texts pads all eight to 4000). Modelling the
+    max-length driver is what actually bounds peak memory.
+
+    Disabled (always False) when GLINER_MAX_BATCH_CHARS <= 0."""
+    if GLINER_MAX_BATCH_CHARS <= 0:
+        return False
+    new_max = max(current_max_len, next_len)
+    return (group_size + 1) * new_max > GLINER_MAX_BATCH_CHARS
+
+
 def _truncate_input(text: str) -> str:
     """Hard char-cap on a single inference input (bounds peak activation)."""
     if GLINER_MAX_INPUT_CHARS > 0 and len(text) > GLINER_MAX_INPUT_CHARS:
         return text[:GLINER_MAX_INPUT_CHARS]
     return text
+
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
@@ -215,7 +252,7 @@ async def _get_model() -> Any:
 class _QueueItem:
     """One pending single-text NER request awaiting batched inference."""
 
-    __slots__ = ("text", "labels", "threshold", "future")
+    __slots__ = ("future", "labels", "text", "threshold")
 
     def __init__(self, text: str, labels: list[str], threshold: float, future: asyncio.Future[list[dict[str, Any]]]):
         self.text = text
@@ -310,7 +347,7 @@ def _maybe_recycle() -> None:
     if _METRICS["flushed_total"] % GLINER_MAX_INFERENCES == 0:
         _log("gliner_worker_recycle", flushed_total=_METRICS["flushed_total"], reason="max_inferences")
         # os._exit avoids running atexit/finalizers mid-inference; kubelet restarts.
-        os._exit(0)  # noqa: S606
+        os._exit(0)
 
 
 async def _collector() -> None:
@@ -336,18 +373,29 @@ async def _collector() -> None:
 
             key = _group_key(first.labels, first.threshold)
             group: list[_QueueItem] = [first]
+            # Track the longest text in the group: peak padded activation scales
+            # with len(group) × group_max_len, so the char-budget guard needs both.
+            group_max_len = len(first.text)
             deadline = time.monotonic() + GLINER_BATCH_WAIT_MS / 1000.0
 
-            # Re-scan deferred buffer for same-key items first (no waiting).
+            # Re-scan deferred buffer for same-key items first (no waiting). Skip
+            # any that would breach the padded-activation budget — they stay
+            # deferred and seed/join a later (smaller) batch.
             still_deferred: list[_QueueItem] = []
             for it in deferred:
-                if len(group) < GLINER_MAX_BATCH and _group_key(it.labels, it.threshold) == key:
+                if (
+                    len(group) < GLINER_MAX_BATCH
+                    and _group_key(it.labels, it.threshold) == key
+                    and not _would_exceed_batch_chars(len(group), group_max_len, len(it.text))
+                ):
                     group.append(it)
+                    group_max_len = max(group_max_len, len(it.text))
                 else:
                     still_deferred.append(it)
             deferred = still_deferred
 
-            # Drain fresh arrivals until full or the wait window expires.
+            # Drain fresh arrivals until full (by count OR char budget) or the wait
+            # window expires.
             while len(group) < GLINER_MAX_BATCH:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -356,11 +404,17 @@ async def _collector() -> None:
                     nxt = await asyncio.wait_for(_queue.get(), timeout=remaining)
                 except TimeoutError:
                     break
-                if _group_key(nxt.labels, nxt.threshold) == key:
-                    group.append(nxt)
-                else:
+                if _group_key(nxt.labels, nxt.threshold) != key:
                     # Different key — defer for a subsequent loop (its own batch).
                     deferred.append(nxt)
+                elif _would_exceed_batch_chars(len(group), group_max_len, len(nxt.text)):
+                    # Same key but adding it would breach the activation budget —
+                    # defer it and close this batch to bound peak memory.
+                    deferred.append(nxt)
+                    break
+                else:
+                    group.append(nxt)
+                    group_max_len = max(group_max_len, len(nxt.text))
 
             elapsed_ms = (GLINER_BATCH_WAIT_MS / 1000.0 - max(0.0, deadline - time.monotonic())) * 1000.0
             await _flush_group(model, loop, group, elapsed_ms)
