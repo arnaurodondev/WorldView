@@ -3,8 +3,13 @@
 Covers the dual-session factory logic including BP-179 regression (empty
 SecretStr) and F-014 regression (whitespace-only SecretStr).
 
-All tests mock ``create_async_engine`` to avoid real DB connections — these
-are pure unit tests that validate branching logic only.
+All tests mock ``build_async_engine`` (the BP-732 shared engine factory in
+``messaging.pg.engine_factory``, imported into this module as
+``rag_chat.infrastructure.db.session.build_async_engine``) to avoid real DB
+connections — these are pure unit tests that validate branching logic only.
+Previously these tests mocked ``create_async_engine`` directly; that patch
+target no longer exists in this module now that engine construction is
+delegated to the shared factory (BP-732 Recurrence 2 fix).
 """
 
 from __future__ import annotations
@@ -38,7 +43,7 @@ def _make_settings(**overrides: object) -> MagicMock:
 # ── TC-1: database_url_read=None → read shares write engine ──────────────────
 
 
-@patch("rag_chat.infrastructure.db.session.create_async_engine")
+@patch("rag_chat.infrastructure.db.session.build_async_engine")
 def test_read_none_shares_write_engine(mock_engine: MagicMock) -> None:
     """When database_url_read is None, the read engine IS the write engine."""
     write_sentinel = MagicMock(name="write-engine")
@@ -56,7 +61,7 @@ def test_read_none_shares_write_engine(mock_engine: MagicMock) -> None:
 # ── TC-2: database_url_read=SecretStr("") → read shares write (BP-179) ──────
 
 
-@patch("rag_chat.infrastructure.db.session.create_async_engine")
+@patch("rag_chat.infrastructure.db.session.build_async_engine")
 def test_empty_secret_str_shares_write_engine(mock_engine: MagicMock) -> None:
     """BP-179 regression: SecretStr('') from ``KEY=`` env var must fall back.
 
@@ -77,7 +82,7 @@ def test_empty_secret_str_shares_write_engine(mock_engine: MagicMock) -> None:
 # ── TC-3: database_url_read=SecretStr("  ") → whitespace-only (F-014) ───────
 
 
-@patch("rag_chat.infrastructure.db.session.create_async_engine")
+@patch("rag_chat.infrastructure.db.session.build_async_engine")
 def test_whitespace_only_secret_str_shares_write_engine(mock_engine: MagicMock) -> None:
     """F-014 regression: whitespace-only read URL must fall back to write.
 
@@ -97,7 +102,7 @@ def test_whitespace_only_secret_str_shares_write_engine(mock_engine: MagicMock) 
 # ── TC-4: Same host/port/db → read shares write engine ──────────────────────
 
 
-@patch("rag_chat.infrastructure.db.session.create_async_engine")
+@patch("rag_chat.infrastructure.db.session.build_async_engine")
 def test_same_endpoint_shares_write_engine(mock_engine: MagicMock) -> None:
     """When read URL resolves to the same host/port/db, share the write engine."""
     write_sentinel = MagicMock(name="write-engine")
@@ -117,7 +122,7 @@ def test_same_endpoint_shares_write_engine(mock_engine: MagicMock) -> None:
 # ── TC-5: Distinct host → separate read engine ──────────────────────────────
 
 
-@patch("rag_chat.infrastructure.db.session.create_async_engine")
+@patch("rag_chat.infrastructure.db.session.build_async_engine")
 def test_distinct_host_creates_separate_read_engine(mock_engine: MagicMock) -> None:
     """When the read URL points to a different host, a separate engine is created."""
     write_sentinel = MagicMock(name="write-engine")
