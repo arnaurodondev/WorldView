@@ -216,7 +216,10 @@ async def test_login_callback_full_flow() -> None:
     assert "refresh_token=" in set_cookie
     assert "httponly" in set_cookie.lower()
     assert "samesite=strict" in set_cookie.lower()
-    assert "path=/v1/auth/refresh" in set_cookie.lower()
+    # Path must be the browser-visible "/api/v1/auth/refresh" (reverse-proxy
+    # prefix included), not FastAPI's internal "/v1/auth/refresh" route path —
+    # see routes/auth.py's _COOKIE_PATH comment for why.
+    assert "path=/api/v1/auth/refresh" in set_cookie.lower()
 
 
 @pytest.mark.asyncio

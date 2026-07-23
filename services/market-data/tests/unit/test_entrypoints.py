@@ -420,6 +420,13 @@ def test_dispatcher_main_stop_delegates_to_dispatcher() -> None:
     mock_dispatcher = MagicMock()
     mock_dispatcher.run = AsyncMock()
 
+    # outbox_retention_seconds / ingestion_events_retention_days must be real
+    # ints (0 = pruner disabled) — _build_retention_workers compares them
+    # against 0, which raises on a bare MagicMock attribute.
+    settings = MagicMock()
+    settings.outbox_retention_seconds = 0
+    settings.ingestion_events_retention_days = 0
+
     with (
         patch("market_data.infrastructure.messaging.outbox.dispatcher_main.build_write_engine"),
         patch("market_data.infrastructure.messaging.outbox.dispatcher_main.build_session_factory"),
@@ -428,7 +435,7 @@ def test_dispatcher_main_stop_delegates_to_dispatcher() -> None:
             return_value=mock_dispatcher,
         ),
     ):
-        process = DispatcherProcess(settings=MagicMock())
+        process = DispatcherProcess(settings=settings)
         process.stop()
 
     mock_dispatcher.stop.assert_called_once()
@@ -442,6 +449,13 @@ async def test_dispatcher_main_run_delegates_to_dispatcher() -> None:
     mock_dispatcher = MagicMock()
     mock_dispatcher.run = AsyncMock()
 
+    # outbox_retention_seconds / ingestion_events_retention_days must be real
+    # ints (0 = pruner disabled) — _build_retention_workers compares them
+    # against 0, which raises on a bare MagicMock attribute.
+    settings = MagicMock()
+    settings.outbox_retention_seconds = 0
+    settings.ingestion_events_retention_days = 0
+
     with (
         patch("market_data.infrastructure.messaging.outbox.dispatcher_main.build_write_engine"),
         patch("market_data.infrastructure.messaging.outbox.dispatcher_main.build_session_factory"),
@@ -450,7 +464,7 @@ async def test_dispatcher_main_run_delegates_to_dispatcher() -> None:
             return_value=mock_dispatcher,
         ),
     ):
-        process = DispatcherProcess(settings=MagicMock())
+        process = DispatcherProcess(settings=settings)
         await process.run()
 
     mock_dispatcher.run.assert_called_once()
