@@ -3049,14 +3049,38 @@ class ChatOrchestratorUseCase:
 
         # E-12: initialise audit logger for this turn.
         _turn_id = _new_thread_id()  # UUIDv7
+        # BUG FIX (2026-07-23 audit — chat_thread_id/user_id 100% NULL in
+        # llm_usage_log): resolve the EFFECTIVE thread_id ONCE, here, before
+        # any LLM call is made this turn. Previously every LLM call site
+        # (planning/synthesis/degraded-reprompt/grounding-rewrite) forwarded
+        # the RAW ``request.thread_id`` for cost attribution, while the
+        # persistence step (``_execute_streaming_inner``, near the end of the
+        # turn) independently computed ``request.thread_id or
+        # _new_thread_id()`` — generating a FRESH id long after every
+        # ``llm_usage_log`` row for the turn had already been written. For a
+        # brand-new conversation (client has no thread_id yet — the
+        # overwhelming majority of turns) this meant every cost row for the
+        # ENTIRE turn was written with ``chat_thread_id=NULL``, and the
+        # persisted ``threads`` row ended up with a DIFFERENT id that no
+        # earlier cost row ever referenced. Fix: resolve once, reuse the SAME
+        # id for the audit logger, every LLM cost-attribution call, and the
+        # final persisted thread row.
+        # NOTE: this must NOT replace ``request.thread_id`` itself — the
+        # completion-cache key (``check_cache``/``write_completion_cache``)
+        # and ``load_history`` intentionally key off the RAW client-supplied
+        # value (the eval harness relies on a stable ``None`` key for
+        # deterministic cache hits across runs).
+        effective_thread_id: UUID = request.thread_id or _turn_id
         audit = ChatAuditLogger(
             turn_id=_turn_id,
-            thread_id=request.thread_id or _turn_id,
+            thread_id=effective_thread_id,
             user_id=request.user_id,
         )
 
         try:
-            async for event in self._execute_streaming_inner(request, uow, p, budget, audit, start):
+            async for event in self._execute_streaming_inner(
+                request, uow, p, budget, audit, start, effective_thread_id
+            ):
                 yield event
         finally:
             # E-12: finalize audit log — never propagates to user.
@@ -3074,11 +3098,19 @@ class ChatOrchestratorUseCase:
         budget: AgentBudget,
         audit: Any,
         start: datetime,
+        effective_thread_id: UUID,
     ) -> AsyncGenerator[dict[str, str], None]:
         """Inner generator — contains the full pipeline logic.
 
         Split from execute_streaming so the try/finally in execute_streaming
         correctly wraps all yields without Python generator/finally interaction issues.
+
+        ``effective_thread_id`` (2026-07-23 audit fix) is ``request.thread_id``
+        resolved to a concrete UUIDv7 once at the top of the turn (see
+        ``execute_streaming``) — use THIS for every LLM cost-attribution call
+        and for the final persisted thread row so they all agree on one id.
+        Do NOT use it for the completion-cache key or history load; those
+        intentionally key off the raw (possibly ``None``) ``request.thread_id``.
         """
         # ── PLAN-0099 W1-T03: per-phase wall-clock instrumentation ──────────
         # Phases tracked: ``check_cache`` (always), then on cache miss
@@ -3473,7 +3505,10 @@ class ChatOrchestratorUseCase:
                     # token cost to the right chat thread. The receiving side
                     # accepts ``thread_id`` as an optional kwarg; current adapters
                     # ignore unknown kwargs via **kwargs forwarding.
-                    thread_id=request.thread_id,
+                    # 2026-07-23 audit fix: use the turn-resolved
+                    # ``effective_thread_id`` (never None), not the raw
+                    # ``request.thread_id`` (None for every new conversation).
+                    thread_id=effective_thread_id,
                     # PLAN-0117 W4 (FR-3): forward the authenticated user so the
                     # leaf usage-log row is per-user-attributable for future
                     # cost quotas. NULL for system/background call paths.
@@ -4799,7 +4834,10 @@ class ChatOrchestratorUseCase:
                             # (benchmark runner passes seed=42 in --judge mode).
                             seed=request.seed,
                             # PLAN-0107: forward thread_id for cost-capture (Agent B).
-                            thread_id=request.thread_id,
+                            # 2026-07-23 audit fix: use the turn-resolved
+                            # ``effective_thread_id`` (never None), not the raw
+                            # ``request.thread_id`` (None for every new conversation).
+                            thread_id=effective_thread_id,
                             # PLAN-0117 W4 (FR-3): attribute the synthesis leaf
                             # cost to the authenticated user for future quotas.
                             user_id=request.user_id,
@@ -5019,7 +5057,10 @@ class ChatOrchestratorUseCase:
                     # PLAN-0117 (attribution): bump the per-thread total + stamp
                     # the user so degraded-synthesis salvage spend is not dropped
                     # from chat_threads.estimated_cost_usd / per-user quota.
-                    thread_id=request.thread_id,
+                    # 2026-07-23 audit fix: use the turn-resolved
+                    # ``effective_thread_id`` (never None), not the raw
+                    # ``request.thread_id`` (None for every new conversation).
+                    thread_id=effective_thread_id,
                     user_id=request.user_id,
                     # Distinguish salvage spend from the real synthesis turn.
                     call_site="degraded_synthesis",
@@ -5251,7 +5292,10 @@ class ChatOrchestratorUseCase:
                     # PLAN-0117 (attribution): thread the identity down so the
                     # grounding-repair rewrite's leaf cost bumps the per-thread
                     # total + stamps the user (per-user quota, PRD-0118).
-                    thread_id=request.thread_id,
+                    # 2026-07-23 audit fix: use the turn-resolved
+                    # ``effective_thread_id`` (never None), not the raw
+                    # ``request.thread_id`` (None for every new conversation).
+                    thread_id=effective_thread_id,
                     user_id=request.user_id,
                     # Point 2 Stage 2 — relax the numeric gate for analytical /
                     # hypothetical turns. Gated on the deterministic what-if
@@ -5673,7 +5717,15 @@ class ChatOrchestratorUseCase:
                 log.warning("suggestions_derivation_failed", error=str(_sugg_exc))
 
         # ── Step 10: Persist + cache + metrics ───────────────────────────────────
-        thread_id: UUID = request.thread_id or _new_thread_id()
+        # 2026-07-23 audit fix: reuse the SAME id resolved at the top of the
+        # turn (``effective_thread_id``) instead of independently generating
+        # a second, different UUID here. Before this fix, every LLM cost row
+        # written earlier in the turn (planning/synthesis/grounding-rewrite)
+        # referenced ``request.thread_id`` (None for a new conversation)
+        # while THIS line minted a fresh id for the persisted ``threads``
+        # row — the two never matched, so cost attribution was unrecoverable
+        # even though the persisted thread itself had a valid id.
+        thread_id: UUID = effective_thread_id
         latency_ms = int((datetime.now(tz=UTC) - start).total_seconds() * 1000)
         _model_id = _resolve_model_id(p.llm_chain, provider_name)
         token_count_in_est = len(request.message) // 4

@@ -1044,3 +1044,52 @@ All `llm_usage_log` writes to `rag_db` funnel through the single INSERT choke-po
 - **Boot-time priceability warning**: app lifespan calls `warn_unpriceable_models(...)`,
   logging a structured WARNING for any configured chat model with no pricing path.
   Prometheus alert `LlmUsageSilentZeroCost`; see `docs/BUG_PATTERNS.md` BP-715.
+
+### Thread/User Attribution Fix (2026-07-23 audit)
+
+`docs/audits/2026-07-23-three-vertical-prod-investigation.md` found `chat_thread_id`
+NULL on 100% of `llm_usage_log` rows over a 7-day prod window, and `user_id` NULL on
+~14%. The 2026-07-03 audit (`docs/audits/2026-07-03-chat-llm-cost-untracked.md`) had
+already fixed the *forwarding* of `thread_id`/`user_id` into every LLM call site inside
+`ChatOrchestratorUseCase` (PLAN-0117 W4) — by 2026-07-23 every call site correctly
+forwards `request.thread_id`/`request.user_id`. The still-live bug was upstream:
+`request.thread_id` itself is `None` for the ENTIRE turn on every NEW conversation (the
+client has no thread_id yet — the overwhelming majority of chat traffic). The persist
+step at the end of the turn independently minted a fresh id via
+`request.thread_id or _new_thread_id()`, long after every planning/synthesis/grounding-
+rewrite LLM call had already logged its `llm_usage_log` row with `chat_thread_id=NULL`
+— so the persisted `threads` row never matched any cost row from its own turn.
+
+**Fix** (`ChatOrchestratorUseCase.execute_streaming`,
+`services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py`): resolve
+`effective_thread_id = request.thread_id or _turn_id` ONCE at the top of the turn
+(reusing the UUIDv7 `_turn_id` already generated there for the audit logger), thread it
+through `_execute_streaming_inner` as an explicit parameter, and reuse it at every LLM
+cost-attribution call site (planning `chat_with_tools`, synthesis `stream_chat`,
+degraded-reprompt `stream_chat`, combined-grounding-rewrite `stream_chat`) AND the final
+`persist_chat` call — so the cost rows and the persisted thread row always agree on one
+id. The raw (possibly `None`) `request.thread_id` is DELIBERATELY left unchanged for the
+completion-cache key (`check_cache`/`write_completion_cache`) and `load_history` — those
+intentionally key off the client-supplied value (the eval harness relies on a stable
+`None` cache key across runs for reproducibility).
+
+**user_id**: flows from the authenticated `AuthContextDep` (InternalJWTMiddleware) for
+every real chat turn — there is no anonymous chat path, so a NULL `user_id` on a
+`tool_loop_iter`/`synthesis`/`grounding_rewrite`/`degraded_synthesis` row is always a
+bug. The remaining legitimate NULL `thread_id`/`user_id` rows are pre-thread-context or
+batch system calls, DELIBERATE and untouched by this fix: the Layer-2 safety classifier
+(`llm_injection_classifier.py`, gates the raw message before any thread context exists)
+and the citation-judge cron (`citation_judge_adapter.py`, a batch job with no chat turn).
+
+**Regression test**:
+`services/rag-chat/tests/integration/test_thread_user_attribution_e2e.py` drives a full
+new-conversation turn (`thread_id=None`) through `execute_streaming` against a real
+Postgres (testcontainers + actual Alembic migrations) and a real
+`PrometheusAndDbCostRecorder`, then queries the persisted `llm_usage_log` rows back and
+asserts every row has non-null `chat_thread_id`/`user_id` sharing one consistent id.
+
+**Deferred follow-up** (not fixed in this pass — out of scope, see
+`docs/audits/2026-07-23-three-vertical-prod-investigation.md` item 5): the
+`cost_source='pricematrix'` fallback on ~0.5-0.7% of calls doesn't log the raw provider
+response, making the root cause (missing usage field / unknown model_id) hard to find
+after the fact.
