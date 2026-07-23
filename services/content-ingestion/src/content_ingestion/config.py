@@ -389,6 +389,21 @@ class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────────────────────────
     db_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db")
     db_url_read: SecretStr = SecretStr("")  # Falls back to db_url if empty (R23)
+    # Connection-pool floors right-sized for the shared single-node Postgres
+    # (2026-07-23, direct-backend OOM root cause). content-ingestion runs 4 low-
+    # concurrency pods on content_ingestion_db (API + scheduler + fetch/parse worker
+    # at worker_concurrency=2 + dispatcher); DB writes are brief upserts, so a pool
+    # floor of 2 + 4 burst covers real concurrency with headroom. Previously these
+    # were HARDCODED at 10/20 (write) and 20/30 (read) in the session factory, letting
+    # every pod balloon to 30 backends under a reconnect storm — the unbounded tail
+    # that OOM-killed the shared Postgres. Now settings-driven + env-tunable. Since
+    # ``pool_size`` is the persistent idle-backend FLOOR each pod holds (QueuePool keeps
+    # it open once used) and ``pool_size + max_overflow`` the burst CEILING, keeping
+    # both small directly caps content-ingestion's contribution to the shared server.
+    db_pool_size: int = 2
+    db_max_overflow: int = 4
+    db_pool_size_read: int = 2
+    db_max_overflow_read: int = 4
 
     # ── Kafka ─────────────────────────────────────────────────────────────────
     kafka_bootstrap_servers: str = "localhost:9092"

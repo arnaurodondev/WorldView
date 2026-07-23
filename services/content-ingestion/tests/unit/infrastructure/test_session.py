@@ -125,18 +125,42 @@ class TestBuildFactories:
     @patch("content_ingestion.infrastructure.db.session.create_async_engine")
     @patch("content_ingestion.infrastructure.db.session.async_sessionmaker")
     def test_write_factory_pool_config(self, mock_sessionmaker: MagicMock, mock_engine: MagicMock) -> None:
-        """Write engine has pool_size=10, pool_pre_ping=True, expire_on_commit=False."""
+        """Write engine is settings-driven (right-sized pool), pre-ping on, expire off.
+
+        The pool size/overflow must come from Settings (not a hardcoded 10/20) so the
+        shared single-node Postgres cannot be OOM-killed by an oversized direct pool
+        (2026-07-23 direct-backend fix). We pass explicit values and assert they flow
+        straight through to ``create_async_engine``.
+        """
         from content_ingestion.infrastructure.db.session import _build_factories
 
         settings = MagicMock()
         settings.db_url = SecretStr("postgresql+asyncpg://localhost/test")
         settings.db_url_read = ""
+        settings.db_pool_size = 2
+        settings.db_max_overflow = 4
 
         _build_factories(settings)
 
         engine_kwargs = mock_engine.call_args
-        assert engine_kwargs.kwargs["pool_size"] == 10
+        assert engine_kwargs.kwargs["pool_size"] == 2
+        assert engine_kwargs.kwargs["max_overflow"] == 4
         assert engine_kwargs.kwargs["pool_pre_ping"] is True
 
         session_kwargs = mock_sessionmaker.call_args
         assert session_kwargs.kwargs["expire_on_commit"] is False
+
+    def test_default_pool_floors_are_small(self) -> None:
+        """The Settings pool defaults must stay tiny (shared-Postgres backend cap).
+
+        Regression guard for the 2026-07-23 direct-backend OOM: content-ingestion runs
+        4 pods on content_ingestion_db, so an accidental bump back toward 10/20 would
+        re-open the unbounded burst tail. Keep the floor + burst ceiling conservative.
+        """
+        from content_ingestion.config import Settings
+
+        s = Settings()
+        assert s.db_pool_size <= 3
+        assert s.db_pool_size + s.db_max_overflow <= 8
+        assert s.db_pool_size_read <= 3
+        assert s.db_pool_size_read + s.db_max_overflow_read <= 8

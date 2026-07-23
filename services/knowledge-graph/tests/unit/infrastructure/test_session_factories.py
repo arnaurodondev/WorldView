@@ -136,3 +136,31 @@ class TestStatementTimeoutBackstop:
         )
 
         assert _statement_timeout_from_env() == _DEFAULT_STATEMENT_TIMEOUT_MS
+
+
+class TestPoolDefaultsAreRightSized:
+    """Regression guard for the 2026-07-23 shared-Postgres direct-backend OOM.
+
+    knowledge-graph runs ~17 pods on the shared single-node Postgres (API + 15 single-
+    replica Kafka consumers + 1 scheduler). SQLAlchemy's QueuePool keeps ``pool_size``
+    connections open persistently (the per-pod idle-backend FLOOR) and bursts up to
+    ``pool_size + max_overflow`` (the CEILING). An accidental bump back toward the old
+    10/20 default would re-open the unbounded burst tail that OOM-killed Postgres, so
+    pin the SERVICE-WIDE defaults tiny; the scheduler (concurrent periodic workers)
+    gets its real concurrency via per-worker env override in gitops (not tested here).
+    This only changes pool COUNTS — AGE/Cypher pooling mode + search_path are untouched.
+    """
+
+    def _settings(self) -> object:
+        from knowledge_graph.config import Settings
+
+        return Settings(
+            database_url=SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"),  # type: ignore[call-arg]
+        )
+
+    def test_db_pool_floor_is_small(self) -> None:
+        s = self._settings()
+        assert s.db_pool_size <= 3  # type: ignore[attr-defined]
+        assert s.db_pool_size + s.db_max_overflow <= 8  # type: ignore[attr-defined]
+        assert s.db_pool_size_read <= 3  # type: ignore[attr-defined]
+        assert s.db_pool_size_read + s.db_max_overflow_read <= 8  # type: ignore[attr-defined]

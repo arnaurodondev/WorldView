@@ -30,10 +30,25 @@ class Settings(BaseSettings):
     # nlp_db — owned, Alembic enabled; no default: fails fast if env var missing (DEF-027)
     database_url: SecretStr  # NLP_PIPELINE_DATABASE_URL — required
     database_url_read: SecretStr = SecretStr("")
-    db_pool_size: int = 10
-    db_max_overflow: int = 20
-    db_pool_size_read: int = 20
-    db_max_overflow_read: int = 30
+    # Connection-pool floors right-sized for the shared single-node Postgres
+    # (2026-07-23, direct-backend OOM root cause). SQLAlchemy's QueuePool keeps up
+    # to ``pool_size`` connections OPEN persistently once they have been used and
+    # only closes the extra ``max_overflow`` connections on return — so ``pool_size``
+    # is the PERSISTENT idle-backend floor each pod contributes to the shared server,
+    # and ``pool_size + max_overflow`` is its worst-case burst ceiling. With ~11
+    # nlp-pipeline pods (API + 8 singleton workers + 2-replica article fleet) the
+    # previous 10/20 default meant every pod could balloon to 30 backends under a
+    # reconnect storm / backfill — the unbounded tail that OOM-killed the 6→8→10Gi
+    # Postgres. These SERVICE-WIDE defaults size the API + concurrency-1 singleton
+    # workers (dispatcher, relevance, price-impact, …), which never check out more
+    # than ~1-2 connections at a time: a floor of 2 + 4 burst is ample. The heavy
+    # article-consumer fleet (article_consumer_concurrency, holds nlp_s AND intel_s
+    # across the whole deep-extraction LLM phase) overrides these via per-worker env
+    # in gitops to cover its real concurrency — see values/nlp-pipeline.yaml.
+    db_pool_size: int = 2
+    db_max_overflow: int = 4
+    db_pool_size_read: int = 2
+    db_max_overflow_read: int = 4
     # Universal per-connection statement_timeout (milliseconds) applied to EVERY
     # SQL session on nlp_db AND intelligence_db.  Backstop introduced after FTS
     # ``ts_rank_cd`` / ``ts_headline`` queries (document_search.py) ran ~5 min
@@ -143,10 +158,16 @@ class Settings(BaseSettings):
     # no default: fails fast if env var missing (DEF-027)
     intelligence_database_url: SecretStr  # NLP_PIPELINE_INTELLIGENCE_DATABASE_URL — required
     intelligence_database_url_read: SecretStr = SecretStr("")
-    intelligence_db_pool_size: int = 10
-    intelligence_db_max_overflow: int = 20
-    intelligence_db_pool_size_read: int = 20
-    intelligence_db_max_overflow_read: int = 30
+    # Right-sized floors for the SHARED intelligence_db (also used by knowledge-graph)
+    # — same rationale as the nlp_db pool above. Service-wide defaults size the API +
+    # concurrency-1 singleton workers; the article-consumer fleet overrides these via
+    # per-worker env in gitops (it holds an intel_s across entity resolution + deep
+    # extraction). Kept intentionally tiny (2 + 3) because nlp-pipeline is a lighter
+    # intelligence_db user than knowledge-graph.
+    intelligence_db_pool_size: int = 2
+    intelligence_db_max_overflow: int = 3
+    intelligence_db_pool_size_read: int = 2
+    intelligence_db_max_overflow_read: int = 3
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"

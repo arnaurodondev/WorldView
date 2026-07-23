@@ -53,13 +53,17 @@ def _build_factories(
     # BP-502: application_name surfaces this service in pg_stat_activity for
     # connection debugging; pool_recycle=300 defends against stale DNS sockets.
     _connect_args: dict[str, object] = {"server_settings": {"application_name": "content-ingestion"}}
+    # pool_size/max_overflow are settings-driven (right-sized 2 + 4 default) so this
+    # pod cannot re-introduce the oversized 10/20 pool that contributed to the shared-
+    # Postgres direct-backend OOM (2026-07-23); tune via CONTENT_INGESTION_DB_POOL_SIZE
+    # / CONTENT_INGESTION_DB_MAX_OVERFLOW without a rebuild.
     write_engine = create_async_engine(
         settings.db_url.get_secret_value(),
         echo=False,
         future=True,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
         pool_recycle=300,
         connect_args=_connect_args,
     )
@@ -80,8 +84,8 @@ def _build_factories(
             echo=False,
             future=True,
             pool_pre_ping=True,
-            pool_size=20,
-            max_overflow=30,
+            pool_size=settings.db_pool_size_read,
+            max_overflow=settings.db_max_overflow_read,
             pool_recycle=300,
             connect_args=_connect_args,
         )

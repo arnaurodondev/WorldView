@@ -213,13 +213,16 @@ def create_session_factory(url: str) -> tuple[AsyncEngine, async_sessionmaker[As
     Returns a ``(engine, session_factory)`` pair. The caller owns the engine
     lifecycle (``await engine.dispose()`` on shutdown).
     """
+    # pool_size/max_overflow match the right-sized Settings defaults (2 + 4) so this
+    # raw-URL wrapper cannot silently re-introduce the oversized 10/20 pool that
+    # contributed to the shared-Postgres direct-backend OOM (2026-07-23).
     engine = create_async_engine(
         url,
         echo=False,
         future=True,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
+        pool_size=2,
+        max_overflow=4,
         pool_recycle=300,
         connect_args=build_connect_args(
             statement_timeout_from_env(),

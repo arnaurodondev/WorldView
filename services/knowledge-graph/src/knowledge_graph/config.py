@@ -28,10 +28,25 @@ class Settings(BaseSettings):
     # Database — no default; service fails fast at startup if env var is missing (DEF-001)
     database_url: SecretStr  # KNOWLEDGE_GRAPH_DATABASE_URL — required
     database_url_read: SecretStr = SecretStr("")
-    db_pool_size: int = 10
-    db_max_overflow: int = 20
-    db_pool_size_read: int = 20
-    db_max_overflow_read: int = 30
+    # Connection-pool floors right-sized for the shared single-node Postgres
+    # (2026-07-23, direct-backend OOM root cause). knowledge-graph runs ~17 pods on
+    # intelligence_db (API + 15 single-replica Kafka consumers + 1 scheduler), each
+    # of which — under the old 10/20 default — could balloon to 30 backends on a
+    # broker-reconnect storm, the unbounded tail that OOM-killed the shared Postgres.
+    # SQLAlchemy's QueuePool keeps up to ``pool_size`` connections open persistently,
+    # so ``pool_size`` is the per-pod idle-backend FLOOR and ``pool_size +
+    # max_overflow`` the burst CEILING. These SERVICE-WIDE defaults size the API +
+    # the concurrency-1 consumers (enriched/entity/fundamentals/… each processes one
+    # message at a time = ~1 checked-out connection): a floor of 2 + 4 burst is ample.
+    # The scheduler pod runs the periodic workers with internal concurrency (summary
+    # up to 8) and overrides these via per-worker env in gitops — see
+    # values/knowledge-graph.yaml. NOTE: this only changes pool COUNTS; AGE/Cypher
+    # sessions keep the same QueuePool + per-connection search_path (no pooling-mode
+    # change), so ag_catalog session state is untouched.
+    db_pool_size: int = 2
+    db_max_overflow: int = 4
+    db_pool_size_read: int = 2
+    db_max_overflow_read: int = 4
     # Universal per-connection statement_timeout (milliseconds) applied to EVERY
     # regular (non-AGE) SQL session on intelligence_db.  Backstop introduced
     # after a single ``RelationEvidencePromoterWorker._FETCH_SQL`` run ran for

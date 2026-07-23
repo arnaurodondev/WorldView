@@ -327,3 +327,40 @@ class TestCommandTimeoutBehaviour:
         assert asyncio.TimeoutError is TimeoutError  # py3.11+ alias
         assert issubclass(TimeoutError, Exception)
         assert not issubclass(TimeoutError, FatalError)
+
+
+class TestPoolDefaultsAreRightSized:
+    """Regression guard for the 2026-07-23 shared-Postgres direct-backend OOM.
+
+    nlp-pipeline runs ~11 pods on the shared single-node Postgres (API + 8 singleton
+    workers + 2-replica article fleet). SQLAlchemy's QueuePool keeps ``pool_size``
+    connections open persistently (the per-pod idle-backend FLOOR) and allows a burst
+    up to ``pool_size + max_overflow`` (the CEILING). An accidental bump back toward
+    the old 10/20 default would re-open the unbounded burst tail that OOM-killed
+    Postgres, so pin the SERVICE-WIDE defaults tiny. The heavy article fleet gets its
+    real concurrency via per-worker env override in gitops (not tested here).
+    """
+
+    def _settings(self) -> object:
+        from nlp_pipeline.config import Settings
+
+        return Settings(
+            database_url=SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/nlp_db"),  # type: ignore[call-arg]
+            intelligence_database_url=SecretStr(
+                "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"
+            ),
+        )
+
+    def test_nlp_db_pool_floor_is_small(self) -> None:
+        s = self._settings()
+        assert s.db_pool_size <= 3  # type: ignore[attr-defined]
+        assert s.db_pool_size + s.db_max_overflow <= 8  # type: ignore[attr-defined]
+        assert s.db_pool_size_read <= 3  # type: ignore[attr-defined]
+        assert s.db_pool_size_read + s.db_max_overflow_read <= 8  # type: ignore[attr-defined]
+
+    def test_intelligence_db_pool_floor_is_small(self) -> None:
+        s = self._settings()
+        assert s.intelligence_db_pool_size <= 3  # type: ignore[attr-defined]
+        assert s.intelligence_db_pool_size + s.intelligence_db_max_overflow <= 8  # type: ignore[attr-defined]
+        assert s.intelligence_db_pool_size_read <= 3  # type: ignore[attr-defined]
+        assert s.intelligence_db_pool_size_read + s.intelligence_db_max_overflow_read <= 8  # type: ignore[attr-defined]
