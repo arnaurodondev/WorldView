@@ -40,7 +40,7 @@ info "════════════════════════�
 info ""
 
 # ─── 1. Ruff check on changed files ──────────────────────────────────────────
-info "── Step 1/4: ruff check ──────────────────────────────────────"
+info "── Step 1/5: ruff check ──────────────────────────────────────"
 RUFF_FILES=""
 for f in $CHANGED_PY; do
   full_path="$ROOT_DIR/$f"
@@ -66,7 +66,7 @@ fi
 
 # ─── 2. mypy on changed packages ─────────────────────────────────────────────
 info ""
-info "── Step 2/4: mypy ────────────────────────────────────────────"
+info "── Step 2/5: mypy ────────────────────────────────────────────"
 MYPY_TARGETS=""
 for f in $CHANGED_PY; do
   pkg=$(echo "$f" | sed -n 's|^\(libs/[^/]*/src\)/.*|\1|p; s|^\(services/[^/]*/src\)/.*|\1|p')
@@ -94,7 +94,7 @@ fi
 
 # ─── 3. Import guards on changed service files ───────────────────────────────
 info ""
-info "── Step 3/4: import guards ─────────────────────────────────────"
+info "── Step 3/5: import guards ─────────────────────────────────────"
 SVC_CHANGED=$(echo "$CHANGED_PY" | grep '^services/' || true)
 if [ -n "$SVC_CHANGED" ]; then
   GUARD_SERVICES=$(echo "$SVC_CHANGED" | sed -n 's|^services/\([^/]*\)/.*|\1|p' | sort -u | paste -sd, -)
@@ -116,7 +116,7 @@ fi
 
 # ─── 4. Run tests for changed services/libs ──────────────────────────────────
 info ""
-info "── Step 4/4: pytest (unit tests) ─────────────────────────────"
+info "── Step 4/5: pytest (unit tests) ─────────────────────────────"
 TEST_DIRS=""
 for f in $CHANGED_PY; do
   svc=$(echo "$f" | sed -n 's|^\(services/[^/]*\)/.*|\1|p')
@@ -146,6 +146,27 @@ if [ -n "$(echo "$TEST_DIRS" | tr -d '[:space:]')" ]; then
   done
 else
   info "✓ No testable packages changed — skipping pytest"
+fi
+
+# ─── 5. tool_use.py prompt-version live-eval-artifact gate ──────────────────
+# PLAN (2026-07-23 bottleneck audit, Recurrence B / BP-735 / HR-065 /
+# REVIEW_CHECKLIST.md:117): a version bump to TOOL_USE_SYSTEM_PROMPT_TEMPLATE
+# in libs/prompts/src/prompts/chat/tool_use.py has regressed unrelated
+# tool-selection behavior at least twice before, caught only by a live A/B
+# run — never by the static prompt-contract tests. This mechanically
+# enforces the REVIEW_CHECKLIST.md:117 requirement instead of leaving it to
+# reviewer memory. See scripts/hooks/check_tool_use_prompt_eval_artifact.py
+# for the full rationale and how to produce a real artifact.
+info ""
+info "── Step 5/5: tool_use.py prompt-version eval-artifact gate ────"
+GATE_OUTPUT=""
+if GATE_OUTPUT=$(cd "$ROOT_DIR" && python3 scripts/hooks/check_tool_use_prompt_eval_artifact.py 2>&1); then
+  info "✓ tool_use.py eval-artifact gate passed"
+else
+  info "✗ tool_use.py eval-artifact gate FAILED"
+  info "$GATE_OUTPUT"
+  FAILURE_REASONS+=("tool_use.py version bump missing a live-eval artifact. See scripts/hooks/check_tool_use_prompt_eval_artifact.py for how to attach one (.claude/eval-artifacts/tool_use_v<version>.json or an 'Eval-Artifact:' commit trailer).")
+  FAILED=1
 fi
 
 # ─── Result ───────────────────────────────────────────────────────────────────
