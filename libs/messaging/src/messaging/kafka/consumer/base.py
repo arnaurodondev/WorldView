@@ -1892,7 +1892,7 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         in the group.  Errors are swallowed — we are in a teardown / rebalance
         path and cannot do anything useful with them.
         """
-        if not self._paused_partitions:
+        if not self._paused_partitions and not self._barrier_paused_partitions:
             return
         partitions = list(self._paused_partitions)
         try:
