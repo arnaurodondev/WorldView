@@ -73,6 +73,24 @@ jobs:
     outputs:
       # JSON array of service names that changed, e.g.: ["portfolio","alert"]
       services: ${{ steps.filter.outputs.changes }}
+      # Same list with postgres/gliner/synthetic/smoke/intelligence-migrations
+      # stripped — these are real dorny/paths-filter matches (so they correctly
+      # populate the *_changed booleans below and each has its own dedicated
+      # build-<name> job) but they are NOT valid entries for the generic
+      # build-and-push / bump-image-tag matrices (both `exclude:` them). When
+      # a push changes ONLY one of these special paths, `services` is a
+      # single-element array whose one element the matrix's `exclude:` removes
+      # entirely — GitHub Actions then runs the matrix ONCE MORE with every
+      # matrix variable unset (a documented quirk: excluding every generated
+      # combination does not yield zero jobs), producing a phantom
+      # `Build & Push — ` job with `matrix.service=""` that fails on
+      # `invalid tag "ghcr.io/arnaurodondev/worldview-:latest"` (BP-748,
+      # 2026-07-24 — hit twice same day: docs/scripts-only pushes that only
+      # touched `infra/synthetic/**` and `scripts/prod_e2e_smoke.py`).
+      # Filtering here, at the source, means both matrices' `service:` list is
+      # already exclude-clean, so their `exclude:` blocks become pure defense
+      # in depth instead of the only thing standing between them and this bug.
+      real_services: ${{ steps.filter-real.outputs.result }}
       any_changed: ${{ steps.filter.outputs.any_changed }}
       postgres_changed: ${{ steps.filter.outputs.postgres }}
       gliner_changed: ${{ steps.filter.outputs.gliner }}
@@ -148,6 +166,18 @@ jobs:
               - 'infra/smoke/**'
               - 'scripts/prod_e2e_smoke.py'
 
+      # Strips postgres/gliner/synthetic/smoke/intelligence-migrations out of
+      # `steps.filter.outputs.changes` — see the `real_services` output comment
+      # above (BP-748) for why this must happen here rather than relying on
+      # each matrix job's own `exclude:`. Plain jq (preinstalled on
+      # ubuntu-latest) — no new third-party action pin needed for one filter.
+      - name: Filter to matrix-eligible services
+        id: filter-real
+        run: |
+          result=$(echo '${{ steps.filter.outputs.changes }}' | jq -c \
+            '. - ["postgres", "gliner", "synthetic", "smoke", "intelligence-migrations"]')
+          echo "result=${result}" >> "$GITHUB_OUTPUT"
+
   # ═══════════════════════════════════════════════════════════════════════════
   # Job 1b: Build + push the shared python base image
   #
@@ -221,14 +251,16 @@ jobs:
     # ran) did not fail.
     if: >-
       always() &&
-      needs.detect-changes.outputs.services != '[]' &&
-      needs.detect-changes.outputs.services != '' &&
+      needs.detect-changes.outputs.real_services != '[]' &&
+      needs.detect-changes.outputs.real_services != '' &&
       needs.build-python-base.result != 'failure' &&
       needs.build-python-base.result != 'cancelled'
     strategy:
       fail-fast: false  # don't cancel other services if one fails
       matrix:
-        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+        # real_services (BP-748) is already exclude-clean — the list below is
+        # pure defense in depth, not load-bearing.
+        service: ${{ fromJson(needs.detect-changes.outputs.real_services) }}
         # intelligence-migrations builds in its OWN job (build-intelligence-
         # migrations) with a service-local context — its Dockerfile uses relative
         # COPY paths that break under the repo-root context this matrix uses.
@@ -550,15 +582,16 @@ jobs:
     if: >-
       always() &&
       needs.build-and-push.result != 'skipped' &&
-      needs.detect-changes.outputs.services != '[]'
+      needs.detect-changes.outputs.real_services != '[]'
     strategy:
       fail-fast: false
       matrix:
         # Same service list, but exclude intelligence-migrations (no Deployment)
         # and postgres/gliner/synthetic (custom-context images with no
         # values/<name>.yaml Deployment to bump — see build-and-push's exclude
-        # list above for the full explanation).
-        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+        # list above for the full explanation). real_services (BP-748) is
+        # already exclude-clean; the list below is defense in depth.
+        service: ${{ fromJson(needs.detect-changes.outputs.real_services) }}
         exclude:
           - service: intelligence-migrations
           - service: postgres
