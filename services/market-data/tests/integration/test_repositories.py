@@ -11,7 +11,7 @@ Total: 19 tests (all backed by real TimescaleDB container).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -221,6 +221,72 @@ class TestPgInstrumentRepository:
         ).one()
         assert row.last_fundamentals_ingest_at is not None
         assert row.last_fundamentals_ingest_at == ts
+
+    async def test_find_by_symbol_icase_prefers_nonempty_exchange(self, uow) -> None:
+        """NFLX-duplicate-instrument regression (2026-07).
+
+        Given two rows for the same symbol — a placeholder ``exchange=''``
+        row and a real ``exchange='US'`` row — ``find_by_symbol_icase`` MUST
+        deterministically return the real-exchange row, never the
+        placeholder, regardless of insertion order. Before the fix,
+        ``.first()`` with no ``ORDER BY`` returned whichever row Postgres
+        happened to store first on disk — which was the stale placeholder in
+        the live NFLX incident.
+        """
+        from market_data.domain.entities import Instrument
+
+        sec_id = await self._make_security(uow)
+        # Insert the PLACEHOLDER row first (matches the live incident's
+        # ordering: fundamentals-refresh created the placeholder a day
+        # before regular ingestion created the canonical row).
+        placeholder = Instrument(security_id=sec_id, symbol="DUPX", exchange="")
+        await uow.instruments.upsert(placeholder)
+        await uow.commit()
+
+        canonical = Instrument(security_id=sec_id, symbol="DUPX", exchange="US")
+        created_canonical = await uow.instruments.upsert(canonical)
+        await uow.commit()
+
+        found = await uow.instruments.find_by_symbol_icase("DUPX")
+        assert found is not None
+        assert found.id == created_canonical.id
+        assert found.exchange == "US"
+
+        # Case-insensitivity is preserved by the new ORDER BY.
+        found_lower = await uow.instruments.find_by_symbol_icase("dupx")
+        assert found_lower is not None
+        assert found_lower.id == created_canonical.id
+
+    async def test_find_by_symbol_icase_prefers_freshest_fundamentals(self, uow) -> None:
+        """When both rows have a real exchange, the freshest row wins.
+
+        Tie-break #2 (after "non-empty exchange"): most recent
+        ``last_fundamentals_ingest_at``. This covers duplicates that are NOT
+        the placeholder-exchange pattern (e.g. a historical dual-listing
+        cleanup), so the resolver still picks the row with the most current
+        data rather than an arbitrary one.
+        """
+        from market_data.domain.entities import Instrument
+
+        sec_id = await self._make_security(uow)
+        stale = Instrument(security_id=sec_id, symbol="DUPY", exchange="XNAS")
+        created_stale = await uow.instruments.upsert(stale)
+        await uow.commit()
+        await uow.instruments.touch_fundamentals_ingest_at(created_stale.id, datetime(2026, 3, 31, tzinfo=UTC))
+        await uow.commit()
+
+        # A second row for the SAME symbol under a DIFFERENT exchange (the
+        # constraint is on (symbol, exchange), so this insert succeeds
+        # distinctly — mirrors how the real duplicate came to exist).
+        fresh = Instrument(security_id=sec_id, symbol="DUPY", exchange="XLON")
+        created_fresh = await uow.instruments.upsert(fresh)
+        await uow.commit()
+        await uow.instruments.touch_fundamentals_ingest_at(created_fresh.id, datetime(2026, 7, 22, tzinfo=UTC))
+        await uow.commit()
+
+        found = await uow.instruments.find_by_symbol_icase("DUPY")
+        assert found is not None
+        assert found.id == created_fresh.id
 
 
 # ── OHLCV repository ──────────────────────────────────────────────────────────
@@ -1033,6 +1099,208 @@ class TestPgPredictionMarketRepositoryQuery:
 
             assert total == 0
             assert pairs == []
+        finally:
+            await self._cleanup(uow)
+
+
+class TestPgPredictionMarketSnapshotDenormalizationLive:
+    """Real-DB end-to-end coverage for migration 048's write-path sync.
+
+    Complements the mock-session unit tests in ``test_repositories.py``
+    (unit) — those pin the exact SQL shape; these confirm the whole thing
+    actually works against a real (TimescaleDB) Postgres: a snapshot write
+    updates ``prediction_markets.last_snapshot_at`` /
+    ``latest_volume_24h`` in the SAME transaction, ``list_markets`` reads the
+    result back correctly (no LATERAL involved), and an out-of-order/older
+    snapshot never regresses the denormalized columns.
+    """
+
+    @staticmethod
+    async def _cleanup(uow) -> None:
+        from sqlalchemy import text as _sql_text
+
+        await uow.get_write_session().execute(_sql_text("DELETE FROM prediction_market_snapshots"))
+        await uow.get_write_session().execute(_sql_text("DELETE FROM prediction_markets"))
+        await uow.commit()
+
+    @staticmethod
+    def _market(market_id: str, question: str = "Will X happen?") -> object:
+        from market_data.domain.entities import PredictionMarket
+
+        return PredictionMarket(market_id=market_id, question=question)
+
+    @staticmethod
+    def _snapshot(market_id: str, snapshot_at, volume_24h) -> object:
+        from market_data.domain.entities import PredictionMarketSnapshot
+
+        return PredictionMarketSnapshot(
+            market_id=market_id,
+            snapshot_at=snapshot_at,
+            outcomes_prices={"Yes": 0.6, "No": 0.4},
+            source_event_id="evt-1",
+            volume_24h=volume_24h,
+        )
+
+    async def test_single_snapshot_insert_denormalizes_onto_market_row(self, uow) -> None:
+        """A single snapshot write updates last_snapshot_at + latest_volume_24h."""
+        from sqlalchemy import text as _sql_text
+
+        try:
+            await uow.prediction_markets.upsert(self._market("mkt-denorm-1"))
+            await uow.commit()
+
+            snap = self._snapshot("mkt-denorm-1", datetime(2026, 4, 9, 12, tzinfo=UTC), Decimal("1234.56"))
+            inserted = await uow.prediction_market_snapshots.insert_if_not_exists(snap)
+            await uow.commit()
+
+            assert inserted is True
+            row = (
+                await uow.get_read_session().execute(
+                    _sql_text(
+                        "SELECT latest_volume_24h, last_snapshot_at FROM prediction_markets WHERE market_id = :m"
+                    ).bindparams(m="mkt-denorm-1")
+                )
+            ).fetchone()
+            assert row.latest_volume_24h == Decimal("1234.5600")
+            assert row.last_snapshot_at == datetime(2026, 4, 9, 12, tzinfo=UTC)
+
+            # list_markets must surface the SAME value with no LATERAL — the
+            # whole point of migration 048.
+            pairs, total = await uow.prediction_markets.list_markets(status=None, query=None, limit=10, offset=0)
+            assert total == 1
+            assert pairs[0][1] == Decimal("1234.5600")
+        finally:
+            await self._cleanup(uow)
+
+    async def test_out_of_order_snapshot_never_regresses_denormalized_columns(self, uow) -> None:
+        """An older/late-arriving snapshot must not clobber the newer denormalized state.
+
+        Kafka delivery is not globally ordered — a replay or a re-delivered
+        older message must never regress last_snapshot_at/latest_volume_24h
+        to a stale value.
+        """
+        from sqlalchemy import text as _sql_text
+
+        try:
+            await uow.prediction_markets.upsert(self._market("mkt-denorm-2"))
+            await uow.commit()
+
+            newer = self._snapshot("mkt-denorm-2", datetime(2026, 4, 9, 12, tzinfo=UTC), Decimal("900"))
+            await uow.prediction_market_snapshots.insert_if_not_exists(newer)
+            await uow.commit()
+
+            older = self._snapshot("mkt-denorm-2", datetime(2026, 4, 9, 10, tzinfo=UTC), Decimal("100"))
+            await uow.prediction_market_snapshots.insert_if_not_exists(older)
+            await uow.commit()
+
+            row = (
+                await uow.get_read_session().execute(
+                    _sql_text(
+                        "SELECT latest_volume_24h, last_snapshot_at FROM prediction_markets WHERE market_id = :m"
+                    ).bindparams(m="mkt-denorm-2")
+                )
+            ).fetchone()
+            # Must still reflect the NEWER snapshot, not the out-of-order older one.
+            assert row.latest_volume_24h == Decimal("900.0000")
+            assert row.last_snapshot_at == datetime(2026, 4, 9, 12, tzinfo=UTC)
+        finally:
+            await self._cleanup(uow)
+
+    async def test_bulk_insert_denormalizes_using_newest_snapshot_per_market(self, uow) -> None:
+        """bulk_insert_if_not_exists syncs each market using its newest snapshot in the batch."""
+        from sqlalchemy import text as _sql_text
+
+        try:
+            await uow.prediction_markets.upsert(self._market("mkt-bulk-a"))
+            await uow.prediction_markets.upsert(self._market("mkt-bulk-b"))
+            await uow.commit()
+
+            snapshots = [
+                self._snapshot("mkt-bulk-a", datetime(2026, 4, 9, 10, tzinfo=UTC), Decimal("100")),
+                self._snapshot("mkt-bulk-a", datetime(2026, 4, 9, 12, tzinfo=UTC), Decimal("500")),  # newest for A
+                self._snapshot("mkt-bulk-b", datetime(2026, 4, 9, 9, tzinfo=UTC), Decimal("42")),
+            ]
+            inserted = await uow.prediction_market_snapshots.bulk_insert_if_not_exists(snapshots)
+            await uow.commit()
+
+            assert inserted == 3
+            rows = {
+                r.market_id: r
+                for r in (
+                    await uow.get_read_session().execute(
+                        _sql_text(
+                            "SELECT market_id, latest_volume_24h, last_snapshot_at FROM prediction_markets "
+                            "WHERE market_id IN ('mkt-bulk-a', 'mkt-bulk-b')"
+                        )
+                    )
+                ).fetchall()
+            }
+            assert rows["mkt-bulk-a"].latest_volume_24h == Decimal("500.0000")
+            assert rows["mkt-bulk-a"].last_snapshot_at == datetime(2026, 4, 9, 12, tzinfo=UTC)
+            assert rows["mkt-bulk-b"].latest_volume_24h == Decimal("42.0000")
+        finally:
+            await self._cleanup(uow)
+
+    async def test_list_markets_volume_window_days_degrades_stale_market_to_null(self, uow) -> None:
+        """Real-DB coverage for the ``volume_window_days`` CASE (migration 048).
+
+        Regression guard tied to a review finding on migration 048's backfill
+        (a ``COALESCE`` bug that would have left ``last_snapshot_at`` stale for
+        already-synced markets, silently breaking this exact CASE in
+        production). This test exercises the SAME code path end-to-end
+        against a real Postgres: a market whose ``last_snapshot_at`` falls
+        OUTSIDE the window must report ``volume_24h = None`` (sorts last),
+        while a market whose ``last_snapshot_at`` is inside the window must
+        keep reporting its real ``latest_volume_24h``. The unit tests
+        (``TestPredictionMarketListVolumeWindow``) only pin the emitted SQL
+        text against a mocked session — this proves the SQL is also
+        semantically correct against a real database.
+        """
+        from sqlalchemy import text as _sql_text
+
+        try:
+            await uow.prediction_markets.upsert(self._market("mkt-stale"))
+            await uow.prediction_markets.upsert(self._market("mkt-fresh"))
+            await uow.commit()
+
+            now = datetime.now(UTC)
+            stale_snapshot_at = now - timedelta(days=45)  # outside a 30-day window
+            fresh_snapshot_at = now - timedelta(hours=1)  # inside a 30-day window
+
+            await uow.prediction_market_snapshots.insert_if_not_exists(
+                self._snapshot("mkt-stale", stale_snapshot_at, Decimal("777"))
+            )
+            await uow.prediction_market_snapshots.insert_if_not_exists(
+                self._snapshot("mkt-fresh", fresh_snapshot_at, Decimal("888"))
+            )
+            await uow.commit()
+
+            # Sanity: the denormalized columns themselves are populated
+            # correctly regardless of the window (the window only affects
+            # what list_markets() SURFACES, not what's stored).
+            row = (
+                await uow.get_read_session().execute(
+                    _sql_text(
+                        "SELECT market_id, latest_volume_24h FROM prediction_markets WHERE market_id = 'mkt-stale'"
+                    )
+                )
+            ).fetchone()
+            assert row.latest_volume_24h == Decimal("777.0000")
+
+            pairs, total = await uow.prediction_markets.list_markets(
+                status=None,
+                query=None,
+                limit=10,
+                offset=0,
+                volume_window_days=30,
+            )
+            assert total == 2
+            volume_by_market = {m.market_id: vol for m, vol in pairs}
+            # Outside the window: volume degrades to None (sorts last) even
+            # though latest_volume_24h is populated in the table.
+            assert volume_by_market["mkt-stale"] is None
+            # Inside the window: the real denormalized volume is surfaced.
+            assert volume_by_market["mkt-fresh"] == Decimal("888.0000")
         finally:
             await self._cleanup(uow)
 

@@ -71,6 +71,11 @@ def _make_message(dataset_type: str = "fundamentals") -> dict:
 def _make_consumer(mock_uow: AsyncMock, mock_storage: AsyncMock) -> FundamentalsConsumer:
     # Ensure content-hash dedup never short-circuits in unit tests
     mock_uow.ingestion_events.exists_by_content_hash = AsyncMock(return_value=False)
+    # Default the NFLX-dup-guard's symbol-only lookup to "nothing found" so
+    # existing "creates a new instrument" tests keep exercising the create
+    # path unless a test explicitly overrides this (set AFTER calling this
+    # helper — see test_fundamentals_consumer_reuses_existing_instrument_with_different_exchange).
+    mock_uow.instruments.find_by_symbol_icase = AsyncMock(return_value=None)
     consumer = FundamentalsConsumer(
         uow_factory=lambda: mock_uow,
         object_storage=mock_storage,
@@ -148,6 +153,53 @@ async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
     call_kwargs = mock_uow.outbox_events.create.call_args
     assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
     assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_reuses_existing_instrument_with_different_exchange() -> None:
+    """NFLX-duplicate-instrument regression (2026-07) — the ACTUAL root-cause path.
+
+    This is the consumer that created the live NFLX orphan:
+    ``FundamentalsRefreshWorker`` triggers a fundamentals refresh from a bare
+    symbol list with NO exchange context, so the Kafka message arrives here
+    with ``exchange=""``. ``find_by_symbol_exchange(symbol, "")`` finds
+    nothing (no exact ``('GOOG', '')`` row), but a row for the SAME symbol
+    already exists under its REAL exchange (created earlier by regular
+    OHLCV/quotes ingestion). The consumer MUST reuse that existing row
+    instead of creating a second, ``exchange=''``-keyed duplicate — and
+    since ``exchange`` here is empty, it must NOT downgrade the existing
+    row's real exchange back to a placeholder.
+    """
+    existing_real = _make_instrument(has_fundamentals=False)  # symbol=GOOG, exchange=US
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.update_metadata = AsyncMock()
+    mock_uow.instruments.update_flags = AsyncMock()
+    mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {"income_statement": _make_section_data("income_statement")}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    message = _make_message()
+    message["exchange"] = ""  # unknown at trigger time — the actual incident condition
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    # Set AFTER ``_make_consumer`` since it defaults this mock to "not found".
+    mock_uow.instruments.find_by_symbol_icase = AsyncMock(return_value=existing_real)
+    await consumer.process_message(None, message, {})
+
+    # The critical assertion: NO new instrument row was created.
+    mock_uow.instruments.upsert.assert_not_called()
+    # exchange is empty here, so the existing row's real exchange ("US") must
+    # NOT be clobbered back to a placeholder — update_metadata is only called
+    # to UPGRADE a placeholder, never to downgrade a real value.
+    mock_uow.instruments.update_metadata.assert_not_called()
+    # has_fundamentals flips False -> True on the REUSED row, not a new one.
+    mock_uow.instruments.update_flags.assert_awaited_once()
+    assert mock_uow.instruments.update_flags.call_args[0][0] == existing_real.id
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.entities import Instrument, Quote, Security
 from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
+from market_data.infrastructure.messaging.consumers._instrument_dedup import find_symbol_match_ignoring_exchange
 from market_data.infrastructure.messaging.consumers._quote_cache_fanout import schedule_quote_cache_fanout
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
@@ -217,6 +218,15 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
 
         # Resolve or create instrument
         instrument: Instrument | None = await uow.instruments.find_by_symbol_exchange(symbol, exchange)
+        if instrument is None:
+            # BP-NFLX-DUP guard: before creating a brand-new row, check whether
+            # ANY instrument already exists for this symbol under a different
+            # exchange value. Without this, an empty/unknown ``exchange``
+            # (e.g. forwarded from an ingestion task enqueued without exchange
+            # context) would create a permanent duplicate instead of reusing
+            # the existing row. See ``_instrument_dedup.py`` for the full
+            # incident writeup.
+            instrument = await find_symbol_match_ignoring_exchange(uow, symbol, exchange)
         if instrument is None:
             security = await uow.securities.upsert(Security(name=symbol))
             instrument = Instrument(
