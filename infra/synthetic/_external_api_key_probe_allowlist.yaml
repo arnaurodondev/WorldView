@@ -1,0 +1,498 @@
+# External API key freshness-probe allowlist
+# ─────────────────────────────────────────────────────────────────────────────
+# Companion to tests/architecture/_consumer_dedup_allowlist.yaml's pattern
+# (same schema philosophy: force an explicit, reviewable, dated decision
+# instead of a silent gap).
+#
+# infra/synthetic/tests/test_probe_registry_completeness.py scans every
+# service's (+ libs/ml-clients') config.py for str/SecretStr-typed fields
+# whose name looks like a shared/rotatable external API credential (has
+# "key"/"secret" as an underscore-delimited token, or ends in "_client_id" —
+# matches SnapTrade's client-id/consumer-key pair). Both str AND SecretStr are
+# scanned — several real external keys in this repo (resend_api_key,
+# sendgrid_api_key, content-ingestion's eodhd_api_key, router_embedding_api_key)
+# are typed plain str, not SecretStr. For each field found, the test requires
+# EITHER:
+#   (a) a corresponding `probe_<name>_key` function registered in
+#       synthetic_monitor.PROBES (derived by stripping the field's
+#       "_api_key"/"_secret_key"/"_access_key"/"_consumer_key"/"_client_id"/
+#       "_client_secret"/"_key"/"_secret" suffix), OR
+#   (b) an entry here, justifying why no freshness probe exists today.
+#
+# This is what closes the "reactive-only" gap that produced probe_deepinfra_key
+# and probe_eodhd_key: those two were added AFTER separate production
+# incidents (DeepInfra key rotation with no alert; potential EODHD key
+# rotation). A brand-new SecretStr key-shaped config field that is neither
+# probed nor listed here FAILS the test loudly — forcing the same "add a
+# probe" vs. "document why not" decision made explicit and reviewable, instead
+# of silently doing neither until the next incident.
+#
+# Schema: each entry must have:
+#   service:       str   — service directory name (e.g. "market-ingestion")
+#   field:         str   — exact Settings attribute name
+#   file:          str   — config.py path, relative to repo root (greppability)
+#   justification: str   — why no probe_<name>_key exists today
+#   granted_at:    str   — ISO-8601 date this exemption was recorded
+#
+# Exemption categories used below:
+#
+#   Internal-signing-key   — a self-generated credential (JWT RSA key, HMAC
+#                             secret) used for THIS platform's own
+#                             service-to-service auth. There is no external
+#                             provider endpoint to probe; it can't be
+#                             "rotated out from under us" by a third party.
+#
+#   Internal-infra-cred    — a credential for infrastructure we operate
+#                             ourselves (MinIO/S3 access/secret key pair) via
+#                             our own IaC, not a third-party SaaS account key.
+#                             Freshness is covered by our own infra health
+#                             checks, not a key-rotation-style probe.
+#
+#   Duplicate-shared-key   — the SAME physical DeepInfra account key
+#                             duplicated across a per-service/per-feature env
+#                             var (this repo runs ~8 such duplicated vars —
+#                             see infra/gitops/docs/deepinfra-key-rotation.md).
+#                             probe_deepinfra_key already probes that live
+#                             value; a second identical probe would be
+#                             redundant, not additional coverage.
+#
+#   Not-a-credential        — the field matches the "*_key"/"*_secret" naming
+#                             heuristic (name.contains "key"/"secret" as an
+#                             underscore-delimited token) but is NOT actually
+#                             a secret value: a version/identifier string
+#                             (e.g. jwt_key_version = "v1") or a Valkey/Redis
+#                             cache-key NAME used as a key-prefix constant
+#                             (e.g. valkey_watchlist_key), not a credential at
+#                             all. No freshness probe applies because there is
+#                             no "freshness" for a version tag or a cache-key
+#                             string to check.
+#
+#   Optional-fallback-cred — a third-party integration that is OPTIONAL and
+#                             disabled-by-default (empty string = feature off)
+#                             in the live deployment today. Not yet on any
+#                             critical path an incident has hit. Flagged here
+#                             as a real, reviewable follow-up candidate rather
+#                             than silently doing nothing — see the `followup`
+#                             note on each such entry.
+
+allowlist:
+
+  # ── alert ─────────────────────────────────────────────────────────────────
+  - service: alert
+    field: resend_api_key
+    file: services/alert/src/alert/config.py
+    justification: >
+      Resend transactional email provider — the default configured
+      email_provider ("resend"), but the key VALUE itself is empty by default
+      (must be set via env for the feature to actually send mail). No
+      freshness probe exists today. Category: Optional-fallback-cred.
+      followup: add probe_resend_key (Resend exposes a lightweight API-key
+      validation endpoint) — genuine candidate given it's the default
+      provider, not bundled into this test-gap-closing change.
+    granted_at: "2026-07-24"
+
+  - service: alert
+    field: sendgrid_api_key
+    file: services/alert/src/alert/config.py
+    justification: >
+      SendGrid — the alternate email_provider option (config.py: "resend |
+      sendgrid | smtp"), not the default. Category: Optional-fallback-cred.
+    granted_at: "2026-07-24"
+
+  # ── api-gateway ───────────────────────────────────────────────────────────
+  - service: api-gateway
+    field: oidc_client_id
+    file: services/api-gateway/src/api_gateway/config.py
+    justification: >
+      Zitadel-issued OIDC client id (public, non-secret identifier — plain
+      str, paired with oidc_client_secret below). Same login-flow-covered
+      reasoning as oidc_client_secret. Category: Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  - service: api-gateway
+    field: oidc_client_secret
+    file: services/api-gateway/src/api_gateway/config.py
+    justification: >
+      Zitadel-issued OIDC client secret used only for the S9 login/token-exchange
+      flow. Its "freshness" is already implicitly covered by the login flow itself
+      (a revoked/rotated secret breaks every login attempt within seconds, which
+      user-facing auth-failure alerting already catches) — a standalone
+      GET-based freshness probe (the pattern probe_deepinfra_key/probe_eodhd_key
+      use) doesn't map cleanly onto an OAuth client-credentials exchange.
+      Category: Internal-infra-cred (auth-adjacent, not a data-provider key).
+    granted_at: "2026-07-24"
+
+  - service: api-gateway
+    field: internal_jwt_public_key
+    file: services/api-gateway/src/api_gateway/config.py
+    justification: >
+      Public half of the RS256 keypair S9 uses to sign internal JWTs (paired
+      with internal_jwt_private_key below, also exposed via GET
+      /internal/jwks for other services to validate against) — not secret by
+      design, and nothing external can silently revoke it. Category:
+      Internal-signing-key.
+    granted_at: "2026-07-24"
+
+  - service: api-gateway
+    field: jwt_key_version
+    file: services/api-gateway/src/api_gateway/config.py
+    justification: >
+      NOT a credential — this is the "kid" version tag (e.g. "v1") stamped
+      into internal JWT headers for JWKS rotation, a plain identifier string,
+      not a secret value. Category: Not-a-credential.
+    granted_at: "2026-07-24"
+
+  - service: api-gateway
+    field: internal_jwt_private_key
+    file: services/api-gateway/src/api_gateway/config.py
+    justification: >
+      Self-generated RSA private key S9 uses to SIGN its own internal JWTs
+      (validated by every backend's InternalJWTMiddleware via GET /internal/jwks).
+      Nothing external issues or can silently revoke this key — it never calls
+      out to a third party. Category: Internal-signing-key.
+    granted_at: "2026-07-24"
+
+  # ── nlp-pipeline ──────────────────────────────────────────────────────────
+  - service: nlp-pipeline
+    field: embedding_api_key
+    file: services/nlp-pipeline/src/nlp_pipeline/config.py
+    justification: >
+      Same physical DeepInfra account key as DEEPINFRA_API_KEY, duplicated into
+      this feature-specific env var (NLP_PIPELINE_EMBEDDING_API_KEY). Already
+      probed live by probe_deepinfra_key. Category: Duplicate-shared-key.
+    granted_at: "2026-07-24"
+
+  - service: nlp-pipeline
+    field: extraction_api_key
+    file: services/nlp-pipeline/src/nlp_pipeline/config.py
+    justification: >
+      Same physical DeepInfra account key, duplicated into
+      NLP_PIPELINE_EXTRACTION_API_KEY. Already probed live by probe_deepinfra_key.
+      Category: Duplicate-shared-key.
+    granted_at: "2026-07-24"
+
+  - service: nlp-pipeline
+    field: relevance_scoring_api_key
+    file: services/nlp-pipeline/src/nlp_pipeline/config.py
+    justification: >
+      Same physical DeepInfra account key, duplicated into
+      NLP_PIPELINE_RELEVANCE_SCORING_API_KEY. Already probed live by
+      probe_deepinfra_key. Category: Duplicate-shared-key.
+    granted_at: "2026-07-24"
+
+  - service: nlp-pipeline
+    field: unresolved_resolution_api_key
+    file: services/nlp-pipeline/src/nlp_pipeline/config.py
+    justification: >
+      Same physical DeepInfra account key, duplicated into
+      NLP_PIPELINE_UNRESOLVED_RESOLUTION_API_KEY. Already probed live by
+      probe_deepinfra_key. Category: Duplicate-shared-key.
+    granted_at: "2026-07-24"
+
+  - service: nlp-pipeline
+    field: jina_api_key
+    file: services/nlp-pipeline/src/nlp_pipeline/config.py
+    justification: >
+      Optional Jina AI embedding fallback — empty by default (S6/Ollama path
+      used instead) in every live deployment today; not yet a key any incident
+      has hit. Category: Optional-fallback-cred.
+      followup: add probe_jina_key if/when a Jina key is actually provisioned
+      in production.
+    granted_at: "2026-07-24"
+
+  - service: nlp-pipeline
+    field: storage_access_key
+    file: services/nlp-pipeline/src/nlp_pipeline/config.py
+    justification: MinIO/S3 access key for infra we operate (typed plain str here, unlike market-data's SecretStr version). Category Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  - service: nlp-pipeline
+    field: storage_secret_key
+    file: services/nlp-pipeline/src/nlp_pipeline/config.py
+    justification: Paired credential with storage_access_key above. Category Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  - service: nlp-pipeline
+    field: valkey_watchlist_key
+    file: services/nlp-pipeline/src/nlp_pipeline/config.py
+    justification: >
+      NOT a credential — this is the Valkey/Redis cache-key NAME (a string
+      constant used as a key prefix, e.g. "nlp:v1:watched_entities"), not a
+      secret value. Matches the naming heuristic's "*_key" suffix by
+      coincidence. Category: Not-a-credential.
+    granted_at: "2026-07-24"
+
+  - service: nlp-pipeline
+    field: valkey_canonical_tickers_key
+    file: services/nlp-pipeline/src/nlp_pipeline/config.py
+    justification: Same as valkey_watchlist_key above — a cache-key-name constant, not a secret. Category Not-a-credential.
+    granted_at: "2026-07-24"
+
+  # ── market-data ───────────────────────────────────────────────────────────
+  - service: market-data
+    field: storage_access_key
+    file: services/market-data/src/market_data/config.py
+    justification: >
+      MinIO/S3 access key for infrastructure WE operate (not a third-party SaaS
+      account). Freshness is covered by MinIO's own health checks / the
+      storage-outage alerting built after the 2026-07-18 MinIO inode-exhaustion
+      incident, not a key-rotation-style probe. Category: Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  - service: market-data
+    field: internal_jwt_private_key
+    file: services/market-data/src/market_data/config.py
+    justification: Self-generated internal JWT signing key (same pattern as api-gateway's). Category Internal-signing-key.
+    granted_at: "2026-07-24"
+
+  - service: market-data
+    field: storage_secret_key
+    file: services/market-data/src/market_data/config.py
+    justification: Same as storage_access_key above (paired credential). Category Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  # ── content-ingestion ─────────────────────────────────────────────────────
+  - service: content-ingestion
+    field: internal_jwt_private_key
+    file: services/content-ingestion/src/content_ingestion/config.py
+    justification: >
+      Self-generated internal JWT signing key (same pattern as api-gateway's).
+      Category: Internal-signing-key.
+    granted_at: "2026-07-24"
+
+  - service: content-ingestion
+    field: finnhub_api_key
+    file: services/content-ingestion/src/content_ingestion/config.py
+    justification: >
+      Duplicate of the same optional Finnhub key market-ingestion configures
+      (config.py's own comment: "no CONTENT_INGESTION_ prefix — shared
+      variables"). Same Optional-fallback-cred reasoning as
+      market-ingestion.finnhub_api_key below — EODHD is authoritative,
+      Finnhub is not on a live critical path.
+    granted_at: "2026-07-24"
+
+  - service: content-ingestion
+    field: newsapi_key
+    file: services/content-ingestion/src/content_ingestion/config.py
+    justification: >
+      Optional NewsAPI.org provider — empty by default, bare shared env var
+      ("no CONTENT_INGESTION_ prefix"), not wired into any live critical
+      ingestion path. Category: Optional-fallback-cred.
+    granted_at: "2026-07-24"
+
+  - service: content-ingestion
+    field: minio_access_key
+    file: services/content-ingestion/src/content_ingestion/config.py
+    justification: MinIO/S3 access key for infra we operate (named "minio_" here vs. "storage_" elsewhere — same credential class). Category Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  - service: content-ingestion
+    field: minio_secret_key
+    file: services/content-ingestion/src/content_ingestion/config.py
+    justification: Paired credential with minio_access_key above. Category Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  # ── content-store ─────────────────────────────────────────────────────────
+  - service: content-store
+    field: minio_access_key
+    file: services/content-store/src/content_store/config.py
+    justification: MinIO/S3 access key for infra we operate. Category Internal-infra-cred (see content-ingestion's entry above).
+    granted_at: "2026-07-24"
+
+  - service: content-store
+    field: minio_secret_key
+    file: services/content-store/src/content_store/config.py
+    justification: Paired credential with minio_access_key above. Category Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  # ── market-ingestion ──────────────────────────────────────────────────────
+  - service: market-ingestion
+    field: storage_access_key
+    file: services/market-ingestion/src/market_ingestion/config.py
+    justification: MinIO/S3 access key for infra we operate. Category Internal-infra-cred (see market-data's entry above).
+    granted_at: "2026-07-24"
+
+  - service: market-ingestion
+    field: storage_secret_key
+    file: services/market-ingestion/src/market_ingestion/config.py
+    justification: Same as storage_access_key above (paired credential). Category Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  - service: market-ingestion
+    field: internal_jwt_private_key
+    file: services/market-ingestion/src/market_ingestion/config.py
+    justification: Self-generated internal JWT signing key. Category Internal-signing-key.
+    granted_at: "2026-07-24"
+
+  - service: market-ingestion
+    field: finnhub_api_key
+    file: services/market-ingestion/src/market_ingestion/config.py
+    justification: >
+      Optional secondary market-data provider — the 2026-07-16 OHLCV decision
+      made EODHD authoritative for OHLCV (per-ticker /eod), so Finnhub is not on
+      any live critical ingestion path today. Category: Optional-fallback-cred.
+      followup: add probe_finnhub_key if Finnhub is ever promoted off the
+      fallback tier.
+    granted_at: "2026-07-24"
+
+  - service: market-ingestion
+    field: polygon_api_key
+    file: services/market-ingestion/src/market_ingestion/config.py
+    justification: >
+      Optional provider — config.py's own comment documents "empty = Polygon
+      disabled"; not wired into any live critical path. Category:
+      Optional-fallback-cred.
+    granted_at: "2026-07-24"
+
+  - service: market-ingestion
+    field: alpha_vantage_api_key
+    file: services/market-ingestion/src/market_ingestion/config.py
+    justification: Optional fallback provider, same reasoning as polygon_api_key above. Category Optional-fallback-cred.
+    granted_at: "2026-07-24"
+
+  - service: market-ingestion
+    field: alpaca_api_key
+    file: services/market-ingestion/src/market_ingestion/config.py
+    justification: >
+      Legacy OHLCV provider — the 2026-07-16 OHLCV-correctness fix made EODHD
+      authoritative and Alpaca a secondary/legacy path (config.py: "empty =
+      Alpaca disabled"). Category: Optional-fallback-cred.
+    granted_at: "2026-07-24"
+
+  - service: market-ingestion
+    field: alpaca_secret_key
+    file: services/market-ingestion/src/market_ingestion/config.py
+    justification: Paired credential with alpaca_api_key above; same reasoning. Category Optional-fallback-cred.
+    granted_at: "2026-07-24"
+
+  # ── knowledge-graph ───────────────────────────────────────────────────────
+  - service: knowledge-graph
+    field: embedding_api_key
+    file: services/knowledge-graph/src/knowledge_graph/config.py
+    justification: >
+      Same physical DeepInfra account key as DEEPINFRA_API_KEY, duplicated into
+      KNOWLEDGE_GRAPH_EMBEDDING_API_KEY. Already probed live by
+      probe_deepinfra_key. Category: Duplicate-shared-key.
+    granted_at: "2026-07-24"
+
+  - service: knowledge-graph
+    field: gemini_api_key
+    file: services/knowledge-graph/src/knowledge_graph/config.py
+    justification: >
+      Optional Gemini fallback for KG description generation — empty by default;
+      not a key any production incident has hit yet. Category:
+      Optional-fallback-cred. followup: add probe_gemini_key if Gemini is
+      promoted off the fallback tier.
+    granted_at: "2026-07-24"
+
+  - service: knowledge-graph
+    field: internal_jwt_private_key
+    file: services/knowledge-graph/src/knowledge_graph/config.py
+    justification: Self-generated internal JWT signing key. Category Internal-signing-key.
+    granted_at: "2026-07-24"
+
+  - service: knowledge-graph
+    field: storage_access_key
+    file: services/knowledge-graph/src/knowledge_graph/config.py
+    justification: MinIO/S3 access key for infra we operate. Category Internal-infra-cred (see market-data's entry above).
+    granted_at: "2026-07-24"
+
+  - service: knowledge-graph
+    field: storage_secret_key
+    file: services/knowledge-graph/src/knowledge_graph/config.py
+    justification: Paired credential with storage_access_key above. Category Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  # ── portfolio ─────────────────────────────────────────────────────────────
+  - service: portfolio
+    field: snaptrade_client_id
+    file: services/portfolio/src/portfolio/config.py
+    justification: >
+      SnapTrade brokerage-sync OAuth client id (PRD-0022). Unlike the other
+      "Optional-fallback-cred" entries above, brokerage sync IS a live
+      production feature (2026-07-19/21 hardening notes reference a real
+      brokerage-sync dead-letter recovery), so this is a genuine follow-up
+      candidate, not a "not yet critical" case — recorded here rather than
+      silently skipped so it stays visible. Category: Optional-fallback-cred
+      (external SaaS, no probe built yet). followup: add probe_snaptrade_key
+      (SnapTrade exposes a lightweight account-status endpoint suitable for a
+      cheap freshness check) in a dedicated follow-up, not bundled into this
+      test-gap-closing change.
+    granted_at: "2026-07-24"
+
+  - service: portfolio
+    field: snaptrade_consumer_key
+    file: services/portfolio/src/portfolio/config.py
+    justification: Paired credential with snaptrade_client_id above; same reasoning and same followup.
+    granted_at: "2026-07-24"
+
+  - service: portfolio
+    field: brokerage_sync_jwt_secret
+    file: services/portfolio/src/portfolio/config.py
+    justification: >
+      Self-generated HMAC secret for THIS platform's own portfolio <->
+      brokerage-sync service-to-service auth — not a third-party API key.
+      Category: Internal-signing-key.
+    granted_at: "2026-07-24"
+
+  - service: portfolio
+    field: storage_access_key
+    file: services/portfolio/src/portfolio/config.py
+    justification: MinIO/S3 access key for infra we operate. Category Internal-infra-cred (see market-data's entry above).
+    granted_at: "2026-07-24"
+
+  - service: portfolio
+    field: storage_secret_key
+    file: services/portfolio/src/portfolio/config.py
+    justification: Paired credential with storage_access_key above. Category Internal-infra-cred.
+    granted_at: "2026-07-24"
+
+  - service: portfolio
+    field: snaptrade_secret_encryption_key
+    file: services/portfolio/src/portfolio/config.py
+    justification: >
+      Self-generated symmetric key used to encrypt SnapTrade OAuth tokens at
+      rest in our own DB — not a third-party API credential (there is no
+      external provider to probe; it never leaves this platform).
+      Category: Internal-signing-key. Note: currently typed plain str rather
+      than SecretStr — worth hardening separately (defense-in-depth against
+      accidental logging), but out of scope for this test-gap-closing change.
+    granted_at: "2026-07-24"
+
+  # ── ml-clients (libs, shared across services) ────────────────────────────
+  - service: ml-clients
+    field: router_embedding_api_key
+    file: libs/ml-clients/src/ml_clients/config.py
+    justification: >
+      Same physical DeepInfra account key as DEEPINFRA_API_KEY — config.py's
+      own comment: "injected via env (e.g. *_DEEPINFRA_API_KEY)". Already
+      probed live by probe_deepinfra_key. Category: Duplicate-shared-key.
+    granted_at: "2026-07-24"
+
+  # ── rag-chat ──────────────────────────────────────────────────────────────
+  - service: rag-chat
+    field: openrouter_api_key
+    file: services/rag-chat/src/rag_chat/config.py
+    justification: >
+      Optional OpenRouter fallback provider (DEF-034) — only used when the
+      DeepInfra primary provider chain fails; most live deployments only have
+      the DeepInfra key wired (per config.py's own W40 cross-provider-failover
+      comment). Category: Optional-fallback-cred. followup: add
+      probe_openrouter_key if OpenRouter is promoted to a primary path.
+    granted_at: "2026-07-24"
+
+  - service: rag-chat
+    field: cohere_api_key
+    file: services/rag-chat/src/rag_chat/config.py
+    justification: >
+      Optional Cohere reranker — config.py: "optional; fusion_score fallback
+      when absent (DEF-034)". Category: Optional-fallback-cred.
+    granted_at: "2026-07-24"
+
+  - service: rag-chat
+    field: jina_api_key
+    file: services/rag-chat/src/rag_chat/config.py
+    justification: >
+      Optional Jina embedding fallback — config.py: "optional; S6/Ollama
+      fallback when absent (DEF-034)". Category: Optional-fallback-cred.
+    granted_at: "2026-07-24"
