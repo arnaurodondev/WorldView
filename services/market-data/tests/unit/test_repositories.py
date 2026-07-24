@@ -702,7 +702,7 @@ class TestPredictionMarketListQueryEscape:
 
 
 class TestPredictionMarketListVolumeWindow:
-    """Migration 046 — ``list_markets`` reads a denormalized column, no LATERAL.
+    """migration 048 — ``list_markets`` reads a denormalized column, no LATERAL.
 
     ``prediction_market_snapshots`` is a TimescaleDB hypertable (~1.8M rows,
     weekly chunks). ``list_markets`` used to ``LEFT JOIN LATERAL`` it per row
@@ -710,7 +710,7 @@ class TestPredictionMarketListVolumeWindow:
     time-bounded that LATERAL (so TimescaleDB could prune chunks), the
     per-request per-market re-derivation still occasionally tipped over the
     8s ``statement_timeout`` under concurrent load (intermittent 500s).
-    Migration 046 denormalizes ``latest_volume_24h`` (and reuses the existing
+    migration 048 denormalizes ``latest_volume_24h`` (and reuses the existing
     ``last_snapshot_at``) directly onto ``prediction_markets``, kept in sync
     at snapshot-write time (see ``TestPgPredictionMarketSnapshotDenormalization``
     below) — the list query now reads plain columns with zero per-row join.
@@ -746,7 +746,7 @@ class TestPredictionMarketListVolumeWindow:
     async def test_no_lateral_or_join_against_snapshots_table(self):
         """Regression guard: the query must never join prediction_market_snapshots.
 
-        This is the whole point of migration 046 — the per-row LATERAL was
+        This is the whole point of migration 048 — the per-row LATERAL was
         the root cause of the intermittent statement_timeout 500s. Any
         re-introduction of a JOIN against the snapshots hypertable in
         list_markets must fail this test.
@@ -829,7 +829,7 @@ class TestPredictionMarketListVolumeWindow:
 
 
 class TestPgPredictionMarketSnapshotDenormalization:
-    """Migration 046 — snapshot writes keep ``prediction_markets`` in sync.
+    """migration 048 — snapshot writes keep ``prediction_markets`` in sync.
 
     ``PgPredictionMarketSnapshotRepository.insert_if_not_exists`` and
     ``bulk_insert_if_not_exists`` must, in the SAME transaction as the

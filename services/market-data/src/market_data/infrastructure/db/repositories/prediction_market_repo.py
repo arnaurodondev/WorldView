@@ -367,7 +367,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         """Return paginated ``(market, latest_volume_24h)`` pairs and total count.
 
         Reads ``m.latest_volume_24h`` — a column denormalized directly onto
-        ``prediction_markets`` (migration 046) — instead of joining
+        ``prediction_markets`` (migration 048) — instead of joining
         ``prediction_market_snapshots`` per row.
 
         HISTORY (why there's no LATERAL here anymore): PLAN-0048 D-1 first
@@ -538,10 +538,10 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
         self._session = session
 
     async def _sync_market_denormalized_fields(self, snapshot: PredictionMarketSnapshot) -> None:
-        """Push ``snapshot``'s time/volume onto ``prediction_markets`` (migration 046).
+        """Push ``snapshot``'s time/volume onto ``prediction_markets`` (migration 048).
 
         Keeps ``last_snapshot_at`` (migration 006) and ``latest_volume_24h``
-        (migration 046) current so ``list_markets`` can read a plain column
+        (migration 048) current so ``list_markets`` can read a plain column
         instead of joining ``prediction_market_snapshots`` per row (the fix
         for the intermittent ``statement_timeout`` 500s under load).
 
@@ -587,7 +587,7 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
         )
         result = await self._session.execute(stmt)
         inserted = result.scalar_one_or_none() is not None
-        # migration 046: keep prediction_markets.last_snapshot_at /
+        # migration 048: keep prediction_markets.last_snapshot_at /
         # latest_volume_24h in sync in the SAME transaction as the snapshot
         # write (same session/UoW — the caller commits both together).
         await self._sync_market_denormalized_fields(snapshot)
@@ -626,7 +626,7 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
         result = await self._session.execute(stmt)
         inserted_count = len(result.fetchall())
 
-        # migration 046: sync the denormalized columns for every DISTINCT
+        # migration 048: sync the denormalized columns for every DISTINCT
         # market_id in this batch, using only that market's NEWEST snapshot
         # within the batch (a batch may carry several snapshots for the same
         # market — e.g. a backfill replay). One guarded UPDATE per distinct

@@ -726,14 +726,14 @@ class PredictionMarketRepository(ABC):
             without a code change.  NULL-category rows never match.
 
         ``latest_volume_24h``: ``volume_24h`` denormalized onto
-        ``prediction_markets.latest_volume_24h`` (migration 046) and kept in
+        ``prediction_markets.latest_volume_24h`` (migration 048) and kept in
         sync at snapshot-write time — no per-row join against
         ``prediction_market_snapshots`` (that LATERAL was the root cause of
         intermittent ``statement_timeout`` 500s under load). ``None`` when the
         market has no snapshots yet. Forward-compatible: callers tolerating
         ``None`` continue to work.
 
-        ``volume_window_days`` (PLAN-0056 QA, adapted for migration 046): when
+        ``volume_window_days`` (PLAN-0056 QA, adapted for migration 048): when
         a positive int, bound the denormalized volume to markets whose
         ``last_snapshot_at >= now() - N days`` (a ``CASE`` expression, not a
         LATERAL predicate). Markets with no in-window activity get

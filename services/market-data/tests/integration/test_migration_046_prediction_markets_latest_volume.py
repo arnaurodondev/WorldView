@@ -217,7 +217,7 @@ def test_backfill_populates_latest_volume_from_newest_snapshot(pre_046_url) -> N
     asyncio.run(_seed_pre_migration_fixture(pre_046_url))
 
     # Run the migration under test (045 -> 046): adds the column + backfills.
-    _run_alembic(pre_046_url, "046", direction="upgrade")
+    _run_alembic(pre_046_url, "048", direction="upgrade")
 
     rows = asyncio.run(_fetch_markets(pre_046_url))
 
@@ -249,7 +249,7 @@ def test_backfill_populates_latest_volume_from_newest_snapshot(pre_046_url) -> N
 def test_downgrade_drops_latest_volume_column_cleanly(pre_046_url) -> None:
     """``downgrade()`` removes latest_volume_24h without touching last_snapshot_at."""
     asyncio.run(_seed_pre_migration_fixture(pre_046_url))
-    _run_alembic(pre_046_url, "046", direction="upgrade")
+    _run_alembic(pre_046_url, "048", direction="upgrade")
 
     async def _select_column(column: str) -> None:
         from sqlalchemy import text
@@ -266,7 +266,7 @@ def test_downgrade_drops_latest_volume_column_cleanly(pre_046_url) -> None:
     # Sanity: the column exists post-upgrade.
     asyncio.run(_select_column("latest_volume_24h"))
 
-    _run_alembic(pre_046_url, "045", direction="downgrade")
+    _run_alembic(pre_046_url, "047", direction="downgrade")
 
     # Post-downgrade: the column must be gone (querying it raises).
     from sqlalchemy.exc import ProgrammingError

@@ -29,7 +29,7 @@ class ListPredictionMarketsUseCase:
     Avoids N+1 via a single ``get_latest_prices_batch`` call that returns
     the latest snapshot prices for all markets at once. The repo's
     ``list_markets`` reads ``volume_24h`` from a denormalized column on
-    ``prediction_markets`` (migration 046) — no join and no extra round-trip
+    ``prediction_markets`` (migration 048) — no join and no extra round-trip
     is needed for that field (originally PLAN-0048 D-1; the LATERAL join it
     used to require was removed once the column was denormalized).
     """

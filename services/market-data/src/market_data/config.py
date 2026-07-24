@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     # under concurrent load, because it re-derived "latest volume" per market
     # on every single request.
     #
-    # migration 046 removed the LATERAL entirely: ``latest_volume_24h`` is now
+    # migration 048 removed the LATERAL entirely: ``latest_volume_24h`` is now
     # denormalized onto ``prediction_markets`` and kept in sync at
     # snapshot-write time, so the list query reads a plain column with zero
     # per-row join. This setting still applies — it now bounds a ``CASE``

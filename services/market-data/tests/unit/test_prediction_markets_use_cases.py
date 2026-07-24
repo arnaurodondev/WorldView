@@ -274,10 +274,10 @@ async def test_list_markets_omits_category_when_not_provided() -> None:
 async def test_list_markets_forwards_volume_window_to_repo() -> None:
     """A configured ``volume_window_days`` is passed to ``list_markets``.
 
-    PLAN-0056 QA / migration 046: the repo must receive the window so it can
+    PLAN-0056 QA / migration 048: the repo must receive the window so it can
     bound the denormalized ``latest_volume_24h`` column to markets with
     recent activity (a ``CASE`` against ``last_snapshot_at`` — no LATERAL
-    involved since migration 046 removed it). If a refactor drops the
+    involved since migration 048 removed it). If a refactor drops the
     plumbing, stale markets stop sorting to the bottom, and no other test
     catches it.
     """
@@ -296,7 +296,7 @@ async def test_list_markets_forwards_window_to_price_batch() -> None:
 
     PLAN-0056 QA: ``get_latest_prices_batch`` is a separate DISTINCT ON scan
     over the ``prediction_market_prices`` hypertable — it was NOT replaced by
-    migration 046's denormalization (only the market-row ``volume_24h`` was),
+    migration 048's denormalization (only the market-row ``volume_24h`` was),
     so it still needs its own time bound to prune chunks. It must receive
     ``window_days`` so it prunes chunks AND so a row's prices come from the
     same recent-window snapshot as its (now-denormalized) ``volume_24h``

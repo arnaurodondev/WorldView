@@ -14,7 +14,7 @@ R25: no infrastructure imports — all reads go through use cases.
 R16: API layer uses only use cases.
 Note: volume_24h is authored on snapshots (per-poll), but the list endpoint
 reads it from ``prediction_markets.latest_volume_24h`` — a column
-denormalized at snapshot-write time (migration 046) — and forwards it
+denormalized at snapshot-write time (migration 048) — and forwards it
 through the use case. This replaced an earlier ``LEFT JOIN LATERAL``
 (PLAN-0048 D-1) that re-derived the latest volume per row on every request;
 under load that per-row join occasionally tipped over the DB

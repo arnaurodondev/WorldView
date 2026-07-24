@@ -1,7 +1,7 @@
 """Denormalize latest snapshot volume_24h onto prediction_markets.
 
-Revision ID: 046
-Revises: 045
+Revision ID: 048
+Revises: 047
 Create Date: 2026-07-24
 
 WHY THIS MIGRATION EXISTS (list_markets 500 root cause):
@@ -74,8 +74,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "046"
-down_revision = "045"
+revision = "048"
+down_revision = "047"
 branch_labels = None
 depends_on = None
 

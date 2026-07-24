@@ -68,7 +68,7 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
-| GET | `/api/v1/prediction-markets` | List prediction markets — query params: `status` (`open`/`resolved`/`cancelled`/`all`), `limit`, `offset`, `category`, `query`. Ordered by latest `volume_24h` DESC (recently-traded first). `volume_24h` is read from `prediction_markets.latest_volume_24h` — a column **denormalized at snapshot-write time** (migration 046), NOT joined per-request. This replaced an earlier `LEFT JOIN LATERAL` over `prediction_market_snapshots` (PLAN-0048 D-1, then time-bounded by PLAN-0056 QA) that still occasionally tipped over the 8s `statement_timeout` under concurrent load even after bounding. `prediction_market_list_volume_window_days` (default 30d) still bounds the value via `CASE WHEN last_snapshot_at >= now() - N days` — markets with no snapshot in-window get `volume_24h=null` and sort last. | — |
+| GET | `/api/v1/prediction-markets` | List prediction markets — query params: `status` (`open`/`resolved`/`cancelled`/`all`), `limit`, `offset`, `category`, `query`. Ordered by latest `volume_24h` DESC (recently-traded first). `volume_24h` is read from `prediction_markets.latest_volume_24h` — a column **denormalized at snapshot-write time** (migration 048), NOT joined per-request. This replaced an earlier `LEFT JOIN LATERAL` over `prediction_market_snapshots` (PLAN-0048 D-1, then time-bounded by PLAN-0056 QA) that still occasionally tipped over the 8s `statement_timeout` under concurrent load even after bounding. `prediction_market_list_volume_window_days` (default 30d) still bounds the value via `CASE WHEN last_snapshot_at >= now() - N days` — markets with no snapshot in-window get `volume_24h=null` and sort last. | — |
 | GET | `/api/v1/prediction-markets/categories` | Per-category counts of currently-open markets (PLAN-0053) | — |
 | GET | `/api/v1/prediction-markets/events` | List Polymarket event groups (newest first) — query params: `limit` (1..200), `offset` (PLAN-0056 A4) | — |
 | GET | `/api/v1/prediction-markets/events/{event_id}` | Single event group (HTTP 404 if unknown) (PLAN-0056 A4) | — |
@@ -1127,9 +1127,9 @@ Backfill summary includes `scanned_rows`, `extracted_metric_rows`, `inserted_row
 > **Note**: Migrations 001–005 were consolidated into a single `001` initial schema.
 > The `fundamental_metrics` migration is `002` relative to the consolidated `001`.
 
-**Current head: `041`** (`alembic/versions/041_seed_volatility_30d_field.py`, down-revision `040`). The
-linear chain `001 → … → 041` is the source of truth — the consolidated table above only documents
-the early schema. Notable recent migrations:
+**Current head: `047`** (`alembic/versions/047_unique_placeholder_exchange_instruments.py`, down-revision
+`046`). The linear chain `001 → … → 047` is the source of truth — the consolidated table above only
+documents the early schema. Notable recent migrations:
 
 | Revision | Description |
 |---|---|
@@ -1137,6 +1137,9 @@ the early schema. Notable recent migrations:
 | `022`, `037` | `ANALYZE`/autovacuum tuning on fundamentals tables (paired with composite indexes, BP-581) |
 | `023`, `038` | Composite/covering fundamentals indexes (incl. `ix_fundamental_metrics_metric_instr_date_val` for the screener default-sort dedup scan) |
 | `024`/`025`/`029`/`035`/`041` | Seed L2/L4a/L3/L5b/volatility-30d screen fields (lock-step with `app.py::_get_static_screen_fields`) |
+| `045` | Dedup duplicate non-intraday OHLCV bars to one UTC-midnight row per day |
+| `046` | **NFLX-duplicate-instrument incident (BP-743, 2026-07)**: data-repair migration that merges any group of `instruments` rows sharing the same `upper(symbol)` into one winner (preferring non-empty `exchange`, then freshest `last_fundamentals_ingest_at`, then newest `created_at` — same ordering as the `find_by_symbol_icase` resolver fix), reassigning every FK-referencing child row (17 fundamentals section tables, `company_profiles`, `instrument_fundamentals_snapshot`, `fundamental_metrics`, `insider_transactions`, `earnings_calendar`, `ohlcv_bars`, `quotes`) to the winner before deleting the loser row(s). Irreversible; idempotent; safe to re-run. |
+| `047` | Adds a partial unique index `uq_instruments_symbol_placeholder_exchange` on `upper(symbol) WHERE exchange = ''` — caps future placeholder-exchange row proliferation as defense-in-depth alongside the app-level dedup guard (see `_instrument_dedup.py`) |
 | `028` | L5c earnings-calendar columns (`earnings_calendar` table) |
 | `030`, `032` | `insider_transactions` per-row table (introduced, then schema replaced) |
 | `031` | Extend `screen_field_metadata.field_type` CHECK to include `'date'` |
@@ -1167,7 +1170,7 @@ All repository interfaces are in `src/market_data/application/ports/repositories
 | ABC | Key methods |
 |---|---|
 | `SecurityRepository` | `find_by_figi`, `find_by_isin`, `list(limit, offset) → (list, total)`, `upsert` |
-| `InstrumentRepository` | `find_by_symbol_exchange`, `find_by_id`, `search(query, *, has_ohlcv, has_quotes, has_fundamentals, exchange, limit, offset)` — DB-side filters + pagination, `count(query, *, …)` — matching total, `upsert`, `update_flags`, `update_metadata` |
+| `InstrumentRepository` | `find_by_symbol_exchange`, `find_by_id`, `find_by_symbol_icase` (deterministic: non-empty `exchange` first, then freshest `last_fundamentals_ingest_at`, then newest `created_at` — see BP-743 / migration 046), `search(query, *, has_ohlcv, has_quotes, has_fundamentals, exchange, limit, offset)` — DB-side filters + pagination, `count(query, *, …)` — matching total, `upsert`, `update_flags`, `update_metadata` |
 | `OHLCVRepository` | `bulk_upsert_with_priority` (provider-priority conflict resolution), `find_by_instrument_timeframe_range`, `get_available_timeframes`, `get_date_range` |
 | `QuoteRepository` | `upsert`, `find_by_instrument`, `find_by_instruments` |
 | `FundamentalsRepository` | `merge_upsert` (dispatches to per-section upsert by `FundamentalsSection`) |
