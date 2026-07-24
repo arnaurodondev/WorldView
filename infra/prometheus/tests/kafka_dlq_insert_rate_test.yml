@@ -1,0 +1,75 @@
+# promtool unit tests for the DLQ insert-rate alert (2026-07-24 bug-pattern audit).
+# Run: promtool test rules infra/prometheus/tests/kafka_dlq_insert_rate_test.yml
+#
+# Validates the two behaviours that matter:
+#   * ZERO / LOW dead-letter rate → KafkaDeadLetterInsertRate does NOT fire
+#     (0 false-fire on a healthy or rarely-failing consumer).
+#   * SUSTAINED bleed above the 0.001 msgs/sec threshold, held for the full
+#     ``for: 15m`` → KafkaDeadLetterInsertRate DOES fire. This is the exact
+#     signature the 2026-06-18 investigation found invisible: a consumer that
+#     is alive and NOT backlogged but is steadily dead-lettering messages.
+rule_files:
+  - ../rules/kafka_dlq_insert_rate.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── 1. HEALTHY: zero dead-letters the whole time -> never fires ────────────
+  - name: zero dead-letter rate -> no alert
+    interval: 1m
+    input_series:
+      - series: 'kafka_messages_dead_lettered_total{service="nlp-pipeline",topic="content.article.stored.v1",reason="fatal"}'
+        values: "0+0x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: KafkaDeadLetterInsertRate
+        exp_alerts: []
+
+  # ── 2. RARE: an occasional low-rate trickle, below the alert threshold ─────
+  #    ~1 dead-letter every 20 minutes ≈ 0.00083/s over a 15m window — under
+  #    the 0.001/s threshold, so it must NOT fire (isolated failures are
+  #    expected background noise, not the structural bleed this alert targets).
+  - name: low occasional trickle below threshold -> no alert
+    interval: 1m
+    input_series:
+      - series: 'kafka_messages_dead_lettered_total{service="nlp-pipeline",topic="content.article.stored.v1",reason="timeout"}'
+        values: "0x20 1+0x20 1x20"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: KafkaDeadLetterInsertRate
+        exp_alerts: []
+
+  # ── 3. STRUCTURAL BLEED: steady dead-letters at ~2/min, sustained -> fires ──
+  #    2/min ≈ 0.033/s, far above the 0.001/s threshold, held for the full
+  #    for:15m window — the BP-729-adjacent slow-bleed signature (2026-06-18
+  #    investigation's ~122/day trickle, scaled up here so the test settles
+  #    quickly and unambiguously above threshold).
+  - name: sustained dead-letter bleed above threshold -> alert fires
+    interval: 1m
+    input_series:
+      - series: 'kafka_messages_dead_lettered_total{service="nlp-pipeline",topic="content.article.stored.v1",reason="fatal"}'
+        values: "0+2x60"
+    alert_rule_test:
+      # 15m to build the rate() window + for:15m -> fires by ~30m; assert well past that.
+      - eval_time: 32m
+        alertname: KafkaDeadLetterInsertRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              subsystem: messaging
+              service: nlp-pipeline
+              topic: content.article.stored.v1
+            exp_annotations:
+              summary: "nlp-pipeline is steadily dead-lettering messages on content.article.stored.v1"
+              description: >
+                nlp-pipeline has dead-lettered messages on content.article.stored.v1 at a
+                sustained rate above 0.001/s (~86/day) for at least 15 minutes. This is the
+                BP-729-adjacent "slow bleed" signature (2026-06-18 investigation): the
+                consumer is alive and draining its backlog normally, so liveness and backlog
+                alerts stay silent, yet a steady trickle of messages is being permanently
+                lost to the dead-letter topic. Check the ``reason`` label on
+                ``kafka_messages_dead_lettered_total`` (Prometheus) to see whether this is a
+                deterministic poison-message pattern (BP-575), a structural timeout-margin
+                issue, or a genuine bad-input class that should be triaged and possibly
+                replayed via ``python -m nlp_pipeline.workers.requeue_dlq``.
+              runbook_url: "https://github.com/worldview/runbooks/blob/main/KafkaDeadLetterInsertRate.md"

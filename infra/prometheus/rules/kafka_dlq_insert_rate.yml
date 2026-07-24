@@ -1,0 +1,60 @@
+# 2026-07-24 bug-pattern audit — DLQ insert-RATE alert (test-gap fix #1).
+#
+# Why this exists
+# ----------------
+# The 2026-06-18 article-consumer timeout/dead-letter investigation
+# (docs/audits/2026-06-18-article-consumer-timeout-deadletter-investigation.md)
+# found a STEADY dead-letter bleed of ~122 messages/day (evenly spread across
+# the day, no spike) caused by structural timeout fragility — invisible to
+# every alert that existed at the time, because those only covered:
+#   * consumer LIVENESS (rate(kafka_consumer_messages_consumed_total[5m])==0)
+#   * consumer-group BACKLOG (kafka_consumergroup_lag > threshold)
+# Neither signal moves when a consumer is alive, keeps draining its backlog,
+# and STILL quietly dead-letters a steady trickle of messages every day. The
+# investigation's own recommendation (#8): "Alert on DLQ growth rate, not
+# just liveness." This rule is that alert — the first one in the repo to key
+# directly off ``kafka_messages_dead_lettered_total`` (see
+# ``libs/messaging/src/messaging/kafka/consumer/base.py`` — incremented in
+# ``BaseKafkaConsumer.dead_letter`` on EVERY dead-letter across every service,
+# labelled ``service``/``topic``/``reason``).
+#
+# Threshold calibration
+# ----------------------
+# The 2026-06-18 incident's 122/day bleed, spread over its ~16h active window,
+# averages to ~0.0021 msgs/sec; spread flat across a full day it is ~0.0014
+# msgs/sec. We set the threshold at 0.001 msgs/sec (~86/day-equivalent) —
+# comfortably BELOW both estimates so a recurrence of that exact bleed would
+# have crossed it, while still requiring a genuinely sustained multi-message
+# trickle (not a single isolated dead-letter) to hold true for the full
+# ``for: 15m`` window before paging. This is a much finer-grained signal than
+# the existing backlog-scale alerts (e.g. NlpPipelineBacklogNotDraining's
+# 20000-message lag threshold) — intentionally so, since a slow bleed never
+# accumulates enough backlog to trip those.
+groups:
+  - name: kafka_dlq_insert_rate
+    rules:
+      - alert: KafkaDeadLetterInsertRate
+        expr: |
+          sum by (service, topic) (
+            rate(kafka_messages_dead_lettered_total[15m])
+          ) > 0.001
+        for: 15m
+        labels:
+          severity: warning
+          subsystem: messaging
+        annotations:
+          summary: "{{ $labels.service }} is steadily dead-lettering messages on {{ $labels.topic }}"
+          description: >
+            {{ $labels.service }} has dead-lettered messages on {{ $labels.topic }}
+            at a sustained rate above 0.001/s (~86/day) for at least 15 minutes.
+            This is the BP-729-adjacent "slow bleed" signature (2026-06-18
+            investigation): the consumer is alive and draining its backlog
+            normally, so liveness and backlog alerts stay silent, yet a steady
+            trickle of messages is being permanently lost to the dead-letter
+            topic. Check the ``reason`` label on
+            ``kafka_messages_dead_lettered_total`` (Prometheus) to see whether
+            this is a deterministic poison-message pattern (BP-575), a
+            structural timeout-margin issue, or a genuine bad-input class that
+            should be triaged and possibly replayed via
+            ``python -m nlp_pipeline.workers.requeue_dlq``.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/KafkaDeadLetterInsertRate.md"
