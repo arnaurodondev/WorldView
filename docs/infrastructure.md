@@ -832,10 +832,14 @@ Alertmanager config is at `infra/alertmanager/alertmanager.yml`. Configure SMTP 
 
 ### Synthetic Monitor
 
-A lightweight probe process (`infra/synthetic/synthetic_monitor.py`) runs three probes every 60 seconds:
-1. `probe_api_gateway_health` — `GET /health` must return 200
-2. `probe_market_data_quote` — `GET /api/v1/market-data/AAPL/quote` must not 5xx
-3. `probe_portfolio_holdings` — `GET /api/v1/portfolio/holdings` (skipped if no JWT)
+A lightweight probe process (`infra/synthetic/synthetic_monitor.py`) runs five probes every 60 seconds:
+1. `probe_api_gateway_health` — `GET /healthz` on the API gateway must return 200
+2. `probe_market_data_quote` — `GET /v1/quotes/{instrument_id}` must not 5xx
+3. `probe_portfolio_holdings` — `GET /v1/holdings/{portfolio_id}` (skipped if no `SYNTHETIC_JWT`/`SYNTHETIC_PORTFOLIO_ID` configured)
+4. `probe_deepinfra_key` — `GET /models` against DeepInfra with the shared `DEEPINFRA_API_KEY`; fails loudly (RuntimeError) on 401/403 so a revoked/rotated key that would otherwise silently kill the whole ML pipeline (chat, embedding, extraction, relevance, resolution, KG, NL screener) is caught within minutes. Skipped (treated as success) if `DEEPINFRA_API_KEY` is unset.
+5. `probe_eodhd_key` — `GET /api/internal-user` against EODHD with the shared `EODHD_API_KEY` (EODHD's cheapest authenticated endpoint — 1 API call per request, per `docs/references/eodhd-endpoints-reference.md`; content-ingestion/market-ingestion do not poll it in any live code path today, so this is a new, separate call). Fails loudly on 401/403 for the same reason as (4) — an EODHD key rotation would otherwise silently starve news/market-data ingestion. Skipped if `EODHD_API_KEY` is unset. Because this endpoint is billed (unlike DeepInfra's free `GET /models`), the probe throttles its own real HTTP calls to at most once per `EODHD_PROBE_MIN_INTERVAL_S` (default 900s/15min, independent of the 60s `PROBE_INTERVAL_S` loop cadence) and replays the last known outcome on ticks in between — ~96 calls/day (~0.1% of the shared 100k-calls/UTC-day cap) instead of ~1,440/day.
+
+Every probe reports into `synthetic_probe_success{probe_name=...}` (1=ok, 0=failed). The generic `SyntheticProbeDown` alert (`synthetic_probe_success == 0` for 5m) automatically covers every probe registered in `PROBES` — no per-probe alert-rule change is needed when a new probe is added. `probe_deepinfra_key` additionally has its own faster (2m) `DeepInfraKeyDead` alert in `infra/prometheus/rules/alert-rules.yml` since every ML feature is down while that key is dead; `probe_eodhd_key` currently relies on the generic 5m `SyntheticProbeDown` alert only (no dedicated fast-fire rule yet).
 
 Results are pushed to Pushgateway and scraped by Prometheus.
 
