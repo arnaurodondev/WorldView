@@ -343,6 +343,54 @@ RAG_DATE_ANCHOR_MUST_CONTAIN_ANY = ["64", "$64"]  # $64.727B — tolerant to rou
 RAG_PREDICTION_QUESTION = "What do prediction markets say about Donald Trump winning the 2028 US Presidential Election?"
 RAG_PREDICTION_MUST_CONTAIN_ANY = ["trump", "2028", "market", "odds", "probability", "%"]
 
+# ── rag-chat cost-attribution NULL-ratio guard (BP-740 generalization) ───────
+# BP-740: `llm_usage_log.chat_thread_id` was NULL on 100% of rows for a 7-day
+# prod window, found only by a manual audit query — no automated check existed
+# that would have caught it sooner, or that would catch the NEXT similarly-
+# shaped attribution bug (a different late-minted id, or a brand-new
+# cost-bearing column that ships NULL-by-default). This is a GENERIC guard:
+# each entry below is one column judged independently, so extending coverage
+# to a future column is a one-line addition here, not a new check function.
+#
+# `chat_thread_id`: after the BP-740 fix, every CHAT-TURN call site resolves
+# `effective_thread_id` before its first LLM call, so this should be non-NULL
+# on very nearly all rows. The one legitimate NULL source is gateway-relayed,
+# non-chat-turn usage (`RecordLlmUsageUseCase`, e.g. the S9 screener
+# nl-translate route persisted via `POST /internal/v1/llm-usage`) which has no
+# thread concept at all — expected to be a small minority of total rows. A
+# moderate partial-NULL band is tolerated as WARN; a near-total ratio
+# reproduces the exact BP-740 signature and FAILs.
+#
+# `user_id`: explicitly nullable BY DESIGN for system/background calls
+# (migration 0010's own docstring: "authenticated end user ... NULL for
+# system/background calls") — a high NULL ratio alone is NOT a defect, so
+# zero-tolerance is the wrong model here. `fail_pct=None` means this column
+# can only ever WARN (a coverage-regression signal worth a look), never FAIL.
+#
+# `cost_source`: provenance tag added by the same migration (`provider` /
+# `pricematrix` / `local`); NULL means "written before provenance tracking
+# existed" OR a capability that never tags it — also a coverage signal, not a
+# hard invariant, so WARN-only.
+#
+# `tokens_in` / `tokens_out` / `estimated_cost_usd`: NOT NULL with a
+# server_default in the current schema, so their NULL ratio is structurally
+# always 0% today — included anyway so this list is checked against ANY future
+# cost-bearing column with the same late-resolved-value failure mode without
+# needing a new code change, only a future migration making one of them
+# nullable (or a new column appended to this same list).
+RAG_COST_ATTR_WINDOW_HOURS = 24.0  # lookback window for the NULL-ratio guard
+RAG_COST_ATTR_MIN_ROWS = 20  # fewer rows than this in the window → WARN "too little signal", not a verdict
+# (column, warn_pct, fail_pct). fail_pct=None → WARN-only column (legitimate
+# high/all-NULL population by design; never escalates to FAIL).
+RAG_COST_ATTR_NULL_COLUMNS: list[tuple[str, float, float | None]] = [
+    ("chat_thread_id", 30.0, 95.0),
+    ("user_id", 80.0, None),
+    ("cost_source", 50.0, None),
+    ("tokens_in", 30.0, 95.0),
+    ("tokens_out", 30.0, 95.0),
+    ("estimated_cost_usd", 30.0, 95.0),
+]
+
 # ── v4: S9 gateway composition-route contracts (driven in-pod via localhost:8000) ─
 # The gateway-S2S fix (fix/gateway-s2s-auth) made the gateway accept its OWN
 # internal JWT (X-Internal-JWT) as a principal, restoring ~8 backend-composing
