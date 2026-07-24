@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 from market_data.infrastructure.db.session import (
+    _COMMAND_TIMEOUT_SECONDS,
     _POOL_TIMEOUT_SECONDS,
     _STATEMENT_TIMEOUT_MS,
     _connect_args,
@@ -44,6 +45,24 @@ def test_connect_args_sets_statement_timeout_and_app_name() -> None:
     assert server_settings["statement_timeout"] == _STATEMENT_TIMEOUT_MS
     assert server_settings["statement_timeout"] == "8000"
     assert server_settings["application_name"] == "market-data"
+
+
+def test_connect_args_sets_client_side_command_timeout() -> None:
+    """BP-732 parity fix (2026-07-24) — market-data was the one pooled service
+    ``scripts/check_db_session_parity.py`` flagged as missing a client-side
+    ``command_timeout``. Without it, the server-side ``statement_timeout``
+    above is the ONLY backstop against a hung connection — and that GUC is a
+    non-native PgBouncer startup parameter that may be silently dropped under
+    transaction pooling (see ``_connect_args``'s docstring). This asserts the
+    asyncpg-level backstop that has no such caveat is present, matching every
+    other pooled service's session.py in this repo.
+    """
+    args = _connect_args()
+    assert args["command_timeout"] == _COMMAND_TIMEOUT_SECONDS
+    # Must sit above the existing fail-fast budget (8s statement + 10s pool
+    # checkout) so it never fires before those more specific timeouts.
+    assert _COMMAND_TIMEOUT_SECONDS > _POOL_TIMEOUT_SECONDS
+    assert _COMMAND_TIMEOUT_SECONDS > int(_STATEMENT_TIMEOUT_MS) / 1000
 
 
 def test_connect_args_disables_prepared_statements_for_pgbouncer() -> None:

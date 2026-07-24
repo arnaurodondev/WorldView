@@ -168,6 +168,23 @@ DLQ_DB_BACKLOG_WARN = 50  # unresolved rows → WARN
 DLQ_DB_BACKLOG_FAIL = 500  # unresolved rows → FAIL (mass dead-lettering)
 DLQ_DB_RATE_FAIL = 20  # UNRESOLVED rows that arrived in the last 1h → FAIL (skew storm)
 
+# ── `idle in transaction` connections (BP-731, 2026-07-23) ───────────────────
+# BP-731 found ~27 nlp-pipeline `idle in transaction` Postgres backends holding
+# snapshots/locks for up to 5m16s — the proximate cause of a recurring
+# postgres-0 OOM (14 restarts/27h). Root cause: per-item external I/O
+# (embedding calls) made sequentially inside an already-open, long-lived DB
+# transaction. Before this check there was ZERO production visibility into
+# this failure class — every past incident was found by a human running an
+# ad-hoc `pg_stat_activity` query DURING an active outage, not by any
+# automated monitor. Thresholds: WARN well below the incident-observed count
+# (~27) so this pages BEFORE a repeat reaches OOM territory; FAIL at/above the
+# incident count OR if any single connection's transaction age exceeds the
+# longest incident age observed (~2 min chosen as a conservative floor under
+# the observed 5m16s max).
+IDLE_IN_TXN_WARN = 10  # count of `idle in transaction` backends → WARN
+IDLE_IN_TXN_FAIL_COUNT = 25  # count → FAIL (BP-731 incident was ~27)
+IDLE_IN_TXN_FAIL_AGE_S = 120  # any single backend's tx age (seconds) → FAIL
+
 # ── Schema Registry (issue class 1 root misconfig) ───────────────────────────
 SCHEMA_REGISTRY_URL = "http://schema-registry.infra.svc:8081"
 # The registry MUST enforce FULL/FULL_TRANSITIVE so a forward-INCOMPATIBLE schema
@@ -382,6 +399,7 @@ def layer0() -> None:
     # schema-registry compatibility level — see the module constants for rationale.
     check_migration_drift()
     check_db_dead_letter()
+    check_idle_in_transaction()
     check_schema_registry()
 
 
@@ -524,6 +542,58 @@ def check_db_dead_letter() -> None:
         if total_unresolved
         else "all DB DLQ tables drained",
     )
+
+
+def check_idle_in_transaction() -> None:
+    """Alert on `idle in transaction` Postgres backends (BP-731, 2026-07-23).
+
+    This is a single-node cluster — one Postgres instance (`postgres-0`) hosts
+    every service database, and `pg_stat_activity` is a cluster-wide system
+    view: connecting to any one database (here ``postgres``, always present)
+    surfaces backends across ALL databases via its `datname` column, so a
+    single query is enough — no per-db loop needed.
+
+    Reports (a) the total count of `idle in transaction` connections and (b)
+    the MAX transaction age among them, in seconds. WARN/FAIL thresholds are
+    module constants calibrated against the BP-731 incident (~27 connections,
+    ages up to 5m16s) — see their definitions for rationale.
+    """
+    totals = _psql(
+        "postgres",
+        "SELECT count(*), "
+        "COALESCE(MAX(EXTRACT(EPOCH FROM (now() - xact_start))), 0)::int "
+        "FROM pg_stat_activity WHERE state = 'idle in transaction'",
+    )
+    parts = totals.split("|") if "|" in totals else []
+    if len(parts) != 2 or not parts[0].isdigit():
+        R.add("0", "idle-in-transaction connections", WARN, f"could not read pg_stat_activity ({totals[:60]!r})")
+        return
+    count, max_age_s = int(parts[0]), int(parts[1])
+
+    status = (
+        FAIL
+        if (count >= IDLE_IN_TXN_FAIL_COUNT or max_age_s >= IDLE_IN_TXN_FAIL_AGE_S)
+        else WARN
+        if count >= IDLE_IN_TXN_WARN
+        else PASS
+    )
+
+    detail = f"{count} idle-in-transaction, max age {max_age_s}s"
+    if status != PASS and count:
+        # Per-database breakdown for the worst offenders — squeezed into a
+        # single-row string_agg so `_psql`'s "return first non-error line"
+        # helper still works without a bespoke multi-row parser.
+        breakdown = _psql(
+            "postgres",
+            "SELECT string_agg(datname || '=' || cnt, ', ') FROM ("
+            "  SELECT datname, count(*) cnt FROM pg_stat_activity"
+            "  WHERE state = 'idle in transaction' GROUP BY datname ORDER BY cnt DESC"
+            ") s",
+        )
+        if breakdown:
+            detail += f" ({breakdown})"
+
+    R.add("0", "idle-in-transaction connections", status, detail)
 
 
 def check_schema_registry() -> None:
@@ -691,12 +761,12 @@ def layer23(res: dict) -> None:
         if st != want_status:
             # quotes during closed market is expected-empty → WARN not FAIL
             sev = WARN if market_hours_ok else FAIL
-            R.add(layer, name, sev, f"HTTP {st} {r.get('error','')} {r.get('body','')[:120]}")
+            R.add(layer, name, sev, f"HTTP {st} {r.get('error', '')} {r.get('body', '')[:120]}")
             return
         if need_data and r.get("len", 0) < 5:
             R.add(layer, name, WARN, "200 but empty body")
             return
-        R.add(layer, name, PASS, f"HTTP {st}, {r.get('len','?')}B")
+        R.add(layer, name, PASS, f"HTTP {st}, {r.get('len', '?')}B")
 
     check("2", "KG graph/stats", "kg_stats")
     check("2", "KG entity lookup (AAPL)", "kg_lookup")
@@ -724,14 +794,14 @@ def layer23(res: dict) -> None:
             "HTTP 429 (route up, rate-limited — already refreshed this hour)",
         )
     elif dr:
-        R.add("3", "entity description-gen trigger", FAIL, f"HTTP {dr.get('status')} {dr.get('body','')[:120]}")
+        R.add("3", "entity description-gen trigger", FAIL, f"HTTP {dr.get('status')} {dr.get('body', '')[:120]}")
 
     # chat grounding: expect a non-empty answer body
     ch = res.get("chat")
     if ch and ch.get("status") == 200 and ch.get("len", 0) > 20:
         R.add("3", "rag-chat grounded answer", PASS, f"{ch['len']}B answer")
     elif ch:
-        R.add("3", "rag-chat grounded answer", FAIL, f"HTTP {ch.get('status')} {ch.get('body','')[:120]}")
+        R.add("3", "rag-chat grounded answer", FAIL, f"HTTP {ch.get('status')} {ch.get('body', '')[:120]}")
 
 
 # ── LAYER 4 — async workers & data pipelines ─────────────────────────────────
@@ -758,7 +828,7 @@ def layer4(res: dict) -> None:
     elif e and e.get("status") == 400:
         R.add("4", "embedding path (synthetic CJK)", FAIL, "400 — token-budget truncation regressed (CJK under-count)")
     elif e:
-        R.add("4", "embedding path (synthetic CJK)", WARN, f"HTTP {e.get('status')} {e.get('error','')}")
+        R.add("4", "embedding path (synthetic CJK)", WARN, f"HTTP {e.get('status')} {e.get('error', '')}")
 
     # 2. embedding-retry-worker: no rows abandoned at the retry ceiling.
     ab = _psql("nlp_db", "SELECT count(*) FROM embedding_pending WHERE retry_count >= 5")
