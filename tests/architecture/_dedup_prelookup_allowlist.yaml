@@ -1,0 +1,33 @@
+# Dedup pre-lookup allowlist (DEDUP-PRELOOKUP-001)
+# ─────────────────────────────────────────────────────────────────────────────
+# See tests/architecture/test_dedup_prelookup_enforcement.py for the rule this
+# allowlist backs. Style mirrors _consumer_dedup_allowlist.yaml.
+#
+# Schema: each entry must have:
+#   file_path:     str   — path to the offending file, relative to repo root
+#   target_label:  str   — the DedupProneTarget.label this entry exempts
+#   justification: str   — why this create/upsert call site does not need the
+#                           identity-only pre-lookup helper
+#   granted_at:    str   — ISO-8601 date the exemption was approved
+#
+# A file is exempt from a given target ONLY if BOTH file_path and target_label
+# match an entry here — an exemption for "instruments" does not silently cover
+# a future "canonical_entities" violation in the same file.
+
+allowlist:
+  - file_path: services/portfolio/src/portfolio/infrastructure/messaging/consumers/instrument_consumer.py
+    target_label: "instruments (symbol/exchange resolve-or-create)"
+    justification: >
+      InstrumentEventConsumer.process_message upserts InstrumentRef keyed on
+      instrument_id = entity_id (the M-017 stable cross-service id) or a fresh
+      UUIDv7 — NOT on a (symbol, exchange) composite identity match-then-insert.
+      Portfolio's instruments table is a read-through cache of the single
+      upstream `market.instrument.discovered.v1` event stream (already
+      deduplicated at the source by market-data's own
+      find_symbol_match_ignoring_exchange guard), and this consumer additionally
+      gates on `uow.idempotency.create_if_not_exists(event_uid)` before the
+      upsert. It is not an independent resolve-or-create identity-minting path
+      of the BP-459/BP-743 shape (two pipelines racing to mint the same logical
+      row from a placeholder vs. a real key) — it is a single-writer ID-keyed
+      cache sync. Reference: services/portfolio/src/portfolio/infrastructure/messaging/consumers/instrument_consumer.py:107-122.
+    granted_at: "2026-07-24"

@@ -16,6 +16,10 @@ Layers
     nlp_pipeline     S6: chunks/embeddings/NER/routing/relevance + read APIs
     content          S4+S5: news freshness/volume, dedup, title coverage, DLQ
     pipeline         outcome-based 24h liveness (docs/relations/embeddings/preds)
+    duplicate_groups cross-service GROUP BY ... HAVING count(*) > 1 scans
+                     (instruments, canonical_entities, prediction_markets) —
+                     guards BP-459/BP-743/BP-700's placeholder-vs-real /
+                     independent-minting-pipeline duplicate shape
     rag_chat         S8: grounded golden-answer assertions
     portfolio        S1+S2: schema presence, readiness, ingestion throughput
     alert            S10+S9: alert schema/rule-type, gateway route contract
@@ -41,6 +45,7 @@ from . import prober
 from .checks import alert as c_alert
 from .checks import coarse as c_coarse
 from .checks import content as c_content
+from .checks import duplicate_groups as c_dupgroups
 from .checks import gateway as c_gateway
 from .checks import knowledge_graph as c_kg
 from .checks import market_data as c_md
@@ -57,6 +62,7 @@ LAYERS: list[tuple[str, object, bool]] = [
     ("nlp_pipeline", c_nlp, True),
     ("content", c_content, False),
     ("pipeline", c_pipeline, False),
+    ("duplicate_groups", c_dupgroups, False),
     ("rag_chat", c_rag, True),
     ("portfolio", c_portfolio, False),
     ("alert", c_alert, True),
