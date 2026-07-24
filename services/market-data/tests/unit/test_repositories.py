@@ -702,16 +702,23 @@ class TestPredictionMarketListQueryEscape:
 
 
 class TestPredictionMarketListVolumeWindow:
-    """PLAN-0056 QA — the latest-volume LATERAL time-window bound.
+    """Migration 046 — ``list_markets`` reads a denormalized column, no LATERAL.
 
     ``prediction_market_snapshots`` is a TimescaleDB hypertable (~1.8M rows,
-    weekly chunks). The unbounded ``ORDER BY snapshot_at DESC LIMIT 1`` LATERAL
-    cannot stop early for markets whose newest snapshot is in an old chunk, so
-    it cold-scans every chunk per market x 527 markets (~1.8 s) and 500s the
-    endpoint under load. ``volume_window_days`` bounds the LATERAL so
-    TimescaleDB prunes to recent chunks (verified live: 5 chunks excluded,
-    ~60-370 ms). These tests pin that the SQL is emitted (bound param, not
-    interpolated) when a window is set and stays unbounded otherwise.
+    weekly chunks). ``list_markets`` used to ``LEFT JOIN LATERAL`` it per row
+    to fetch each market's newest ``volume_24h`` — even after PLAN-0056 QA
+    time-bounded that LATERAL (so TimescaleDB could prune chunks), the
+    per-request per-market re-derivation still occasionally tipped over the
+    8s ``statement_timeout`` under concurrent load (intermittent 500s).
+    Migration 046 denormalizes ``latest_volume_24h`` (and reuses the existing
+    ``last_snapshot_at``) directly onto ``prediction_markets``, kept in sync
+    at snapshot-write time (see ``TestPgPredictionMarketSnapshotDenormalization``
+    below) — the list query now reads plain columns with zero per-row join.
+    These tests pin that: (1) no LATERAL/JOIN against
+    ``prediction_market_snapshots`` is ever emitted, and (2)
+    ``volume_window_days`` still degrades stale markets' volume to NULL, now
+    via a ``CASE`` against the denormalized ``last_snapshot_at`` instead of a
+    LATERAL predicate — preserving the "recently-traded first" contract.
     """
 
     async def _run(self, *, volume_window_days):
@@ -736,30 +743,42 @@ class TestPredictionMarketListVolumeWindow:
         params = {k: v.value for k, v in text_clause._bindparams.items()}
         return text_clause.text, params
 
-    async def test_window_adds_bounded_snapshot_predicate(self):
-        """A positive window emits a bound-param time predicate inside the LATERAL."""
+    async def test_no_lateral_or_join_against_snapshots_table(self):
+        """Regression guard: the query must never join prediction_market_snapshots.
+
+        This is the whole point of migration 046 — the per-row LATERAL was
+        the root cause of the intermittent statement_timeout 500s. Any
+        re-introduction of a JOIN against the snapshots hypertable in
+        list_markets must fail this test.
+        """
+        sql, _params = await self._run(volume_window_days=30)
+        sql_upper = sql.upper()
+        assert "LATERAL" not in sql_upper
+        assert "PREDICTION_MARKET_SNAPSHOTS" not in sql_upper
+        # The base query must read the denormalized column directly.
+        assert "m.latest_volume_24h" in sql
+
+    async def test_window_bounds_denormalized_volume_via_case(self):
+        """A positive window degrades stale markets' volume to NULL via CASE."""
         sql, params = await self._run(volume_window_days=30)
 
-        # The LATERAL is time-bounded so TimescaleDB can prune chunks.
-        assert "s.snapshot_at >= now() - make_interval(days => :volume_window_days)" in sql
+        # No LATERAL predicate — the bound now guards a CASE expression
+        # against the denormalized last_snapshot_at column.
+        assert "m.last_snapshot_at >= now() - make_interval(days => :volume_window_days)" in sql
+        assert "CASE WHEN" in sql.upper()
         # The window is a *bound parameter* — never interpolated into the SQL
-        # string (no injection surface, and the planner still folds it for
-        # chunk exclusion).
+        # string (no injection surface).
         assert params["volume_window_days"] == 30
         assert "30" not in sql
-        # Predicate lives inside the LATERAL (before its ORDER BY), not in the
-        # outer WHERE — so it bounds the per-market snapshot lookup, not the
-        # market set.
-        assert sql.index("make_interval") < sql.index("ORDER BY s.snapshot_at DESC")
 
-    async def test_no_window_keeps_unbounded_lateral(self):
-        """``None`` window preserves the legacy unbounded LATERAL (no time bound)."""
+    async def test_no_window_reads_unbounded_denormalized_column(self):
+        """``None`` window reads ``m.latest_volume_24h`` directly (no CASE)."""
         sql, params = await self._run(volume_window_days=None)
 
         assert "make_interval" not in sql
         assert "volume_window_days" not in params
-        # The LATERAL still pulls the newest snapshot per market.
-        assert "ORDER BY s.snapshot_at DESC" in sql
+        assert "CASE WHEN" not in sql.upper()
+        assert "m.latest_volume_24h" in sql
 
     async def test_non_positive_window_is_ignored(self):
         """``0`` / negative disables the bound (defensive — never a 0-day window).
@@ -807,6 +826,142 @@ class TestPredictionMarketListVolumeWindow:
         assert "make_interval" not in sql
         assert "window_days" not in params
         assert "DISTINCT ON (market_id)" in sql
+
+
+class TestPgPredictionMarketSnapshotDenormalization:
+    """Migration 046 — snapshot writes keep ``prediction_markets`` in sync.
+
+    ``PgPredictionMarketSnapshotRepository.insert_if_not_exists`` and
+    ``bulk_insert_if_not_exists`` must, in the SAME transaction as the
+    snapshot write, push ``last_snapshot_at`` / ``latest_volume_24h`` onto
+    ``prediction_markets`` so ``list_markets`` never needs to re-derive
+    "latest volume" per request. These are pure mock-session unit tests that
+    pin the SQL shape (including the monotonicity guard); see
+    ``TestPgPredictionMarketRepositoryQuery`` (integration) for the real-DB
+    end-to-end behaviour.
+    """
+
+    def _snapshot(self, **over):
+        from market_data.domain.entities import PredictionMarketSnapshot
+
+        base = {
+            "market_id": "mkt-1",
+            "snapshot_at": datetime(2026, 4, 9, 12, 0, 0, tzinfo=UTC),
+            "outcomes_prices": {"Yes": 0.6, "No": 0.4},
+            "source_event_id": "evt-1",
+            "volume_24h": Decimal("1500.50"),
+        }
+        base.update(over)
+        return PredictionMarketSnapshot(**base)
+
+    async def test_single_insert_syncs_denormalized_columns(self):
+        """``insert_if_not_exists`` issues a second, guarded UPDATE on prediction_markets."""
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketSnapshotRepository,
+        )
+
+        session = AsyncMock()
+        insert_result = MagicMock()
+        insert_result.scalar_one_or_none.return_value = "some-id"
+        sync_result = MagicMock()
+        session.execute = AsyncMock(side_effect=[insert_result, sync_result])
+
+        repo = PgPredictionMarketSnapshotRepository(session)
+        snapshot = self._snapshot()
+        inserted = await repo.insert_if_not_exists(snapshot)
+
+        assert inserted is True
+        assert session.execute.call_count == 2
+        sync_stmt = session.execute.call_args_list[1][0][0]
+        sql = sync_stmt.text
+        params = {k: v.value for k, v in sync_stmt._bindparams.items()}
+
+        assert "UPDATE prediction_markets" in sql
+        assert "SET last_snapshot_at = :snapshot_at, latest_volume_24h = :volume_24h" in sql
+        assert params["market_id"] == "mkt-1"
+        assert params["snapshot_at"] == snapshot.snapshot_at
+        assert params["volume_24h"] == Decimal("1500.50")
+        # Monotonicity guard — must never regress a newer last_snapshot_at.
+        assert "last_snapshot_at IS NULL OR last_snapshot_at <= :snapshot_at" in sql
+
+    async def test_single_insert_syncs_even_on_duplicate(self):
+        """A duplicate delivery (ON CONFLICT DO NOTHING fired) still runs the sync.
+
+        Correctness requires this: a re-delivered snapshot that IS new data
+        relative to prediction_markets (e.g. the sync failed on a previous,
+        crashed attempt) must not be silently skipped just because the
+        snapshot row itself already existed.
+        """
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketSnapshotRepository,
+        )
+
+        session = AsyncMock()
+        insert_result = MagicMock()
+        insert_result.scalar_one_or_none.return_value = None  # conflict — not newly inserted
+        sync_result = MagicMock()
+        session.execute = AsyncMock(side_effect=[insert_result, sync_result])
+
+        repo = PgPredictionMarketSnapshotRepository(session)
+        inserted = await repo.insert_if_not_exists(self._snapshot())
+
+        assert inserted is False
+        assert session.execute.call_count == 2  # sync still ran
+
+    async def test_bulk_insert_syncs_once_per_distinct_market_using_newest(self):
+        """A batch with 2 markets, one having 2 snapshots, syncs 2x — with the newer one."""
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketSnapshotRepository,
+        )
+
+        session = AsyncMock()
+        insert_result = MagicMock()
+        insert_result.fetchall.return_value = [("id-1",), ("id-2",), ("id-3",)]
+        sync_results = [MagicMock(), MagicMock()]
+        session.execute = AsyncMock(side_effect=[insert_result, *sync_results])
+
+        repo = PgPredictionMarketSnapshotRepository(session)
+        older = self._snapshot(
+            market_id="mkt-1",
+            snapshot_at=datetime(2026, 4, 9, 11, 0, 0, tzinfo=UTC),
+            volume_24h=Decimal("100"),
+        )
+        newer = self._snapshot(
+            market_id="mkt-1",
+            snapshot_at=datetime(2026, 4, 9, 12, 0, 0, tzinfo=UTC),
+            volume_24h=Decimal("999"),
+        )
+        other_market = self._snapshot(
+            market_id="mkt-2",
+            snapshot_at=datetime(2026, 4, 9, 10, 0, 0, tzinfo=UTC),
+            volume_24h=Decimal("42"),
+        )
+
+        inserted = await repo.bulk_insert_if_not_exists([older, newer, other_market])
+
+        assert inserted == 3
+        # 1 bulk insert + 2 sync UPDATEs (one per distinct market_id).
+        assert session.execute.call_count == 3
+        sync_calls = session.execute.call_args_list[1:]
+        synced_params = [{k: v.value for k, v in call[0][0]._bindparams.items()} for call in sync_calls]
+        by_market = {p["market_id"]: p for p in synced_params}
+        assert set(by_market) == {"mkt-1", "mkt-2"}
+        # mkt-1 must sync with the NEWER of its two snapshots, not the older one.
+        assert by_market["mkt-1"]["volume_24h"] == Decimal("999")
+        assert by_market["mkt-1"]["snapshot_at"] == newer.snapshot_at
+        assert by_market["mkt-2"]["volume_24h"] == Decimal("42")
+
+    async def test_bulk_insert_empty_list_is_noop(self):
+        """An empty batch never touches the session (no insert, no sync)."""
+        from market_data.infrastructure.db.repositories.prediction_market_repo import (
+            PgPredictionMarketSnapshotRepository,
+        )
+
+        session = AsyncMock()
+        repo = PgPredictionMarketSnapshotRepository(session)
+
+        assert await repo.bulk_insert_if_not_exists([]) == 0
+        session.execute.assert_not_called()
 
 
 class TestPredictionMarketQueryTokenizer:

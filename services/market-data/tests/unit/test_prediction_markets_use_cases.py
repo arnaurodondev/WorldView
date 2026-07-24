@@ -274,10 +274,12 @@ async def test_list_markets_omits_category_when_not_provided() -> None:
 async def test_list_markets_forwards_volume_window_to_repo() -> None:
     """A configured ``volume_window_days`` is passed to ``list_markets``.
 
-    PLAN-0056 QA: this is the perf/500 fix — the repo must receive the window so
-    its latest-volume LATERAL is time-bounded and TimescaleDB can prune chunks.
-    If a refactor drops the plumbing, the endpoint silently reverts to the
-    unbounded full-chunk-scan that 500s under load, and no other test catches it.
+    PLAN-0056 QA / migration 046: the repo must receive the window so it can
+    bound the denormalized ``latest_volume_24h`` column to markets with
+    recent activity (a ``CASE`` against ``last_snapshot_at`` — no LATERAL
+    involved since migration 046 removed it). If a refactor drops the
+    plumbing, stale markets stop sorting to the bottom, and no other test
+    catches it.
     """
     uow = _make_uow(markets=[], total=0)
     uc = ListPredictionMarketsUseCase(uow, volume_window_days=30)
@@ -290,12 +292,15 @@ async def test_list_markets_forwards_volume_window_to_repo() -> None:
 
 @pytest.mark.asyncio
 async def test_list_markets_forwards_window_to_price_batch() -> None:
-    """The batch price fetch is bounded to the SAME window as the volume LATERAL.
+    """The batch price fetch is bounded to the SAME window as the volume bound.
 
-    PLAN-0056 QA: ``get_latest_prices_batch`` is the residual cold
-    hypertable-scan after the LATERAL fix. It must receive ``window_days`` so it
-    prunes chunks AND so a row's prices come from the same recent-window
-    snapshot as its ``volume_24h`` (consistent recency).
+    PLAN-0056 QA: ``get_latest_prices_batch`` is a separate DISTINCT ON scan
+    over the ``prediction_market_prices`` hypertable — it was NOT replaced by
+    migration 046's denormalization (only the market-row ``volume_24h`` was),
+    so it still needs its own time bound to prune chunks. It must receive
+    ``window_days`` so it prunes chunks AND so a row's prices come from the
+    same recent-window snapshot as its (now-denormalized) ``volume_24h``
+    (consistent recency).
     """
     market = _make_market()
     uow = _make_uow(

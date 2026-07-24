@@ -725,16 +725,18 @@ class PredictionMarketRepository(ABC):
             backend never validates the enum so new Polymarket tags roll out
             without a code change.  NULL-category rows never match.
 
-        ``latest_volume_24h``: ``volume_24h`` from the most recent snapshot
-        (``LEFT JOIN LATERAL ... ORDER BY snapshot_at DESC LIMIT 1``); ``None``
-        when the market has no snapshots or the latest snapshot has no volume.
-        Forward-compatible: callers tolerating ``None`` continue to work.
+        ``latest_volume_24h``: ``volume_24h`` denormalized onto
+        ``prediction_markets.latest_volume_24h`` (migration 046) and kept in
+        sync at snapshot-write time — no per-row join against
+        ``prediction_market_snapshots`` (that LATERAL was the root cause of
+        intermittent ``statement_timeout`` 500s under load). ``None`` when the
+        market has no snapshots yet. Forward-compatible: callers tolerating
+        ``None`` continue to work.
 
-        ``volume_window_days`` (PLAN-0056 QA): when a positive int, bound the
-        latest-snapshot LATERAL to ``snapshot_at >= now() - N days`` so the
-        TimescaleDB hypertable prunes to recent chunks instead of descending
-        every chunk per market (which cold-scans ~1.8M rows and 500s the
-        endpoint under load). Markets with no in-window snapshot get
+        ``volume_window_days`` (PLAN-0056 QA, adapted for migration 046): when
+        a positive int, bound the denormalized volume to markets whose
+        ``last_snapshot_at >= now() - N days`` (a ``CASE`` expression, not a
+        LATERAL predicate). Markets with no in-window activity get
         ``latest_volume_24h = None`` and sort to the bottom (stale volume must
         not float a dead market to the top). ``None`` / ``<= 0`` = unbounded.
         """

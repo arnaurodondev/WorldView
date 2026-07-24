@@ -62,8 +62,17 @@ class PredictionMarketModel(TimestampMixin, Base):
     resolution_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'open'"))
     resolved_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     # D-01: tracks the timestamp of the most recent snapshot for this market.
-    # Updated by the consumer on each upsert via trigger or explicit write.
+    # Updated by PgPredictionMarketSnapshotRepository on each snapshot write
+    # (insert_if_not_exists / bulk_insert_if_not_exists), guarded by
+    # monotonicity so an out-of-order/late snapshot never regresses it.
     last_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # migration 046 — denormalized latest-snapshot volume_24h, kept in sync by
+    # the same snapshot-repo write path as last_snapshot_at above. Lets
+    # list_markets() sort/read "recent volume" from a plain column instead of
+    # a per-market LEFT JOIN LATERAL against the prediction_market_snapshots
+    # hypertable (that per-row join was the root cause of intermittent
+    # statement_timeout 500s under load — see migration 046 docstring).
+    latest_volume_24h: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
     # WHY nullable: existing rows have no slug; backfilled on next consumer poll (migration 009).
     market_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
     # PLAN-0049 T-C-3-03 / migration 010 — high-level category tag

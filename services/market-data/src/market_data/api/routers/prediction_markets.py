@@ -12,12 +12,15 @@ Endpoints:
 
 R25: no infrastructure imports — all reads go through use cases.
 R16: API layer uses only use cases.
-Note: volume_24h is stored on snapshots, not on the market record. The list
-endpoint pulls the latest snapshot volume via ``LEFT JOIN LATERAL`` in the
-repo (PLAN-0048 D-1) and forwards it through the use case. The detail
-endpoint still returns ``None`` (single-market view; can be wired similarly
-later when needed).  The history endpoint exposes per-snapshot volume_24h
-correctly.
+Note: volume_24h is authored on snapshots (per-poll), but the list endpoint
+reads it from ``prediction_markets.latest_volume_24h`` — a column
+denormalized at snapshot-write time (migration 046) — and forwards it
+through the use case. This replaced an earlier ``LEFT JOIN LATERAL``
+(PLAN-0048 D-1) that re-derived the latest volume per row on every request;
+under load that per-row join occasionally tipped over the DB
+``statement_timeout`` and 500'd the endpoint. The detail endpoint still
+returns ``None`` (single-market view; can be wired similarly later when
+needed). The history endpoint exposes per-snapshot volume_24h correctly.
 """
 
 from __future__ import annotations

@@ -366,64 +366,62 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
     ) -> tuple[list[tuple[PredictionMarket, Decimal | None]], int]:
         """Return paginated ``(market, latest_volume_24h)`` pairs and total count.
 
-        Adds a ``LEFT JOIN LATERAL`` to ``prediction_market_snapshots`` that
-        pulls the single newest snapshot per market (ORDER BY snapshot_at
-        DESC LIMIT 1).  PLAN-0048 D-1: the list endpoint must surface real
-        24-hour volume — previously the field was hardcoded to ``None``
-        because it lives on the hypertable, not the master ``prediction_markets``
-        row.  LATERAL keeps the join evaluated per-row (uses the partial
-        per-market index on snapshot_at) instead of a window function over
-        the whole snapshot table.
+        Reads ``m.latest_volume_24h`` — a column denormalized directly onto
+        ``prediction_markets`` (migration 046) — instead of joining
+        ``prediction_market_snapshots`` per row.
 
-        PLAN-0056 QA — perf/500 fix: when ``volume_window_days`` is a positive
-        int, the LATERAL is bounded to ``snapshot_at >= now() - N days``. On the
-        TimescaleDB hypertable (weekly chunks, ~1.8M rows) the unbounded
-        ``ORDER BY snapshot_at DESC LIMIT 1`` cannot stop early for a market
-        whose newest snapshot lives in an old chunk (or that stopped being
-        polled): ChunkAppend descends EVERY chunk per market x 527 markets,
-        cold-reading off disk (~1.8 s) — under load these pile up and exhaust
-        the DB pool, so the endpoint 500s and the frontend rows stay skeletons.
-        A time bound lets TimescaleDB prune to the in-window chunks (chunk
-        exclusion), keeping the query bounded (~60-370 ms) regardless of history
-        depth.  Uses the ``ix_pms_market_time (market_id, snapshot_at DESC)``
-        index (Wave A1).  Markets with no in-window snapshot get NULL volume and
-        sort to the bottom — the desired "recently-traded first" behaviour.
+        HISTORY (why there's no LATERAL here anymore): PLAN-0048 D-1 first
+        surfaced real 24h volume via a ``LEFT JOIN LATERAL`` that pulled each
+        market's newest snapshot (``ORDER BY snapshot_at DESC LIMIT 1``).
+        PLAN-0056 QA then bounded that LATERAL to a recent time window
+        because the unbounded version cold-scanned every TimescaleDB chunk
+        per market (~1.8 s) and 500'd the endpoint under load. The bounded
+        version helped a lot (~60-370 ms) but STILL re-derived "latest
+        volume" per market on every single list request, and a handful of
+        those per-request lookups continued to occasionally tip over the 8s
+        ``statement_timeout`` under concurrent load (~20 occurrences / 3h,
+        immediate retry usually succeeded — a query-scaling problem). The
+        structural fix: keep ``latest_volume_24h`` denormalized and in sync
+        at WRITE time (``PgPredictionMarketSnapshotRepository`` — see
+        ``insert_if_not_exists`` / ``bulk_insert_if_not_exists`` below), so
+        the READ path never re-joins the hypertable at all.
+
+        ``volume_window_days`` is preserved for behavioural parity with the
+        pre-denormalization contract ("recently-traded first"; a market with
+        no snapshot in the last N days sorts last with NULL volume) — when
+        set, it's applied as a ``CASE`` against ``m.last_snapshot_at``
+        (also denormalized, migration 006) rather than a LATERAL predicate.
+        Markets with no in-window activity still get NULL volume and sort to
+        the bottom; markets with no snapshot history at all (both columns
+        NULL) behave identically to before.
         """
         # F-101: build WHERE clause from static string segments only; all user
         # values are bound via named parameters — no f-string interpolation of
         # user data.
         params: dict[str, Any] = {"limit": limit, "offset": offset}
 
-        # PLAN-0056 QA: optional recent-window bound on the latest-snapshot
-        # LATERAL (see docstring). The interval is a *bound parameter* cast to an
-        # INTERVAL of N days — no user/int data is interpolated into the SQL
-        # string, and `now() - :window` is a stable expression the planner uses
-        # for TimescaleDB chunk exclusion.
-        lateral_time_predicate = ""
+        # PLAN-0056 QA (adapted post-denormalization): optional recent-window
+        # bound on the denormalized volume column, expressed against
+        # last_snapshot_at (also denormalized) instead of a LATERAL predicate.
+        # The interval is a *bound parameter* — never interpolated into the
+        # SQL string.
+        volume_expr = "m.latest_volume_24h"
         if volume_window_days is not None and volume_window_days > 0:
-            lateral_time_predicate = "    AND s.snapshot_at >= now() - make_interval(days => :volume_window_days) "
+            volume_expr = (
+                "(CASE WHEN m.last_snapshot_at >= now() - make_interval(days => :volume_window_days) "
+                "THEN m.latest_volume_24h ELSE NULL END)"
+            )
             params["volume_window_days"] = volume_window_days
 
-        # Base query — always-true predicate allows clean appending below.
-        # WHY LEFT JOIN LATERAL (not DISTINCT ON over snapshots): we want at
-        # most ONE additional column per market row, no behaviour change to
-        # the existing pagination/ORDER/COUNT(*) OVER() shape.  LEFT (not
-        # INNER) ensures markets without snapshots still appear with NULL
-        # volume — matches the previous behaviour where volume was always
-        # NULL.
+        # Base query — plain column read, no per-row join against the
+        # prediction_market_snapshots hypertable.
         base = (
             "SELECT m.id, m.market_id, m.source, m.question, m.description, m.outcomes, "
             "m.close_time, m.resolution_status, m.resolved_answer, m.market_slug, "
             "m.category, "
-            "m.created_at, m.updated_at, latest.volume_24h AS latest_volume_24h, "
+            "m.created_at, m.updated_at, " + volume_expr + " AS latest_volume_24h, "
             "COUNT(*) OVER() AS total "
-            "FROM prediction_markets m "
-            "LEFT JOIN LATERAL ("
-            "  SELECT volume_24h "
-            "  FROM prediction_market_snapshots s "
-            "  WHERE s.market_id = m.market_id " + lateral_time_predicate + "  ORDER BY s.snapshot_at DESC "
-            "  LIMIT 1"
-            ") latest ON TRUE"
+            "FROM prediction_markets m"
         )
         predicates: list[str] = []
 
@@ -481,7 +479,9 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         full_sql = (
             base
             + where_sql
-            + " ORDER BY COALESCE(latest.volume_24h, 0) DESC, m.close_time ASC, m.updated_at DESC"
+            + " ORDER BY COALESCE("
+            + volume_expr
+            + ", 0) DESC, m.close_time ASC, m.updated_at DESC"
             + " LIMIT :limit OFFSET :offset"
         )
 
@@ -537,6 +537,35 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def _sync_market_denormalized_fields(self, snapshot: PredictionMarketSnapshot) -> None:
+        """Push ``snapshot``'s time/volume onto ``prediction_markets`` (migration 046).
+
+        Keeps ``last_snapshot_at`` (migration 006) and ``latest_volume_24h``
+        (migration 046) current so ``list_markets`` can read a plain column
+        instead of joining ``prediction_market_snapshots`` per row (the fix
+        for the intermittent ``statement_timeout`` 500s under load).
+
+        Guarded by ``last_snapshot_at`` monotonicity — Kafka delivery is not
+        globally ordered across partitions/consumer restarts, so a
+        re-delivered or out-of-order (older) snapshot must never regress the
+        denormalized columns to a stale value. Safe to call unconditionally
+        (including for a snapshot that turned out to be a duplicate insert):
+        on a true duplicate the values already match, so the guarded UPDATE
+        is a no-op.
+        """
+        await self._session.execute(
+            text(
+                "UPDATE prediction_markets "
+                "SET last_snapshot_at = :snapshot_at, latest_volume_24h = :volume_24h "
+                "WHERE market_id = :market_id "
+                "AND (last_snapshot_at IS NULL OR last_snapshot_at <= :snapshot_at)"
+            ).bindparams(
+                market_id=snapshot.market_id,
+                snapshot_at=snapshot.snapshot_at,
+                volume_24h=snapshot.volume_24h,
+            )
+        )
+
     async def insert_if_not_exists(self, snapshot: PredictionMarketSnapshot) -> bool:
         """Atomically insert a snapshot; return ``True`` if new, ``False`` on conflict."""
         stmt = (
@@ -557,7 +586,12 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
             .returning(PredictionMarketSnapshotModel.id)
         )
         result = await self._session.execute(stmt)
-        return result.scalar_one_or_none() is not None
+        inserted = result.scalar_one_or_none() is not None
+        # migration 046: keep prediction_markets.last_snapshot_at /
+        # latest_volume_24h in sync in the SAME transaction as the snapshot
+        # write (same session/UoW — the caller commits both together).
+        await self._sync_market_denormalized_fields(snapshot)
+        return inserted
 
     async def bulk_insert_if_not_exists(self, snapshots: list[PredictionMarketSnapshot]) -> int:
         """Insert many snapshots in ONE multi-row ``ON CONFLICT DO NOTHING``.
@@ -590,7 +624,24 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
             .returning(PredictionMarketSnapshotModel.id)
         )
         result = await self._session.execute(stmt)
-        return len(result.fetchall())
+        inserted_count = len(result.fetchall())
+
+        # migration 046: sync the denormalized columns for every DISTINCT
+        # market_id in this batch, using only that market's NEWEST snapshot
+        # within the batch (a batch may carry several snapshots for the same
+        # market — e.g. a backfill replay). One guarded UPDATE per distinct
+        # market (bounded by batch size, never by the hypertable's size) —
+        # the same monotonicity guard as the single-insert path protects
+        # against an out-of-order batch regressing the columns.
+        latest_by_market: dict[str, PredictionMarketSnapshot] = {}
+        for s in by_key.values():
+            current = latest_by_market.get(s.market_id)
+            if current is None or s.snapshot_at > current.snapshot_at:
+                latest_by_market[s.market_id] = s
+        for s in latest_by_market.values():
+            await self._sync_market_denormalized_fields(s)
+
+        return inserted_count
 
     async def list_snapshots(
         self,
