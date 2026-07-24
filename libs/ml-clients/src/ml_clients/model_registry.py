@@ -61,7 +61,9 @@ class ConfiguredModel:
 
 
 # ── The registry (mirrors service config.py defaults — see module docstring) ──
-# Verified 2026-07-01 against each service's config.py + libs/ml-clients/config.py.
+# Verified 2026-07-24 against each service's config.py + libs/ml-clients/config.py
+# (re-verified by tests/architecture/test_model_registry_completeness.py, which
+# independently re-derives this list from config.py and fails CI on drift).
 PLATFORM_MODEL_REGISTRY: tuple[ConfiguredModel, ...] = (
     # ── S6 nlp-pipeline ──────────────────────────────────────────────────────
     ConfiguredModel("nlp-pipeline", "embedding_model_id", "bge-large", "ollama"),
@@ -90,9 +92,38 @@ PLATFORM_MODEL_REGISTRY: tuple[ConfiguredModel, ...] = (
         "Qwen/Qwen3-235B-A22B-Instruct-2507",
         "deepinfra",
     ),
+    # extraction_high_recall_model_id (2026-07-24): HIGH-RECALL model slug for
+    # SEC/long-filing extraction (hybrid_extraction_routing_enabled). Same
+    # model_id as extraction_api_model_id above but a distinct config field —
+    # enrolled separately so tests/architecture/test_model_registry_completeness.py
+    # can verify (service, field) coverage independently of value dedup.
+    ConfiguredModel(
+        "nlp-pipeline",
+        "extraction_high_recall_model_id",
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "deepinfra",
+    ),
+    # claim_entailment_check_model_id (2026-07-24): opt-in claim-entailment
+    # verifier (claim_entailment_check_enabled, default OFF). Same model_id as
+    # extraction_fallback_model_id above.
+    ConfiguredModel(
+        "nlp-pipeline",
+        "claim_entailment_check_model_id",
+        "deepseek-ai/DeepSeek-V4-Flash",
+        "deepinfra",
+    ),
     # ── S7 knowledge-graph ───────────────────────────────────────────────────
     ConfiguredModel("knowledge-graph", "embedding_model_id", "bge-large:latest", "ollama"),
     ConfiguredModel("knowledge-graph", "embedding_api_model_id", "BAAI/bge-large-en-v1.5", "deepinfra"),
+    # polarity_classifier_model_id (2026-07-24): KG "against a company"
+    # bullish/bearish exposure classifier (DeepInfra-served — see the field's
+    # own config.py comment for the 404-on-smaller-model history).
+    ConfiguredModel(
+        "knowledge-graph",
+        "polarity_classifier_model_id",
+        "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        "deepinfra",
+    ),
     ConfiguredModel(
         "knowledge-graph",
         "deepinfra_extraction_model_id",
@@ -126,7 +157,18 @@ PLATFORM_MODEL_REGISTRY: tuple[ConfiguredModel, ...] = (
     ConfiguredModel("rag-chat", "ollama_completion_model", "deepseek-r1:32b", "ollama"),
     ConfiguredModel("rag-chat", "ollama_reranker_model", "bge-reranker-v2-m3", "ollama"),
     ConfiguredModel("rag-chat", "deepinfra_classification_model", "Qwen/Qwen3.5-9B", "deepinfra"),
-    ConfiguredModel("rag-chat", "completion_model", "deepseek-ai/DeepSeek-V4-Flash-Thinking", "deepinfra"),
+    # completion_model (updated 2026-07-24 / DEF-035): the previous default
+    # "deepseek-ai/DeepSeek-V4-Flash-Thinking" does NOT exist on DeepInfra
+    # (404) — prod only survived via the RAG_CHAT_COMPLETION_MODEL env
+    # override. config.py's default now points at the real, live-verified
+    # model ("openai/gpt-oss-120b"); this entry was stale (still recording the
+    # retired 404 slug) until test_model_registry_completeness.py's
+    # REG-VALUE-STALE check caught the drift.
+    ConfiguredModel("rag-chat", "completion_model", "openai/gpt-oss-120b", "deepinfra"),
+    # planning_model (2026-07-24 / DEF-036): planner/synthesis model split —
+    # drives ONLY the tool-loop planning turn (chat_with_tools). Defaults to
+    # the SAME value as completion_model (see config.py DEF-036 comment).
+    ConfiguredModel("rag-chat", "planning_model", "openai/gpt-oss-120b", "deepinfra"),
     ConfiguredModel(
         "rag-chat",
         "openrouter_completion_model",
