@@ -187,10 +187,13 @@ jobs:
 
   # ═══════════════════════════════════════════════════════════════════════════
   # DB session-bootstrap parity — BP-732 automated backstop, fast path
-  # Warn-only (not --strict): market-data is a KNOWN pre-existing gap
-  # (missing command_timeout) outside this check's remediation scope; failing
-  # CI on it would block unrelated PRs. Flip to --strict once market-data is
-  # migrated onto the shared factory too.
+  # Strict (--strict, 2026-07-24): market-data's command_timeout gap (the one
+  # documented pre-existing exception below) has been closed — see
+  # services/market-data/src/market_data/infrastructure/db/session.py
+  # ``_COMMAND_TIMEOUT_SECONDS`` — so every currently-pooled session file now
+  # carries both command_timeout + statement_timeout. A future service that
+  # regresses this parity (opts out of the shared factory / hand-rolls
+  # connect_args without both knobs) now FAILS CI instead of only warning.
   # ═══════════════════════════════════════════════════════════════════════════
 
   db-session-parity:
@@ -204,8 +207,8 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Run DB session parity check (warn-only)
-        run: python scripts/check_db_session_parity.py
+      - name: Run DB session parity check (strict)
+        run: python scripts/check_db_session_parity.py --strict
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Architecture tests — fast path pytest suite, no infra required

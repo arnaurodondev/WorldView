@@ -44,6 +44,23 @@ _POOL_TIMEOUT_SECONDS = 10
 # Cap any single statement server-side so a slow/wedged query cannot pin a
 # connection open indefinitely. Expressed in milliseconds for Postgres.
 _STATEMENT_TIMEOUT_MS = "8000"
+# Client-side (asyncpg) command timeout — BP-732 parity fix (2026-07-24). The
+# server-side ``statement_timeout`` GUC above is applied via
+# ``server_settings`` at connect time, but under PgBouncer TRANSACTION pooling
+# it is a non-native startup parameter: PgBouncer either rejects the connect
+# or silently drops it unless explicitly allow-listed in
+# ``ignore_startup_parameters`` (see the ``_connect_args`` docstring — the
+# real backstop for that case is the DATABASE-level
+# ``ALTER DATABASE ... SET statement_timeout``, which requires a manual step
+# outside this file). A client-side ``command_timeout`` has no such caveat —
+# asyncpg enforces it locally regardless of what the pooler does with startup
+# parameters — so it is the more RELIABLE backstop against a hung/wedged
+# connection and is what every other pooled service in this repo already sets
+# (``scripts/check_db_session_parity.py``, the BP-732 automated backstop,
+# flagged market-data as the one remaining gap). Set just above the existing
+# fail-fast budget (8s statement + 10s pool checkout) so it never fires before
+# those more specific timeouts under normal conditions.
+_COMMAND_TIMEOUT_SECONDS = 15.0
 
 
 # ── Pool observability ─────────────────────────────────────────────────────────
@@ -109,6 +126,10 @@ def _connect_args() -> dict[str, object]:
         # cache (``prepared_statement_cache_size=0``). Both are harmless direct.
         "statement_cache_size": 0,
         "prepared_statement_cache_size": 0,
+        # Client-side dead-connection/hang backstop (BP-732 parity fix) — see
+        # ``_COMMAND_TIMEOUT_SECONDS`` docstring above for why this is the more
+        # reliable of the two timeouts under PgBouncer.
+        "command_timeout": _COMMAND_TIMEOUT_SECONDS,
     }
 
 
