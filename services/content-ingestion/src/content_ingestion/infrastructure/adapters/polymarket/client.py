@@ -2,10 +2,16 @@
 
 No authentication required — the Gamma API is publicly accessible.
 
-Pagination (verified against the official Gamma docs, 2026-07-16): the Gamma list
-endpoints paginate via ``offset``/``limit`` query params and return a **bare JSON
-array** of market objects (there is NO response-body ``next_cursor`` field). A page
-is the last page when it returns fewer than ``limit`` items (or is empty).
+Pagination (verified live, 2026-07-16): the Gamma list endpoints paginate via
+``offset``/``limit`` query params and return a **bare JSON array** of market
+objects (there is NO response-body ``next_cursor`` field). The Gamma API
+silently caps its page size at ~100 rows regardless of the requested
+``limit`` (limit=500 → 100 rows observed live), so a page shorter than
+``limit`` is the norm, NOT a signal of end-of-data — only an EMPTY page means
+the walk is done. (An earlier revision of this client used the disproven
+``len(items) < limit`` heuristic; it under-fetched the market universe after
+~100 rows and was fixed the same night — see
+``docs/audits/2026-07-23-bottleneck-content-ingestion-pagination.md``.)
 
 To preserve the adapter's cursor-loop contract without leaking offset arithmetic
 into the adapter, this client keeps the ``next_cursor`` parameter/field names but
@@ -13,8 +19,12 @@ treats the cursor as an **opaque synthetic string == the next offset**:
 
 * ``next_cursor is None``  → start at offset 0 (first page).
 * ``next_cursor == "500"`` → start at offset 500 (second page, page_size 500).
-* returned ``next_cursor``  → ``str(offset + limit)`` when a full page came back
-  (more pages may remain), or ``None`` when the page was short/empty (done).
+* returned ``next_cursor``  → derived via the shared
+  :func:`~content_ingestion.infrastructure.adapters._pagination.next_offset_cursor`
+  helper: ``str(offset + <actual returned count>)`` when the page was
+  non-empty, or ``None`` when the page was empty (done). Advancing by the
+  actual count (not ``limit``) ensures no rows are skipped when the provider
+  under-fills a page.
 
 The adapter loops until ``next_cursor is None`` or ``max_pages_per_cycle`` is hit,
 so the whole active-market universe is walked instead of only the first 500 rows.
@@ -26,6 +36,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from content_ingestion.domain.exceptions import AdapterError
+from content_ingestion.infrastructure.adapters._pagination import next_offset_cursor
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -154,16 +165,10 @@ class PolymarketClient:
 
         markets = _extract_items(resp.json(), key="markets")
 
-        # Advance the synthetic cursor by the number of rows the API ACTUALLY
-        # returned, and stop only on an empty page. The Gamma API silently caps
-        # its page size at ~100 rows regardless of the requested ``limit`` (verified
-        # live 2026-07-16: limit=500 → 100 rows), so a "short" page (len < limit) is
-        # the norm, not the end of the list. Advancing by ``limit`` would skip the
-        # uncovered rows, and stopping on a short page would (re)break pagination
-        # after the first 100 markets — the exact bug this branch fixes. Advancing
-        # by the actual count and terminating only when a page is empty is correct
-        # for any server-side page cap.
-        next_offset: str | None = str(offset + len(markets)) if markets else None
+        # Delegate to the shared termination rule: advance by the ACTUAL
+        # returned count, terminate only on an empty page. See module
+        # docstring + _pagination.next_offset_cursor for why.
+        next_offset: str | None = next_offset_cursor(offset=offset, returned_count=len(markets))
 
         logger.debug(
             "gamma_api_page_fetched",

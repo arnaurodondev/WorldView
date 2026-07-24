@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import json
 import time
+from collections import namedtuple
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -997,3 +998,199 @@ class TestLagStallSelfHealMaxPollCeiling:
                 await task
 
         assert not exit_mock.called, "kill-switch must disable the RC-C max.poll ceiling"
+
+
+# ── Hashable TopicPartition stand-in (see test_paused_partition_frozen_does_not_self_heal) ──
+# ``_resume_all_paused_partitions`` / ``_resume_barrier_paused`` only read
+# ``.topic`` / ``.partition`` and store these in a ``set``, so a plain
+# namedtuple is a faithful, dependency-free substitute for
+# ``confluent_kafka.TopicPartition`` in these tests.
+_TopicPartition = namedtuple("_TopicPartition", ["topic", "partition"])
+
+
+class TestResumeAllPausedPartitions:
+    """Regression coverage for the ``19d5fbf3c`` fix (audit 2026-07-23 §3a).
+
+    ``9938b0b37`` introduced ``_barrier_paused_partitions`` as a second,
+    independent pause-tracking set alongside the pre-existing
+    ``_paused_partitions`` (backpressure), but did not update
+    ``_resume_all_paused_partitions``'s early-return guard, which still only
+    checked ``_paused_partitions``.  Result: a rebalance-revoke or shutdown
+    that occurred while ONLY the barrier had partitions paused (the
+    saturated-in-flight-window case both ``ade21fdfb`` and ``9938b0b37`` exist
+    to handle) silently skipped ``_resume_barrier_paused()`` — the barrier-held
+    partitions were handed to the next group member still paused.
+    ``19d5fbf3c`` fixed the guard (checks both sets) but shipped with **zero**
+    test coverage — confirmed by ``git show --stat 19d5fbf3c`` touching a
+    single line in ``base.py`` and no test file.  These tests close that gap.
+    """
+
+    async def test_resume_all_paused_partitions_releases_barrier_only_state(self) -> None:
+        """THE fix: barrier-only pause state must be released (the exact 19d5fbf3c regression).
+
+        Before the fix, ``if not self._paused_partitions: return`` fired here
+        (empty backpressure set) and ``_resume_barrier_paused()`` was never
+        called, leaving ``_barrier_paused_partitions`` non-empty and the
+        partition still paused at the broker.
+        """
+        consumer = _build_consumer()
+        tp = _TopicPartition(topic="t", partition=0)
+        consumer._barrier_paused_partitions = {tp}
+        consumer._paused_partitions = set()
+        fake_kafka = MagicMock()
+        consumer._consumer = fake_kafka
+
+        consumer._resume_all_paused_partitions()
+
+        assert not consumer._barrier_paused_partitions, (
+            "barrier-only pause state was NOT released — this is the exact 19d5fbf3c regression "
+            "(the guard skipped _resume_barrier_paused() when _paused_partitions was empty)"
+        )
+        # ``_resume_barrier_paused`` calls ``consumer.resume`` with the barrier
+        # partition (see below) — confirm the broker call actually happened,
+        # not just the in-memory set being cleared.
+        resumed = [tp for call in fake_kafka.resume.call_args_list for tp in call.args[0]]
+        assert tp in resumed, "resume() was never called with the barrier-paused partition"
+
+    async def test_resume_all_paused_partitions_releases_both_sets_independently(self) -> None:
+        """Disjoint backpressure + barrier pauses are both cleared and both partitions resumed."""
+        consumer = _build_consumer()
+        backpressure_tp = _TopicPartition(topic="t", partition=0)
+        barrier_tp = _TopicPartition(topic="t", partition=1)
+        consumer._paused_partitions = {backpressure_tp}
+        consumer._barrier_paused_partitions = {barrier_tp}
+        fake_kafka = MagicMock()
+        consumer._consumer = fake_kafka
+
+        consumer._resume_all_paused_partitions()
+
+        assert not consumer._paused_partitions, "backpressure pause set must be cleared"
+        assert not consumer._barrier_paused_partitions, "barrier pause set must be cleared"
+        # Both partitions must have been passed to consumer.resume() across the
+        # two internal calls (backpressure resume + _resume_barrier_paused).
+        resumed = [tp for call in fake_kafka.resume.call_args_list for tp in call.args[0]]
+        assert backpressure_tp in resumed, "backpressure-paused partition was never resumed"
+        assert barrier_tp in resumed, "barrier-paused partition was never resumed"
+
+    async def test_resume_barrier_paused_does_not_unpause_backpressure_held_partition(self) -> None:
+        """A partition held by BOTH mechanisms must not be resumed by the barrier release alone.
+
+        Exercises the exclusion logic at the ``to_resume`` computation in
+        ``_resume_barrier_paused`` (line ~1959): a partition simultaneously
+        paused for backpressure AND by the barrier must stay paused after
+        ``_resume_barrier_paused()`` runs in isolation — only the backpressure
+        policy (or ``_resume_all_paused_partitions``) may release it.
+        """
+        consumer = _build_consumer()
+        shared_tp = _TopicPartition(topic="t", partition=0)
+        consumer._paused_partitions = {shared_tp}
+        consumer._barrier_paused_partitions = {shared_tp}
+        fake_kafka = MagicMock()
+        consumer._consumer = fake_kafka
+
+        consumer._resume_barrier_paused()
+
+        # Barrier bookkeeping is cleared (the barrier's OWN pause is released)...
+        assert not consumer._barrier_paused_partitions
+        # ...but the partition must NOT have been passed to consumer.resume(),
+        # and it must remain in the backpressure set — still genuinely paused.
+        resumed = [tp for call in fake_kafka.resume.call_args_list for tp in call.args[0]]
+        assert shared_tp not in resumed, (
+            "_resume_barrier_paused() resumed a partition still held by backpressure — "
+            "this would un-pause a partition the backpressure policy needs frozen"
+        )
+        assert shared_tp in consumer._paused_partitions, "backpressure pause tracking must be untouched"
+
+    # ── Combinatorial self-heal matrix (audit 2026-07-23 §3a.4) ──────────────
+    #
+    # Every historical fix (d15adb082 .. 9938b0b37) added a test that pins every
+    # OTHER signal to a fixed "safe" value while varying only the ONE signal
+    # that commit introduced.  None of them exercise the full cross-product, so
+    # a future SIXTH discriminator's interaction with the existing five would
+    # have no regression coverage.  This test asserts ``should_force_exit``
+    # against the documented truth table (see ``_connectivity_probe_loop``,
+    # base.py ~2279-2333) for every cell of {pause state} x {heartbeat} x
+    # {fetch-poll}.
+    #
+    # Truth table (independent of pause state):
+    #   fetch-poll FRESH                     -> should_force_exit = True  (poll_loop_active)
+    #   fetch-poll STALE-WITHIN-max.poll, HB fresh -> False  (suppressed: legit slow batch / clean halt)
+    #   fetch-poll STALE-WITHIN-max.poll, HB stale -> True   (consumer_fenced)
+    #   fetch-poll STALE-PAST-max.poll             -> True   (poll_stale_past_max_poll, RC-C, regardless of HB)
+    #
+    # Pause state only gates whether the single stalled partition is excluded
+    # from ``wedged`` in the first place (backpressure-paused, barrier-paused,
+    # or both -> excluded; neither -> included).  The self-heal only ever fires
+    # when BOTH the partition is wedged (pause state == "none") AND
+    # should_force_exit is True for the (heartbeat, fetch-poll) cell.
+    @pytest.mark.parametrize("pause_state", ["none", "backpressure", "barrier", "both"])
+    @pytest.mark.parametrize("heartbeat", ["fresh", "stale"])
+    @pytest.mark.parametrize("fetch_poll", ["fresh", "stale_within_max_poll", "stale_past_max_poll"])
+    async def test_selfheal_matrix_across_all_halt_reasons(
+        self,
+        fetch_poll: str,
+        heartbeat: str,
+        pause_state: str,
+    ) -> None:
+        """24-cell cross-product truth-table test — the gap that let 5 fixes ship serially.
+
+        Parametrized over every cell of {paused-only, barrier-only, both,
+        neither} x {heartbeat fresh/stale} x {fetch-poll fresh/
+        stale-within-max-poll/stale-past-max-poll}, asserting the self-heal
+        fires (or not) exactly per the documented truth table above — not just
+        the specific cells each historical commit happened to cover.
+        """
+        consumer = _build_selfheal_consumer()
+        tp = _TopicPartition(topic="t", partition=0)
+        if pause_state in ("backpressure", "both"):
+            consumer._paused_partitions = {tp}
+        if pause_state in ("barrier", "both"):
+            consumer._barrier_paused_partitions = {tp}
+
+        max_poll_s = consumer._config.max_poll_interval_ms / 1000.0
+        probe_interval_s = consumer._probe_interval_seconds
+        fetch_poll_values = {
+            # Comfortably below the probe interval -> poll_loop_active True.
+            "fresh": probe_interval_s / 2.0,
+            # Beyond the probe interval but well within max.poll.interval.ms.
+            "stale_within_max_poll": max_poll_s / 2.0,
+            # Past the hard RC-C ceiling.
+            "stale_past_max_poll": max_poll_s + 100.0,
+        }
+        heartbeat_values = {
+            "fresh": 0.0,
+            "stale": consumer._lag_stall_selfheal_fence_grace_seconds + 100.0,
+        }
+
+        # Mirror the documented truth table from ``_connectivity_probe_loop``:
+        # fetch-poll fresh or past-max-poll force-exits regardless of
+        # heartbeat; stale-within-max-poll only force-exits if the heartbeat
+        # has ALSO gone stale (the fence gate).
+        if fetch_poll in ("fresh", "stale_past_max_poll"):
+            should_force_exit = True
+        else:
+            should_force_exit = heartbeat == "stale"
+        expected_exit = pause_state == "none" and should_force_exit
+
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                return_value={"t:0": (9_000, 1_000)},
+            ),
+            patch.object(type(consumer), "seconds_since_fetch_poll", return_value=fetch_poll_values[fetch_poll]),
+            patch.object(type(consumer), "seconds_since_progress", return_value=heartbeat_values[heartbeat]),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        cell = f"pause={pause_state} heartbeat={heartbeat} fetch_poll={fetch_poll}"
+        if expected_exit:
+            assert exit_mock.called, f"self-heal should have force-exited for cell ({cell}) but did not"
+        else:
+            assert not exit_mock.called, f"self-heal force-exited for cell ({cell}) but should have been suppressed"

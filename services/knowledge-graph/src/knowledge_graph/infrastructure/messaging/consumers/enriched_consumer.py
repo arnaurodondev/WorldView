@@ -144,6 +144,16 @@ class _NoOpUoW:
 class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     # DP-005 fix: class-level constant so key prefix is stable across config changes.
     _dedup_prefix: str = "kg:dedup:enriched_article_consumer"
+    # Recurrence-1 structural fix (2026-07-23 bottleneck audit, BP-736): this
+    # class used to hand-roll its own ``_handle_message`` override to skip
+    # un-decodable/poison records instead of dead-lettering them (see BP-720
+    # history below). That behaviour is now the DEFAULT at the
+    # ``BaseKafkaConsumer`` level (``ConsumerConfig.skip_undecodable_records``,
+    # default True) — this class attribute only preserves the exact
+    # structlog event name the override used to emit, so existing
+    # dashboards/alerts/tests keep matching byte-for-byte after the override
+    # was removed as redundant.
+    _deserialize_skip_log_event: str = "enriched_consumer_deserialize_skipped"
 
     """Consumes ``nlp.article.enriched.v1`` and materializes the knowledge graph.
 
@@ -181,53 +191,20 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     # ------------------------------------------------------------------
     # Resilient message handling
     # ------------------------------------------------------------------
-
-    async def _handle_message(self, msg: Any) -> None:
-        """Deserialize + dispatch one message, SKIPPING un-decodable records.
-
-        Prod-readiness fix (BP-720): commit ``66b0b6416`` appended nullable
-        ``external_id``/``source_title`` to ``nlp.article.enriched.v1.avsc``. The
-        platform decodes with ``fastavro.schemaless_reader`` (positional, NO schema
-        registry, writer==reader assumed), so every pre-2026-07-09 backlog record —
-        written WITHOUT the trailing fields — under-runs the new reader schema and
-        raises ``EOFError`` inside ``deserialize_confluent_avro``. The base
-        ``_handle_message`` wraps that (and any other decode/struct error) into
-        ``MalformedDataError`` (a ``FatalError``), which dead-letters INLINE; a run of
-        ~10.7k old-schema records trips ``dead_letter_cap`` (5000) → the consumer is
-        force-restarted BEFORE committing → it re-reads the same 5000 forever and can
-        NEVER reach today's new-schema NEWS messages at the tail. news→KG enrichment
-        halts 100%.
-
-        Unlike the forward-only PredictionEnrichedConsumer, this consumer must NOT
-        start-at-latest — it still has un-processed NEW-schema NEWS backlog to reach.
-        The correct behaviour is to SKIP only the un-decodable OLD records while
-        processing the good ones: catch the deserialize failure BROADLY (the
-        base-wrapped ``MalformedDataError`` plus raw ``EOFError``/``struct.error`` as
-        defence-in-depth for any path that surfaces the decode error un-wrapped), log
-        it WITH topic/partition/offset, and return normally. The run loop then commits
-        the offset and advances past the poison record. Crucially, ``dead_letter`` is
-        never called on a skip, so the ``dead_letter_cap`` crash-loop can never trip on
-        old-schema records. All OTHER exceptions (genuine processing/DB failures)
-        propagate unchanged into the retry/dead-letter path.
-        """
-        import struct
-
-        try:
-            await super()._handle_message(msg)
-        except (MalformedDataError, EOFError, struct.error) as exc:
-            # Un-decodable record (old-schema/poison). Skip + advance the offset.
-            # The ``nlp.article.enriched.v1.dlq`` topic exists but this consumer's
-            # ``_dead_letter_impl`` is log-only, so a structured skip log IS the
-            # observability signal (dead-letter emission would re-arm the cap crash).
-            logger.warning(
-                "enriched_consumer_deserialize_skipped",
-                topic=msg.topic(),
-                partition=msg.partition(),
-                offset=msg.offset(),
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-
+    #
+    # Prod-readiness fix (BP-720): commit ``66b0b6416`` appended nullable
+    # ``external_id``/``source_title`` to ``nlp.article.enriched.v1.avsc``. The
+    # platform decodes with ``fastavro.schemaless_reader`` (positional, NO schema
+    # registry, writer==reader assumed), so every pre-2026-07-09 backlog record —
+    # written WITHOUT the trailing fields — under-runs the new reader schema and
+    # raises ``EOFError`` inside ``deserialize_confluent_avro``. A previous
+    # ``_handle_message`` override on this class caught that (plus raw
+    # ``struct.error``) and skipped+logged instead of dead-lettering. That
+    # behaviour now lives in ``BaseKafkaConsumer._handle_message`` itself
+    # (Recurrence-1 structural fix, 2026-07-23 bottleneck audit / BP-736) —
+    # see ``_deserialize_skip_log_event`` above for the class attribute that
+    # preserves this consumer's specific log event name.
+    #
     # ------------------------------------------------------------------
     # Core processing
     # ------------------------------------------------------------------
@@ -519,9 +496,6 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # PLAN-0062 F-018: cap the JSON-fallback branch to defend against
         # an oversized poison message before ``json.loads`` allocates the
         # entire payload as a Python object graph.
-        from messaging.kafka.consumer.errors import (  # type: ignore[import-untyped]
-            MalformedDataError,
-        )
 
         if len(raw) > _MAX_JSON_FALLBACK_BYTES:
             raise MalformedDataError(

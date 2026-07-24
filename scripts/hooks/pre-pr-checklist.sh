@@ -216,6 +216,26 @@ else
   echo "✓ No obvious security issues detected"
 fi
 
+# ─── 10. tool_use.py prompt-version live-eval-artifact gate ──────────────────
+# 2026-07-23 bottleneck audit, Recurrence B / BP-735 / HR-065 /
+# REVIEW_CHECKLIST.md:117 — mechanically enforces (rather than merely
+# advises) that any TOOL_USE_SYSTEM_PROMPT_TEMPLATE version bump carries a
+# live-eval artifact. Checked over the WHOLE PR range ($BASE_BRANCH...HEAD),
+# complementing the per-commit check already wired into
+# pre-commit-validate.sh (a PR could otherwise bump the version in a commit
+# made before that gate existed, or via a rebase/cherry-pick that skipped
+# the per-commit hook). See scripts/hooks/check_tool_use_prompt_eval_artifact.py.
+echo ""
+echo "── 10/10: tool_use.py prompt-version eval-artifact gate ───────"
+if GATE_OUTPUT=$(cd "$ROOT_DIR" && TOOL_USE_EVAL_GATE_DIFF_RANGE="$BASE_BRANCH...HEAD" \
+    python3 scripts/hooks/check_tool_use_prompt_eval_artifact.py 2>&1); then
+  echo "✓ tool_use.py eval-artifact gate passed"
+else
+  echo "✗ tool_use.py eval-artifact gate FAILED"
+  echo "$GATE_OUTPUT"
+  FAILED=1
+fi
+
 # ─── Result ───────────────────────────────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════════════════"

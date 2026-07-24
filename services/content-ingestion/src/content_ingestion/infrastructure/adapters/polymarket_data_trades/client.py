@@ -2,6 +2,19 @@
 
 No authentication required. Returns individual fills for a market
 (``condition_id``), offset-paginated.
+
+Pagination termination (fixed 2026-07-23): ``has_more`` is derived from the
+shared :func:`~content_ingestion.infrastructure.adapters._pagination.next_offset_cursor`
+helper — terminate ONLY on an empty page, never on ``len(trades) < limit``.
+This client previously used ``has_more = len(trades) >= limit``, the exact
+"short page == last page" heuristic that was disproven TWICE for the
+Polymarket Gamma ``/markets`` and ``/events`` clients (the Gamma API silently
+caps pages at ~100 rows regardless of the requested ``limit``). Whether the
+Data-API ``/trades`` endpoint has (or will ever adopt) the same silent
+page-size cap has NOT been live-verified as of this fix — see
+``docs/audits/2026-07-23-bottleneck-content-ingestion-pagination.md``. Ship
+the conservative, always-correct behavior (terminate only on empty page)
+until a live smoke test confirms/tightens the contract.
 """
 
 from __future__ import annotations
@@ -10,6 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from content_ingestion.domain.exceptions import AdapterError
+from content_ingestion.infrastructure.adapters._pagination import next_offset_cursor
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -26,8 +40,10 @@ class TradesPage:
 
     Attributes:
         trades: Raw trade dicts returned by the endpoint.
-        has_more: True when a full page came back (caller should request the
-            next offset). Derived by the client from ``len(trades) == limit``.
+        has_more: True when the page was non-empty (caller should request the
+            next offset). Derived via the shared ``next_offset_cursor``
+            helper from "was this page empty," NOT from "was this page full"
+            — a short-but-nonempty page must not be treated as end-of-data.
     """
 
     trades: list[dict]
@@ -91,7 +107,11 @@ class PolymarketTradesClient:
         # and failing the whole task. Only genuine trade dicts are kept.
         raw_trades = data.get("data", []) if isinstance(data, dict) else data
         trades: list[dict] = [t for t in raw_trades if isinstance(t, dict)] if isinstance(raw_trades, list) else []
-        has_more = len(trades) >= limit
+        # has_more MUST reflect "was this page empty," never "was this page
+        # short vs. limit" -- see module docstring. next_offset_cursor
+        # returns None only when returned_count == 0, so a non-None result
+        # means the page had at least one row and pagination should continue.
+        has_more = next_offset_cursor(offset=offset, returned_count=len(trades)) is not None
 
         logger.debug(
             "trades_page_fetched",

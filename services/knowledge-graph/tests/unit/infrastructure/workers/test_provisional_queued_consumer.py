@@ -510,3 +510,64 @@ class TestRetryUsesConfiguredBackoff:
         # The bound :now param must also be present so tests can stub time.
         params = first_call.args[1]
         assert "now" in params, "Step 1 SELECT must bind :now from common.time.utc_now()"
+
+
+# ---------------------------------------------------------------------------
+# Recurrence-1 structural fix (2026-07-23 bottleneck audit / BP-736)
+# ---------------------------------------------------------------------------
+
+
+class _FakeKafkaMessage:
+    """Minimal confluent-Kafka message stand-in for ``_handle_message`` tests."""
+
+    def __init__(self, raw_value: bytes, *, offset: int = 8181, partition: int = 0) -> None:
+        self._value = raw_value
+        self._offset = offset
+        self._partition = partition
+
+    def topic(self) -> str:
+        return "entity.provisional.queued.v1"
+
+    def value(self) -> bytes:
+        return self._value
+
+    def key(self) -> bytes | None:
+        return None
+
+    def headers(self) -> list[tuple[str, bytes]]:
+        return []
+
+    def offset(self) -> int:
+        return self._offset
+
+    def partition(self) -> int:
+        return self._partition
+
+
+class TestProvisionalQueuedConsumerResilientDeserialize:
+    """An un-decodable/poison record must be SKIPPED, not crash-loop the group.
+
+    ``ProvisionalQueuedConsumer`` never overrode ``_handle_message`` at all,
+    so before the base-class fix a poison Avro record on
+    ``entity.provisional.queued.v1`` would wrap into ``MalformedDataError``
+    and dead-letter inline — a burst of them would trip ``dead_letter_cap``
+    and crash-loop the consumer. The skip-and-advance behaviour now lives in
+    ``BaseKafkaConsumer._handle_message`` itself
+    (``ConsumerConfig.skip_undecodable_records``, default True), so this
+    consumer is protected automatically with zero source changes; this test
+    guards the regression.
+    """
+
+    async def test_undecodable_old_schema_record_is_skipped_not_raised(self) -> None:
+        _, factory = _make_session_factory(pending_row=None)
+        consumer = _make_consumer(factory)
+        msg = _FakeKafkaMessage(b"\x00garbage-not-avro")
+        with (
+            patch.object(consumer, "deserialize_value", side_effect=EOFError("short read")),
+            capture_logs() as logs,
+        ):
+            await consumer._handle_message(msg)  # must not raise
+        assert any(e["event"] == "kafka_consumer_deserialize_skipped" for e in logs)
+        skip = next(e for e in logs if e["event"] == "kafka_consumer_deserialize_skipped")
+        assert skip["offset"] == 8181
+        assert consumer._dead_letter_count == 0
