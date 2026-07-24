@@ -729,3 +729,77 @@ jobs:
         run: |
           docker compose -f infra/compose/docker-compose.test.yml \
             --profile ${{ matrix.profile }} down -v
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # CI Required (all jobs green) — aggregate gate
+  #
+  # WHY THIS EXISTS (do not delete as "redundant" — read this first):
+  # From 2026-07-19 to 2026-07-23, CI was silently broken for 4+ days. Root
+  # cause: test-services, test-contract, test-integration, and test-e2e all
+  # declare `needs: [test-libs, validate-service-structure, import-guards,
+  # architecture-tests]`. When ANY one of those four upstream jobs fails,
+  # GitHub Actions SKIPS (does not fail) every downstream job across all ~10
+  # services/matrix legs. A skipped job shows as a neutral gray check, not a
+  # red X, so the PR/commit checks list reads as a confusing mix of green and
+  # gray rather than one unambiguous failure. Compounding this, `main` had no
+  # branch protection rule requiring a specific status check, so nothing
+  # blocked merges while entire test tiers were silently not running.
+  #
+  # This job is the fix: it depends on EVERY job in this workflow (explicitly
+  # enumerated — GitHub Actions has no wildcard for `needs:`) and fails loudly
+  # if any of them is `failure`, `cancelled`, OR `skipped`. Mark THIS job (not
+  # any individual job above) as the required status check in branch
+  # protection — that is the only way a silent upstream skip becomes a
+  # visible, merge-blocking red X again.
+  #
+  # `if: always()` is required so this job still runs (and can fail) even
+  # when upstream jobs fail or are skipped — the default `if` would skip this
+  # job too, defeating the whole purpose.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  ci-required:
+    name: CI Required (all jobs green)
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - lint
+      - validate-schemas
+      - validate-service-structure
+      - import-guards
+      - db-session-parity
+      - architecture-tests
+      - schema-compat
+      - test-libs
+      - test-synthetic-monitor
+      - test-services
+      - test-frontend
+      - test-contract
+      - test-integration
+      - test-e2e
+    steps:
+      - name: Check all job results
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python3 -c "
+          import json, os, sys
+
+          needs = json.loads(os.environ['NEEDS_CONTEXT'])
+          bad = {}
+          for job_name, info in needs.items():
+              result = info.get('result')
+              # 'skipped' is included deliberately: a downstream job silently
+              # skipped because an upstream gate (test-libs, import-guards,
+              # validate-service-structure, architecture-tests) failed is
+              # exactly the failure mode that caused the 4-day silent outage.
+              if result in ('failure', 'cancelled', 'skipped'):
+                  bad[job_name] = result
+
+          if bad:
+              print('CI Required gate FAILED — one or more jobs did not succeed:')
+              for job_name, result in sorted(bad.items()):
+                  print(f'  - {job_name}: {result}')
+              sys.exit(1)
+
+          print('All required jobs succeeded.')
+          "
