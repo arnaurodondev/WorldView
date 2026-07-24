@@ -1,0 +1,91 @@
+# promtool unit tests for NlpPipelineRetryStorm (2026-07-24 bug-pattern audit).
+# Run: promtool test rules infra/prometheus/tests/nlp_retry_storm_test.yml
+#
+# Gap this fixes: infra/prometheus/rules/nlp_pipeline_retry_storm.yml (PLAN-0096
+# W4 T-W4-03, BP-575) has existed since 2026-05-26 with NO promtool coverage —
+# a broken PromQL expression in it would silently never fire, with nobody
+# noticing until the next real retry-storm incident.
+#
+# NOTE: unlike nlp_drain_health.rules.yml, this rule has no PrometheusRule CRD
+# counterpart to keep in sync — infra/prometheus/rules/*.yml is loaded directly
+# by the local/docker-compose Prometheus (see infra/prometheus/prometheus.yml
+# `rule_files: /etc/prometheus/rules/*.yml`), so this test targets it in place.
+#
+# Validates the two behaviours that matter:
+#   * STORM (BP-575 signature): the article consumer processes ZERO messages
+#     from content.article.stored.v1 for the full for:10m window WHILE the
+#     topic has a non-zero backlog (every redelivery hits the same
+#     deterministic permanent failure, so the offset never advances and the
+#     DLQ never fills either) -> NlpPipelineRetryStorm fires.
+#   * NORMAL operation (consumer draining -- rate > 0) and IDLE (rate == 0 but
+#     topic backlog is also 0, i.e. genuinely nothing to consume) -> the alert
+#     must NOT fire in either case (0 false-fire).
+rule_files:
+  - ../rules/nlp_pipeline_retry_storm.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── 1. STORM: consumer wedged (0 consumed) while topic backlog > 0 ─────────
+  - name: consumer wedged with non-zero backlog -> retry storm alert fires
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumer_messages_consumed_total{service="nlp-pipeline",topic="content.article.stored.v1",consumer_group="nlp-pipeline-group"}'
+        values: "500+0x40"  # counter frozen -> rate() == 0 for the whole window
+      - series: 'kafka_topic_size{topic="content.article.stored.v1"}'
+        values: "94+0x40"  # BP-575's 94 poison messages sitting in the backlog
+    alert_rule_test:
+      # rate([5m]) needs 5m of history, then for:10m -> fires by ~15m; assert
+      # comfortably past that (mirrors the 37m margin used in the sibling
+      # nlp_drain_health_test.yml for its longer for:20m rule).
+      - eval_time: 20m
+        alertname: NlpPipelineRetryStorm
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              subsystem: nlp-pipeline
+              topic: content.article.stored.v1
+            exp_annotations:
+              summary: "NLP article consumer stalled on content.article.stored.v1 (retry storm suspected)"
+              description: >
+                ``ArticleProcessingConsumer`` has processed zero messages from
+                ``content.article.stored.v1`` for >10 minutes while the topic has
+                a non-zero backlog.  This is the BP-575 signature: every message
+                is hitting a deterministic ``IntegrityError`` (or equivalent
+                permanent-failure pattern) and being treated as retryable, so the
+                offset never advances and the DLQ never fills.  Check the
+                consumer logs for ``article_consumer.legacy_tenant_id_sentinel_applied``
+                (legacy passthrough is working) or repeated
+                ``null value in column "tenant_id"`` traces (sentinel branch is
+                NOT reached — code drift).
+              runbook_url: "https://github.com/worldview/runbooks/blob/main/NlpPipelineRetryStorm.md"
+
+  # ── 2. HEALTHY: consumer actively draining the topic -> no fire ────────────
+  #    rate() > 0 throughout -> the first AND-leg (`== 0`) is never true.
+  - name: consumer actively consuming -> no alert
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumer_messages_consumed_total{service="nlp-pipeline",topic="content.article.stored.v1",consumer_group="nlp-pipeline-group"}'
+        values: "0+50x40"  # steadily incrementing -> rate() > 0
+      - series: 'kafka_topic_size{topic="content.article.stored.v1"}'
+        values: "94+0x40"  # backlog present but being drained, not stalled
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NlpPipelineRetryStorm
+        exp_alerts: []
+
+  # ── 3. IDLE (not stalled): zero consumption because there is genuinely ─────
+  #    nothing to consume (topic backlog == 0). The second AND-leg
+  #    (`kafka_topic_size > 0`) is false, so the alert must NOT mistake a
+  #    quiet, fully-drained topic for a retry storm.
+  - name: idle topic with zero backlog -> no alert
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumer_messages_consumed_total{service="nlp-pipeline",topic="content.article.stored.v1",consumer_group="nlp-pipeline-group"}'
+        values: "500+0x40"  # nothing new consumed...
+      - series: 'kafka_topic_size{topic="content.article.stored.v1"}'
+        values: "0+0x40"  # ...because there is nothing left in the topic
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NlpPipelineRetryStorm
+        exp_alerts: []

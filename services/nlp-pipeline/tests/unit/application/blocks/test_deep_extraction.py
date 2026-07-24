@@ -427,6 +427,47 @@ class TestRunDeepExtractionBlock:
         assert result["degraded"] is False
         assert result["timed_out_windows"] == 0
 
+    @pytest.mark.asyncio
+    async def test_provider_billing_error_propagates(self) -> None:
+        """BP-729 regression guard (2026-07-24 bug-pattern audit).
+
+        ``ProviderBillingError`` (a ``RetryableError`` subclass raised for HTTP
+        401/402/403 spend-cap / auth refusals — see ``ml_clients.errors``) MUST
+        propagate OUT of ``run_deep_extraction_block`` as a
+        ``ProviderBillingError``, not be re-wrapped into a generic
+        ``RetryableError`` and not be swallowed into a degraded=False empty
+        result. The article consumer's ``_settle_message`` has a SPECIFIC
+        ``except ProviderBillingError as exc:`` branch (see
+        ``article_consumer.py``) that defers the message WITHOUT consuming its
+        bounded retry budget, because a spend-cap outage clears only when the
+        operator acts and can outlast a normal retry schedule. If this block
+        loses the specific exception type on the way out — e.g. by raising a
+        plain ``RetryableError`` in the all-windows-failed branch — the
+        consumer's generic transient-retry path catches it instead, spends the
+        bounded budget, and the message is dead-lettered once the budget is
+        exhausted: this is the EXACT 693-article silent-loss mechanism BP-729
+        describes. A generic non-billing failure (``test_extraction_failure_
+        does_not_raise`` above) must still be swallowed — only the billing
+        exception's propagation behaviour changes.
+        """
+        from ml_clients.errors import ProviderBillingError  # type: ignore[import-not-found]
+
+        client = MagicMock()
+        client.extract = AsyncMock(side_effect=ProviderBillingError("DeepInfra 402 spend cap"))
+
+        with pytest.raises(ProviderBillingError):
+            await run_deep_extraction_block(
+                doc_id=uuid.uuid4(),
+                chunks=[_make_chunk("Single window article body.")],
+                mentions=[],
+                processing_path=ProcessingPath.FULL_PIPELINE,
+                extraction_client=client,
+                model_id="qwen2.5:7b-instruct",
+                published_at=None,
+                extracted_at=datetime.now(tz=UTC),
+                outbox_topic_signal="nlp.signal.detected.v1",
+            )
+
 
 @pytest.mark.unit
 class TestDeepExtractionTimeouts:

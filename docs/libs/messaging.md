@@ -200,7 +200,7 @@ BaseKafkaConsumer(
 | `mark_processed(event_id)` | After successful processing | Insert into dedup store (inside same UoW). |
 | `store_failure(failure)` | First failure | Persist `FailureInfo` to retry table. Return saved record. |
 | `update_failure(failure)` | Subsequent retries | Update attempt count and last error. |
-| `dead_letter(failure, reason=None)` | Fatal error or max retries exceeded | Move to dead-letter store; alert; increments `kafka_messages_dead_lettered_total{reason}`. |
+| `dead_letter(failure, reason=None)` | Fatal error or max retries exceeded | Move to dead-letter store; alert; increments `kafka_messages_dead_lettered_total{service,topic,reason}`. |
 | `get_pending_retries()` | Background retry loop | Return all `FailureInfo` records eligible for retry. |
 | `process_message_from_failure(failure)` | Retry | Re-run business logic from `failure.record` (stored payload). |
 | `get_unit_of_work()` | Each message | Return a fresh async UoW context manager. |

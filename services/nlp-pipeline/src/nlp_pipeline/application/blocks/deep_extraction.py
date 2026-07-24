@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
-from ml_clients.errors import RetryableError  # type: ignore[import-not-found]
+from ml_clients.errors import ProviderBillingError, RetryableError  # type: ignore[import-not-found]
 from ml_clients.pricing import resolve_cost  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
@@ -560,6 +560,12 @@ async def run_deep_extraction_block(
     #   * After the loop, retry semantics are decided (see below).
     window_results: list[ExtractionResult] = []
     timed_out_windows = 0
+    # 2026-07-24 bug-pattern audit (BP-729 regression guard): remember the LAST
+    # RetryableError caught below so the all-windows-failed branch can inspect
+    # its concrete type instead of always synthesizing a generic RetryableError.
+    # This matters specifically for ProviderBillingError (HTTP 401/402/403
+    # spend-cap / auth refusal) — see the re-raise below for why.
+    last_retryable_error: RetryableError | None = None
     # ``total_windows`` was set above to the PRE-cap window count so timeout logs
     # and the completion event report the true document size; the loop iterates
     # the (possibly capped) ``windows`` list.
@@ -574,12 +580,13 @@ async def run_deep_extraction_block(
                 usage_logger=usage_logger,
             )
             window_results.append(result)
-        except RetryableError:
+        except RetryableError as exc:
             # Transient/timeout failure — DO NOT substitute an empty result as if
             # the window succeeded. Track it so the completion event/return value
             # can flag the doc as degraded, and so a timed-out doc is retried
             # rather than persisted as a clean zero.
             timed_out_windows += 1
+            last_retryable_error = exc
             # R25: record via the injected metrics port (NOOP_METRICS by
             # default) so the application layer never imports infra metrics.
             try:
@@ -646,6 +653,20 @@ async def run_deep_extraction_block(
             timed_out_windows=timed_out_windows,
             total_windows=total_windows,
         )
+        # BP-729 regression guard (2026-07-24 bug-pattern audit): a
+        # ProviderBillingError (spend-cap/auth refusal) must propagate out
+        # AS a ProviderBillingError, not be re-wrapped into a generic
+        # RetryableError. The article consumer's ``_settle_message`` has a
+        # dedicated ``except ProviderBillingError`` branch that defers the
+        # message WITHOUT consuming its bounded retry budget — a plain
+        # RetryableError instead falls into the generic transient-retry path,
+        # which spends the budget and eventually dead-letters the article once
+        # it is exhausted. That is the exact 693-article silent-loss mechanism
+        # BP-729 describes, reintroduced here if the type is lost on the way
+        # out. Re-raising the ORIGINAL exception instance also preserves its
+        # message/traceback, which the generic path below discards.
+        if isinstance(last_retryable_error, ProviderBillingError):
+            raise last_retryable_error
         raise RetryableError(
             f"deep extraction timed out on all {timed_out_windows}/{total_windows} windows for doc {doc_id}",
         )
