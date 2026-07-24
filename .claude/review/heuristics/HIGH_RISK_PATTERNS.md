@@ -1246,3 +1246,43 @@ comment.
 grep -rn "offset\s*+=\|cursor\s*=.*next\|while.*len(.*)\s*==\s*limit" \
   services/content-ingestion/src/content_ingestion/infrastructure/adapters/polymarket*/
 ```
+
+---
+
+### HR-068: Resolve-or-Create on `instruments`/`canonical_entities` Keyed on an Exact Composite Match, With No Identity-Only Fallback
+
+**Pattern** (RED):
+```python
+# SUSPICIOUS — exact-match lookup, then create on miss, with no broader pre-lookup
+existing = await uow.instruments.find_by_symbol_exchange(symbol, exchange)
+if existing is None:
+    instrument = Instrument(symbol=symbol, exchange=exchange, ...)
+    await uow.instruments.upsert(instrument)  # mints a NEW row — exchange may be a placeholder
+```
+
+**Risk**: this exact shape has independently fired in TWO services — BP-459 (knowledge-graph:
+two minting pipelines raced on the same ticker because the conflict-detection index never
+matched both insert shapes) and BP-743 (market-data: a placeholder `exchange=''` row and a later
+real-exchange row for the same `NFLX` symbol coexisted because `(symbol, exchange)` is an exact
+composite key). An exact-match unique constraint/`ON CONFLICT` does NOT catch a duplicate when
+one input component can legitimately arrive as unknown/placeholder from a different code path
+than the one that later supplies the real value.
+**Action**: any resolve-or-create on `instruments` MUST also call
+`find_symbol_match_ignoring_exchange` (`services/market-data/.../messaging/consumers/_instrument_dedup.py`)
+before creating; any resolve-or-create on `canonical_entities` MUST also call `find_by_ticker`
+before minting. Two standing guards now enforce this automatically: the prod-QA
+`duplicate_groups` check (`scripts/prod_qa/checks/duplicate_groups.py`, zero-tolerance
+`GROUP BY <key> HAVING count(*) > 1` scan) and the architecture test
+`tests/architecture/test_dedup_prelookup_enforcement.py` (rule `DEDUP-PRELOOKUP-001`, AST-scans
+for the create call without the guard reference in the same file). A file matching this shape
+that fails the architecture test needs either the guard call added, or a justified allowlist
+entry in `tests/architecture/_dedup_prelookup_allowlist.yaml` (only for call sites that upsert by
+a stable ID rather than a human-readable composite key — i.e. genuinely not this bug shape).
+**Detection**:
+```bash
+# Architecture test already runs this automatically:
+pytest tests/architecture/test_dedup_prelookup_enforcement.py -v
+# Manual spot-check for a new create call site missing its guard:
+grep -rn "\.instruments\.\(upsert\|create\)(\|\.\(entity_repo\|canonical_entities\)\.\(create\|create_or_get\)(" \
+  services/*/src/*/infrastructure/
+```

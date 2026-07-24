@@ -89,6 +89,7 @@ traffic (`401` on `/v1/...`, `403` on `/metrics`).
 | `knowledge_graph` (S7) | entity intel + graph | AAPL grounded facts (name/type/ticker/**ISIN** — anti-fabrication), relation density + type diversity, description/embedding coverage, **AGE** vertex+edge liveness, evidence-promoter drain, prediction entity-linking |
 | `nlp_pipeline` (S6) | enrichment | chunks + embeddings-ready %, NER mentions/24h (GLiNER-alive), routing 3-tier spread, relevance coverage, no poison embeddings, ANN search, synthetic CJK embed E2E |
 | `content` (S4+S5) | ingestion/store | news freshness + 24h volume, title coverage (SEC primary-doc fix), source mix, task failure ratio, DLQ bounded |
+| `duplicate_groups` | cross-service identity dedup | `GROUP BY <normalized-key> HAVING count(*) > 1` on `instruments`, `canonical_entities`, `prediction_markets`; junk exchange-prefixed canonical names; `event_id IS NULL` floor guard — see **duplicate-group scanner** below |
 | `rag_chat` (S8) | grounded chat | golden Q → answer names the company + grounds a `$` price; `rag_db` persistence schema present |
 | `portfolio` (S1+S2) | tenant + upstream ingest | schema present, `/readyz`, instrument-cache populated, S2 ingestion throughput + no stuck leases |
 | `alert` (S10+S9) | alerts + gateway contract | alert schema + rule-type CHECK includes `PREDICTION`, worker pods up, **N backend families reachable via the prober** (BFF proxy wired), gateway `/healthz` |
@@ -121,6 +122,39 @@ The chat golden questions are templated into the in-pod prober from
 cold-start hang return `-1` → the check **WARNs** (a latency hazard, not a
 correctness verdict) rather than crashing the run.
 
+## Duplicate-group scanner (`checks/duplicate_groups.py`, 2026-07-24)
+
+This platform has hit the same bug shape three times, each time only
+discovered by hand-running a `GROUP BY <key> HAVING count(*) > 1` query after
+a support ticket or manual audit: **BP-459** (two independent
+`canonical_entities`-minting pipelines racing on the same ticker), **BP-743**
+(a placeholder `exchange=''` `instruments` row coexisting with a later
+real-exchange row for the same symbol), and **BP-700** (an unnormalized
+exchange-suffixed ticker minting a duplicate tickerless canonical, and
+producing junk `"NYSE: BCS"`-shaped canonical names). `duplicate_groups.py`
+makes the detection queries from each of those bug-pattern write-ups a
+standing, table-driven layer so a fourth occurrence surfaces on the next run:
+
+| Check | Table | Guard |
+|-------|-------|-------|
+| duplicate symbol (case-insensitive) | `instruments` (market_data_db) | BP-743 |
+| duplicate ticker | `canonical_entities` (intelligence_db) | BP-459 |
+| duplicate name+type (secondary) | `canonical_entities` (intelligence_db) | BP-459 |
+| duplicate `market_id` | `prediction_markets` (market_data_db) | BP-743 (sibling) |
+| duplicate `market_slug` (case-insensitive) | `prediction_markets` (market_data_db) | BP-743 (sibling) |
+| junk exchange-prefixed name (`^[A-Z]+:\s`) | `canonical_entities` (intelligence_db) | BP-700 |
+| `event_id IS NULL` floor (SOFT — total-collapse guard, not zero-tolerance) | `prediction_markets` (market_data_db) | BP-743 (sibling) |
+
+Every hard check is **zero-tolerance** (FAIL on any count > 0) — this is a
+completeness scanner, not a coverage floor, and every historical nonzero
+reading on one of these queries was a confirmed bug, never backfill noise.
+Extend `DUP_GROUP_CHECKS` the next time this shape fires against a new table.
+
+**Validation note**: this check's query-building/threshold logic is covered by
+unit tests in `tests/prod_qa/test_duplicate_groups.py` (no live prod
+Postgres access was available in the environment that authored this check —
+see that test file for what was and wasn't exercised against a real cluster).
+
 ## Tuning
 
 Every numeric floor is a **named constant in `thresholds.py`** with a HARD (FAIL)
@@ -143,6 +177,7 @@ scripts/prod_qa/
     ├── knowledge_graph.py  # S7 (+ AGE)
     ├── nlp_pipeline.py     # S6
     ├── content.py          # S4 + S5
+    ├── duplicate_groups.py # cross-service identity dedup (BP-459/BP-743/BP-700)
     ├── rag_chat.py         # S8
     ├── portfolio.py        # S1 + S2
     └── alert.py            # S10 + S9 gateway contract
