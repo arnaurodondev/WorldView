@@ -137,7 +137,7 @@ EXPECTED_ALEMBIC_HEADS: dict[str, str] = {
     "content_store_db": "0006",
     "ingestion_db": "0025",  # market-ingestion
     "intelligence_db": "0067",  # intelligence-migrations (Job-run, no owner pod)
-    "market_data_db": "045",
+    "market_data_db": "048",
     "nlp_db": "0024",
     "portfolio_db": "0027",
     "rag_db": "0010",
