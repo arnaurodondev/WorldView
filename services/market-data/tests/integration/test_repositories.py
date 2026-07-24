@@ -222,6 +222,72 @@ class TestPgInstrumentRepository:
         assert row.last_fundamentals_ingest_at is not None
         assert row.last_fundamentals_ingest_at == ts
 
+    async def test_find_by_symbol_icase_prefers_nonempty_exchange(self, uow) -> None:
+        """NFLX-duplicate-instrument regression (2026-07).
+
+        Given two rows for the same symbol — a placeholder ``exchange=''``
+        row and a real ``exchange='US'`` row — ``find_by_symbol_icase`` MUST
+        deterministically return the real-exchange row, never the
+        placeholder, regardless of insertion order. Before the fix,
+        ``.first()`` with no ``ORDER BY`` returned whichever row Postgres
+        happened to store first on disk — which was the stale placeholder in
+        the live NFLX incident.
+        """
+        from market_data.domain.entities import Instrument
+
+        sec_id = await self._make_security(uow)
+        # Insert the PLACEHOLDER row first (matches the live incident's
+        # ordering: fundamentals-refresh created the placeholder a day
+        # before regular ingestion created the canonical row).
+        placeholder = Instrument(security_id=sec_id, symbol="DUPX", exchange="")
+        await uow.instruments.upsert(placeholder)
+        await uow.commit()
+
+        canonical = Instrument(security_id=sec_id, symbol="DUPX", exchange="US")
+        created_canonical = await uow.instruments.upsert(canonical)
+        await uow.commit()
+
+        found = await uow.instruments.find_by_symbol_icase("DUPX")
+        assert found is not None
+        assert found.id == created_canonical.id
+        assert found.exchange == "US"
+
+        # Case-insensitivity is preserved by the new ORDER BY.
+        found_lower = await uow.instruments.find_by_symbol_icase("dupx")
+        assert found_lower is not None
+        assert found_lower.id == created_canonical.id
+
+    async def test_find_by_symbol_icase_prefers_freshest_fundamentals(self, uow) -> None:
+        """When both rows have a real exchange, the freshest row wins.
+
+        Tie-break #2 (after "non-empty exchange"): most recent
+        ``last_fundamentals_ingest_at``. This covers duplicates that are NOT
+        the placeholder-exchange pattern (e.g. a historical dual-listing
+        cleanup), so the resolver still picks the row with the most current
+        data rather than an arbitrary one.
+        """
+        from market_data.domain.entities import Instrument
+
+        sec_id = await self._make_security(uow)
+        stale = Instrument(security_id=sec_id, symbol="DUPY", exchange="XNAS")
+        created_stale = await uow.instruments.upsert(stale)
+        await uow.commit()
+        await uow.instruments.touch_fundamentals_ingest_at(created_stale.id, datetime(2026, 3, 31, tzinfo=UTC))
+        await uow.commit()
+
+        # A second row for the SAME symbol under a DIFFERENT exchange (the
+        # constraint is on (symbol, exchange), so this insert succeeds
+        # distinctly — mirrors how the real duplicate came to exist).
+        fresh = Instrument(security_id=sec_id, symbol="DUPY", exchange="XLON")
+        created_fresh = await uow.instruments.upsert(fresh)
+        await uow.commit()
+        await uow.instruments.touch_fundamentals_ingest_at(created_fresh.id, datetime(2026, 7, 22, tzinfo=UTC))
+        await uow.commit()
+
+        found = await uow.instruments.find_by_symbol_icase("DUPY")
+        assert found is not None
+        assert found.id == created_fresh.id
+
 
 # ── OHLCV repository ──────────────────────────────────────────────────────────
 

@@ -58,6 +58,11 @@ def _make_consumer(
 ) -> QuotesConsumer:
     # Ensure content-hash dedup never short-circuits in unit tests
     mock_uow.ingestion_events.exists_by_content_hash = AsyncMock(return_value=False)
+    # Default the NFLX-dup-guard's symbol-only lookup to "nothing found" so
+    # existing "creates a new instrument" tests keep exercising the create
+    # path unless a test explicitly overrides this (set AFTER calling this
+    # helper — see test_quotes_consumer_reuses_existing_instrument_with_different_exchange).
+    mock_uow.instruments.find_by_symbol_icase = AsyncMock(return_value=None)
     consumer = QuotesConsumer(
         uow_factory=lambda: mock_uow,
         object_storage=mock_storage,
@@ -128,6 +133,51 @@ async def test_quotes_consumer_creates_instrument_on_first_seen() -> None:
     assert call_kwargs.kwargs["event_type"] == "market.instrument.discovered"
     assert call_kwargs.kwargs["topic"] == "market.instrument.discovered.v1"
     assert call_kwargs.kwargs["payload"]["symbol"] == "MSFT"
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_reuses_existing_instrument_with_different_exchange() -> None:
+    """NFLX-duplicate-instrument regression (2026-07).
+
+    ``find_by_symbol_exchange(symbol, exchange)`` finds nothing (no exact
+    match for THIS exchange), but a row for the SAME symbol already exists
+    under a DIFFERENT exchange (e.g. the empty-string placeholder created by
+    ``FundamentalsRefreshWorker`` triggering a refresh with no exchange
+    context). The consumer MUST reuse that existing row — upgrading its
+    exchange since we now know a real one — instead of creating a second,
+    duplicate instrument.
+    """
+    existing_placeholder = Instrument(
+        id="instr-placeholder-002",
+        security_id="sec-111",
+        symbol="MSFT",
+        exchange="",  # unknown at the time this row was created
+        flags=InstrumentFlags(has_fundamentals=True),
+        is_active=True,
+        created_at=datetime.now(tz=UTC),
+    )
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.update_metadata = AsyncMock()
+    mock_uow.instruments.update_flags = AsyncMock()
+    mock_uow.quotes.upsert = AsyncMock(return_value=None)
+
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_quote_json())
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    # Set AFTER ``_make_consumer`` since it defaults this mock to "not found".
+    mock_uow.instruments.find_by_symbol_icase = AsyncMock(return_value=existing_placeholder)
+    await consumer.process_message(None, _make_message(), {})
+
+    # The critical assertion: NO new instrument row was created.
+    mock_uow.instruments.upsert.assert_not_called()
+    # The placeholder's exchange was upgraded to the now-known real value.
+    mock_uow.instruments.update_metadata.assert_awaited_once_with(existing_placeholder.id, {"exchange": "US"})
+    # The quote is written against the REUSED instrument's id.
+    mock_uow.quotes.upsert.assert_awaited_once()
+    quote_arg = mock_uow.quotes.upsert.call_args[0][0]
+    assert quote_arg.instrument_id == existing_placeholder.id
 
 
 @pytest.mark.asyncio

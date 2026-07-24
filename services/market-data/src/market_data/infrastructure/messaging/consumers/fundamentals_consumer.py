@@ -22,6 +22,7 @@ from market_data.infrastructure.db.fundamentals_snapshot_writer import (
     upsert_snapshot,
 )
 from market_data.infrastructure.db.metric_extractor import extract_metrics
+from market_data.infrastructure.messaging.consumers._instrument_dedup import find_symbol_match_ignoring_exchange
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from market_data.infrastructure.metrics.prometheus import fundamentals_consumer_processing_ms
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
@@ -465,6 +466,17 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         # one, KG's ``synthesised_name`` path would re-create the placeholder
         # state we are trying to escape.
         instrument: Instrument | None = await uow.instruments.find_by_symbol_exchange(symbol, exchange)
+        if instrument is None:
+            # BP-NFLX-DUP guard: before creating a brand-new row, check whether
+            # ANY instrument already exists for this symbol under a different
+            # exchange value. This consumer is the one that actually created
+            # the 2026-07-15 NFLX orphan row — FundamentalsRefreshWorker
+            # triggers a refresh from a bare symbol list with NO exchange
+            # context, so ``exchange`` arrives here as ``""`` for brand-new
+            # symbols. Without this guard that produces a permanent duplicate
+            # instead of reusing/upgrading the existing row. See
+            # ``_instrument_dedup.py`` for the full incident writeup.
+            instrument = await find_symbol_match_ignoring_exchange(uow, symbol, exchange)
         is_first_fundamentals = instrument is None or not instrument.flags.has_fundamentals
         if instrument is None:
             security = await uow.securities.upsert(Security(name=symbol))

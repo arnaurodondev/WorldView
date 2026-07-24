@@ -225,6 +225,19 @@ class PgInstrumentRepository(InstrumentRepository):
         if not updates:
             return
         await self._session.execute(update(InstrumentModel).where(InstrumentModel.id == id).values(**updates))
+        # BP-610 / BP-743: explicit flush so this UPDATE reaches the transaction
+        # immediately rather than staying buffered until commit(). The exchange
+        # upgrade in ``_instrument_dedup.find_symbol_match_ignoring_exchange`` is
+        # now a correctness-path caller (it fixes a placeholder exchange in
+        # place); without the flush, a later same-UoW op that raises and is
+        # swallowed by the consumer's try/except would silently drop this
+        # buffered UPDATE — the exact buffered-but-never-sent pattern that
+        # produced 0/629 non-NULL rows in the BP-610 incident. Matches the
+        # repo-wide convention (``touch_fundamentals_ingest_at`` above,
+        # ``content-store`` / ``alert`` / ``rag-chat`` repos). The other caller
+        # (``on_demand_profile``) commits right after, so the flush is a no-op
+        # cost there.
+        await self._session.flush()
 
     async def touch_fundamentals_ingest_at(self, id: str, ts: datetime) -> None:  # noqa: A002
         """Bump ``last_fundamentals_ingest_at`` to ``ts`` for instrument ``id``.
@@ -259,6 +272,39 @@ class PgInstrumentRepository(InstrumentRepository):
         return self._to_domain(row) if row else None
 
     async def find_by_symbol_icase(self, symbol: str) -> Instrument | None:
-        result = await self._session.execute(select(InstrumentModel).where(InstrumentModel.symbol.ilike(symbol)))
+        """Case-insensitive symbol lookup, deterministically picking the *best* row.
+
+        2026-07 NFLX-duplicate-instrument incident: two rows existed for the
+        same symbol (``exchange=''`` placeholder created 2026-07-15 with stale
+        fundamentals vs. ``exchange='US'`` canonical created 2026-07-16 with
+        fresh fundamentals — see the audit + migration 046 that merges any
+        duplicate same-symbol rows). Without an ``ORDER BY``, ``.first()`` returned whichever row
+        Postgres happened to store first on disk — deterministically but
+        arbitrarily the stale placeholder — silently serving stale fundamentals
+        data into rag-chat's fundamentals tool.
+
+        Even with the app-level dedup guard added alongside this fix (see
+        ``_instrument_dedup.py`` used by ``ohlcv_consumer``/``quotes_consumer``/
+        ``fundamentals_consumer``) and the DB-level partial unique index
+        (migration 047) preventing *new* duplicates, this ordering is kept as
+        defense-in-depth: any duplicate that slips through (race condition,
+        manual data fix, pre-guard legacy row) resolves to the most useful row
+        rather than an arbitrary one.
+
+        Tie-break order:
+          1. Non-empty/real ``exchange`` beats the ``''`` placeholder.
+          2. Most recent ``last_fundamentals_ingest_at`` (freshest data) wins.
+          3. Most recently created row wins as the final deterministic
+             tiebreaker (never truly ambiguous).
+        """
+        result = await self._session.execute(
+            select(InstrumentModel)
+            .where(InstrumentModel.symbol.ilike(symbol))
+            .order_by(
+                (InstrumentModel.exchange != "").desc(),
+                InstrumentModel.last_fundamentals_ingest_at.desc().nulls_last(),
+                InstrumentModel.created_at.desc(),
+            )
+        )
         row = result.scalars().first()
         return self._to_domain(row) if row else None
