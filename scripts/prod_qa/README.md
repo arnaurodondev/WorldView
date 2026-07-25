@@ -90,6 +90,7 @@ traffic (`401` on `/v1/...`, `403` on `/metrics`).
 | `nlp_pipeline` (S6) | enrichment | chunks + embeddings-ready %, NER mentions/24h (GLiNER-alive), routing 3-tier spread, relevance coverage, no poison embeddings, ANN search, synthetic CJK embed E2E |
 | `content` (S4+S5) | ingestion/store | news freshness + 24h volume, title coverage (SEC primary-doc fix), source mix, task failure ratio, DLQ bounded |
 | `duplicate_groups` | cross-service identity dedup | `GROUP BY <normalized-key> HAVING count(*) > 1` on `instruments`, `canonical_entities`, `prediction_markets`; junk exchange-prefixed canonical names; `event_id IS NULL` floor guard — see **duplicate-group scanner** below |
+| `internal_jwt_signing` | outbound internal-JWT signing-key completeness | re-derives every service that mints outbound `X-Internal-JWT` tokens (config.py scan) and asserts its `internal_jwt_private_key` is actually POPULATED in the live k8s Secret (key presence only, never decoded) — see **internal-JWT signing-key scanner** below |
 | `rag_chat` (S8) | grounded chat | golden Q → answer names the company + grounds a `$` price; `rag_db` persistence schema present |
 | `portfolio` (S1+S2) | tenant + upstream ingest | schema present, `/readyz`, instrument-cache populated, S2 ingestion throughput + no stuck leases |
 | `alert` (S10+S9) | alerts + gateway contract | alert schema + rule-type CHECK includes `PREDICTION`, worker pods up, **N backend families reachable via the prober** (BFF proxy wired), gateway `/healthz` |
@@ -155,6 +156,38 @@ unit tests in `tests/prod_qa/test_duplicate_groups.py` (no live prod
 Postgres access was available in the environment that authored this check —
 see that test file for what was and wasn't exercised against a real cluster).
 
+## Internal-JWT signing-key scanner (`checks/internal_jwt_signing.py`, 2026-07-25)
+
+**BP-752**: `portfolio` and `market-ingestion` were found silently signing
+HS256 "dev fallback" internal JWTs in production because their
+`internal_jwt_private_key` was empty/unset — while `market-data` (the
+callee) verifies RS256 and rejects HS256 — 24h+ of 100% silent auth failure,
+invisible because each caller degrades gracefully (cost-basis pricing /
+static symbol universe) instead of crashing. Unlike the single-service,
+in-pod `knowledge_graph` check above (`internal-JWT KG→market-data
+signs+verifies`, added the same investigation day), this scanner is
+**general**: it does not hardcode which services need checking. It
+filesystem-scans every service's `config.py` for the
+`internal_jwt_private_key` field (the same source-of-truth signal the
+sibling architecture test `tests/architecture/test_internal_jwt_signing_key_wiring.py`
+uses) to re-derive the "should be populated" set, then queries each
+matching service's live k8s Secret for the corresponding data KEY —
+checking only whether the key is present and long enough to plausibly be a
+real RS256 PEM, never decoding the value itself.
+
+Run live (2026-07-25) this check correctly **FAILs** for `portfolio`,
+`market-ingestion`, `market-data`, and `content-ingestion` (all four
+currently have no `*_INTERNAL_JWT_PRIVATE_KEY` entry in their deployed
+Secret — a genuine, still-open ops gap; provisioning real key pairs for
+these four is a follow-up outside this check's scope) and **PASSes** for
+`knowledge-graph` and `api-gateway` (both have the key populated).
+
+**Validation note**: this check's scan/decision logic is covered by unit
+tests in `tests/prod_qa/test_internal_jwt_signing.py` (mocked `H.kubectl` —
+no live cluster access required to validate the Python-side logic); the
+live-cluster run above additionally confirms the query shape works against
+the real `kubectl`/Secret API.
+
 ## Tuning
 
 Every numeric floor is a **named constant in `thresholds.py`** with a HARD (FAIL)
@@ -178,6 +211,7 @@ scripts/prod_qa/
     ├── nlp_pipeline.py     # S6
     ├── content.py          # S4 + S5
     ├── duplicate_groups.py # cross-service identity dedup (BP-459/BP-743/BP-700)
+    ├── internal_jwt_signing.py # outbound internal-JWT signing-key completeness (BP-752)
     ├── rag_chat.py         # S8
     ├── portfolio.py        # S1 + S2
     └── alert.py            # S10 + S9 gateway contract

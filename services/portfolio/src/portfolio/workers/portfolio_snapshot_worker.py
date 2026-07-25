@@ -129,19 +129,24 @@ def is_trading_day(d: date) -> bool:
 # ── HTTP price client ─────────────────────────────────────────────────────────
 
 
-def _system_jwt_headers() -> dict[str, str]:
+def _system_jwt_headers(private_key_pem: str = "") -> dict[str, str]:
     """Generate ``X-Internal-JWT`` for service-to-service calls to market-data.
 
     DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
     always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
     ``InternalJWTMiddleware`` once real verification is enabled).  Same
-    rationale as ``BrokerageTransactionSyncWorker._system_jwt_headers``: in dev
-    S3 runs with ``skip_verification=True`` and accepts any decodable JWT.
-    Production needs a real S9-signed token.
+    rationale as ``BrokerageTransactionSyncWorker._system_jwt_headers``.
+
+    BP-752: ``private_key_pem`` non-empty (``settings.internal_jwt_private_key``
+    populated in the deployed secret) signs a real RS256 token that production
+    market-data verifies; empty falls back to the HS256 dev token, only
+    accepted when market-data itself runs ``skip_verification=True`` (never
+    true in production).
     """
     token = mint_internal_jwt(
         sub="system:portfolio-snapshot",
         ttl_seconds=86400,
+        private_key_pem=private_key_pem,
         dev_hs256_secret="dev-skip-verification-key-for-portfolio-snapshot-worker",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
     )
     return {"X-Internal-JWT": token}
@@ -681,7 +686,9 @@ async def main() -> None:
     _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     try:
-        async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http_client:
+        async with httpx.AsyncClient(
+            timeout=10.0, headers=_system_jwt_headers(settings.internal_jwt_private_key.get_secret_value())
+        ) as http_client:
             price_client = HttpOHLCVPriceClient(
                 http=http_client,
                 market_data_url=settings.market_data_service_url,

@@ -34,6 +34,19 @@ from the verified JWT claims.
 - Health/metrics paths (`/healthz`, `/readyz`, `/metrics`) bypass middleware.
 - **`PORTFOLIO_INTERNAL_SERVICE_TOKEN` is REMOVED** — never reference it in new code.
 
+**Outbound signing (BP-752, 2026-07-25)**: the middleware above only covers
+*incoming* requests. When portfolio itself calls OUT to market-data
+(current-price/recent-prices/instrument-lookup clients, brokerage-sync
+worker, snapshot worker), it signs its own `X-Internal-JWT` via
+`mint_internal_jwt(private_key_pem=settings.internal_jwt_private_key...)`.
+This field did not exist at all before BP-752 — every outbound call was
+permanently stuck on an HS256 dev-fallback token that production
+market-data (RS256-verifying) rejects. The field now exists, but as of
+2026-07-25 the deployed k8s Secret still has no
+`PORTFOLIO_INTERNAL_JWT_PRIVATE_KEY` entry — provisioning a real key pair
+is a follow-up ops action tracked by `scripts/prod_qa/checks/internal_jwt_signing.py`
+(FAILs until that secret is populated).
+
 ### Process Topology
 
 | Process | Entry Point | Purpose |

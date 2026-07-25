@@ -138,9 +138,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     market_data_http = _httpx.AsyncClient(timeout=10.0)
     app.state.market_data_http = market_data_http
+    # BP-752: thread the RS256 signing key through so these clients can mint
+    # a real internal JWT instead of only the HS256 dev fallback (empty
+    # SecretStr default preserves today's behaviour until the key is
+    # provisioned in the deployed secret).
+    _internal_jwt_private_key = settings.internal_jwt_private_key.get_secret_value()
     app.state.current_price_client = HttpCurrentPriceClient(
         http=market_data_http,
         market_data_url=settings.market_data_service_url,
+        internal_jwt_private_key=_internal_jwt_private_key,
     )
 
     # PLAN-0102 W2 T-W2-01: recent-prices client used by the P&L endpoint.
@@ -151,6 +157,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.recent_prices_client = HttpRecentPricesClient(
         http=market_data_http,
         market_data_url=settings.market_data_service_url,
+        internal_jwt_private_key=_internal_jwt_private_key,
     )
 
     # 8. Create outbox dispatcher

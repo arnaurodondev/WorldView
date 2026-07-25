@@ -159,10 +159,13 @@ def _system_jwt_headers(settings: Settings) -> dict[str, str]:
 
     WHY: Market-data uses InternalJWTMiddleware which requires X-Internal-JWT on
     every request. The brokerage-sync worker calls market-data directly (not via
-    S9), so it cannot obtain an RS256-signed JWT from the gateway. In dev,
-    market-data is configured with skip_verification=True which accepts any
-    decodable JWT. The HS256 token here is only for dev — production would
-    require a proper service account token from S9.
+    S9), so it cannot obtain an RS256-signed JWT from the gateway.
+
+    BP-752: prefers signing a real RS256 token from ``settings.internal_jwt_private_key``
+    when populated in the deployed secret — production market-data verifies RS256
+    and rejects HS256 unless it itself runs ``skip_verification=True`` (forbidden
+    in production). Falls back to the HS256 dev secret only when the key is empty
+    (local dev / not yet provisioned).
     """
     # DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
     # always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
@@ -170,6 +173,7 @@ def _system_jwt_headers(settings: Settings) -> dict[str, str]:
     token = mint_internal_jwt(
         sub="system:brokerage-sync",
         ttl_seconds=86400,
+        private_key_pem=settings.internal_jwt_private_key.get_secret_value(),
         dev_hs256_secret=settings.brokerage_sync_jwt_secret.get_secret_value(),
     )
     return {"X-Internal-JWT": token}

@@ -88,6 +88,21 @@ class Settings(BaseSettings):
     # production — only for E2E tests that run without a full S9 stack.
     internal_jwt_skip_verification: bool = False
 
+    # RS256 private key this service uses to SIGN outbound X-Internal-JWT
+    # tokens when it calls OTHER services' internal endpoints (market-data
+    # quote/instrument-lookup batch calls from the current-price/recent-prices
+    # clients, and the brokerage-sync / snapshot workers). Empty in dev — the
+    # callers below fall back to an HS256 dev token, which any RS256-verifying
+    # callee (e.g. production market-data) rejects unless that callee itself
+    # runs with skip_verification=True — which is forbidden in production (see
+    # the validator further down). This field previously did not exist at all
+    # here (unlike market-ingestion / market-data / content-ingestion /
+    # knowledge-graph / api-gateway, which all already declare it), so this
+    # service's outbound calls had NO path to ever mint a real RS256 token —
+    # added 2026-07-25 alongside the internal-JWT signing-key completeness
+    # audit. See docs/BUG_PATTERNS.md BP-752.
+    internal_jwt_private_key: SecretStr = SecretStr("")
+
     # SnapTrade brokerage sync (PRD-0022 §4.3, §12)
     # WHY PORTFOLIO_* listed first: docker-compose brokerage-sync sets bare SNAPTRADE_*
     # vars to "" (empty) via shell expansion when host env is unset. Putting the prefixed

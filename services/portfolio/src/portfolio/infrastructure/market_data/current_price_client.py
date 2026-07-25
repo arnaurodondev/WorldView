@@ -46,15 +46,20 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
-def _system_jwt_headers() -> dict[str, str]:
+def _system_jwt_headers(private_key_pem: str = "") -> dict[str, str]:
     """Issue a one-shot ``X-Internal-JWT`` for the market-data call.
 
     Mirrors the pattern in
     ``portfolio.workers.brokerage_sync_worker._system_jwt_headers``.
-    The HS256 token is signed with a dev-only key — market-data accepts
-    it because ``skip_verification=True`` is on in dev. Production must
-    swap this for an RS256 token issued by S9 (out of scope here; F-007
-    fix is the auth handshake, not the key-rotation pipeline).
+
+    BP-752: ``private_key_pem`` non-empty signs a real RS256 token (the
+    ``internal_jwt_private_key`` setting, when populated in the deployed
+    secret) so production market-data's ``InternalJWTMiddleware`` — which
+    runs with ``skip_verification=False`` — verifies and accepts it. When
+    empty (key not yet provisioned, or local dev), ``mint_internal_jwt``
+    falls back to the HS256 dev token, which market-data only accepts if
+    it itself runs with ``skip_verification=True`` — never true in
+    production.
     """
     # DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
     # always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
@@ -62,6 +67,7 @@ def _system_jwt_headers() -> dict[str, str]:
     token = mint_internal_jwt(
         sub="system:portfolio-current-price-client",
         ttl_seconds=86400,
+        private_key_pem=private_key_pem,
         dev_hs256_secret="dev-skip-verification-key-for-portfolio-current-price",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
     )
     return {"X-Internal-JWT": token}
@@ -83,9 +89,12 @@ class HttpCurrentPriceClient(CurrentPriceClient):
       partial data.
     """
 
-    def __init__(self, http: httpx.AsyncClient, market_data_url: str) -> None:
+    def __init__(self, http: httpx.AsyncClient, market_data_url: str, internal_jwt_private_key: str = "") -> None:
         self._http = http
         self._base_url = market_data_url.rstrip("/")
+        # BP-752: RS256 private key (PEM) used to sign the outbound
+        # X-Internal-JWT header — see ``_system_jwt_headers`` docstring.
+        self._internal_jwt_private_key = internal_jwt_private_key
 
     async def get_current_prices(
         self,
@@ -103,7 +112,7 @@ class HttpCurrentPriceClient(CurrentPriceClient):
         # InternalJWTMiddleware doesn't 401 us. We mint per-request rather
         # than once-per-client so the JTI is unique each call (avoids
         # replay-detection on the gateway side).
-        headers = _system_jwt_headers()
+        headers = _system_jwt_headers(self._internal_jwt_private_key)
         try:
             response = await self._http.post(url, json=body, headers=headers)
         except Exception as exc:

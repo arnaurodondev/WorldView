@@ -20,6 +20,11 @@ Layers
                      (instruments, canonical_entities, prediction_markets) —
                      guards BP-459/BP-743/BP-700's placeholder-vs-real /
                      independent-minting-pipeline duplicate shape
+    internal_jwt_signing  re-derives every service that mints outbound
+                     internal JWTs (config.py scan) and asserts its
+                     internal_jwt_private_key is actually populated in the
+                     live k8s Secret — guards BP-752's silent HS256
+                     dev-fallback-in-production shape
     rag_chat         S8: grounded golden-answer assertions
     portfolio        S1+S2: schema presence, readiness, ingestion throughput
     alert            S10+S9: alert schema/rule-type, gateway route contract
@@ -47,6 +52,7 @@ from .checks import coarse as c_coarse
 from .checks import content as c_content
 from .checks import duplicate_groups as c_dupgroups
 from .checks import gateway as c_gateway
+from .checks import internal_jwt_signing as c_internal_jwt_signing
 from .checks import knowledge_graph as c_kg
 from .checks import market_data as c_md
 from .checks import nlp_pipeline as c_nlp
@@ -63,6 +69,7 @@ LAYERS: list[tuple[str, object, bool]] = [
     ("content", c_content, False),
     ("pipeline", c_pipeline, False),
     ("duplicate_groups", c_dupgroups, False),
+    ("internal_jwt_signing", c_internal_jwt_signing, False),
     ("rag_chat", c_rag, True),
     ("portfolio", c_portfolio, False),
     ("alert", c_alert, True),

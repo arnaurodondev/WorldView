@@ -35,16 +35,21 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
-def _system_jwt_headers() -> dict[str, str]:
-    """Mint a one-shot HS256 X-Internal-JWT (same pattern as the quote client).
+def _system_jwt_headers(private_key_pem: str = "") -> dict[str, str]:
+    """Mint a one-shot X-Internal-JWT (same pattern as the quote client).
 
     DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
     always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
     ``InternalJWTMiddleware`` once real verification is enabled).
+
+    BP-752: ``private_key_pem`` non-empty signs RS256 (verified by production
+    market-data); empty falls back to the HS256 dev token, only accepted when
+    market-data itself runs ``skip_verification=True`` (never true in prod).
     """
     token = mint_internal_jwt(
         sub="system:portfolio-recent-prices-client",
         ttl_seconds=86400,
+        private_key_pem=private_key_pem,
         dev_hs256_secret="dev-skip-verification-key-for-portfolio-recent-prices",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
     )
     return {"X-Internal-JWT": token}
@@ -53,9 +58,12 @@ def _system_jwt_headers() -> dict[str, str]:
 class HttpRecentPricesClient(RecentPricesClient):
     """Production adapter — POST /internal/v1/price/batch on market-data."""
 
-    def __init__(self, http: httpx.AsyncClient, market_data_url: str) -> None:
+    def __init__(self, http: httpx.AsyncClient, market_data_url: str, internal_jwt_private_key: str = "") -> None:
         self._http = http
         self._base_url = market_data_url.rstrip("/")
+        # BP-752: RS256 private key (PEM) used to sign the outbound
+        # X-Internal-JWT header — see ``_system_jwt_headers`` docstring.
+        self._internal_jwt_private_key = internal_jwt_private_key
 
     async def get_recent_prices(
         self,
@@ -68,7 +76,7 @@ class HttpRecentPricesClient(RecentPricesClient):
         # (the dict shape gives explicit nulls instead of silently omitting).
         url = f"{self._base_url}/internal/v1/price/batch"
         body = {"instrument_ids": [str(iid) for iid in instrument_ids]}
-        headers = _system_jwt_headers()
+        headers = _system_jwt_headers(self._internal_jwt_private_key)
         params = {"include_missing": "true"}
 
         try:
