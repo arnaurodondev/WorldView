@@ -83,6 +83,19 @@ class Settings(BaseSettings):
     api_gateway_url: str = "http://api-gateway:8000"
     internal_jwt_issuer: str = Field(default="worldview-gateway")
 
+    # BUG FIX (2026-07-25): Optional RS256 private key PEM for service-to-service
+    # JWT signing, mirroring knowledge-graph's ``internal_jwt_private_key`` (F-015).
+    # When set, PortfolioSnapshotWorker / BrokerageTransactionSyncWorker issue
+    # RS256-signed internal JWTs (the SAME key pair S9 api-gateway uses) instead
+    # of the HS256 dev-fallback token, so market-data's production RS256/JWKS
+    # verification actually accepts the call. Previously these workers had NO
+    # code path that could ever use a private key — every daily snapshot 401'd
+    # against market-data and silently degraded to cost-basis pricing.
+    # Set PORTFOLIO_INTERNAL_JWT_PRIVATE_KEY to the PEM contents of the same
+    # RS256 key that S9/api-gateway uses so backends can verify with the
+    # gateway JWKS.
+    internal_jwt_private_key: SecretStr = SecretStr("")
+
     # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
     # verification if the JWKS public key is unavailable. NEVER enable in
     # production — only for E2E tests that run without a full S9 stack.

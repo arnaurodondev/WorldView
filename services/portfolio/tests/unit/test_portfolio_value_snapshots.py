@@ -695,3 +695,46 @@ def test_system_jwt_headers_include_aud_and_jti() -> None:
     assert decoded["iss"] == "worldview-gateway"
     assert decoded["sub"] == "system:portfolio-snapshot"
     assert decoded["jti"]
+
+
+def test_system_jwt_headers_signs_rs256_when_private_key_configured() -> None:
+    """BUG FIX (2026-07-25): production 100%-401 regression test.
+
+    Before this fix, ``_system_jwt_headers`` had no ``private_key_pem``
+    parameter at all, so it ALWAYS minted an HS256 token — even when a
+    real RS256 signing key was available. market-data hard-rejects
+    ``skip_verification`` in production, so every HS256 token 401'd and
+    every daily portfolio snapshot silently fell back to cost-basis
+    pricing. This test proves that when a private key PEM is supplied, the
+    worker signs RS256 (verifiable via the matching public key) instead of
+    falling back to the HS256 dev token.
+    """
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from portfolio.workers.portfolio_snapshot_worker import _system_jwt_headers
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+
+    token = _system_jwt_headers(private_pem)["X-Internal-JWT"]
+
+    header = pyjwt.get_unverified_header(token)
+    assert header["alg"] == "RS256"
+    # Round-trips through signature verification with the matching public key —
+    # proves the token was actually signed with the supplied private key (not
+    # silently downgraded to the HS256 dev fallback).
+    decoded = pyjwt.decode(token, public_pem, algorithms=["RS256"], audience="worldview-internal")
+    assert decoded["sub"] == "system:portfolio-snapshot"

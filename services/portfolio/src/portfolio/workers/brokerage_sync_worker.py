@@ -163,6 +163,16 @@ def _system_jwt_headers(settings: Settings) -> dict[str, str]:
     market-data is configured with skip_verification=True which accepts any
     decodable JWT. The HS256 token here is only for dev — production would
     require a proper service account token from S9.
+
+    BUG FIX (2026-07-25): this function previously never read
+    ``settings.internal_jwt_private_key`` at all, so it unconditionally
+    minted an HS256 dev-fallback token — identical root cause to
+    ``portfolio_snapshot_worker._system_jwt_headers``. Now mirrors
+    knowledge-graph's F-015 pattern: when
+    ``settings.internal_jwt_private_key`` is configured (non-empty), issue an
+    RS256 JWT signed with the same key S9 api-gateway uses (market-data
+    verifies it via the gateway JWKS). Falls back to the HS256 dev token only
+    when the key is absent.
     """
     # DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
     # always carries ``aud="worldview-internal"`` + a unique ``jti`` (required by
@@ -170,6 +180,7 @@ def _system_jwt_headers(settings: Settings) -> dict[str, str]:
     token = mint_internal_jwt(
         sub="system:brokerage-sync",
         ttl_seconds=86400,
+        private_key_pem=settings.internal_jwt_private_key.get_secret_value(),
         dev_hs256_secret=settings.brokerage_sync_jwt_secret.get_secret_value(),
     )
     return {"X-Internal-JWT": token}

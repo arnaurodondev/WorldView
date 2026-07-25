@@ -992,4 +992,45 @@ def test_system_jwt_headers_include_aud_and_jti() -> None:
     assert decoded["aud"] == "worldview-internal"
     assert decoded["iss"] == "worldview-gateway"
     assert decoded["sub"] == "system:brokerage-sync"
+
+
+def test_system_jwt_headers_signs_rs256_when_private_key_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUG FIX (2026-07-25): identical root cause to the snapshot worker.
+
+    ``_system_jwt_headers`` previously never read
+    ``settings.internal_jwt_private_key`` — it unconditionally minted an
+    HS256 dev token, which market-data 401s on in production. This proves
+    that when ``PORTFOLIO_INTERNAL_JWT_PRIVATE_KEY`` is configured, the
+    worker signs RS256 instead.
+    """
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from portfolio.config import Settings
+    from portfolio.workers.brokerage_sync_worker import _system_jwt_headers
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+
+    monkeypatch.setenv("PORTFOLIO_INTERNAL_JWT_PRIVATE_KEY", private_pem)
+    settings = Settings()  # type: ignore[call-arg]
+
+    token = _system_jwt_headers(settings)["X-Internal-JWT"]
+
+    header = pyjwt.get_unverified_header(token)
+    assert header["alg"] == "RS256"
+    decoded = pyjwt.decode(token, public_pem, algorithms=["RS256"], audience="worldview-internal")
+    assert decoded["sub"] == "system:brokerage-sync"
     assert decoded["jti"]

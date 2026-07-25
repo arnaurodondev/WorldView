@@ -129,7 +129,7 @@ def is_trading_day(d: date) -> bool:
 # ── HTTP price client ─────────────────────────────────────────────────────────
 
 
-def _system_jwt_headers() -> dict[str, str]:
+def _system_jwt_headers(private_key_pem: str = "") -> dict[str, str]:
     """Generate ``X-Internal-JWT`` for service-to-service calls to market-data.
 
     DEF-002: delegates to the shared ``mint_internal_jwt`` helper so the token
@@ -138,10 +138,23 @@ def _system_jwt_headers() -> dict[str, str]:
     rationale as ``BrokerageTransactionSyncWorker._system_jwt_headers``: in dev
     S3 runs with ``skip_verification=True`` and accepts any decodable JWT.
     Production needs a real S9-signed token.
+
+    BUG FIX (2026-07-25): this function previously had NO parameter for a
+    private key at all, so it unconditionally minted an HS256 dev-fallback
+    token — even in production, where market-data verifies RS256 and hard-
+    rejects ``internal_jwt_skip_verification``. Every daily snapshot 401'd
+    against market-data and silently degraded to cost-basis pricing (100%
+    failure rate). Mirrors knowledge-graph's ``FundamentalsRefreshWorker``
+    ``_system_jwt_headers`` (F-015): when ``private_key_pem`` is provided
+    (non-empty), issues an RS256 JWT signed with the same key S9 api-gateway
+    uses, which market-data verifies via the gateway JWKS. Falls back to the
+    HS256 dev token only when the key is absent (dev/test, with
+    ``skip_verification=True`` on market-data).
     """
     token = mint_internal_jwt(
         sub="system:portfolio-snapshot",
         ttl_seconds=86400,
+        private_key_pem=private_key_pem,
         dev_hs256_secret="dev-skip-verification-key-for-portfolio-snapshot-worker",  # noqa: S106 — documented dev-only skip_verification key, not a real secret
     )
     return {"X-Internal-JWT": token}
@@ -681,7 +694,14 @@ async def main() -> None:
     _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     try:
-        async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http_client:
+        # BUG FIX (2026-07-25): pass the RS256 private key when configured so
+        # the worker issues a cryptographically verifiable JWT for market-data
+        # calls (see ``_system_jwt_headers`` docstring). Falls back to the
+        # HS256 dev token when the key is absent.
+        async with httpx.AsyncClient(
+            timeout=10.0,
+            headers=_system_jwt_headers(settings.internal_jwt_private_key.get_secret_value()),
+        ) as http_client:
             price_client = HttpOHLCVPriceClient(
                 http=http_client,
                 market_data_url=settings.market_data_service_url,
