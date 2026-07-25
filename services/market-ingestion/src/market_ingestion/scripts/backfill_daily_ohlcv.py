@@ -76,7 +76,7 @@ from market_ingestion.config import Settings
 from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.value_objects import DateRange, Timeframe
 from messaging.eodhd_quota.quota_service import EodhdQuotaService  # type: ignore[import-untyped]
-from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
+from messaging.pg.advisory_lock import pg_advisory_xact_lock  # type: ignore[import-untyped]
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
@@ -415,7 +415,19 @@ async def run_backfill(settings: Settings, args: argparse.Namespace) -> int:
 
     # Single-flight guard: hold the advisory lock (on a dedicated session) for the
     # whole run so a second backfill Job cannot double-fetch the same universe.
-    async with write_factory() as lock_session, pg_advisory_lock(lock_session, BACKFILL_LOCK) as acquired:
+    #
+    # BP-752: this MUST be ``pg_advisory_xact_lock`` (transaction-scoped), not
+    # ``pg_advisory_lock`` (session-scoped) — this service's write engine routes
+    # through PgBouncer ``pool_mode=transaction`` (see infrastructure/db/session.py),
+    # whose ``server_reset_query=DISCARD ALL`` silently drops session-level
+    # advisory locks the instant the acquiring transaction ends, voiding mutual
+    # exclusion with no warning. The xact-scoped lock instead auto-releases
+    # exactly when ``lock_session``'s transaction ends (i.e. when this ``async
+    # with`` exits and the never-explicitly-committed session rolls back) —
+    # which is precisely the boundary PgBouncer itself tracks. ``lock_session``
+    # must NEVER be committed inside this block; all actual writes below go
+    # through separate ``_uow()``/``enqueue_uow`` sessions instead.
+    async with write_factory() as lock_session, pg_advisory_xact_lock(lock_session, BACKFILL_LOCK) as acquired:
         if not acquired:
             logger.warning("ohlcv_backfill_lock_busy")
             await valkey.close()

@@ -82,7 +82,7 @@ from typing import TYPE_CHECKING, Any
 import common.time
 from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.value_objects import DateRange, Timeframe
-from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
+from messaging.pg.advisory_lock import pg_advisory_xact_lock  # type: ignore[import-untyped]
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
@@ -324,7 +324,14 @@ async def run_backfill(settings: Settings, args: argparse.Namespace) -> int:
 
     # Single-flight guard: hold the advisory lock for the whole run so a second
     # backfill Job cannot double-fetch the same universe.
-    async with write_factory() as lock_session, pg_advisory_lock(lock_session, BACKFILL_LOCK) as acquired:
+    #
+    # BP-752: xact-scoped (not session-scoped) — this service's write engine
+    # routes through PgBouncer ``pool_mode=transaction``, which silently drops
+    # session-level advisory locks via ``DISCARD ALL`` the instant the acquiring
+    # transaction ends. The xact-scoped lock auto-releases exactly when
+    # ``lock_session``'s transaction ends instead, matching PgBouncer's own
+    # release boundary. ``lock_session`` must NEVER be committed in this block.
+    async with write_factory() as lock_session, pg_advisory_xact_lock(lock_session, BACKFILL_LOCK) as acquired:
         if not acquired:
             logger.warning("alpaca_ohlcv_backfill_lock_busy")
             await valkey.close()

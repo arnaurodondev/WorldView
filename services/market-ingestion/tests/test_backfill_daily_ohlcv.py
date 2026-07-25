@@ -264,7 +264,7 @@ class TestProducePathClaimsTask:
         monkeypatch.setattr(mod, "_list_ohlcv_instruments", AsyncMock(return_value=universe))
         monkeypatch.setattr(mod, "_build_object_store", lambda *_a, **_k: MagicMock())
         # Advisory lock: acquired.
-        monkeypatch.setattr(mod, "pg_advisory_lock", lambda *_a, **_k: _AsyncCM(True))
+        monkeypatch.setattr(mod, "pg_advisory_xact_lock", lambda *_a, **_k: _AsyncCM(True))
 
         quota = MagicMock()
         quota.get_daily_credits_used = AsyncMock(return_value=0)

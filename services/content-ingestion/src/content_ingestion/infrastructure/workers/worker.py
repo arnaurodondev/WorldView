@@ -49,7 +49,7 @@ from content_ingestion.infrastructure.metrics.poller import _metrics_poller
 from content_ingestion.infrastructure.metrics.prometheus import record_fetch
 from content_ingestion.infrastructure.scheduler.scheduler import ADAPTER_REGISTRY
 from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
-from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
+from messaging.pg.advisory_lock import pg_advisory_lock_pinned  # type: ignore[import-untyped]
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 from storage.factory import build_object_storage  # type: ignore[import-untyped]
@@ -116,7 +116,17 @@ class WorkerProcess:
         self._polymarket_task_timeout = settings.worker_polymarket_task_timeout_seconds
 
         # Build own infrastructure (one instance per worker process — R22)
-        _, _, self._write_factory, self._read_factory = _build_factories(settings)
+        #
+        # BP-752: ``write_engine`` is kept (not discarded as ``_``) so the
+        # per-source advisory lock (``pg_advisory_lock_pinned``, see the 4
+        # ``_execute_*_task`` methods below) can open its OWN dedicated
+        # connection, independent of whichever ``session`` the surrounding
+        # write use case commits (possibly multiple times) while the lock is
+        # held. This engine connects DIRECTLY to Postgres (no PgBouncer
+        # transaction pooling — see content_ingestion.infrastructure.db.session),
+        # so a connection pinned open across many other sessions' commits is
+        # a safe and correct way to hold the lock for the whole write phase.
+        self._write_engine, _, self._write_factory, self._read_factory = _build_factories(settings)
         self._valkey = create_valkey_client_from_url(settings.valkey_url)
 
         # Shared EODHD quota counter (blind-spot fix, 2026-07-01). S4 is the
@@ -332,6 +342,7 @@ class WorkerProcess:
         bronze = MinioBronzeAdapter(self._storage)
         use_case = ExecuteContentTaskUseCase(
             write_factory=self._write_factory,
+            write_engine=self._write_engine,
             settings=self._settings,
             bronze=bronze,
             adapter_state_factory=AdapterStateRepository,
@@ -657,46 +668,53 @@ class WorkerProcess:
                 task.succeed()
             return
 
-        # 5. Write under advisory lock — fetch_log + outbox atomically
-        async with (
-            self._write_factory() as session,
-            pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
-        ):
+        # 5. Write under advisory lock — fetch_log + outbox atomically.
+        #
+        # BP-752: the lock lives on its OWN dedicated connection
+        # (``pg_advisory_lock_pinned``), separate from the ``session`` the
+        # write use case commits into. ``FetchAndWritePredictionMarketsUseCase``
+        # commits once PER result (not one commit for the whole batch), so a
+        # session-scoped lock sharing that session would release (or attempt
+        # to release on the WRONG physical connection) after the very first
+        # committed market.
+        async with pg_advisory_lock_pinned(self._write_engine, f"s4:fetch:{task.source_name}") as acquired:
             if not acquired:
-                task_repo = TaskRepository(session)
-                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
-                await session.commit()
-                task.succeed()
+                async with self._write_factory() as session:
+                    task_repo = TaskRepository(session)
+                    await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                    await session.commit()
+                    task.succeed()
                 return
 
-            pm_log_repo_write = PredictionMarketFetchLogRepository(session)
-            outbox_repo = OutboxRepository(session)
-            write_use_case = FetchAndWritePredictionMarketsUseCase(
-                fetch_log_repo=pm_log_repo_write,
-                outbox_repo=outbox_repo,
-                commit_fn=session.commit,
-                rollback_fn=session.rollback,  # M-02: required to unpoison session on failure
-            )
-            summary = await write_use_case.execute(results, source_id=task.source_id)
+            async with self._write_factory() as session:
+                pm_log_repo_write = PredictionMarketFetchLogRepository(session)
+                outbox_repo = OutboxRepository(session)
+                write_use_case = FetchAndWritePredictionMarketsUseCase(
+                    fetch_log_repo=pm_log_repo_write,
+                    outbox_repo=outbox_repo,
+                    commit_fn=session.commit,
+                    rollback_fn=session.rollback,  # M-02: required to unpoison session on failure
+                )
+                summary = await write_use_case.execute(results, source_id=task.source_id)
 
-            task_repo = TaskRepository(session)
-            # F-302: if ALL results failed (no successful writes at all), treat the
-            # task as failed so the scheduler can retry rather than silently succeed.
-            if summary.failed > 0 and summary.fetched == 0:
-                task.fail(f"all_{summary.failed}_markets_failed")
-                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
-            else:
-                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
-                task.succeed()
-            await session.commit()
+                task_repo = TaskRepository(session)
+                # F-302: if ALL results failed (no successful writes at all), treat the
+                # task as failed so the scheduler can retry rather than silently succeed.
+                if summary.failed > 0 and summary.fetched == 0:
+                    task.fail(f"all_{summary.failed}_markets_failed")
+                    await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+                else:
+                    await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                    task.succeed()
+                await session.commit()
 
-            record_fetch(
-                task.source_name,
-                fetched=summary.fetched,
-                skipped=summary.skipped,
-                failed=summary.failed,
-                duration=summary.duration_seconds,
-            )
+                record_fetch(
+                    task.source_name,
+                    fetched=summary.fetched,
+                    skipped=summary.skipped,
+                    failed=summary.failed,
+                    duration=summary.duration_seconds,
+                )
 
         # PLAN-0056 B2: emit synthetic entity-linking documents for each market.
         # Runs OUTSIDE the snapshot advisory lock in its own session — the
@@ -918,43 +936,46 @@ class WorkerProcess:
             return
 
         # 4. Write under advisory lock — fetch_log + outbox atomically.
-        async with (
-            self._write_factory() as session,
-            pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
-        ):
+        #
+        # BP-752: lock held on a dedicated connection (``pg_advisory_lock_pinned``),
+        # separate from the ``session`` the write use case commits into — see the
+        # matching comment in ``_execute_polymarket_task`` for the full rationale.
+        async with pg_advisory_lock_pinned(self._write_engine, f"s4:fetch:{task.source_name}") as acquired:
             if not acquired:
-                task_repo = TaskRepository(session)
-                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
-                await session.commit()
-                task.succeed()
+                async with self._write_factory() as session:
+                    task_repo = TaskRepository(session)
+                    await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                    await session.commit()
+                    task.succeed()
                 return
 
-            write_use_case = FetchAndWritePredictionStreamUseCase(
-                fetch_log_repo=PredictionMarketFetchLogRepository(session),
-                outbox_repo=OutboxRepository(session),
-                spec=spec,
-                commit_fn=session.commit,
-                rollback_fn=session.rollback,  # M-02: unpoison session on failure
-            )
-            summary = await write_use_case.execute(results, source_id=task.source_id, is_backfill=is_backfill)
+            async with self._write_factory() as session:
+                write_use_case = FetchAndWritePredictionStreamUseCase(
+                    fetch_log_repo=PredictionMarketFetchLogRepository(session),
+                    outbox_repo=OutboxRepository(session),
+                    spec=spec,
+                    commit_fn=session.commit,
+                    rollback_fn=session.rollback,  # M-02: unpoison session on failure
+                )
+                summary = await write_use_case.execute(results, source_id=task.source_id, is_backfill=is_backfill)
 
-            task_repo = TaskRepository(session)
-            # F-302 parity: if EVERY result failed, fail the task so it retries.
-            if summary.failed > 0 and summary.fetched == 0:
-                task.fail(f"all_{summary.failed}_{task.source_type.value}_failed")
-                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
-            else:
-                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
-                task.succeed()
-            await session.commit()
+                task_repo = TaskRepository(session)
+                # F-302 parity: if EVERY result failed, fail the task so it retries.
+                if summary.failed > 0 and summary.fetched == 0:
+                    task.fail(f"all_{summary.failed}_{task.source_type.value}_failed")
+                    await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+                else:
+                    await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                    task.succeed()
+                await session.commit()
 
-            record_fetch(
-                task.source_name,
-                fetched=summary.fetched,
-                skipped=summary.skipped,
-                failed=summary.failed,
-                duration=summary.duration_seconds,
-            )
+                record_fetch(
+                    task.source_name,
+                    fetched=summary.fetched,
+                    skipped=summary.skipped,
+                    failed=summary.failed,
+                    duration=summary.duration_seconds,
+                )
 
     # ── PLAN-0056 QA — incremental + bounded trades stream ────────────────────
 
@@ -1062,25 +1083,26 @@ class WorkerProcess:
                 continue
 
             if market_result.results:
-                async with (
-                    self._write_factory() as session,
-                    pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
-                ):
+                # BP-752: lock on a dedicated connection, decoupled from the
+                # write session (``FetchAndWritePredictionStreamUseCase`` commits
+                # per result, not once for the whole batch).
+                async with pg_advisory_lock_pinned(self._write_engine, f"s4:fetch:{task.source_name}") as acquired:
                     if acquired:
-                        write_use_case = FetchAndWritePredictionStreamUseCase(
-                            fetch_log_repo=PredictionMarketFetchLogRepository(session),
-                            outbox_repo=OutboxRepository(session),
-                            spec=PREDICTION_TRADE_SPEC,
-                            commit_fn=session.commit,
-                            rollback_fn=session.rollback,  # M-02: unpoison on failure
-                        )
-                        summary = await write_use_case.execute(
-                            market_result.results, source_id=task.source_id, is_backfill=is_backfill
-                        )
-                        total_fetched += summary.fetched
-                        total_emitted += summary.emitted
-                        total_skipped += summary.skipped
-                        total_failed += summary.failed
+                        async with self._write_factory() as session:
+                            write_use_case = FetchAndWritePredictionStreamUseCase(
+                                fetch_log_repo=PredictionMarketFetchLogRepository(session),
+                                outbox_repo=OutboxRepository(session),
+                                spec=PREDICTION_TRADE_SPEC,
+                                commit_fn=session.commit,
+                                rollback_fn=session.rollback,  # M-02: unpoison on failure
+                            )
+                            summary = await write_use_case.execute(
+                                market_result.results, source_id=task.source_id, is_backfill=is_backfill
+                            )
+                            total_fetched += summary.fetched
+                            total_emitted += summary.emitted
+                            total_skipped += summary.skipped
+                            total_failed += summary.failed
 
             # INCREMENTAL COMMIT: persist this market's advanced cursor + the
             # resume offset so a later timeout/retry does not re-do this market.
@@ -1267,25 +1289,26 @@ class WorkerProcess:
                 continue
 
             if market_result.results:
-                async with (
-                    self._write_factory() as session,
-                    pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
-                ):
+                # BP-752: lock on a dedicated connection, decoupled from the
+                # write session (``FetchAndWritePredictionStreamUseCase`` commits
+                # per result, not once for the whole batch).
+                async with pg_advisory_lock_pinned(self._write_engine, f"s4:fetch:{task.source_name}") as acquired:
                     if acquired:
-                        write_use_case = FetchAndWritePredictionStreamUseCase(
-                            fetch_log_repo=PredictionMarketFetchLogRepository(session),
-                            outbox_repo=OutboxRepository(session),
-                            spec=PREDICTION_HISTORY_SPEC,
-                            commit_fn=session.commit,
-                            rollback_fn=session.rollback,  # M-02: unpoison on failure
-                        )
-                        summary = await write_use_case.execute(
-                            market_result.results, source_id=task.source_id, is_backfill=is_backfill
-                        )
-                        total_fetched += summary.fetched
-                        total_emitted += summary.emitted
-                        total_skipped += summary.skipped
-                        total_failed += summary.failed
+                        async with self._write_factory() as session:
+                            write_use_case = FetchAndWritePredictionStreamUseCase(
+                                fetch_log_repo=PredictionMarketFetchLogRepository(session),
+                                outbox_repo=OutboxRepository(session),
+                                spec=PREDICTION_HISTORY_SPEC,
+                                commit_fn=session.commit,
+                                rollback_fn=session.rollback,  # M-02: unpoison on failure
+                            )
+                            summary = await write_use_case.execute(
+                                market_result.results, source_id=task.source_id, is_backfill=is_backfill
+                            )
+                            total_fetched += summary.fetched
+                            total_emitted += summary.emitted
+                            total_skipped += summary.skipped
+                            total_failed += summary.failed
 
             # INCREMENTAL COMMIT: persist this market's advanced cursor + the
             # resume offset so a later timeout/retry does not re-do this market.

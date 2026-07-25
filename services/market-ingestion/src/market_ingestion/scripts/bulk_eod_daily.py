@@ -77,7 +77,7 @@ from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.freshness import EODHD_CREDIT_COST
 from market_ingestion.domain.value_objects import DateRange, Timeframe
 from messaging.eodhd_quota.quota_service import EodhdQuotaService  # type: ignore[import-untyped]
-from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
+from messaging.pg.advisory_lock import pg_advisory_xact_lock  # type: ignore[import-untyped]
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
@@ -310,7 +310,16 @@ async def run_bulk_eod(settings: Settings, args: argparse.Namespace) -> int:
     produced = 0
     unmatched = 0
 
-    async with write_factory() as lock_session, pg_advisory_lock(lock_session, BULK_EOD_LOCK) as acquired:
+    # Single-flight guard: hold the advisory lock (on a dedicated session) for
+    # the whole run so a second bulk-EOD Job cannot double-fetch.
+    #
+    # BP-752: xact-scoped (not session-scoped) — this service's write engine
+    # routes through PgBouncer ``pool_mode=transaction``, which silently drops
+    # session-level advisory locks via ``DISCARD ALL`` the instant the acquiring
+    # transaction ends. The xact-scoped lock auto-releases exactly when
+    # ``lock_session``'s transaction ends instead, matching PgBouncer's own
+    # release boundary. ``lock_session`` must NEVER be committed in this block.
+    async with write_factory() as lock_session, pg_advisory_xact_lock(lock_session, BULK_EOD_LOCK) as acquired:
         if not acquired:
             logger.warning("bulk_eod_lock_busy")
             await valkey.close()
