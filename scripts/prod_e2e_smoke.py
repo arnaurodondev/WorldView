@@ -115,15 +115,25 @@ BACKUP_MAX_AGE_H = 12  # newest pg dump must be younger than this
 # Expected Alembic head per service DB == the head revision on the RELEASE ref
 # (git main). A prod DB whose alembic_version < this head means either the
 # migrate Job never re-ran (pending migration) OR the deployed image is stale
-# (predates the migration). We disambiguate by ALSO reading the head baked into
-# the running image (`alembic heads` inside the owning Deployment pod):
-#   image_head  < EXPECTED (git head)   → STALE IMAGE (pod predates the merge)
-#   db_current  < image_head            → migrate Job PENDING (DB behind image)
-#   no owner pod (Job-run migrator,     → compare db_current vs EXPECTED only
-#     e.g. intelligence-migrations)
+# (predates the migration). This EXPECTED map is a hand-maintained constant and
+# goes stale the instant a migration merges before THIS harness image is rebuilt,
+# so it is NOT the authority. The authority is the LIVE pair — the applied DB head
+# vs the head baked into the running Deployment pod (`alembic heads`):
+#   db_current == image_head             → prod self-consistent (healthy). If this
+#                                          differs from EXPECTED, only the constant
+#                                          is stale → WARN, never a critical FAIL.
+#   db_current != image_head             → real drift: migrate Job PENDING (DB
+#                                          behind code) or STALE IMAGE (old code on
+#                                          a migrated DB) → FAIL (page).
+#   no owner pod (Job-run migrator,      → cannot confirm against live code; the
+#     e.g. intelligence-migrations)        stale-prone constant is all we have →
+#                                          WARN, not FAIL.
+# (An older revision of this check FAILed on `db_current != EXPECTED` alone, which
+# false-paged whenever this harness image lagged the map — observed live 2026-07-25
+# for market_data_db: DB@048, pod@048, but the stale deployed image pinned 045.)
 #
-# This single check would have caught prediction migrations 043/044 (market_data)
-# and content-ingestion 0011 sources the moment the migrate Job was skipped.
+# This still catches prediction migrations 043/044 (market_data) and content-
+# ingestion 0011 the moment the migrate Job is skipped (DB then != running image).
 #
 # REGENERATE on every migration merge (a CI freshness gate — see the companion
 # spec — should assert this map == `alembic heads` for each service):
@@ -464,7 +474,14 @@ def _alembic_image_head(pod: str) -> str:
 
 
 def check_migration_drift() -> None:
-    """Flag prod DBs whose applied migration != the release head (issue 2 & 3)."""
+    """FAIL only on a real DB-vs-running-code migration divergence (issue 2 & 3).
+
+    A mismatch against the hard-coded ``EXPECTED_ALEMBIC_HEADS`` constant is NOT
+    by itself a prod problem — the constant goes stale whenever a migration merges
+    before this harness image is rebuilt. The critical FAIL fires only when the
+    applied DB head disagrees with the head baked into the running pod; a stale
+    constant on an otherwise self-consistent prod degrades to WARN.
+    """
     for db, expected in sorted(EXPECTED_ALEMBIC_HEADS.items()):
         current = _psql(db, "SELECT version_num FROM alembic_version")
         if not current:
@@ -473,16 +490,49 @@ def check_migration_drift() -> None:
         if current == expected:
             R.add("0", f"migrations {db}", PASS, f"@ {current} (head)")
             continue
-        # Drift — disambiguate STALE IMAGE vs PENDING MIGRATE via the image head.
+        # Drift vs the hard-coded release head. `expected` is a hand-maintained
+        # constant that goes stale the instant a migration merges before this
+        # harness image is rebuilt — so a bare `current != expected` is NOT proof
+        # of a prod problem. The AUTHORITATIVE health signal is the LIVE pair
+        # (applied DB head vs the head baked into the running pod): if those two
+        # agree, the deployed schema matches the deployed code and prod is fine —
+        # only the constant is behind. We therefore FAIL (critical page) ONLY on a
+        # genuine DB-vs-running-code divergence, never on a stale constant alone.
         dep = DB_TO_DEPLOYMENT.get(db)
         image_head = _alembic_image_head(_deployment_pod(dep)) if dep else ""
-        if image_head and image_head != expected:
-            detail = f"STALE IMAGE: pod bundles {image_head}, release head {expected} (db@{current})"
-        elif image_head and current != image_head:
-            detail = f"migrate Job PENDING: db@{current} but image bundles {image_head}"
-        else:
-            detail = f"db@{current}, release head {expected} (migrate Job pending or migrator image stale)"
-        R.add("0", f"migrations {db}", FAIL, detail)
+        if not image_head:
+            # Job-run migrator (no owner pod, e.g. intelligence_db) or unreadable
+            # image head → cannot confirm against live code. The stale-prone
+            # constant is the only signal left, so WARN instead of paging.
+            R.add(
+                "0",
+                f"migrations {db}",
+                WARN,
+                f"db@{current} != pinned {expected}; no owner pod to confirm (map may be stale)",
+            )
+            continue
+        if current == image_head:
+            # Deployed DB and deployed code agree → prod is self-consistent and
+            # healthy; the pinned `expected` constant is simply behind (this
+            # harness image predates the migration). Surface it as WARN so the map
+            # gets bumped, but do NOT trip the critical smoke FAIL.
+            R.add(
+                "0",
+                f"migrations {db}",
+                WARN,
+                f"prod in sync @ {current}; smoke EXPECTED_ALEMBIC_HEADS pins stale {expected} (bump the map)",
+            )
+            continue
+        # Real divergence: applied schema != running code. Either the migrate Job
+        # is PENDING (DB behind the image) or a STALE IMAGE is serving old code
+        # against a migrated DB (DB ahead of the image). Both warrant a page.
+        R.add(
+            "0",
+            f"migrations {db}",
+            FAIL,
+            f"db@{current} != running image@{image_head} (release head {expected}) "
+            "— migrate Job pending or stale image serving old code",
+        )
 
 
 def check_db_dead_letter() -> None:
@@ -691,12 +741,12 @@ def layer23(res: dict) -> None:
         if st != want_status:
             # quotes during closed market is expected-empty → WARN not FAIL
             sev = WARN if market_hours_ok else FAIL
-            R.add(layer, name, sev, f"HTTP {st} {r.get('error','')} {r.get('body','')[:120]}")
+            R.add(layer, name, sev, f"HTTP {st} {r.get('error', '')} {r.get('body', '')[:120]}")
             return
         if need_data and r.get("len", 0) < 5:
             R.add(layer, name, WARN, "200 but empty body")
             return
-        R.add(layer, name, PASS, f"HTTP {st}, {r.get('len','?')}B")
+        R.add(layer, name, PASS, f"HTTP {st}, {r.get('len', '?')}B")
 
     check("2", "KG graph/stats", "kg_stats")
     check("2", "KG entity lookup (AAPL)", "kg_lookup")
@@ -724,14 +774,14 @@ def layer23(res: dict) -> None:
             "HTTP 429 (route up, rate-limited — already refreshed this hour)",
         )
     elif dr:
-        R.add("3", "entity description-gen trigger", FAIL, f"HTTP {dr.get('status')} {dr.get('body','')[:120]}")
+        R.add("3", "entity description-gen trigger", FAIL, f"HTTP {dr.get('status')} {dr.get('body', '')[:120]}")
 
     # chat grounding: expect a non-empty answer body
     ch = res.get("chat")
     if ch and ch.get("status") == 200 and ch.get("len", 0) > 20:
         R.add("3", "rag-chat grounded answer", PASS, f"{ch['len']}B answer")
     elif ch:
-        R.add("3", "rag-chat grounded answer", FAIL, f"HTTP {ch.get('status')} {ch.get('body','')[:120]}")
+        R.add("3", "rag-chat grounded answer", FAIL, f"HTTP {ch.get('status')} {ch.get('body', '')[:120]}")
 
 
 # ── LAYER 4 — async workers & data pipelines ─────────────────────────────────
@@ -758,7 +808,7 @@ def layer4(res: dict) -> None:
     elif e and e.get("status") == 400:
         R.add("4", "embedding path (synthetic CJK)", FAIL, "400 — token-budget truncation regressed (CJK under-count)")
     elif e:
-        R.add("4", "embedding path (synthetic CJK)", WARN, f"HTTP {e.get('status')} {e.get('error','')}")
+        R.add("4", "embedding path (synthetic CJK)", WARN, f"HTTP {e.get('status')} {e.get('error', '')}")
 
     # 2. embedding-retry-worker: no rows abandoned at the retry ceiling.
     ab = _psql("nlp_db", "SELECT count(*) FROM embedding_pending WHERE retry_count >= 5")
