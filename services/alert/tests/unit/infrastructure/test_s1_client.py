@@ -124,6 +124,45 @@ class TestS1Client:
         assert await client.health_check() is False
 
     @pytest.mark.unit
+    async def test_get_watchers_by_entity_transient_disconnect_retries_and_recovers(self) -> None:
+        """A single transport error (e.g. a keep-alive connection the server closed
+        right as it was reused — the ~2% race that lines up 5s readinessProbe
+        polling with httpx's 5s default keepalive_expiry) must be retried once
+        rather than immediately giving up on an otherwise-healthy S1."""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"watchers": [{"user_id": "u1", "watchlist_id": "w1", "alert_types": []}]}
+        mock_resp.raise_for_status = MagicMock()
+        # First call: connection closed mid-reuse. Second call (retry): succeeds.
+        mock_client.get = AsyncMock(
+            side_effect=[httpx.RemoteProtocolError("Server disconnected without sending a response."), mock_resp]
+        )
+
+        client = S1Client(_settings(), client=mock_client)
+        watchers, ok = await client.get_watchers_by_entity("eid-1")
+
+        assert ok is True
+        assert len(watchers) == 1
+        assert watchers[0].user_id == "u1"
+        assert mock_client.get.call_count == 2
+
+    @pytest.mark.unit
+    async def test_get_watchers_by_entity_persistent_disconnect_still_degrades_gracefully(self) -> None:
+        """Both the initial attempt AND the retry fail → still best-effort:
+        empty list, ok=False, never raises (retry must not change this contract)."""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.get = AsyncMock(
+            side_effect=httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        )
+
+        client = S1Client(_settings(), client=mock_client)
+        watchers, ok = await client.get_watchers_by_entity("eid-1")
+
+        assert ok is False
+        assert watchers == []
+        assert mock_client.get.call_count == 2
+
+    @pytest.mark.unit
     async def test_internal_jwt_sent_in_header(self) -> None:
         """PRD-0025: S1Client must send X-Internal-JWT (RS256), not X-Internal-Token."""
         mock_client = AsyncMock(spec=httpx.AsyncClient)

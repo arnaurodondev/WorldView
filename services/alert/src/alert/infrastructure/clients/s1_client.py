@@ -121,7 +121,25 @@ class S1Client:
             resp = await self._client.get(url, headers=self._headers())
             resp.raise_for_status()
             return resp.json()  # type: ignore[no-any-return]
-        except (RequestError, HTTPStatusError) as exc:
+        except RequestError as exc:
+            # Transient transport error — most commonly a pooled keep-alive
+            # connection that the server closed right as it was reused. This
+            # races on a ~2% cadence in prod because /readyz's health_check()
+            # shares this client and the k8s readinessProbe periodSeconds (5s)
+            # lines up almost exactly with httpx's default keepalive_expiry
+            # (5s). One immediate retry opens a fresh connection and resolves
+            # the vast majority of these without giving up on an otherwise
+            # healthy S1 — remains best-effort: a second failure still
+            # returns None exactly as before (never raises).
+            logger.warning("s1_client_request_failed", url=url, error=str(exc), retry=True)
+            try:
+                resp = await self._client.get(url, headers=self._headers())
+                resp.raise_for_status()
+                return resp.json()  # type: ignore[no-any-return]
+            except (RequestError, HTTPStatusError) as retry_exc:
+                logger.warning("s1_client_request_failed", url=url, error=str(retry_exc), retry=False)
+                return None
+        except HTTPStatusError as exc:
             logger.warning("s1_client_request_failed", url=url, error=str(exc))
             return None
 
@@ -130,6 +148,18 @@ class S1Client:
             resp = await self._client.post(url, json=json_body, headers=self._headers())
             resp.raise_for_status()
             return resp.json()  # type: ignore[no-any-return]
-        except (RequestError, HTTPStatusError) as exc:
+        except RequestError as exc:
+            # See _get_json: same transient keep-alive race, same one-retry
+            # mitigation. /by-entities is a read-only lookup (POST used only
+            # to carry the entity_ids list body), so a single retry is safe.
+            logger.warning("s1_client_request_failed", url=url, error=str(exc), retry=True)
+            try:
+                resp = await self._client.post(url, json=json_body, headers=self._headers())
+                resp.raise_for_status()
+                return resp.json()  # type: ignore[no-any-return]
+            except (RequestError, HTTPStatusError) as retry_exc:
+                logger.warning("s1_client_request_failed", url=url, error=str(retry_exc), retry=False)
+                return None
+        except HTTPStatusError as exc:
             logger.warning("s1_client_request_failed", url=url, error=str(exc))
             return None
