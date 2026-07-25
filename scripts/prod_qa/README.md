@@ -93,6 +93,7 @@ traffic (`401` on `/v1/...`, `403` on `/metrics`).
 | `rag_chat` (S8) | grounded chat | golden Q → answer names the company + grounds a `$` price; `rag_db` persistence schema present |
 | `portfolio` (S1+S2) | tenant + upstream ingest | schema present, `/readyz`, instrument-cache populated, S2 ingestion throughput + no stuck leases |
 | `alert` (S10+S9) | alerts + gateway contract | alert schema + rule-type CHECK includes `PREDICTION`, worker pods up, **N backend families reachable via the prober** (BFF proxy wired), gateway `/healthz` |
+| `internal_auth` | independent internal-JWT signers | every service that mints its OWN `X-Internal-JWT` (not via api-gateway) signs the exact token its real code path uses, inside its own pod, and calls a real read-only endpoint on its target — see **internal-auth signer probes** below |
 
 ## v2 regression checks (2026-07-15 session)
 
@@ -121,6 +122,53 @@ The chat golden questions are templated into the in-pod prober from
 `thresholds.py` (single source of truth). Chat calls that time out on a
 cold-start hang return `-1` → the check **WARNs** (a latency hazard, not a
 correctness verdict) rather than crashing the run.
+
+## Internal-auth signer probes (`checks/internal_auth.py`, 2026-07-25)
+
+**Incident**: `market-ingestion-scheduler` and `portfolio-snapshot-worker` got
+**100% 401s on every call to market-data for 24+ hours**, entirely silently —
+each service's own error handling swallows the auth failure and falls back to
+degraded behaviour (stale prices, cost-basis valuation) instead of crashing or
+alerting. Nothing existing would have caught this class:
+
+* the LAYER 2 / `gateway` in-pod prober only mints **api-gateway's own**
+  signing key — it proves that ONE trust path works, but market-ingestion and
+  portfolio each mint their **own** `X-Internal-JWT` directly via
+  `observability.internal_jwt.mint_internal_jwt`, a completely different
+  signer. api-gateway's signer stayed healthy the whole 24h+; a gateway-only
+  check is structurally blind to any *other* signer breaking.
+* the coarse `internal-JWT signing keys non-empty` scan only flags a key env
+  var that **is set** but too short — it says nothing when the var is
+  **entirely absent** (confirmed live: neither pod carries any
+  `*INTERNAL_JWT*` env var at all today), and it never calls the target, so it
+  also can't catch a *present-but-mismatched* keypair.
+
+`checks/internal_auth.py` is a **generic driver** over
+`thresholds.INTERNAL_AUTH_PROBES` — one entry per known caller→target
+relationship (currently: market-ingestion→market-data, portfolio→market-data,
+content-ingestion→market-data). For each entry it `kubectl exec`s into the
+**caller's own pod**, reproduces the exact `mint_internal_jwt(...)` call that
+service's real production code makes (same `sub`, same HS256 dev-fallback
+secret literal, same target base-URL env var/default — so it reads the
+caller's REAL env, never a stand-in), and calls a cheap, safe, read-only GET
+endpoint on the target that a real caller already hits in production. `200` →
+PASS, `401`/`403` → FAIL (this signer's calls are broken), anything else →
+WARN (inconclusive, e.g. pod missing or a network hiccup — never masks the
+auth invariant). Adding a new signer is a one-line addition to the constant;
+the driver code never needs to change.
+
+**Live validation (2026-07-25, against the real cluster, before the JWT fix
+lands)**: all three probes correctly **FAIL** today —
+`market-ingestion-scheduler` and `content-ingestion` get `401 {"detail":
+"Invalid internal JWT"}` from market-data (their `internal_jwt_private_key` is
+present as a config field but the pods carry **no** value for it in the
+running env — an absent, not just malformed, key), and `portfolio-snapshot-
+worker` also gets `401` (portfolio has **no RS256 private-key config field at
+all** — it is permanently HS256-dev-only and depends entirely on
+`market-data`'s `skip_verification=True`, which the target's own
+`internal_jwt_skip_verification MUST NOT be enabled in production` guard says
+should never be true in prod). This reproduces the exact 2026-07-23 incident
+signature end-to-end.
 
 ## Duplicate-group scanner (`checks/duplicate_groups.py`, 2026-07-24)
 
@@ -180,5 +228,6 @@ scripts/prod_qa/
     ├── duplicate_groups.py # cross-service identity dedup (BP-459/BP-743/BP-700)
     ├── rag_chat.py         # S8
     ├── portfolio.py        # S1 + S2
-    └── alert.py            # S10 + S9 gateway contract
+    ├── alert.py            # S10 + S9 gateway contract
+    └── internal_auth.py    # independent internal-JWT signer functional probes
 ```

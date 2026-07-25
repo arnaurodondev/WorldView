@@ -440,6 +440,65 @@ PIPE_RELATIONS_24H_FLOOR = 50  # intelligence_db.relations created
 PIPE_EMBEDDINGS_24H_FLOOR = 200  # nlp_db.chunk_embeddings created
 PIPE_PRED_SNAPS_24H_FLOOR = 200  # market_data_db.prediction_market_snapshots
 
+# ── v5: cross-service internal-JWT signer health (independent-signer class) ──
+# The 2026-07-23 incident: market-ingestion-scheduler and portfolio-snapshot-
+# worker each mint their OWN X-Internal-JWT (via ``observability.internal_jwt.
+# mint_internal_jwt``) to call market-data directly — they do NOT go through
+# api-gateway's signer, which the LAYER-2/gateway prober exercises. Both
+# signers' calls were 100% 401 for 24h+ while api-gateway's own token-minting
+# path stayed perfectly healthy the whole time, so a gateway-only auth check
+# (or the existing empty-key env-var scan, which only flags a var that IS SET
+# but too short — not a var that is entirely ABSENT, as it was here) would have
+# missed this class entirely. Each entry below reproduces the EXACT mint call a
+# real caller makes (same ``sub``, same dev-HS256-fallback secret, same target
+# URL env var/default) against a cheap, safe, READ-ONLY endpoint on the target
+# service, executed inside the CALLER's own pod (so it uses the caller's real
+# env, not a stand-in). PASS=200, FAIL=401/403 (auth broken), WARN=anything
+# else (network hiccup, pod missing, 5xx) — a WARN never masks the auth
+# invariant, only a genuinely inconclusive probe does.
+#
+# (name, caller pod app.kubernetes.io/name label, RS256 private-key env var
+#  (may be entirely unset — e.g. portfolio has no such field in its config at
+#  all, so it is PERMANENTLY HS256-dev-only), target base-URL env var, target
+#  base-URL default (mirrors the service's own pydantic-settings default), the
+#  HS256 dev-fallback secret literal that call site's ``mint_internal_jwt``
+#  passes as ``dev_hs256_secret`` (used only when the RS256 key is empty — this
+#  is what actually signs the token today for portfolio/market-ingestion/
+#  content-ingestion since none currently carry a real key), the synthetic
+#  ``sub`` claim, and the target path to call.)
+INTERNAL_AUTH_PROBES: list[dict[str, str]] = [
+    {
+        "name": "market-ingestion → market-data",
+        "caller_label": "app.kubernetes.io/name=market-ingestion-scheduler",
+        "key_env_var": "MARKET_INGESTION_INTERNAL_JWT_PRIVATE_KEY",
+        "target_env_var": "MARKET_INGESTION_MARKET_DATA_URL",
+        "target_default": "http://market-data:8003",
+        "dev_secret": "dev-skip-verification-key-for-kg-structured-enrichment",
+        "sub": "system:prod-qa-internal-auth-probe",
+        "path": "/internal/v1/instruments?limit=1",
+    },
+    {
+        "name": "portfolio → market-data",
+        "caller_label": "app.kubernetes.io/name=portfolio-snapshot-worker",
+        "key_env_var": "PORTFOLIO_INTERNAL_JWT_PRIVATE_KEY",  # not a real config field today (HS256-only signer)
+        "target_env_var": "PORTFOLIO_MARKET_DATA_SERVICE_URL",
+        "target_default": "http://market-data:8003",
+        "dev_secret": "dev-skip-verification-key-for-portfolio-current-price",
+        "sub": "system:prod-qa-internal-auth-probe",
+        "path": "/api/v1/instruments/lookup?symbol=AAPL",
+    },
+    {
+        "name": "content-ingestion → market-data",
+        "caller_label": "app.kubernetes.io/name=content-ingestion",
+        "key_env_var": "CONTENT_INGESTION_INTERNAL_JWT_PRIVATE_KEY",
+        "target_env_var": "CONTENT_INGESTION_MARKET_DATA_URL",
+        "target_default": "http://market-data:8003",
+        "dev_secret": "dev-skip-verification-key-for-kg-structured-enrichment",
+        "sub": "system:prod-qa-internal-auth-probe",
+        "path": "/internal/v1/instruments?limit=1",
+    },
+]
+
 # ── v4: TLS certificate expiry runway (extends the existing issued=True check) ─
 # The issued-status check confirms cert-manager succeeded ONCE; this asserts the
 # cert is not about to lapse (a renewal-loop failure only shows as imminent

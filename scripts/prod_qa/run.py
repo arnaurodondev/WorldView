@@ -25,6 +25,11 @@ Layers
     alert            S10+S9: alert schema/rule-type, gateway route contract
     gateway          S9: composition-route contracts + auth invariants (forged/
                      expired JWT rejected, system-mutation denied, user path works)
+    internal_auth    every KNOWN independent internal-JWT signer (market-
+                     ingestion, portfolio, content-ingestion → market-data)
+                     mints its OWN token and calls a real endpoint — catches a
+                     signer whose key is broken/mismatched even when
+                     api-gateway's own signer (exercised above) is fine
 
 EXIT CODE: 0 if no FAIL rows (WARNs allowed); 1 otherwise.
 
@@ -47,6 +52,7 @@ from .checks import coarse as c_coarse
 from .checks import content as c_content
 from .checks import duplicate_groups as c_dupgroups
 from .checks import gateway as c_gateway
+from .checks import internal_auth as c_internal_auth
 from .checks import knowledge_graph as c_kg
 from .checks import market_data as c_md
 from .checks import nlp_pipeline as c_nlp
@@ -67,6 +73,7 @@ LAYERS: list[tuple[str, object, bool]] = [
     ("portfolio", c_portfolio, False),
     ("alert", c_alert, True),
     ("gateway", c_gateway, True),
+    ("internal_auth", c_internal_auth, False),
 ]
 
 
