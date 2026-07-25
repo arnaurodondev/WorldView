@@ -163,3 +163,30 @@ class TestPolymarketOIAdapter:
 
         assert results == []
         client.fetch_open_interest.assert_not_awaited()
+
+    async def test_single_market_fetch_failure_is_isolated(self) -> None:
+        """2026-07-25 prod-log audit regression test.
+
+        A single market's transient ``AdapterError`` (observed live as an
+        upstream ``OI API HTTP 408``) must NOT abort the whole ``fetch()``
+        cycle — the other, healthy markets in the same batch should still
+        yield their OI snapshots. This mirrors the per-market isolation the
+        sibling trades/CLOB adapters already have at the worker layer.
+        """
+        client = MagicMock()
+
+        async def _fetch_open_interest(market: str) -> dict:
+            if market == "cond_bad":
+                raise AdapterError("OI API HTTP 408", status_code=408)
+            return _oi_body()
+
+        client.fetch_open_interest = AsyncMock(side_effect=_fetch_open_interest)
+        adapter = _make_adapter(client)
+
+        with patch(_UTC_NOW_PATH, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_source(["cond_ok_1", "cond_bad", "cond_ok_2"]))
+
+        # Both healthy markets still produced a snapshot; only the failing
+        # market was skipped for this cycle (no exception propagates).
+        assert {r.market_id for r in results} == {"cond_ok_1", "cond_ok_2"}
+        assert client.fetch_open_interest.await_count == 3
