@@ -100,7 +100,9 @@ async def recompute_snapshot(
     # lookback exhausted, and every holding fell back to cost basis — making
     # the manually-recomputed snapshot identical to total_cost. Reuse the
     # worker's helper so the auth contract stays in lockstep.
-    async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http:
+    async with httpx.AsyncClient(
+        timeout=10.0, headers=_system_jwt_headers(settings.internal_jwt_private_key.get_secret_value())
+    ) as http:
         price_client = HttpOHLCVPriceClient(
             http=http,
             market_data_url=settings.market_data_service_url,
