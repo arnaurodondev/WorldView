@@ -62,7 +62,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from ml_clients.model_registry import PLATFORM_MODEL_REGISTRY
 
 from tests.architecture._utils import REPO_ROOT, discover_services
 
@@ -77,6 +76,66 @@ _MODEL_FIELD_RE = re.compile(r"(^model$|^model_id$|.*_model$|.*_model_id$)")
 # libs/ml-clients has its own config.py (shared across services) but is not a
 # `services/` package discoverable via discover_services() — handled explicitly.
 _ML_CLIENTS_CONFIG = REPO_ROOT / "libs" / "ml-clients" / "src" / "ml_clients" / "config.py"
+
+# ``libs/ml-clients/src/ml_clients/model_registry.py`` — read via AST, NOT
+# `from ml_clients.model_registry import PLATFORM_MODEL_REGISTRY`. Importing the
+# `ml_clients` package eagerly pulls in every adapter (Gemini, embedding
+# routers, ...) in `ml_clients/__init__.py`, which drags in a heavy dependency
+# tree this repo's lightweight `architecture-tests` CI job deliberately does
+# not install (it only installs pytest/pytest-asyncio/pyyaml/structlog/httpx —
+# see `.github/workflows/ci.yml`). AST-parsing the module's own source, the
+# same technique this file already uses for every service's config.py, avoids
+# needing `ml_clients` importable at all.
+_MODEL_REGISTRY_PY = REPO_ROOT / "libs" / "ml-clients" / "src" / "ml_clients" / "model_registry.py"
+
+
+@dataclass(frozen=True)
+class _RegistryEntry:
+    """One ``ConfiguredModel(service, field, model_id, provider)`` entry, AST-parsed."""
+
+    service: str
+    field: str
+    model_id: str
+    provider: str
+
+
+def _load_platform_model_registry() -> tuple[_RegistryEntry, ...]:
+    """AST-parse ``PLATFORM_MODEL_REGISTRY``'s tuple literal from model_registry.py.
+
+    Each element is expected to be a ``ConfiguredModel(service, field, model_id,
+    provider)`` call with 4 positional string-literal args, matching the
+    registry's current shape exactly. A shape mismatch (e.g. a kwarg-only call,
+    or a non-tuple assignment) raises rather than silently skipping an entry —
+    this test's whole point is completeness, so a parse gap must be loud.
+    """
+    tree = ast.parse(_MODEL_REGISTRY_PY.read_text())
+    for node in ast.walk(tree):
+        is_target = (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "PLATFORM_MODEL_REGISTRY"
+        )
+        if is_target:
+            value = node.value
+            break
+    else:
+        raise AssertionError(f"Could not find `PLATFORM_MODEL_REGISTRY = (...)` in {_MODEL_REGISTRY_PY}")
+
+    assert isinstance(value, ast.Tuple), f"Expected PLATFORM_MODEL_REGISTRY to be a tuple literal, got {type(value)}"
+
+    entries = []
+    for elt in value.elts:
+        assert isinstance(elt, ast.Call), f"Expected a ConfiguredModel(...) call, got {ast.dump(elt)}"
+        args = [a.value for a in elt.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+        assert len(args) == 4, (
+            f"Expected ConfiguredModel(service, field, model_id, provider) with 4 positional "
+            f"string args, got {len(args)} at line {elt.lineno}: {ast.dump(elt)}"
+        )
+        entries.append(_RegistryEntry(*args))
+    return tuple(entries)
+
+
+PLATFORM_MODEL_REGISTRY: tuple[_RegistryEntry, ...] = _load_platform_model_registry()
 
 
 @dataclass(frozen=True)

@@ -322,10 +322,13 @@ jobs:
       # libs/*/services/* package), so it was previously invisible to every CI
       # job here — its tests existed on disk but never ran. Install just what
       # the script + its tests need: pytest/pytest-asyncio (root dev group)
-      # plus the script's own runtime deps (httpx, prometheus-client).
+      # plus the script's own runtime deps (httpx, prometheus-client), plus
+      # pyyaml for test_probe_registry_completeness.py's allowlist YAML parse
+      # (test-only — synthetic_monitor.py itself does not need yaml, so this
+      # stays out of infra/synthetic/requirements.txt).
       - name: Install dependencies
         run: |
-          python -m pip install --quiet "pytest>=8.2,<9" "pytest-asyncio>=0.24.0,<1.0.0"
+          python -m pip install --quiet "pytest>=8.2,<9" "pytest-asyncio>=0.24.0,<1.0.0" "pyyaml>=6"
           python -m pip install --quiet -r infra/synthetic/requirements.txt
 
       - name: Run tests
