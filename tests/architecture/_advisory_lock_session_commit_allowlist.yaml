@@ -1,0 +1,24 @@
+# Advisory-lock session-commit allowlist (ADVISORY-LOCK-COMMIT-001)
+# ─────────────────────────────────────────────────────────────────────────────
+# See tests/architecture/test_advisory_lock_session_commit_enforcement.py for
+# the rule this allowlist backs. Style mirrors _dedup_prelookup_allowlist.yaml.
+#
+# Schema: each entry must have:
+#   file_path:     str   — path to the file, relative to repo root
+#   line:          int   — the exact source line of the offending
+#                          `pg_advisory_lock(...)` call (NOT the commit line)
+#   justification: str   — why this call site is safe despite committing
+#                           mid-block (e.g. it holds a dedicated, never-pooled
+#                           connection across the whole critical section)
+#   granted_at:    str   — ISO-8601 date the exemption was approved
+#
+# A file is exempt from a given lock call site ONLY if BOTH file_path and line
+# match an entry here — an exemption for one `pg_advisory_lock(...)` call never
+# silently covers a different one added later in the same file.
+#
+# No entries yet: as of this test's introduction, every known session-level
+# advisory-lock-plus-mid-block-commit call site is a genuine violation to be
+# fixed at the source (see docs/BUG_PATTERNS.md once the sibling fix lands),
+# not an allowlist exemption.
+
+allowlist: []
