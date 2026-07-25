@@ -436,6 +436,12 @@ allowlist:
     granted_at: "2026-07-24"
 
   - service: portfolio
+    field: internal_jwt_private_key
+    file: services/portfolio/src/portfolio/config.py
+    justification: Self-generated internal JWT signing key (same pattern as api-gateway's). Category Internal-signing-key.
+    granted_at: "2026-07-25"
+
+  - service: portfolio
     field: storage_access_key
     file: services/portfolio/src/portfolio/config.py
     justification: MinIO/S3 access key for infra we operate. Category Internal-infra-cred (see market-data's entry above).
