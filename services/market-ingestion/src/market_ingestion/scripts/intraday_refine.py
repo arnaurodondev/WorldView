@@ -120,7 +120,7 @@ from market_ingestion.scripts.bulk_eod_daily import (
     parse_exchanges,
 )
 from messaging.eodhd_quota.quota_service import EodhdQuotaService  # type: ignore[import-untyped]
-from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
+from messaging.pg.advisory_lock import pg_advisory_xact_lock  # type: ignore[import-untyped]
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
@@ -485,7 +485,16 @@ async def run_intraday_refine(settings: Settings, args: argparse.Namespace) -> i
         await _aclose_registry(registry)
         await valkey.close()
 
-    async with write_factory() as lock_session, pg_advisory_lock(lock_session, INTRADAY_REFINE_LOCK) as acquired:
+    # Single-flight guard: hold the advisory lock (on a dedicated session) for
+    # the whole run so a second intraday-refine Job cannot double-process.
+    #
+    # BP-752: xact-scoped (not session-scoped) — this service's write engine
+    # routes through PgBouncer ``pool_mode=transaction``, which silently drops
+    # session-level advisory locks via ``DISCARD ALL`` the instant the acquiring
+    # transaction ends. The xact-scoped lock auto-releases exactly when
+    # ``lock_session``'s transaction ends instead, matching PgBouncer's own
+    # release boundary. ``lock_session`` must NEVER be committed in this block.
+    async with write_factory() as lock_session, pg_advisory_xact_lock(lock_session, INTRADAY_REFINE_LOCK) as acquired:
         if not acquired:
             logger.warning("intraday_refine_lock_busy")
             await valkey.close()

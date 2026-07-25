@@ -18,13 +18,13 @@ from typing import TYPE_CHECKING, Any
 
 from content_ingestion.application.use_cases.fetch_and_write import FetchAndWriteUseCase, FetchSummary
 from content_ingestion.domain.exceptions import ConfigurationError
-from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
+from messaging.pg.advisory_lock import pg_advisory_lock_pinned  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
     from content_ingestion.application.ports.repositories import (
         AdapterStatePort,
@@ -84,12 +84,23 @@ class ExecuteContentTaskUseCase:
     - **adapter_builder**: callable that constructs a ``SourceAdapterPort``
       for a given source type + dedup function, encapsulating all client
       and rate-limiter construction in the infrastructure layer.
+    - **write_engine**: the raw ``AsyncEngine`` backing ``write_factory``.
+      BP-752: the write phase's ``FetchAndWriteUseCase`` batch-commits every
+      ``batch_size`` articles, so the advisory lock CANNOT be held on the same
+      ``session`` those commits happen on (a mid-block commit hands the
+      session's underlying connection back to the pool; the lock's own
+      release statement can then land on a DIFFERENT physical backend, or
+      leak the original lock entirely). The lock is instead acquired on a
+      dedicated connection opened directly from ``write_engine`` via
+      ``pg_advisory_lock_pinned`` — held open for the whole write phase
+      regardless of how many times the business ``session`` commits.
     """
 
     def __init__(
         self,
         *,
         write_factory: async_sessionmaker[Any],
+        write_engine: AsyncEngine,
         settings: Settings,
         bronze: BronzeStoragePort,
         adapter_state_factory: Callable[[Any], AdapterStatePort],
@@ -99,6 +110,7 @@ class ExecuteContentTaskUseCase:
         task_factory: Callable[[Any], TaskPort] | None = None,
     ) -> None:
         self._write_factory = write_factory
+        self._write_engine = write_engine
         self._settings = settings
         self._bronze = bronze
         self._adapter_state_factory = adapter_state_factory
@@ -237,10 +249,19 @@ class ExecuteContentTaskUseCase:
             await task_repo.update_status(task.id, task.status)
             return None
 
-        # 4. Write results under advisory lock
+        # 4. Write results under advisory lock.
+        #
+        # BP-752: the lock is held on a DEDICATED connection
+        # (``pg_advisory_lock_pinned``, opened straight from ``write_engine``),
+        # NOT on the ``session`` the write phase commits into. FetchAndWriteUseCase
+        # batch-commits every ``batch_size`` articles, so a session-scoped lock
+        # sharing that same session would have its unlock statement land on a
+        # DIFFERENT physical connection after the first batch commit (SQLAlchemy
+        # hands the connection back to the pool on commit) — landing on the
+        # wrong backend at best, leaking the original lock at worst.
         async with (
+            pg_advisory_lock_pinned(self._write_engine, f"s4:fetch:{task.source_name}") as acquired,
             self._write_factory() as session,
-            pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
         ):
             try:
                 return await self._write_results_under_lock(
@@ -251,12 +272,10 @@ class ExecuteContentTaskUseCase:
                     fetch_output=fetch_output,
                 )
             except Exception:
-                # Defense in depth (poisoned-session P0): roll back BEFORE
-                # ``pg_advisory_lock``'s finally clause runs ``pg_advisory_unlock``.
-                # On an aborted transaction the unlock statement would raise
-                # ``InFailedSQLTransaction`` — masking the original error — and
-                # the session-level advisory lock would leak into the pooled
-                # connection, blocking every other worker for this source.
+                # Roll back the WRITE session on any failure. The lock's own
+                # connection is independent (never shares a transaction with
+                # ``session``), so this rollback cannot poison the lock's
+                # release statement the way it could when they shared a session.
                 await session.rollback()
                 raise
 

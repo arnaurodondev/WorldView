@@ -215,7 +215,7 @@ class TestProducePath:
         monkeypatch.setattr(mod, "create_valkey_client_from_url", lambda _u: valkey)
         monkeypatch.setattr(mod, "_list_ohlcv_instruments", AsyncMock(return_value=universe))
         monkeypatch.setattr(mod, "_build_object_store", lambda *_a, **_k: MagicMock())
-        monkeypatch.setattr(mod, "pg_advisory_lock", lambda *_a, **_k: _AsyncCM(True))
+        monkeypatch.setattr(mod, "pg_advisory_xact_lock", lambda *_a, **_k: _AsyncCM(True))
 
         alpaca_adapter = MagicMock()
         alpaca_adapter.fetch_ohlcv = AsyncMock(
@@ -266,7 +266,7 @@ class TestProducePath:
         monkeypatch.setattr(mod, "create_valkey_client_from_url", lambda _u: valkey)
         monkeypatch.setattr(mod, "_list_ohlcv_instruments", AsyncMock(return_value=universe))
         monkeypatch.setattr(mod, "_build_object_store", lambda *_a, **_k: MagicMock())
-        monkeypatch.setattr(mod, "pg_advisory_lock", lambda *_a, **_k: _AsyncCM(True))
+        monkeypatch.setattr(mod, "pg_advisory_xact_lock", lambda *_a, **_k: _AsyncCM(True))
 
         alpaca_adapter = MagicMock()
         alpaca_adapter.fetch_ohlcv = AsyncMock(return_value=SimpleNamespace(bars_returned=0, provider=Provider.ALPACA))

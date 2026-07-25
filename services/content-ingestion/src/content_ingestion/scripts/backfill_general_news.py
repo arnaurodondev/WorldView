@@ -79,7 +79,7 @@ from content_ingestion.infrastructure.db.repositories.source import SourceReposi
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 from messaging.eodhd_quota.quota_service import EodhdQuotaService  # type: ignore[import-untyped]
-from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
+from messaging.pg.advisory_lock import pg_advisory_lock_pinned  # type: ignore[import-untyped]
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from storage.factory import build_object_storage  # type: ignore[import-untyped]
@@ -294,7 +294,10 @@ async def run_backfill(settings: Settings, args: argparse.Namespace) -> int:
     from_date, to_date, window_days = _resolve_window(args, settings)
     all_windows = backward_windows(from_date, to_date, window_days)
 
-    _, _, write_factory, _read_factory = _build_factories(settings)
+    # BP-752: ``write_engine`` is kept (not discarded) so the advisory lock can
+    # be acquired on its OWN dedicated connection via ``pg_advisory_lock_pinned``,
+    # independent of the ``session`` FetchAndWriteUseCase batch-commits into.
+    write_engine, _, write_factory, _read_factory = _build_factories(settings)
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
     cursor = await _load_cursor(valkey, resume=args.resume)
@@ -400,32 +403,35 @@ async def run_backfill(settings: Settings, args: argparse.Namespace) -> int:
 
             written = 0
             if results:
-                async with (
-                    write_factory() as session,
-                    pg_advisory_lock(session, BACKFILL_LOCK) as acquired,
-                ):
+                # BP-752: lock on a dedicated connection (``pg_advisory_lock_pinned``),
+                # separate from the ``session`` FetchAndWriteUseCase batch-commits
+                # into — a session-scoped lock sharing that session would have its
+                # release statement land on a different physical connection (or
+                # leak the original lock) after the first batch commit.
+                async with pg_advisory_lock_pinned(write_engine, BACKFILL_LOCK) as acquired:
                     if not acquired:
                         logger.warning("news_backfill_lock_busy")
                         await valkey.close()
                         return total_written
-                    try:
-                        use_case = FetchAndWriteUseCase(
-                            adapter=_PrefetchedAdapter(),  # type: ignore[arg-type]
-                            bronze=bronze,
-                            fetch_log_repo=FetchLogRepository(session),
-                            outbox_repo=OutboxRepository(session),
-                            commit_fn=session.commit,
-                            rollback_fn=session.rollback,
-                        )
-                        summary = await use_case.execute(
-                            source,
-                            is_backfill=True,
-                            prefetched_results=results,
-                        )
-                        written = summary.fetched
-                    except Exception:
-                        await session.rollback()
-                        raise
+                    async with write_factory() as session:
+                        try:
+                            use_case = FetchAndWriteUseCase(
+                                adapter=_PrefetchedAdapter(),  # type: ignore[arg-type]
+                                bronze=bronze,
+                                fetch_log_repo=FetchLogRepository(session),
+                                outbox_repo=OutboxRepository(session),
+                                commit_fn=session.commit,
+                                rollback_fn=session.rollback,
+                            )
+                            summary = await use_case.execute(
+                                source,
+                                is_backfill=True,
+                                prefetched_results=results,
+                            )
+                            written = summary.fetched
+                        except Exception:
+                            await session.rollback()
+                            raise
 
             total_written += written
 

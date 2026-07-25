@@ -81,6 +81,7 @@ def _make_write_factory() -> tuple[MagicMock, AsyncMock]:
 
 def _make_use_case(
     write_factory: MagicMock | None = None,
+    write_engine: MagicMock | None = None,
     settings: MagicMock | None = None,
     bronze: MagicMock | None = None,
     adapter_state_factory: MagicMock | None = None,
@@ -91,6 +92,10 @@ def _make_use_case(
     wf = write_factory or MagicMock()
     return ExecuteContentTaskUseCase(
         write_factory=wf,
+        # BP-752: write_engine is only ever consumed by pg_advisory_lock_pinned,
+        # which every test that reaches the lock block patches out entirely —
+        # a bare MagicMock is a sufficient placeholder here.
+        write_engine=write_engine or MagicMock(),
         settings=settings or _make_settings(),
         bronze=bronze or MagicMock(),
         adapter_state_factory=adapter_state_factory or MagicMock(),
@@ -217,7 +222,7 @@ class TestExecuteReleasesSessionDuringFetch:
 
 class TestExecuteUpdatesWatermark:
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
     async def test_watermark_updated_on_success(
         self,
@@ -261,7 +266,7 @@ class TestExecuteUpdatesWatermark:
         assert task.status == IngestionTaskStatus.SUCCEEDED
 
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
     async def test_watermark_advances_to_newest_article_published_at(
         self,
@@ -498,7 +503,7 @@ class TestSplitBrainPrevention:
     """
 
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
     async def test_task_succeeded_committed_inside_advisory_lock(
         self,
@@ -530,6 +535,7 @@ class TestSplitBrainPrevention:
 
         uc = ExecuteContentTaskUseCase(
             write_factory=write_factory,
+            write_engine=MagicMock(),
             settings=_make_settings(),
             bronze=MagicMock(),
             adapter_state_factory=adapter_state_factory,
@@ -555,7 +561,7 @@ class TestSplitBrainPrevention:
                 ), "outer task_repo.update_status was called with SUCCEEDED — D-9 violation"
 
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     async def test_advisory_lock_not_acquired_marks_retry(
         self,
         mock_lock: MagicMock,
@@ -581,6 +587,7 @@ class TestSplitBrainPrevention:
 
         uc = ExecuteContentTaskUseCase(
             write_factory=write_factory,
+            write_engine=MagicMock(),
             settings=_make_settings(),
             bronze=MagicMock(),
             adapter_state_factory=adapter_state_factory,
@@ -605,7 +612,7 @@ class TestSplitBrainPrevention:
         assert call_args.args[1] == IngestionTaskStatus.RETRY
 
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     async def test_advisory_lock_not_acquired_fallback_marks_retry(
         self,
         mock_lock: MagicMock,
@@ -639,7 +646,7 @@ class TestSplitBrainPrevention:
         assert result is None
 
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
     async def test_commit_failure_prevents_succeeded_status(
         self,
@@ -679,6 +686,7 @@ class TestSplitBrainPrevention:
 
         uc = ExecuteContentTaskUseCase(
             write_factory=write_factory,
+            write_engine=MagicMock(),
             settings=_make_settings(),
             bronze=MagicMock(),
             adapter_state_factory=adapter_state_factory,
@@ -739,6 +747,7 @@ class TestRunningStatusCommittedImmediately:
 
         uc = ExecuteContentTaskUseCase(
             write_factory=write_factory,
+            write_engine=MagicMock(),
             settings=_make_settings(),
             bronze=MagicMock(),
             adapter_state_factory=MagicMock(),
@@ -766,7 +775,7 @@ class TestRunningStatusCommittedImmediately:
         assert task.status == IngestionTaskStatus.RUNNING or task.status == IngestionTaskStatus.SUCCEEDED
 
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
     async def test_final_status_write_after_running_commit_no_self_deadlock(
         self,
@@ -810,6 +819,7 @@ class TestRunningStatusCommittedImmediately:
 
         uc = ExecuteContentTaskUseCase(
             write_factory=write_factory,
+            write_engine=MagicMock(),
             settings=_make_settings(),
             bronze=MagicMock(),
             adapter_state_factory=adapter_state_factory,
@@ -854,6 +864,7 @@ class TestRunningStatusCommittedImmediately:
 
         uc = ExecuteContentTaskUseCase(
             write_factory=write_factory,
+            write_engine=MagicMock(),
             settings=_make_settings(),
             bronze=MagicMock(),
             adapter_state_factory=MagicMock(),
@@ -874,7 +885,7 @@ class TestAdvisoryLockSessionHygiene:
     """Defense-in-depth checks for the advisory-lock session (poisoned-session P0)."""
 
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
     async def test_lock_timeout_set_on_advisory_lock_session(
         self,
@@ -905,6 +916,7 @@ class TestAdvisoryLockSessionHygiene:
 
         uc = ExecuteContentTaskUseCase(
             write_factory=write_factory,
+            write_engine=MagicMock(),
             settings=_make_settings(),
             bronze=MagicMock(),
             adapter_state_factory=adapter_state_factory,
@@ -922,7 +934,7 @@ class TestAdvisoryLockSessionHygiene:
         ), f"SET LOCAL lock_timeout was never issued on the advisory-lock session (executed={executed_sql})"
 
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
     async def test_advisory_lock_session_rolled_back_on_failure(
         self,
@@ -954,6 +966,7 @@ class TestAdvisoryLockSessionHygiene:
 
         uc = ExecuteContentTaskUseCase(
             write_factory=write_factory,
+            write_engine=MagicMock(),
             settings=_make_settings(),
             bronze=MagicMock(),
             adapter_state_factory=adapter_state_factory,
@@ -1032,7 +1045,7 @@ class TestTaskFactoryInvariant:
     session MUST go through task_factory(session), never the outer task_repo."""
 
     @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
-    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock_pinned")
     @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
     async def test_outer_task_repo_never_receives_succeeded_when_factory_exists(
         self,
@@ -1061,6 +1074,7 @@ class TestTaskFactoryInvariant:
 
         uc = ExecuteContentTaskUseCase(
             write_factory=write_factory,
+            write_engine=MagicMock(),
             settings=_make_settings(),
             bronze=MagicMock(),
             adapter_state_factory=adapter_state_factory,

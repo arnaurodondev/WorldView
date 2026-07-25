@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from messaging.pg.advisory_lock import advisory_lock_id, pg_advisory_lock
+from messaging.pg.advisory_lock import (
+    advisory_lock_id,
+    pg_advisory_lock,
+    pg_advisory_lock_pinned,
+    pg_advisory_xact_lock,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -99,3 +104,137 @@ class TestPgAdvisoryLock:
 
         # acquire + release even though body raised
         assert mock_session.execute.await_count == 2
+
+
+class TestPgAdvisoryXactLock:
+    """Transaction-scoped variant — MUST NOT issue an explicit unlock statement.
+
+    Regression coverage for BP-752: pg_advisory_xact_lock relies entirely on
+    Postgres auto-releasing the lock at commit/rollback of the CURRENT
+    transaction, so unlike ``pg_advisory_lock`` there is no second ``execute``
+    call on context-manager exit — asserting exactly ONE call (not two) is
+    the whole point of this test class.
+    """
+
+    @pytest.fixture()
+    def mock_session(self) -> AsyncMock:
+        return AsyncMock()
+
+    async def test_acquired_yields_true(self, mock_session: AsyncMock) -> None:
+        result = MagicMock()
+        result.scalar.return_value = True
+        mock_session.execute = AsyncMock(return_value=result)
+
+        async with pg_advisory_xact_lock(mock_session, "test") as acquired:
+            assert acquired is True
+
+    async def test_not_acquired_yields_false(self, mock_session: AsyncMock) -> None:
+        result = MagicMock()
+        result.scalar.return_value = False
+        mock_session.execute = AsyncMock(return_value=result)
+
+        async with pg_advisory_xact_lock(mock_session, "test") as acquired:
+            assert acquired is False
+
+    async def test_no_explicit_unlock_statement_on_exit(self, mock_session: AsyncMock) -> None:
+        """Only the acquire statement is ever issued — no unlock call exists."""
+        result = MagicMock()
+        result.scalar.return_value = True
+        mock_session.execute = AsyncMock(return_value=result)
+
+        async with pg_advisory_xact_lock(mock_session, "test"):
+            pass
+
+        assert mock_session.execute.await_count == 1
+        (sql_arg,), _ = mock_session.execute.await_args_list[0]
+        assert "pg_try_advisory_xact_lock" in str(sql_arg)
+
+    async def test_no_explicit_unlock_on_exception(self, mock_session: AsyncMock) -> None:
+        result = MagicMock()
+        result.scalar.return_value = True
+        mock_session.execute = AsyncMock(return_value=result)
+
+        with pytest.raises(ValueError, match="boom"):
+            async with pg_advisory_xact_lock(mock_session, "test"):
+                raise ValueError("boom")
+
+        # Still only the acquire call — release happens via the transaction
+        # rollback the caller performs on the exception path, not this helper.
+        assert mock_session.execute.await_count == 1
+
+    async def test_session_never_committed_by_the_helper(self, mock_session: AsyncMock) -> None:
+        """The helper must never commit/rollback the session itself.
+
+        Releasing the lock is entirely the caller's responsibility (via the
+        session's own commit/rollback lifecycle) — this helper only ever
+        issues the acquire SELECT.
+        """
+        result = MagicMock()
+        result.scalar.return_value = True
+        mock_session.execute = AsyncMock(return_value=result)
+
+        async with pg_advisory_xact_lock(mock_session, "test"):
+            pass
+
+        mock_session.commit.assert_not_awaited()
+        mock_session.rollback.assert_not_awaited()
+
+
+class TestPgAdvisoryLockPinned:
+    """Dedicated-connection variant — must never return the connection mid-lock."""
+
+    @pytest.fixture()
+    def mock_engine(self) -> MagicMock:
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.scalar.return_value = True
+        conn.execute = AsyncMock(return_value=result)
+        engine.connect = AsyncMock(return_value=conn)
+        engine._conn = conn  # stash for assertions
+        return engine
+
+    async def test_acquired_yields_true(self, mock_engine: MagicMock) -> None:
+        async with pg_advisory_lock_pinned(mock_engine, "test") as acquired:
+            assert acquired is True
+
+    async def test_not_acquired_yields_false(self, mock_engine: MagicMock) -> None:
+        mock_engine._conn.execute.return_value.scalar.return_value = False
+        async with pg_advisory_lock_pinned(mock_engine, "test") as acquired:
+            assert acquired is False
+
+    async def test_connection_not_closed_until_after_unlock(self, mock_engine: MagicMock) -> None:
+        """The SAME connection object must issue both acquire and unlock."""
+        conn = mock_engine._conn
+        async with pg_advisory_lock_pinned(mock_engine, "test"):
+            # Only the acquire statement + its commit have run so far.
+            assert conn.execute.await_count == 1
+            conn.close.assert_not_awaited()
+
+        # After exit: unlock statement issued on the SAME connection, then closed.
+        assert conn.execute.await_count == 2
+        conn.close.assert_awaited_once()
+        # engine.connect() must only be called ONCE for the whole lifetime —
+        # proves no re-checkout happened between acquire and release.
+        mock_engine.connect.assert_awaited_once()
+
+    async def test_no_unlock_or_close_skip_when_not_acquired(self, mock_engine: MagicMock) -> None:
+        mock_engine._conn.execute.return_value.scalar.return_value = False
+        conn = mock_engine._conn
+
+        async with pg_advisory_lock_pinned(mock_engine, "test"):
+            pass
+
+        # Only the (failed) acquire attempt — no unlock statement.
+        assert conn.execute.await_count == 1
+        conn.close.assert_awaited_once()
+
+    async def test_connection_closed_on_exception(self, mock_engine: MagicMock) -> None:
+        conn = mock_engine._conn
+        with pytest.raises(ValueError, match="boom"):
+            async with pg_advisory_lock_pinned(mock_engine, "test"):
+                raise ValueError("boom")
+
+        # Unlock still runs (acquired=True) and the connection is still closed.
+        assert conn.execute.await_count == 2
+        conn.close.assert_awaited_once()
