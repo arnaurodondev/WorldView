@@ -198,14 +198,22 @@ def _outbox_dispatchers(R: H.Report) -> None:
     per_table_status = H.PASS
     per_table_detail: list[str] = []
     for db in T.OUTBOX_DBS:
+        # portfolio_db predates the dispatched_at column rename other services
+        # use — its outbox_events tracks completion via published_at instead
+        # (services/portfolio/src/portfolio/infrastructure/db/models/outbox.py).
+        # Using the wrong column name errors the query; psql_many swallows the
+        # error and maps it to "", which the "no outbox_events table" skip
+        # below then silently treats as "nothing to check" — portfolio's
+        # outbox drain was never actually evaluated by this check.
+        col = "published_at" if db == "portfolio_db" else "dispatched_at"
         res = H.psql_many(
             db,
             {
-                "aged": "SELECT count(*) FROM outbox_events WHERE dispatched_at IS NULL "
+                "aged": f"SELECT count(*) FROM outbox_events WHERE {col} IS NULL "
                 "AND created_at < now() - interval '10 minutes'",
-                "undispatched": "SELECT count(*) FROM outbox_events WHERE dispatched_at IS NULL",
+                "undispatched": f"SELECT count(*) FROM outbox_events WHERE {col} IS NULL",
                 "oldest_min": "SELECT coalesce(round(extract(epoch from "
-                "now()-min(created_at) FILTER (WHERE dispatched_at IS NULL))/60,1),0) FROM outbox_events",
+                f"now()-min(created_at) FILTER (WHERE {col} IS NULL))/60,1),0) FROM outbox_events",
             },
             timeout=40,
         )
