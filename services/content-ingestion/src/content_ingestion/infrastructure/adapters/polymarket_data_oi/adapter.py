@@ -98,9 +98,31 @@ class PolymarketOIAdapter:
             logger.info("polymarket_oi_no_condition_ids", source=source.name)
             return []
 
+        # 2026-07-25 prod-log audit: a single market's transient HTTP failure
+        # (e.g. upstream 408/5xx from data-api.polymarket.com) used to propagate
+        # out of ``_process_market`` uncaught, aborting THIS ENTIRE fetch() and
+        # skipping the OI snapshot for every OTHER market in the cycle too. The
+        # sibling trades/CLOB adapters isolate each market's fetch in the
+        # worker's per-market loop (``trades_market_fetch_failed`` /
+        # ``history_market_fetch_failed``, worker.py) so one bad market never
+        # sacrifices its siblings — the OI adapter lacked that isolation.
+        # Catch ``AdapterError`` per market here so one 408/5xx just skips that
+        # market (naturally retried on the next daily-snapshot cycle) instead of
+        # failing the whole task.
         results: list[PredictionOIFetchResult] = []
+        markets_failed = 0
         for condition_id in condition_ids:
-            result = await self._process_market(condition_id, fetched_at)
+            try:
+                result = await self._process_market(condition_id, fetched_at)
+            except AdapterError as exc:
+                logger.error(
+                    "polymarket_oi_market_fetch_failed",
+                    market_id=condition_id,
+                    error=str(exc),
+                    status_code=exc.status_code,
+                )
+                markets_failed += 1
+                continue
             if result is not None:
                 results.append(result)
 
@@ -109,6 +131,7 @@ class PolymarketOIAdapter:
             source=source.name,
             markets=len(condition_ids),
             new=len(results),
+            failed=markets_failed,
         )
         return results
 
