@@ -126,7 +126,7 @@ GLINER_MAX_INFERENCES = int(os.environ.get("GLINER_MAX_INFERENCES", "0"))
 # Adaptive per-forward-pass activation budget (gliner OOM residual, 2026-07-22).
 # The count cap (GLINER_MAX_BATCH) alone does NOT bound peak activation memory:
 # batch_predict_entities pads every text in a group to the LONGEST text, and
-# GLiNER's span-enumeration tensors scale as batch_size × padded_seq_len ×
+# GLiNER's span-enumeration tensors scale as batch_size x padded_seq_len x
 # max_span_width. So a batch of 8 SHORT sections and a batch of 8 max-length
 # (GLINER_MAX_INPUT_CHARS) sections have very different peaks for the SAME count.
 # Live evidence: the arena-fragmentation ramp is fixed (working set flat ~2.4Gi),
@@ -134,13 +134,40 @@ GLINER_MAX_INFERENCES = int(os.environ.get("GLINER_MAX_INFERENCES", "0"))
 # clears the 8Gi cap under a backfill burst of longer sections (~1 OOMKill/day).
 #
 # GLINER_MAX_BATCH_CHARS bounds peak DETERMINISTICALLY by capping the padded-
-# activation proxy (batch_size × longest-text-chars) per forward pass, so a batch
+# activation proxy (batch_size x longest-text-chars) per forward pass, so a batch
 # adaptively SHRINKS when its texts are long and stays full (up to GLINER_MAX_BATCH)
 # when they are short — bounding memory without sacrificing normal-section
 # throughput. 0 disables it (pure count batching, prior behaviour). The group
 # always keeps at least its seed item (already truncated to GLINER_MAX_INPUT_CHARS),
 # so a single oversized text still runs.
 GLINER_MAX_BATCH_CHARS = int(os.environ.get("GLINER_MAX_BATCH_CHARS", "0"))
+
+# Token-based activation budget (gliner OOM residual #2, 2026-07-25). The chars
+# proxy above assumes chars-per-subword-token is roughly constant across inputs,
+# but it is NOT: GLiNER's transformer tokenizer subword-splits financial text
+# (tickers, EPS/dollar figures, percentages, filing IDs — the bulk of this
+# platform's NER traffic) far more densely than plain English. Measured live on
+# the deployed tokenizer: ~1.05 subword-tokens/word for generic prose vs ~3.1 for
+# a financial-news-style sample of EQUAL char count — a ~3x difference the char
+# proxy cannot see, because it counts characters, not what actually feeds the
+# transformer. Self-attention cost/memory scales with subword SEQUENCE LENGTH
+# (super-linearly at these lengths), so a batch of dense financial sections can
+# blow well past the ~6.15Gi peak the char budget was tuned for while staying
+# UNDER GLINER_MAX_BATCH_CHARS the whole time — this is the residual ~1
+# OOMKill/day the char guard alone did not catch (confirmed live: cadvisor
+# working_set spikes to ~4.5-5Gi against a ~2.1-2.6Gi flat baseline immediately
+# before an OOMKilled exit 137, with the 60s-resolution metric scrape too coarse
+# to catch the actual peak mid-spike).
+#
+# GLINER_MAX_BATCH_TOKENS caps the SAME padded-activation proxy shape as the
+# chars guard (batch_size x longest-item) but measured in actual subword tokens
+# (via the already-loaded GLiNER transformer tokenizer) instead of characters —
+# the quantity self-attention memory/compute actually scales with. Additive,
+# defense-in-depth alongside GLINER_MAX_BATCH_CHARS: either guard can close a
+# batch early; the tighter one wins. 0 disables it (prior behaviour, matches
+# GLINER_MAX_BATCH_CHARS' opt-in-via-env convention — tune via the gitops
+# deployment manifest, not this default).
+GLINER_MAX_BATCH_TOKENS = int(os.environ.get("GLINER_MAX_BATCH_TOKENS", "0"))
 
 # Single-thread pool: all model forward passes run here so their (variable-length)
 # CPU tensors are allocated from ONE glibc malloc arena. run_in_executor(None,...)
@@ -164,17 +191,16 @@ def _malloc_trim() -> None:
     relative to a GLiNER forward pass, so it is safe to call after every flush."""
     if _LIBC is None:
         return
-    try:
+    # pragma: no cover — malloc_trim missing (musl)
+    with contextlib.suppress(AttributeError, OSError):
         _LIBC.malloc_trim(0)
-    except (AttributeError, OSError):  # pragma: no cover — malloc_trim missing (musl)
-        pass
 
 
 def _would_exceed_batch_chars(group_size: int, current_max_len: int, next_len: int) -> bool:
     """True if adding a text of ``next_len`` chars would push the group's padded-
     activation proxy over ``GLINER_MAX_BATCH_CHARS``.
 
-    The proxy is ``batch_size × longest-text-length`` because a batched forward
+    The proxy is ``batch_size x longest-text-length`` because a batched forward
     pass pads every text to the longest one — a single long text inflates the peak
     for the WHOLE batch, so summing lengths would under-count it (a batch of one
     4000-char text + seven 10-char texts pads all eight to 4000). Modelling the
@@ -185,6 +211,46 @@ def _would_exceed_batch_chars(group_size: int, current_max_len: int, next_len: i
         return False
     new_max = max(current_max_len, next_len)
     return (group_size + 1) * new_max > GLINER_MAX_BATCH_CHARS
+
+
+def _would_exceed_batch_tokens(group_size: int, current_max_tokens: int, next_tokens: int) -> bool:
+    """Same padded-activation-proxy shape as ``_would_exceed_batch_chars``, but
+    measured in actual subword tokens (see GLINER_MAX_BATCH_TOKENS above) — the
+    quantity that actually drives self-attention memory/compute, unlike raw char
+    count which under-counts token-dense financial text by ~3x.
+
+    Disabled (always False) when GLINER_MAX_BATCH_TOKENS <= 0."""
+    if GLINER_MAX_BATCH_TOKENS <= 0:
+        return False
+    new_max = max(current_max_tokens, next_tokens)
+    return (group_size + 1) * new_max > GLINER_MAX_BATCH_TOKENS
+
+
+# Transformer tokenizer used ONLY to measure subword-token count for the batch
+# budget above — set once the GLiNER model finishes loading (see _get_model).
+# None before load / if unavailable (e.g. unit tests with a stubbed model):
+# _count_tokens then falls back to a conservative chars/3 estimate (the
+# financial-text-dense ratio measured live) rather than silently disabling the
+# guard, since "no tokenizer yet" must never mean "unbounded".
+_tokenizer: Any = None
+
+
+def _count_tokens(text: str) -> int:
+    """Subword-token count for ``text`` via the live GLiNER transformer
+    tokenizer. Cheap relative to a forward pass (a fast Rust tokenizer encode
+    is microseconds-to-low-milliseconds even at GLINER_MAX_INPUT_CHARS length),
+    so computing it once per request (in ``_submit``, after truncation) is not
+    a throughput concern.
+
+    Falls back to ``len(text) // 3`` (the measured worst-case dense-financial-
+    text ratio — see GLINER_MAX_BATCH_TOKENS comment) when the tokenizer is not
+    yet loaded, so the guard is conservative rather than a silent no-op."""
+    if _tokenizer is None:
+        return max(1, len(text) // 3)
+    try:
+        return max(1, len(_tokenizer.encode(text, add_special_tokens=False)))
+    except Exception:  # — never let a budget estimate crash the request path
+        return max(1, len(text) // 3)
 
 
 def _truncate_input(text: str) -> str:
@@ -235,7 +301,7 @@ _model_lock = asyncio.Lock()
 
 
 async def _get_model() -> Any:
-    global _model
+    global _model, _tokenizer
     if _model is None:
         async with _model_lock:
             if _model is None:
@@ -243,6 +309,16 @@ async def _get_model() -> Any:
 
                 loop = asyncio.get_event_loop()
                 _model = await loop.run_in_executor(None, lambda: GLiNER.from_pretrained(_MODEL_PATH))
+                # Grab the transformer tokenizer for the token-based activation
+                # budget (GLINER_MAX_BATCH_TOKENS / _count_tokens above). Same
+                # tokenizer GLiNER itself uses internally, so token counts here
+                # match what actually feeds the forward pass. Best-effort: if
+                # the attribute path ever changes upstream, _count_tokens falls
+                # back to its chars-based estimate rather than raising.
+                try:
+                    _tokenizer = _model.data_processor.transformer_tokenizer
+                except AttributeError:  # pragma: no cover — defensive vs upstream refactor
+                    _tokenizer = None
     return _model
 
 
@@ -252,13 +328,16 @@ async def _get_model() -> Any:
 class _QueueItem:
     """One pending single-text NER request awaiting batched inference."""
 
-    __slots__ = ("future", "labels", "text", "threshold")
+    __slots__ = ("future", "labels", "text", "threshold", "token_len")
 
     def __init__(self, text: str, labels: list[str], threshold: float, future: asyncio.Future[list[dict[str, Any]]]):
         self.text = text
         self.labels = labels
         self.threshold = threshold
         self.future = future
+        # Computed once at enqueue time (post-truncation) so the collector loop
+        # never re-tokenizes the same text on every scan of the deferred buffer.
+        self.token_len = _count_tokens(text)
 
 
 def _group_key(labels: list[str], threshold: float) -> tuple[tuple[str, ...], float]:
@@ -302,6 +381,7 @@ async def _flush_group(model: Any, loop: asyncio.AbstractEventLoop, items: list[
     texts = [it.text for it in items]
     labels = items[0].labels
     threshold = items[0].threshold
+    max_tokens = max((it.token_len for it in items), default=0)
     key_hash = hashlib.sha1(  # noqa: S324 — non-crypto, just a short stable group id for logs
         json.dumps([labels, threshold], sort_keys=True).encode()
     ).hexdigest()[:8]
@@ -328,6 +408,7 @@ async def _flush_group(model: Any, loop: asyncio.AbstractEventLoop, items: list[
         batch_size=len(items),
         wait_ms=round(wait_ms, 2),
         group_key_hash=key_hash,
+        max_tokens=max_tokens,
     )
     _maybe_recycle()
 
@@ -373,13 +454,18 @@ async def _collector() -> None:
 
             key = _group_key(first.labels, first.threshold)
             group: list[_QueueItem] = [first]
-            # Track the longest text in the group: peak padded activation scales
-            # with len(group) × group_max_len, so the char-budget guard needs both.
+            # Track the longest text in the group (chars AND actual subword
+            # tokens): peak padded activation scales with len(group) x
+            # group_max_len, so each budget guard needs its own max. The chars
+            # proxy under-counts token-dense financial text by ~3x (see
+            # GLINER_MAX_BATCH_TOKENS above), so both guards run independently
+            # and whichever is tighter closes the batch first.
             group_max_len = len(first.text)
+            group_max_tokens = first.token_len
             deadline = time.monotonic() + GLINER_BATCH_WAIT_MS / 1000.0
 
             # Re-scan deferred buffer for same-key items first (no waiting). Skip
-            # any that would breach the padded-activation budget — they stay
+            # any that would breach either padded-activation budget — they stay
             # deferred and seed/join a later (smaller) batch.
             still_deferred: list[_QueueItem] = []
             for it in deferred:
@@ -387,15 +473,17 @@ async def _collector() -> None:
                     len(group) < GLINER_MAX_BATCH
                     and _group_key(it.labels, it.threshold) == key
                     and not _would_exceed_batch_chars(len(group), group_max_len, len(it.text))
+                    and not _would_exceed_batch_tokens(len(group), group_max_tokens, it.token_len)
                 ):
                     group.append(it)
                     group_max_len = max(group_max_len, len(it.text))
+                    group_max_tokens = max(group_max_tokens, it.token_len)
                 else:
                     still_deferred.append(it)
             deferred = still_deferred
 
-            # Drain fresh arrivals until full (by count OR char budget) or the wait
-            # window expires.
+            # Drain fresh arrivals until full (by count OR either budget) or the
+            # wait window expires.
             while len(group) < GLINER_MAX_BATCH:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -407,14 +495,17 @@ async def _collector() -> None:
                 if _group_key(nxt.labels, nxt.threshold) != key:
                     # Different key — defer for a subsequent loop (its own batch).
                     deferred.append(nxt)
-                elif _would_exceed_batch_chars(len(group), group_max_len, len(nxt.text)):
-                    # Same key but adding it would breach the activation budget —
+                elif _would_exceed_batch_chars(len(group), group_max_len, len(nxt.text)) or _would_exceed_batch_tokens(
+                    len(group), group_max_tokens, nxt.token_len
+                ):
+                    # Same key but adding it would breach an activation budget —
                     # defer it and close this batch to bound peak memory.
                     deferred.append(nxt)
                     break
                 else:
                     group.append(nxt)
                     group_max_len = max(group_max_len, len(nxt.text))
+                    group_max_tokens = max(group_max_tokens, nxt.token_len)
 
             elapsed_ms = (GLINER_BATCH_WAIT_MS / 1000.0 - max(0.0, deadline - time.monotonic())) * 1000.0
             await _flush_group(model, loop, group, elapsed_ms)
@@ -480,6 +571,8 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         max_batch=GLINER_MAX_BATCH,
         batch_wait_ms=GLINER_BATCH_WAIT_MS,
         max_input_chars=GLINER_MAX_INPUT_CHARS,
+        max_batch_chars=GLINER_MAX_BATCH_CHARS,
+        max_batch_tokens=GLINER_MAX_BATCH_TOKENS,
         max_inferences=GLINER_MAX_INFERENCES,
         malloc_trim=_LIBC is not None,
     )
