@@ -1,0 +1,32 @@
+
+##### Dynatrace/BMO price_target: Dynatrace (DT) Stock Trades Down, Here Is Why
+  --- V1.7 ---
+    run0: ['INV BMO Capital|analyst_rating|Dynatrace', 'INV BMO Capital|price_target|Dynatrace']
+    run1: ['INV BMO Capital|price_target|Dynatrace', 'INV BMO Capital|analyst_rating|Dynatrace']
+    run2: ['INV BMO Capital|price_target|Dynatrace', 'INV BMO Capital|analyst_rating|Dynatrace']
+    run3: ['INV BMO Capital|price_target|Dynatrace', 'INV BMO Capital|analyst_rating|Dynatrace']
+    run4: ['INV BMO Capital|analyst_rating|Dynatrace', 'INV BMO Capital|price_target|Dynatrace']
+    run5: ['INV BMO Capital|price_target|Dynatrace', 'INV BMO Capital|analyst_rating|Dynatrace']
+  --- V1.8 ---
+    run0: ['ok Dynatrace|price_target|BMO Capital', 'ok Dynatrace|analyst_rating|BMO Capital']
+    run1: ['ok Dynatrace|price_target|BMO Capital', 'ok Dynatrace|analyst_rating|BMO Capital']
+    run2: ['ok Dynatrace|price_target|BMO Capital', 'ok Dynatrace|analyst_rating|BMO Capital']
+    run3: ['ok Dynatrace|price_target|BMO Capital']
+    run4: ['ok Dynatrace|price_target|BMO Capital', 'ok Dynatrace|analyst_rating|BMO Capital']
+    run5: ['ok Dynatrace|price_target|BMO Capital', 'ok Dynatrace|analyst_rating|BMO Capital']
+
+##### SoundHound acquired_by Amelia: Why SoundHound AI Stock Rocketed 20% Higher on Thursday
+  --- V1.7 ---
+    run0: ['Amelia AI|acquired_by|SoundHound AI', 'SoundHound AI|listed_on|NASDAQ']
+    run1: ['Amelia AI|acquired_by|SoundHound AI', 'SoundHound AI|listed_on|NASDAQ']
+    run2: ['SoundHound AI|listed_on|NASDAQ', 'Amelia AI|acquired_by|SoundHound AI']
+    run3: ['Amelia AI|acquired_by|SoundHound AI', 'SoundHound AI|listed_on|NASDAQ']
+    run4: ['Amelia AI|acquired_by|SoundHound AI', 'SoundHound AI|listed_on|NASDAQ']
+    run5: ['SoundHound AI|listed_on|NASDAQ', 'Amelia AI|acquired_by|SoundHound AI']
+  --- V1.8 ---
+    run0: ['Amelia AI|acquired_by|SoundHound AI', 'SoundHound AI|listed_on|NASDAQ']
+    run1: ['Amelia AI|acquired_by|SoundHound AI', 'SoundHound AI|listed_on|NASDAQ']
+    run2: ['SoundHound AI|listed_on|NASDAQ', 'Amelia AI|acquired_by|SoundHound AI']
+    run3: ['Amelia AI|acquired_by|SoundHound AI', 'SoundHound AI|listed_on|NASDAQ']
+    run4: ['Amelia AI|acquired_by|SoundHound AI', 'SoundHound AI|listed_on|NASDAQ']
+    run5: ['Amelia AI|acquired_by|SoundHound AI', 'SoundHound AI|listed_on|NASDAQ']

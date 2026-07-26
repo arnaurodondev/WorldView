@@ -1,0 +1,2702 @@
+[
+  {
+    "doc_id": "019f6a44-ee35-781d-8ba5-a2b700d7be3a",
+    "title": "3 Stocks With Upgraded Broker Ratings to Buy for Robust Returns",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5393,
+        "completion_tokens": 1128
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any relationship between the allowed entities 'brokers', 'Brokers', and 'stock' using a relation-bearing verb or phrase; it merely discusses brokers' actions and stock recommendations in a general advisory context. Therefore, an empty relations array is correct and captures the absence of extractable relationships.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4946,
+        "completion_tokens": 912
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any relationship between the allowed entities 'brokers', 'Brokers', and 'stock' using a relation-bearing verb or phrase; it merely discusses brokers' general activities and mentions stocks as investment options. Therefore, an empty relations array is correct and captures the lack of asserted relationships.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a7-7b82-7bf5-9d07-f7c9f31121b2",
+    "title": "Netflix's Ad Revenue Is Expected to Surge 100% to $3 Billion: Is This the Best Stock to Buy Today With $1,000?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 7158,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any explicit relationships between the allowed entities beyond mere co-mention; for example, it mentions Reed Hastings as co-founder and former CEO of Netflix but does not use a relation-bearing verb to link them in a way that would constitute an extracted relation. The system correctly returned an empty array, capturing the lack of asserted relationships a careful",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 6711,
+        "completion_tokens": 3689
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states 'Netflix (NASDAQ: NFLX)' and 'Reed Hastings, the company's co-founder and previous CEO', directly asserting both the listed_on and has_executive relations with correct subject/object order. No other relationships among the allow-listed entities are asserted, so the extraction is complete and accurate.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6ded-d16b-76ad-a623-782fa7301a35",
+    "title": "EVTC vs. EFX: Which Stock Should Value Investors Buy Now?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5480,
+        "completion_tokens": 286
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares Evertec and Equifax on valuation metrics and Zacks Rank but does not assert any explicit relationship between the two entities; it merely co-mentions them as stocks in the same sector. An empty relations array is correct, as no relation-bearing verb or phrase links them.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5033,
+        "completion_tokens": 1856
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares Evertec and Equifax on valuation metrics and Zacks Rank but does not assert any explicit relationship between them, such as partnership, ownership, or transaction. The empty relations array correctly captures the absence of any asserted link, earning a perfect recall grade.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a7-6a20-71a1-9174-efa8b6bf14b3",
+    "title": "Intuitive Surgical or Abbott: Which MedTech Stock Is a Better Bet Now?",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5774,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares Intuitive Surgical and Abbott Laboratories but does not assert any explicit relationships between the two entities or between them and the other listed entities (U.S., China) using a relation-bearing verb or phrase. The empty relations array correctly reflects the absence of such asserted links, earning a top recall grade.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5327,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares Intuitive Surgical and Abbott Laboratories but does not assert any explicit relationship between them or with the other allowed entities (U.S., China) using a relation-bearing verb or phrase. The empty relations array correctly reflects the absence of such asserted links, earning a perfect recall grade.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a0b-5359-72ff-9de2-d1a19e1463c3",
+    "title": "Should Investors Buy, Hold or Sell Costco Stock After June Sales?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 6,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 6,
+      "usage": {
+        "prompt_tokens": 6491,
+        "completion_tokens": 3965
+      },
+      "judge": {
+        "n_relations": 6,
+        "n_supported": 6,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All six relations are directly asserted in the article text with explicit evidence linking Costco to the specified countries via revenue or operations. The article clearly states comparable sales figures for each region and mentions warehouse openings in the United States, confirming the relationships without any false positives or inversions.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 6044,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article discusses Costco's sales performance, membership growth, and valuation but does not assert any explicit relationships between the allowed entities beyond co-mention. The empty relations array correctly reflects the absence of asserted links, earning a perfect recall grade.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a6-7d28-7029-a2d3-e2a0412da315",
+    "title": "UnitedHealth vs. Humana: Which Healthcare Stock Has More Upside Now?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 7012,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article is a comparative analysis of two companies and does not assert any explicit relationships between the listed entities beyond co-mention. The empty relations array correctly captures the absence of asserted links, earning a perfect recall grade.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 6565,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article is a comparative analysis of two companies with no explicit relational assertions between the listed entities; it only describes each company's operations and financials. An empty relations array is correct for this text.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69bd-2389-7ed3-be82-2fb80dc8f650",
+    "title": "Who is Winning AI Workflow Automation? We Compared 4 Enterprise Stocks.",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5639,
+        "completion_tokens": 2390
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article discusses multiple companies but does not assert any explicit relationships between the named entities; it merely compares their financial metrics and business positions. Therefore, an empty relations array is correct and captures the lack of asserted links.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5192,
+        "completion_tokens": 2918
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article discusses four companies in the context of workflow automation but does not assert any explicit relationships between them; it merely compares their financial metrics and market positions. A careful analyst would not extract any relations from this text, so returning an empty array is correct.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6dc5-2672-7703-bea6-5fdec4d32aee",
+    "title": "NMIH vs. CB: Which Stock Should Value Investors Buy Now?",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4285,
+        "completion_tokens": 725
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares NMI Holdings and Chubb on valuation metrics and Zacks Rank but does not assert any explicit relationship between the two entities. An empty relations array is correct because no relation-bearing verb or phrase links them.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 3838,
+        "completion_tokens": 1739
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares NMI Holdings and Chubb on valuation metrics and Zacks Rank but does not assert any explicit relationship between them, such as acquisition, partnership, or executive ties. An empty relations array is correct for this text.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6dc4-e7c5-70e0-80da-80c5b37880f2",
+    "title": "ATO or SWX: Which Is the Better Value Stock Right Now?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4326,
+        "completion_tokens": 530
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares Atmos Energy and Southwest Gas on valuation metrics and Zacks Rank but does not assert any explicit relationship between the two entities; they are merely co-mentioned as peers in the same sector. An empty relations array is correct, as no relation-bearing verb or phrase links them.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 3879,
+        "completion_tokens": 745
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares Atmos Energy and Southwest Gas on valuation metrics and analyst rankings but does not assert any explicit relationship between the two entities. The empty relations array correctly reflects the absence of any asserted link, earning a perfect recall grade.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6dc4-c65d-764c-a0ae-7bae836603d0",
+    "title": "GNL or EGP: Which Is the Better Value Stock Right Now?",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4340,
+        "completion_tokens": 803
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares Global Net Lease and EastGroup Properties on valuation metrics and Zacks Rank but does not assert any explicit relationship between the two entities. An empty relations array is correct because no relation-bearing verb or phrase links them.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 3893,
+        "completion_tokens": 1444
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article only compares the two companies' valuation metrics and Zacks ranks, but does not assert any explicit relationship between them. An empty relations array is correct because no relation-bearing verb or phrase links Global Net Lease and EastGroup Properties.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6db3-9d0b-7e0d-91f2-eed078f2cced",
+    "title": "USNA vs. ZTS: Which Stock Is the Better Value Option?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4303,
+        "completion_tokens": 2182
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares USANA Health Sciences and Zoetis on valuation metrics and Zacks Rank but does not assert any explicit relationship between the two entities; it merely co-mentions them as alternatives for value investors. Therefore, an empty relations array is correct and captures all asserted relationships.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 3856,
+        "completion_tokens": 1131
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares USANA Health Sciences and Zoetis on valuation metrics and Zacks Rank but does not assert any explicit relationship between the two entities; it merely co-mentions them as stocks in the same sector. An empty relations array is correct because no relation-bearing verb or phrase links the two named entities.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a43-fe4f-7592-ac94-d6a315a80702",
+    "title": "Universal Health Services (UHS) Q2 Earnings: Taking a Look at Key Metrics Versus Estimates",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4142,
+        "completion_tokens": 1172
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article only discusses Universal Health Services' financial results and mentions Wall Street in a generic sense (analysts' estimates), but does not assert any specific relationship between the two entities. An empty relations array is correct for this article.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 3695,
+        "completion_tokens": 1365
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article is a financial results report that does not assert any relationship between Universal Health Services and Wall Street beyond co-mention. The empty relations array correctly captures the absence of any asserted predicate linking these two entities.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6d98-58be-7656-899e-67b1cb459e06",
+    "title": "4 Low-Beta Insurance Stocks to Watch Amid High Market Volatility",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 6679,
+        "completion_tokens": 2950
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any explicit relationships between the allowed entities; it merely mentions them in a market recap and analyst commentary context. Therefore, an empty relations array is correct and captures the lack of asserted links.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 6232,
+        "completion_tokens": 3612
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any explicit relationships between the allowed entities; it merely mentions them in a market recap and analyst commentary context. A careful analyst would agree that no relation-bearing verb or phrase links any pair of the allowed entities, so returning an empty array is correct.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a43-fd86-711a-b173-636690eec5ec",
+    "title": "Pebblebrook Hotel (PEB) Q2 Earnings: Taking a Look at Key Metrics Versus Estimates",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4241,
+        "completion_tokens": 1224
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article only discusses Pebblebrook Hotel's financial results and analyst estimates, with no asserted relationship between Pebblebrook Hotel and Wall Street as a named entity. The empty relations array correctly captures the absence of any relation-bearing verb or phrase linking the two entities.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 3794,
+        "completion_tokens": 1336
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any relationship between Pebblebrook Hotel and Wall Street; it merely mentions Wall Street analysts in the context of earnings estimates. The empty relations array correctly captures the absence of any asserted relation, so the recall grade is a 5.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a0a-2b3c-7a5b-baf8-d5106718e76b",
+    "title": "Are You a Momentum Investor? This 1 Stock Could Be the Perfect Pick",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 4177,
+        "completion_tokens": 2026
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states MDU Resources Group, Inc. is a Bismarck, ND based company, supporting the headquartered_in relation, and mentions the spinoff of Knife River, which correctly asserts the divested_from relation with the subject as the divesting entity. The extraction captures all asserted relationships without false positives or inversions.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 3730,
+        "completion_tokens": 1575
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "Both relations are directly asserted in the article: 'a Bismarck, ND based company' explicitly states the headquarters, and 'Post the spinoff of Knife River' clearly indicates MDU Resources divested from Knife River. The directional predicate 'divested_from' has the correct subject (MDU Resources) and object (Knife River), and no false positives or missing relations are present.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6d85-dfaf-7bba-9228-9c499967676e",
+    "title": "Will Best Buy (BBY) Tech Endeavors Help Navigate Challenges?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 3,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 3,
+      "usage": {
+        "prompt_tokens": 5291,
+        "completion_tokens": 2480
+      },
+      "judge": {
+        "n_relations": 3,
+        "n_supported": 3,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All three relations are explicitly asserted in the article text: Best Buy's collaborations with Google Cloud and Accenture are described as part of its strategy, and the vendor partnership with Samsung is directly mentioned. The article is a thin, low-signal market commentary that does not contain any other relationships among the allowed entities, so returning exactly these three is a perfect ext",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 3,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 3,
+      "usage": {
+        "prompt_tokens": 4844,
+        "completion_tokens": 2440
+      },
+      "judge": {
+        "n_relations": 3,
+        "n_supported": 3,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All three relations are directly asserted in the article text with explicit partnership language: 'collaborations with Google Cloud and Accenture' and 'vendor partnerships, such as the one with Samsung'. The article is a thin, low-signal stock analysis that only mentions these three entity pairs in a partnership context, so the extraction correctly captures all asserted relationships.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a09-0c17-7032-9e99-e8cc59f879a3",
+    "title": "Alibaba Just Made the First AI-Powered Glasses. Should You Buy, Sell, or Hold BABA Stock Here?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4516,
+        "completion_tokens": 2686
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any of the allowed entity pairs in a relation; it merely mentions Morgan Stanley in a headline and the indices in a performance comparison, with no linking verb or phrase connecting them to Alibaba. The empty relations array correctly captures the absence of asserted relationships, earning a perfect recall grade.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4069,
+        "completion_tokens": 2618
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any of the allowed entity pairs in a relation-bearing verb phrase; it merely mentions Morgan Stanley in a headline and the indices in a performance comparison, which are co-mentions without a predicate linking them to Alibaba. A careful analyst would find no extractable relations from the allow-list, so returning an empty array is correct.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6d6f-7f94-7791-b70b-db83b3e35e13",
+    "title": "Forget Eli Lilly: 3 Biotech Stocks to Buy Instead",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 5592,
+        "completion_tokens": 3652
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "Both relations are directly asserted in the article text via the parenthetical ticker notation (e.g., 'Amgen(NASDAQ: AMGN)'), which is a standard financial convention for listing on an exchange. The article is a stock recommendation piece that does not contain any other explicit relationships among the allowed entities, so capturing these two is complete and accurate.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5145,
+        "completion_tokens": 845
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any explicit relational predicates between the allowed entities; it merely compares and discusses them as investment alternatives. Therefore, an empty relations array correctly captures the absence of asserted relationships.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69bc-ed61-72d0-b517-a85372ed6a27",
+    "title": "What Are the 2 Top Artificial Intelligence (AI) Stocks to Buy Right Now?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5608,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any explicit relational predicates between the allowed entities; it only co-mentions Nvidia and TSMC in a market context. An empty relations array is correct for this low-signal article.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 4,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 4,
+      "usage": {
+        "prompt_tokens": 5161,
+        "completion_tokens": 4033
+      },
+      "judge": {
+        "n_relations": 4,
+        "n_supported": 4,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All four relations are directly asserted in the article text with appropriate linking verbs or phrases, and no mere co-mentions are present. The directional relations (supplier_of, listed_on) have correct subject-object order, and the recall is perfect for the given entity allow-list.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a08-e659-74e3-b8ec-251efe8a2b68",
+    "title": "Apple Stock vs. Tesla Stock: Which Tech Giant Is a Better Buy Now?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 5791,
+        "completion_tokens": 3355
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states 'Scott Ritchie, an investing expert at Stoculator,' which asserts that Stoculator employs Scott Ritchie. The relation is correctly directional with subject=Stoculator and object=Scott Ritchie, and no other relations were present to miss.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 5344,
+        "completion_tokens": 4087
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'Stoculator employs Scott Ritchie' is directly asserted by the article text 'Scott Ritchie, an investing expert at Stoculator', which implies employment. The subject and object are in the correct order per financial convention (employer employs employee), so there is no inversion.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6d64-a7d3-7985-9639-e39f94b0082a",
+    "title": "7 Unstoppable Growth Stocks to Buy and Hold for the Long Haul",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 8230,
+        "completion_tokens": 2536
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "Both relations are directly asserted in the article text: 'Based in Reston, Virginia, CACI International' explicitly states the headquarters, and 'CACI International ... is a major contractor to the U.S. Federal Government' clearly asserts a supplier relationship with the correct subject/object order. The article is a thin growth-stock list with no other relationships among the allow-listed entiti",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 7783,
+        "completion_tokens": 2158
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "Both relations are directly asserted in the article text: 'Based in Reston, Virginia' explicitly states CACI International is headquartered in Reston, and 'major contractor to the U.S. Federal Government' asserts a supplier relationship with the correct subject/object order. The allow-list is limited, but the extraction correctly captures the only two clear entity relationships present in the text",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a4-d412-707f-9fbe-817e62212e6c",
+    "title": "DocuSign, MongoDB, Workiva, Elastic, and PagerDuty Stocks Trade Up, What You Need To Know",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 4827,
+        "completion_tokens": 1551
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'Nvidia has_executive Jensen Huang' is directly asserted in the article text via the phrase 'Nvidia CEO Jensen Huang', with correct subject/object order. The article contains no other asserted relationships among the allow-listed entities, so the extraction is complete and accurate.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 4380,
+        "completion_tokens": 1784
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'Nvidia has_executive Jensen Huang' is directly asserted in the article text via the phrase 'Nvidia CEO Jensen Huang', with correct subject/object order. The article is a thin market-recap with no other asserted relationships among the allow-listed entities, so returning exactly this one relation is a perfect extraction.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a08-58dd-707c-bac0-50a6ad8a2179",
+    "title": "Dynatrace (DT) Stock Trades Down, Here Is Why",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 4326,
+        "completion_tokens": 1830
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "Both relations are directly asserted in the article: BMO Capital maintained an Outperform rating on Dynatrace and lowered its price target from $63 to $62. The subject/object order is correct for both directional predicates, with BMO Capital as the analyst firm and Dynatrace as the covered company.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 3879,
+        "completion_tokens": 1427
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 2,
+        "recall_grade": 5,
+        "justification": "Both relations are asserted in the article: BMO Capital trimmed its price target on Dynatrace and maintained an Outperform rating, but the subject/object order is reversed for both directional predicates (price_target and analyst_rating should have the analyst as subject and the company as object). The article is thin on relationships beyond these two, so a correct extraction of zero would also be",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a42-6e63-7db5-86a9-f1d18333c2b5",
+    "title": "INGR or NSRGY: Which Is the Better Value Stock Right Now?",
+    "stratum": "comention_heavy",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4345,
+        "completion_tokens": 294
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares Ingredion and Nestle SA on valuation metrics but does not assert any explicit relationship between them; it merely co-mentions both as stocks in the same sector. Therefore, an empty relations array is correct and captures all relevant information.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 3898,
+        "completion_tokens": 1506
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article compares Ingredion and Nestle SA on valuation metrics but does not assert any explicit relationship between them; it merely co-mentions them as alternatives. An empty relations array is correct, earning a perfect recall grade.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a08-0c7b-71c0-af31-043d7e610410",
+    "title": "Compared to Estimates, DXC Technology (DXC) Q1 Earnings: A Look at Key Metrics",
+    "stratum": "comention_heavy",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4079,
+        "completion_tokens": 837
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any relationship between DXC Technology and Wall Street; it merely mentions Wall Street analysts in the context of estimates. The empty relations array correctly captures the absence of any asserted relation, so the recall grade is a 5.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 3632,
+        "completion_tokens": 1971
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article discusses DXC Technology's earnings and mentions Wall Street expectations, but does not assert any explicit relationship between the two entities. An empty relations array is correct for this text.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a7-77b7-7214-9979-be7eb5fc76b9",
+    "title": "Rio Tinto Production Milestones And Arcadium Deal Test Dividend Strength",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 8754,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The relations array is empty, which is correct because the article text does not assert any of the allowed relations between the allowed entities; it only mentions Rio Tinto Group, LSE, copper, and bauxite in a narrative context without linking them via a relation-bearing verb or phrase.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 8307,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article discusses Rio Tinto Group's record copper and bauxite production and its acquisition of Arcadium, but the entity allow-list is limited to Rio Tinto Group, LSE, copper, and bauxite, and no relations were provided for evaluation. Since the system correctly returned an empty array for a thin article with no asserted relationships among the allowed entities, it captures what a careful anal",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a0c-1e2c-7fce-b489-6474958b7ee9",
+    "title": "Materion Corporation to Announce Second Quarter 2025 Financial Results on July 30",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 6,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 6,
+      "usage": {
+        "prompt_tokens": 5100,
+        "completion_tokens": 2659
+      },
+      "judge": {
+        "n_relations": 6,
+        "n_supported": 6,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All six relations are directly asserted in the article text: Materion is listed on NYSE, headquartered in Mayfield Heights, has executives Jugal Vijayvargiya and Shelly Chadwick, and produces precious and non-precious metals and beryllium composites. The two directional relations (has_executive) are correctly ordered with company as subject and person as object, and no false positives or inversion",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 6,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 6,
+      "usage": {
+        "prompt_tokens": 4653,
+        "completion_tokens": 2313
+      },
+      "judge": {
+        "n_relations": 6,
+        "n_supported": 6,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All six relations are directly asserted in the article text: headquartered_in, listed_on, two has_executive, and two produces relations are explicitly stated. The directional has_executive relations are correctly ordered with Materion Corporation as subject and the individuals as objects.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6de8-d926-7d28-8ee2-e66a92bad29a",
+    "title": "Should Investors Buy Home Depot's Stock After Exceeding Q2 Expectations?",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 5147,
+        "completion_tokens": 3755
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation is fully supported by the article text, which states 'Home Depot’s stock lands a Zacks Rank #3 (Hold)' from Zacks Investment Research, asserting an analyst_rating. The subject and object are in the correct order (analyst → company), and no other relationships are present, so recall is perfect.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4700,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any explicit relationships between the allowed entities; it merely mentions Home Depot, macroeconomic uncertainty, and Zacks Investment Research in separate contexts without linking them via a relation-bearing verb or phrase. A careful analyst would agree that no relations are present, so returning an empty array is correct.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a44-ef06-7809-9814-cc48c6566e5c",
+    "title": "SLB OneSubsea Awarded Contract by Equinor for Groundbreaking All-Electric Subsea Project",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 3,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 3,
+      "usage": {
+        "prompt_tokens": 5526,
+        "completion_tokens": 3201
+      },
+      "judge": {
+        "n_relations": 3,
+        "n_supported": 3,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All three relations are directly asserted in the article: SLB is listed on NYSE via the parenthetical notation, SLB is a supplier to Equinor as it received a contract award from Equinor, and SLB and Equinor are partners as stated in the collaboration quote. The directional predicates (listed_on and supplier_of) are correctly oriented, and no false positives or inversions are present.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 3,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 3,
+      "usage": {
+        "prompt_tokens": 5079,
+        "completion_tokens": 2194
+      },
+      "judge": {
+        "n_relations": 3,
+        "n_supported": 3,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All three relations are directly asserted in the article: SLB is listed on NYSE via the parenthetical notation, SLB is a supplier to Equinor as indicated by the contract award, and SLB and Equinor are partners as stated in the collaboration quote. The single directional relation (supplier_of) has the correct subject-object order (SLB as supplier, Equinor as buyer), and no false positives or invers",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6def-31c5-7f09-ab9d-2f7e9577b8c7",
+    "title": "Google’s ex-CEO blames working from home on the company’s AI struggles: ‘Google decided that work-life balance was more important than winning’",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4922,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article discusses Eric Schmidt's criticism of Google's remote work policy and its impact on AI competition, but does not assert any of the listed entity relationships with a relation-bearing verb. The empty relations array correctly captures that no such relationships are present, earning a perfect recall grade.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 4,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 4,
+      "usage": {
+        "prompt_tokens": 4475,
+        "completion_tokens": 3735
+      },
+      "judge": {
+        "n_relations": 4,
+        "n_supported": 4,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All four relations are directly asserted in the article text: Eric Schmidt and Larry Page are explicitly described as former executives of Google, and the article states Google lost the AI lead to startups like OpenAI and Anthropic, implying competition. The directional relations (has_executive) are correctly ordered with company as subject and person as object, and no false positives or inversion",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6df2-a463-74a0-b306-3955859946d8",
+    "title": "SmartCentres Real Estate Investment Trust Releases Second Quarter Results for 2024",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 17863,
+        "completion_tokens": 2620
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "Both relations are directly asserted in the article: SmartCentres is explicitly listed on TSX with its ticker, and Mitchell Goldhar is identified as CEO of SmartCentres. The directional predicate has_executive is correctly ordered (company as subject, person as object) and there are no false positives or missing high-signal relations.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 17416,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article is a financial results press release that mentions the allowed entities (SmartCentres, Mitchell Goldhar, VMC, Markham, Vaughan NW) but does not assert any explicit relational predicate between them beyond co-mention. A careful analyst would not extract any relations from this text, so returning an empty array is correct.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a0c-1e75-788f-9433-e8d50a4210c5",
+    "title": "Cable One to Host Conference Call to Discuss Second Quarter 2025 Results",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 5123,
+        "completion_tokens": 1255
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'Cable One, Inc. listed_on NYSE' is directly asserted in the article text via the parenthetical '(NYSE: CABO)' which indicates the company's stock exchange listing. The article is a thin press release about an earnings call, and the system correctly captured the only clear entity relationship present.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 4676,
+        "completion_tokens": 1812
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'listed_on' between Cable One, Inc. and NYSE is directly asserted by the parenthetical '(NYSE: CABO)' in the article text, which is a standard financial notation indicating the company's stock exchange listing. The article is a thin press release about an earnings call with no other entity relationships to extract, so returning exactly this one correct relation earns a perfect ",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6df1-64fc-719d-9795-725d47b1f978",
+    "title": "Genpact (G) Q2 Earnings and Revenues Surpass Estimates",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5001,
+        "completion_tokens": 1871
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text only mentions Genpact and S&P 500 in a comparative performance context (Genpact shares have lost about 7% versus the S&P 500's gain of 9%), which is a co-mention without any asserted relationship between the two entities. Therefore, an empty relations array is correct and captures all relevant relationships.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4554,
+        "completion_tokens": 2639
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text only mentions Genpact and S&P 500 in a comparative performance context (Genpact shares have lost about 7% since the beginning of the year versus the S&P 500's gain of 9%), which is a co-mention without any asserted relationship between the two entities. The empty relations array correctly captures that no relation-bearing verb or phrase links Genpact and S&P 500, so the extraction",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6df3-65f3-75b6-bae8-152a7765d64d",
+    "title": "Statutory Profit Doesn't Reflect How Good Neurocrine Biosciences' (NASDAQ:NBIX) Earnings Are",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 5273,
+        "completion_tokens": 1967
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states 'Neurocrine Biosciences, Inc.'s (NASDAQ:NBIX)', which asserts that the company is listed on NASDAQ. The single relation is supported and not a co-mention false positive.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 4826,
+        "completion_tokens": 1931
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states 'Neurocrine Biosciences, Inc.'s (NASDAQ:NBIX)', which asserts that the company is listed on NASDAQ. The single relation is supported and correctly extracted, with no false positives or inversions.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6df0-e9b0-7b31-8693-66338144813e",
+    "title": "Why SoundHound AI Stock Rocketed 20% Higher on Thursday",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 4508,
+        "completion_tokens": 2288
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "Both relations are directly asserted in the article: SoundHound AI acquired Amelia AI (correct subject/object for acquired_by), and SoundHound AI is listed on NASDAQ (explicitly stated). The article is a single-event news piece with no other relationships to extract, so the system captured all relevant assertions.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 4061,
+        "completion_tokens": 1762
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": null,
+        "justification": "",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6df1-537c-74d7-82a2-9e94c002cd35",
+    "title": "Douglas Emmett (DEI) Q2 FFO Surpass Estimates",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5046,
+        "completion_tokens": 1454
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any relationship between the allowed entities Douglas Emmett, DEI, and S&P 500 beyond mere co-mention in a market performance comparison. A careful analyst would find no relations to extract, so returning an empty array is correct.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4599,
+        "completion_tokens": 2827
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any explicit relationship between the allowed entities (Douglas Emmett, DEI, S&P 500) beyond co-mentioning them in a market performance comparison. A careful analyst would agree that no relation-bearing verb or phrase links these entities, so an empty relations array is correct.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6df2-b5d2-7cde-aa05-a2000bc36b10",
+    "title": "Air Transport Services (NASDAQ:ATSG) Misses Q2 Sales Targets, But Stock Soars 5.6%",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 6630,
+        "completion_tokens": 3701
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states 'Air Transport Services (NASDAQ:ATSG)' which asserts the listing relationship between the company and the exchange. The single relation is correctly supported and no other relationships among the allowed entities are asserted.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 6183,
+        "completion_tokens": 3282
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states 'Air Transport Services Group (NASDAQ:ATSG)' which asserts the company is listed on NASDAQ, so the relation is supported. The allow-list is small and the article does not assert any other relationships among the listed entities, so the extraction correctly captures the only asserted link.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a7-7bdb-7ae4-b22a-a4fb38a2d588",
+    "title": "Can Percipio Define SKIL's Success in Capturing Market Share?",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 6030,
+        "completion_tokens": 2166
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states 'The CEO remarked...' which asserts that Skillsoft Corp. has a CEO, and 'SKIL has a Zacks Rank #3 (Hold) at present' from Zacks Investment Research asserts an analyst rating on Skillsoft Corp. Both relations are correctly extracted with proper subject/object order and no false positives.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5583,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article primarily discusses Skillsoft Corp.'s product Percipio and its strategic shift, but does not assert any explicit relationships between the allowed entities (Skillsoft Corp., SKIL, CEO, Zacks Investment Research) using a relation-bearing verb or phrase. The CEO is mentioned but not linked to any other allowed entity, and Zacks Investment Research is only cited as the source of the repor",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a7-a0fa-7164-91e1-c5232230a64b",
+    "title": "IonQ Stock Up on Q4 Earnings &amp; Revenue Beat, Gross Margin Down",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5831,
+        "completion_tokens": 3531
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article only discusses IonQ's financial results and mentions no other entities, so an empty relations array is correct. A careful analyst would find no relationships to extract between the allowed entities.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5384,
+        "completion_tokens": 2049
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article only discusses IonQ's financial results and mentions no other entities, so an empty relations array is correct. There are no false positives or missing relations to penalize.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a7-7e51-7cfd-84d0-1f0c09bcd48c",
+    "title": "Freshworks (FRSH) Valuation Check After Steep Share Price And Return Declines",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4866,
+        "completion_tokens": 2028
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article discusses Freshworks' stock performance and fair value estimates but does not assert any explicit relationship between the two allowed entities 'Freshworks' and 'share price' using a relation-bearing verb or phrase. The empty relations array correctly reflects the absence of such asserted relationships, earning a perfect recall grade.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4419,
+        "completion_tokens": 679
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article discusses Freshworks' stock performance and fair value estimates but does not assert any explicit relationship between the two allowed entities 'Freshworks' and 'share price' using a relation-bearing verb or phrase. The empty relations array correctly reflects the absence of such an asserted link, earning a top recall grade.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a7-7de9-7661-89ff-08c5e2996c01",
+    "title": "Trade Desk falls on weak outlook, Loop downgrades on ad recovery uncertainity",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 4,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 4,
+      "usage": {
+        "prompt_tokens": 4137,
+        "completion_tokens": 2990
+      },
+      "judge": {
+        "n_relations": 4,
+        "n_supported": 4,
+        "n_comention_fp": 0,
+        "n_directional": 3,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All four relations are directly asserted in the article text with appropriate linking verbs or phrases: 'listed_on' is supported by the parenthetical ticker, 'downgraded_by' by the explicit downgrade action, 'price_target' by the stated target, and 'has_executive' by the title 'Chief Executive'. No directional inversions or false positives are present, and the extraction captures all key relations",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 4,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 4,
+      "usage": {
+        "prompt_tokens": 3690,
+        "completion_tokens": 4029
+      },
+      "judge": {
+        "n_relations": 4,
+        "n_supported": 4,
+        "n_comention_fp": 0,
+        "n_directional": 3,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All four relations are directly asserted in the article text: The Trade Desk is listed on NASDAQ (parenthetical ticker), downgraded by Loop Capital (explicit downgrade action), has a price target from Loop Capital (firm set $25 target), and has executive Jeff Green (identified as Chief Executive). No relations are mere co-mentions, and all directional predicates have correct subject-object order.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6de7-bf78-7d2d-a90b-f745cd194c1a",
+    "title": "Molina Healthcare of Wisconsin Receives Notice of Intent to Award New Region 5 Contract",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 5203,
+        "completion_tokens": 2441
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'regulates' between Securities and Exchange Commission and Molina Healthcare, Inc. is directly asserted by the text, which states that Molina files periodic reports and Form 10-K with the SEC, implying SEC regulation. The article is a thin press release about a contract award, and no other relations among the allow-listed entities are asserted, so returning only this one is app",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 4756,
+        "completion_tokens": 2186
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'regulates' is supported by the article text, which states that Molina Healthcare files periodic reports with the SEC, implying the SEC regulates the company. The article is a thin press release about a contract award, and the system correctly captured the only clear relationship between the allowed entities.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a7-7861-7350-8c79-923b819fe265",
+    "title": "Is Netflix Stock a Smart Pick for Investors Amid Rising Content Costs?",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 7590,
+        "completion_tokens": 3765
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states Netflix's 'pending deal for Warner Bros. Studios and HBO,' which directly asserts that Netflix is acquiring both entities, matching the acquired_by predicate with correct subject/object order. The extraction captures the only clear directional relationships among the allowed entities, and no other asserted relations are present, so recall is perfect.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 7143,
+        "completion_tokens": 3906
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states Netflix's 'pending deal for Warner Bros. Studios and HBO,' which asserts that Netflix is acquiring both entities, matching the acquired_by predicate with correct subject/object order. The extraction captures the only two asserted relationships among the allow-listed entities, and no other relations are present, so recall is perfect.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6def-6672-79f8-b9b4-e8e965148889",
+    "title": "Performance Food: Fiscal Q4 Earnings Snapshot",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 3676,
+        "completion_tokens": 2593
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'headquartered_in' is directly asserted by the phrase 'The Richmond, Virginia-based company' in the article text. The predicate is not directional per the provided list, and no other relationships among the allow-listed entities are asserted.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 3229,
+        "completion_tokens": 2480
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'headquartered_in' is directly asserted by the phrase 'The Richmond, Virginia-based company', linking Performance Food Group Co. to RICHMOND, Va. The article is a brief earnings report with no other relationships among the allow-listed entities, so the extraction correctly captures the only asserted link.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f69a7-780b-73ca-9944-95a4549fb3c6",
+    "title": "Road Scholar Announces Second-Annual Educator Legacy Award",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 5485,
+        "completion_tokens": 824
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article explicitly states 'Road Scholar President James Moses', which asserts that James Moses is an executive of Road Scholar, matching the has_executive relation with correct subject/object order. The article is a press release about an award and contains no other relationships among the allow-listed entities, so the single correct extraction earns a perfect recall grade.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 1,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 1,
+      "usage": {
+        "prompt_tokens": 5038,
+        "completion_tokens": 567
+      },
+      "judge": {
+        "n_relations": 1,
+        "n_supported": 1,
+        "n_comention_fp": 0,
+        "n_directional": 1,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The single relation 'Road Scholar has_executive James Moses' is directly asserted in the article text by the phrase 'Road Scholar President James Moses', which clearly links the company to its president. The subject and object are in the correct order per financial convention, and no other relations among the allow-listed entities are asserted, so the extraction is both accurate and complete.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a0c-0748-7e65-a0ba-166e87da658c",
+    "title": "US Treasuries Slide for Second Day as New Jobless Claims Fall",
+    "stratum": "regular",
+    "tier": "medium",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4650,
+        "completion_tokens": 2230
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any of the allowed entities in a relation-bearing verb phrase; it merely mentions them in a market commentary context. An empty relations array is correct because no directional or other predicate links any pair of allowed entities.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4203,
+        "completion_tokens": 2847
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article does not assert any explicit relationships between the allowed entities; it only mentions them in context without linking them via a relation-bearing verb or phrase. A careful analyst would agree that no relations are present, so returning an empty array is correct.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a0c-0b6e-7f15-9d06-a18cd741baa0",
+    "title": "Chrysler Century of Innovation Video Series Debuts New Episode 'Chrysler: Evolution of the Minivan'",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5817,
+        "completion_tokens": 2181
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any explicit relationship between Chrysler and Stellantis North America beyond co-mention in the context of social media channels and brand ownership. A careful analyst would agree that no relation-bearing verb or phrase links the two entities, so returning an empty array is correct.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 5370,
+        "completion_tokens": 2608
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any explicit relationship between Chrysler and Stellantis North America beyond co-mention; the empty relations array correctly captures the absence of any relation-bearing verb or phrase linking the two entities.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6de2-4ff1-7808-9826-c1ebaea719c5",
+    "title": "Sony says focus is on creativity, with games, movies, music, sensors, IP, and not gadgets",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4206,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article mentions several entities from the allow-list but does not explicitly assert any of the predefined relation types between them. The system correctly returned an empty array, capturing the absence of asserted relationships.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 3,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 3,
+      "usage": {
+        "prompt_tokens": 3759,
+        "completion_tokens": 3616
+      },
+      "judge": {
+        "n_relations": 3,
+        "n_supported": 3,
+        "n_comention_fp": 0,
+        "n_directional": 3,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All three relations are directly asserted in the article text with correct directional predicates: Sony has executive Kenichiro Yoshida, EMI Music Publishing was acquired by Sony, and Crunchyroll was acquired by Sony. The extraction is complete and accurate, capturing the key relationships a careful analyst would identify.",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a0b-e15c-71ed-b9bc-c5a52a2f6a49",
+    "title": "Equinix stock to benefit from White House data center executive order, Raymond James says",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 0,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 0,
+      "usage": {
+        "prompt_tokens": 4246,
+        "completion_tokens": 4096
+      },
+      "judge": {
+        "n_relations": 0,
+        "n_supported": 0,
+        "n_comention_fp": 0,
+        "n_directional": 0,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "The article text does not assert any of the listed entity pairs in a relation-bearing verb/phrase; it merely mentions them in context. The empty relations array correctly captures that no asserted relationships exist, so the system achieves perfect recall for this low-signal article.",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 3,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 3,
+      "usage": {
+        "prompt_tokens": 3799,
+        "completion_tokens": 3663
+      },
+      "judge": {
+        "n_relations": 3,
+        "n_supported": 3,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "All three relations are directly asserted in the article text: Raymond James highlighted Equinix as a beneficiary (sentiment_signal), Guggenheim initiated coverage with a Buy rating (analyst_rating), and Guggenheim set a price target of $933 (price_target). The directional relations (analyst_rating, price_target) have correct subject/object order (Equinix as subject, Guggenheim as object) per fina",
+        "error": null
+      }
+    }
+  },
+  {
+    "doc_id": "019f6a0c-0706-798a-89d3-0daeaadbaacc",
+    "title": "Thursday 7/24 Insider Buying Report: TBN, CTAS",
+    "stratum": "regular",
+    "tier": "deep",
+    "baseline": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 3900,
+        "completion_tokens": 1297
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "Both relations are directly asserted in the article text: Bryan Sheffield bought shares of Tamboran Resources, and Martin Mucci bought shares of Cintas, which correctly supports the owns_stake_in predicate with the person as subject and company as object. The article is a thin insider-buying report, and the system correctly captured the two clear relationships without any false positives or invers",
+        "error": null
+      }
+    },
+    "candidate": {
+      "raw_defects": {
+        "relations": 2,
+        "self_loop": 0,
+        "oov_predicate": 0,
+        "invalid_listed_on": 0
+      },
+      "gate_drops": {},
+      "gated_relations": 2,
+      "usage": {
+        "prompt_tokens": 3453,
+        "completion_tokens": 1954
+      },
+      "judge": {
+        "n_relations": 2,
+        "n_supported": 2,
+        "n_comention_fp": 0,
+        "n_directional": 2,
+        "n_directional_inverted": 0,
+        "recall_grade": 5,
+        "justification": "Both relations are directly asserted in the article: Bryan Sheffield is identified as an insider buying Tamboran Resources shares, and Martin Mucci is identified as an insider buying Cintas shares, which implies an executive relationship. The subject/object order is correct for the has_executive predicate (company, person), and no false positives or inversions are present.",
+        "error": null
+      }
+    }
+  }
+]
