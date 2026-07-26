@@ -24,6 +24,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
     from nlp_pipeline.config import Settings
 
 
@@ -57,12 +58,24 @@ def current_embedding_model_ids(settings: Settings) -> list[str]:
     return sorted({settings.embedding_model_id, settings.embedding_api_model_id} - {""})
 
 
-def build_embedding_client(settings: Settings) -> Any:
+def build_embedding_client(settings: Settings, *, valkey: ValkeyClient | None = None) -> Any:
     """Instantiate the embedding adapter selected by ``settings.embedding_provider``.
 
     Returns a client exposing ``embed(inputs: list[EmbeddingInput]) -> list[EmbeddingOutput]``.
     The Ollama fallback (used when the chosen provider is misconfigured) wraps a
     :class:`asyncio.Semaphore` of size 1 to serialise local inference.
+
+    Args:
+        settings: Service settings (provider selection + credentials).
+        valkey: Optional shared Valkey client. When provided, the returned
+            client is wrapped in :class:`ml_clients.embedding_cache.CachedEmbeddingClient`
+            (2026-07 embedding-cost audit) so identical text — e.g. the same
+            entity mention surface re-embedded on every article that mentions
+            it, or a chunk re-embedded on backfill/retry after the DB write
+            already landed via ``ON CONFLICT DO NOTHING`` — is served from
+            cache instead of re-paying the provider. Omit (``None``) for
+            callers that don't have a Valkey client handy (e.g. isolated
+            unit tests) — the adapter is returned uncached in that case.
     """
     provider = settings.embedding_provider.lower()
     _embedding_api_key = settings.embedding_api_key.get_secret_value()  # DEF-019
@@ -71,21 +84,32 @@ def build_embedding_client(settings: Settings) -> Any:
             DeepInfraEmbeddingAdapter,
         )
 
-        return DeepInfraEmbeddingAdapter(
+        client: Any = DeepInfraEmbeddingAdapter(
             api_key=_embedding_api_key,
             model_id=settings.embedding_api_model_id,
             base_url=settings.embedding_api_base_url,
         )
-    _jina_api_key = settings.jina_api_key.get_secret_value()  # DEF-019
-    if provider == "jina" and _jina_api_key:
-        from ml_clients.adapters.jina_embedding import JinaEmbeddingAdapter  # type: ignore[import-not-found]
+    else:
+        _jina_api_key = settings.jina_api_key.get_secret_value()  # DEF-019
+        if provider == "jina" and _jina_api_key:
+            from ml_clients.adapters.jina_embedding import (  # type: ignore[import-not-found]
+                JinaEmbeddingAdapter,
+            )
 
-        return JinaEmbeddingAdapter(api_key=_jina_api_key)
+            client = JinaEmbeddingAdapter(api_key=_jina_api_key)
+        else:
+            from ml_clients.adapters.ollama_embedding import (  # type: ignore[import-not-found]
+                OllamaEmbeddingAdapter,
+            )
 
-    from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter  # type: ignore[import-not-found]
+            client = OllamaEmbeddingAdapter(
+                base_url=settings.ollama_base_url,
+                model_id=settings.embedding_model_id,
+                semaphore=asyncio.Semaphore(1),
+            )
 
-    return OllamaEmbeddingAdapter(
-        base_url=settings.ollama_base_url,
-        model_id=settings.embedding_model_id,
-        semaphore=asyncio.Semaphore(1),
-    )
+    if valkey is not None:
+        from ml_clients.embedding_cache import CachedEmbeddingClient  # type: ignore[import-not-found]
+
+        return CachedEmbeddingClient(client, valkey)
+    return client

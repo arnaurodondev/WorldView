@@ -42,11 +42,21 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # ``nlp_pipeline.bootstrap.embedding`` so this entry point and the API process
 # share one source of truth (no more silent drift when a new provider lands).
 # Tests retain the legacy ``_build_embedding_client`` symbol — it's a thin shim.
-def _build_embedding_client(settings: Any) -> Any:
-    """Delegate to the shared bootstrap helper."""
+def _build_embedding_client(settings: Any, *, valkey: Any = None) -> Any:
+    """Delegate to the shared bootstrap helper.
+
+    ``valkey`` (optional): when provided, wraps the adapter with the shared
+    content-addressed embedding cache (2026-07 embedding-cost audit). This
+    worker is the CANONICAL "``ON CONFLICT DO NOTHING`` fires after the paid
+    call" site: it re-embeds ``embedding_pending`` rows, and a row can be
+    re-claimed (crash between a successful embed+write and pending-row
+    cleanup, or a retry racing a live ingest of the same chunk/section text)
+    — without the cache, that re-claim always re-pays the provider even
+    though the DB write is a guaranteed no-op.
+    """
     from nlp_pipeline.bootstrap.embedding import build_embedding_client
 
-    return build_embedding_client(settings)
+    return build_embedding_client(settings, valkey=valkey)
 
 
 async def main() -> None:
@@ -104,7 +114,11 @@ async def main() -> None:
             note=f"rows with retry_count>={max_retries} are skipped by claim_batch and need manual triage",
         )
 
-    embedding_client = _build_embedding_client(settings)
+    from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
+
+    valkey = create_valkey_client_from_url(settings.valkey_url)
+
+    embedding_client = _build_embedding_client(settings, valkey=valkey)
     worker = EmbeddingRetryWorker(
         nlp_session_factory=nlp_sf,
         embedding_client=embedding_client,
@@ -136,6 +150,8 @@ async def main() -> None:
         await worker_task
 
     await nlp_engine.dispose()
+    with contextlib.suppress(Exception):
+        await valkey.close()
     with contextlib.suppress(Exception):
         await metrics_handle.aclose()
     log.info("embedding_retry_worker_stopped")

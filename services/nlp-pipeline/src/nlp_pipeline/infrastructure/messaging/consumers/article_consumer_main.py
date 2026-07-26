@@ -187,6 +187,18 @@ async def main() -> None:
             semaphore=ml_sem,
         )
         log.info("embedding_ollama_adapter_selected", model_id=settings.embedding_model_id)
+
+    # Shared content-addressed embedding cache (2026-07 embedding-cost audit):
+    # wraps whichever provider adapter was selected above so repeated mention
+    # surfaces ("Apple", "the Fed") and retried chunk texts are served from
+    # Valkey instead of re-paying the provider on every article. Reuses the
+    # SAME `valkey` client already constructed above for WatchlistCache — no
+    # new connection pool. Best-effort: a Valkey outage degrades to "always
+    # miss", never to a hard failure (see CachedEmbeddingClient docstring).
+    from ml_clients.embedding_cache import CachedEmbeddingClient  # type: ignore[import-not-found]
+
+    embedding_client = CachedEmbeddingClient(embedding_client, valkey)  # type: ignore[assignment]
+
     # Deep extraction: use DeepInfra (external API) when extraction_api_key is configured.
     # qwen2.5:7b-instruct is too large for CPU self-hosting (7B model); DeepInfra hosts it on GPUs.
     # Falls back to OllamaExtractionAdapter (which will fail gracefully) if no API key.

@@ -49,6 +49,11 @@ def _make_settings(
     s.ollama_base_url = "http://ollama:11434"
     s.embedding_model_id = "bge-large"
     s.embedding_instruction_prefix = "Represent this passage: "
+    # 2026-07 embedding-cache wiring: main() now builds a Valkey client (to
+    # thread into the shared CachedEmbeddingClient) BEFORE calling
+    # _build_embedding_client. A real string is required — MagicMock() would
+    # blow up urllib.parse.urlparse inside create_valkey_client_from_url.
+    s.valkey_url = "redis://localhost:6379/0"
     return s
 
 

@@ -135,6 +135,18 @@ async def main() -> None:
     # to iterate characters, crashing with "'str' has no attribute 'instruction_prefix'".
     _raw_embedding_adapter, _embedding_model_id = _build_embedding_adapter(settings)
 
+    # Shared content-addressed embedding cache (2026-07 embedding-cost audit):
+    # canonicalize_relation_type() embeds the RAW relation-type label string
+    # (e.g. "acquired", "partnered_with") drawn from a small, highly-repeated
+    # vocabulary across extractions — a large fraction of Step-2 ANN soft-map
+    # calls re-embed a string this process has already embedded. Wraps the
+    # raw batch adapter BEFORE the singular-string bridge below so both the
+    # cache key hashing and the paid-call skip happen at the batch layer,
+    # reusing the SAME Valkey connection already opened for dedup above.
+    from ml_clients.embedding_cache import CachedEmbeddingClient  # type: ignore[import-not-found]
+
+    _raw_embedding_adapter = CachedEmbeddingClient(_raw_embedding_adapter, valkey)
+
     from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
 
     class _EmbeddingBridgeClient:

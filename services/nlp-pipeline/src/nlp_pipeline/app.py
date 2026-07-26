@@ -211,16 +211,21 @@ async def _expire_stale_embeddings_task(
         log.warning("expire_stale_embeddings_failed", exc_info=True)
 
 
-def _build_embedding_client(settings: Settings) -> object:
+def _build_embedding_client(settings: Settings, *, valkey: object = None) -> object:
     """Instantiate the embedding adapter for the API process.
 
     Thin shim over :func:`nlp_pipeline.bootstrap.embedding.build_embedding_client`
     — the implementation moved there so the API process and the standalone
     embedding-retry worker share one source of truth (PLAN-0057 QA A-004).
+
+    ``valkey`` (optional): threaded through to enable the shared
+    content-addressed embedding cache (2026-07 embedding-cost audit) so
+    ``POST /api/v1/embed`` calls benefit from the same cross-call dedup as
+    the article consumer.
     """
     from nlp_pipeline.bootstrap.embedding import build_embedding_client
 
-    return build_embedding_client(settings)
+    return build_embedding_client(settings, valkey=valkey)  # type: ignore[arg-type]
 
 
 @asynccontextmanager
@@ -290,7 +295,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 5b. Embedding client for POST /api/v1/embed — provider-selectable.
     # The API process runs separately from article_consumer_main; it needs its own
     # embedding client instance so the embed endpoint is not tied to Ollama.
-    app.state.embedding_client = _build_embedding_client(settings)
+    app.state.embedding_client = _build_embedding_client(settings, valkey=valkey)
     log.info(
         "api_embedding_client_ready",
         provider=settings.embedding_provider,

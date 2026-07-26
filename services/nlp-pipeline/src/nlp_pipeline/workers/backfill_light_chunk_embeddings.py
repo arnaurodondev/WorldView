@@ -54,6 +54,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from nlp_pipeline.bootstrap.embedding import build_embedding_client
 from nlp_pipeline.config import Settings
 from observability import get_logger  # type: ignore[import-untyped]
@@ -179,7 +180,14 @@ async def _backfill(settings: Settings, *, limit: int | None, dry_run: bool) -> 
     prefix = settings.embedding_instruction_prefix
 
     engine = create_async_engine(settings.database_url.get_secret_value(), pool_pre_ping=True)
-    client = build_embedding_client(settings)
+    # Shared content-addressed embedding cache (2026-07 embedding-cost audit):
+    # a re-run of this backfill (e.g. resumed after a crash) re-queries "still
+    # missing" from scratch and would otherwise re-pay for any chunk text that
+    # was ALREADY embedded and written in a prior partial run but not yet
+    # committed/visible when this pass started. Cheap to wire in — same Valkey
+    # instance the rest of nlp-pipeline uses, best-effort on outage.
+    valkey = create_valkey_client_from_url(settings.valkey_url)
+    client = build_embedding_client(settings, valkey=valkey)
 
     total_missing = await _count_missing(engine)
     _log.info(
@@ -264,6 +272,7 @@ async def _backfill(settings: Settings, *, limit: int | None, dry_run: bool) -> 
                 break  # drained the final partial batch
     finally:
         await engine.dispose()
+        await valkey.close()
 
     _log.info("backfill_light_chunk_embeddings_done", written=written)
     return written
