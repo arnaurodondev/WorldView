@@ -29,7 +29,7 @@ import openai
 import pytest
 from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter
 from ml_clients.dataclasses import ExtractionInput
-from ml_clients.errors import RateLimitError, RetryableError
+from ml_clients.errors import ProviderBillingError, RateLimitError, RetryableError
 
 PRIMARY = "Qwen/Qwen3-235B-A22B-Instruct-2507"
 SECONDARY = "deepseek-ai/DeepSeek-V4-Flash"
@@ -222,3 +222,53 @@ async def test_server_error_reason_on_fallback(no_sleep: Any) -> None:
 
     assert out.model_used == SECONDARY
     assert out.fallback_reason == "server_error"
+
+
+@pytest.mark.asyncio
+async def test_billing_error_never_falls_back_even_with_fallback_on_timeout(no_sleep: Any) -> None:
+    """A 402 on the primary must NEVER engage the fallback — same account, guaranteed 402.
+
+    Regression guard (2026-07-26): a 402 was previously mis-tagged as
+    ``fallback_reason=timeout`` (``_reason_for_transient`` had no billing branch),
+    so with ``fallback_on_timeout=True`` (the prod default) it silently engaged
+    the secondary model — which shares the SAME DeepInfra account and therefore
+    also 402s. This burned a second full round-trip against a dead billing
+    account on every article during a spend-cap outage.
+    """
+    adapter = _make_adapter(fallback_model_id=SECONDARY, max_attempts=1, fallback_on_timeout=True)
+    create = AsyncMock(side_effect=[_status_error(402)])
+    adapter._client.chat.completions.create = create  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderBillingError):
+        await adapter.extract(_input())
+
+    # Only the primary was called — the fallback must NEVER be reached for billing.
+    assert _models_called(create) == [PRIMARY]
+
+
+@pytest.mark.asyncio
+async def test_billing_error_fails_fast_without_in_adapter_retry(no_sleep: Any) -> None:
+    """A 402 must raise on attempt 1 — retrying it can never succeed while capped.
+
+    Regression guard (2026-07-26): before this fix, a 402 was classified as a
+    plain ``RetryableError`` and looped through the full backoff/retry budget
+    (``max_attempts``) exactly like a transient 429/5xx, wasting round-trips
+    against an account that cannot recover until the operator raises the cap.
+    """
+    adapter = _make_adapter(fallback_model_id="", max_attempts=3)
+    create = AsyncMock(side_effect=[_status_error(402), _status_error(402), _status_error(402)])
+    adapter._client.chat.completions.create = create  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderBillingError):
+        await adapter.extract(_input())
+
+    # Exactly ONE call — no retry loop for a billing refusal.
+    assert _models_called(create) == [PRIMARY]
+
+
+@pytest.mark.asyncio
+async def test_billing_error_reason_is_billing_not_timeout(no_sleep: Any) -> None:
+    """``_reason_for_transient`` must classify a 402 as ``billing``, not ``timeout``."""
+    adapter = _make_adapter(fallback_model_id=SECONDARY, max_attempts=1)
+    exc = ProviderBillingError("DeepSeek billing/auth refusal (HTTP 402): boom")
+    assert adapter._reason_for_transient(exc) == "billing"

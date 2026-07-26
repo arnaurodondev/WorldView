@@ -68,6 +68,7 @@ _FALLBACK_NONE = "none"
 _FALLBACK_RATE_LIMIT = "rate_limit"
 _FALLBACK_TIMEOUT = "timeout"
 _FALLBACK_SERVER_ERROR = "server_error"
+_FALLBACK_BILLING = "billing"
 
 # Deep-tier extraction (Qwen3-235B-A22B on DeepInfra) has a bursty latency tail:
 # p50 ~16.5s but p95/p99 pin at the wall-clock cap under queue pressure.
@@ -350,10 +351,17 @@ class DeepSeekExtractionAdapter:
         """Map a terminal transient error to a ``fallback_reason`` literal.
 
         Used to tag WHY the primary failed when we hand off to the fallback model
-        (and for the audit row).  ``RateLimitError`` => ``rate_limit``; an explicit
-        5xx-tagged ``RetryableError`` => ``server_error``; everything else
-        (wall-clock / APITimeout / connection) => ``timeout``.
+        (and for the audit row).  ``ProviderBillingError`` (401/402/403) =>
+        ``billing`` — checked FIRST since a spend-cap refusal must never be
+        conflated with a genuine wall-clock timeout (2026-07-26: this conflation
+        was silently routing 100% of 402s through the timeout-fallback path,
+        burning a second model's worth of round-trips against the SAME capped
+        account).  ``RateLimitError`` => ``rate_limit``; an explicit 5xx-tagged
+        ``RetryableError`` => ``server_error``; everything else (wall-clock /
+        APITimeout / connection) => ``timeout``.
         """
+        if isinstance(exc, ProviderBillingError):
+            return _FALLBACK_BILLING
         if isinstance(exc, RateLimitError):
             return _FALLBACK_RATE_LIMIT
         # ``_classify_transient`` tags 5xx with the "5xx" marker in the message.
@@ -415,6 +423,14 @@ class DeepSeekExtractionAdapter:
                 mapped = self._classify_transient(exc)
                 if isinstance(mapped, FatalError):
                     # 4xx/auth/unexpected — a retry cannot help.  Surface now.
+                    raise mapped from exc
+                if isinstance(mapped, ProviderBillingError):
+                    # A spend-cap refusal cannot be fixed by retrying the SAME
+                    # account (2026-07-26 fix) — raise on attempt 1 so the consumer
+                    # reaches its billing-defer path immediately instead of burning
+                    # ``max_attempts`` wasted round-trips first.  Still raised as a
+                    # RetryableError subclass (not FatalError) so the consumer's
+                    # ``except RetryableError`` re-queues rather than empty-commits.
                     raise mapped from exc
                 last_transient = mapped
                 retry_after = mapped.retry_after if isinstance(mapped, RateLimitError) else None
@@ -485,7 +501,10 @@ class DeepSeekExtractionAdapter:
             # is only used for the audit ``attempts`` metadata, so an upper-bound
             # estimate is acceptable and never under-reports the work done.
             primary_attempts = self._max_attempts
-            eligible = reason == _FALLBACK_RATE_LIMIT or self._fallback_on_timeout
+            # Billing refusals are NEVER fallback-eligible: the fallback model is
+            # the SAME DeepInfra account, so a 402 on the primary is guaranteed to
+            # 402 on the fallback too (2026-07-26 fix — see _reason_for_transient).
+            eligible = reason != _FALLBACK_BILLING and (reason == _FALLBACK_RATE_LIMIT or self._fallback_on_timeout)
             if self._fallback_model_id is None or not eligible:
                 # No fallback (unset, or a non-eligible timeout/5xx with the flag
                 # off) — behaviour unchanged: surface the transient error so the
