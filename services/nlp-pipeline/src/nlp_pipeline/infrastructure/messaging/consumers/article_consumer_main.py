@@ -398,6 +398,26 @@ async def main() -> None:
             max_per_doc=claim_entailment_config.max_per_doc,
         )
 
+    # ── Entailment verifier result cache (content-addressed, Valkey-backed) ─────────
+    # Both entailment checks call a DETERMINISTIC verifier (temperature=0.0), so the
+    # SAME (claim, evidence) / (relation, evidence) pair always yields the SAME
+    # verdict — see application/ports/entailment_cache.py for the full rationale.
+    # Built only when at least one check is actually enabled (no point wiring a
+    # cache no LLM call will ever consult); reuses the SAME ``valkey`` client the
+    # watchlist cache uses (no new infrastructure dependency). Fail-open: the
+    # adapter itself never raises (ValkeyEntailmentCacheAdapter), so a Valkey blip
+    # only costs an extra LLM call, never breaks extraction.
+    entailment_cache: Any = None
+    if settings.entailment_cache_enabled and (
+        settings.relation_entailment_check_enabled or settings.claim_entailment_check_enabled
+    ):
+        from nlp_pipeline.infrastructure.valkey.entailment_cache import (
+            ValkeyEntailmentCacheAdapter,
+        )
+
+        entailment_cache = ValkeyEntailmentCacheAdapter(valkey)
+        log.info("entailment_cache_enabled")
+
     # ── 2026-07-16 fabrication filter: evidence-span grounding gate ───────────────
     # Deterministic, free, model-agnostic. Built from settings and always passed to the
     # consumer (unlike the entailment check, it needs no LLM client). Unknown mode strings
@@ -588,6 +608,9 @@ async def main() -> None:
         # 2026-07-16 claim entailment pass: None unless enabled (and key present).
         claim_entailment_client=claim_entailment_client,
         claim_entailment_config=claim_entailment_config,
+        # Content-addressed result cache shared by both entailment verifiers. None
+        # unless entailment_cache_enabled AND at least one check is enabled.
+        entailment_cache=entailment_cache,
         # Hybrid extraction-model routing (2026-07-17): high-recall (Qwen3-235B) client
         # + the primary's real serving slug for per-doc routing and provenance.
         extraction_client_high_recall=extraction_client_high_recall,

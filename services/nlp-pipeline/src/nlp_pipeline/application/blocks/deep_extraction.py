@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
 
     from nlp_pipeline.application.blocks.suppression import ProcessingPath
+    from nlp_pipeline.application.ports.entailment_cache import EntailmentCachePort
     from nlp_pipeline.domain.models import Chunk, EntityMention
     from nlp_pipeline.infrastructure.valkey.extraction_cache import DeepExtractionCache
 
@@ -543,6 +544,12 @@ async def run_deep_extraction_block(
     evidence_grounding_config: EvidenceGroundingConfig | None = None,
     claim_entailment_client: ExtractionClient | None = None,
     claim_entailment_config: ClaimEntailmentCheckConfig | None = None,
+    # Content-addressed result cache for BOTH entailment verifiers (claim and
+    # relation) — a single instance is safe to share since the cache key embeds
+    # "claim"/"relation" as a namespace (see entailment_cache_key.py), so the two
+    # checks' entries can never collide. None (default) = no caching (unchanged
+    # pre-cache behaviour): every gated item pays for its own LLM call.
+    entailment_cache: EntailmentCachePort | None = None,
     metrics: NlpMetricsPort = NOOP_METRICS,
     max_words: int = 0,
     max_windows: int = 0,
@@ -840,6 +847,7 @@ async def run_deep_extraction_block(
                 max_per_doc=entailment_config.max_per_doc,
                 doc_id=str(doc_id),
                 usage_logger=usage_logger,
+                cache=entailment_cache,
             )
             merged = {**merged, "relations": filtered_relations}
         except Exception:
@@ -912,6 +920,7 @@ async def run_deep_extraction_block(
                 max_per_doc=claim_entailment_config.max_per_doc,
                 doc_id=str(doc_id),
                 usage_logger=usage_logger,
+                cache=entailment_cache,
             )
             merged = {**merged, "claims": filtered_claims}
         except Exception:

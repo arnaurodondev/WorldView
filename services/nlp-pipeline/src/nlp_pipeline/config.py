@@ -743,6 +743,26 @@ class Settings(BaseSettings):
     # least DeepSeek-V4-Flash / Qwen3-235B class. NLP_PIPELINE_CLAIM_ENTAILMENT_CHECK_MODEL_ID
     claim_entailment_check_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
 
+    # ── Entailment verifier result cache (content-addressed, Valkey-backed) ───────
+    # Both entailment checks above call a DETERMINISTIC verifier (temperature=0.0 —
+    # see ml_clients.adapters.deepseek_extraction) with a single binary question per
+    # (claim, evidence) / (relation, evidence) pair, so the SAME pair always yields
+    # the SAME verdict. High per-article fan-out plus duplicate/updated articles that
+    # quote the SAME evidence sentence (wire-service syndication, corrected
+    # republishes, recurring press-release boilerplate) mean the identical pair is
+    # often re-verified — and re-paid-for — more than once. This cache lets both
+    # checks skip the LLM call entirely on a hit. Purely a cost optimisation: default
+    # ON is safe because a cache miss/outage degrades to the pre-cache behaviour
+    # (see ValkeyEntailmentCacheAdapter's fail-open get/set). Only takes effect when
+    # ``relation_entailment_check_enabled`` or ``claim_entailment_check_enabled`` is
+    # also True — otherwise neither verifier ever calls the cache.
+    entailment_cache_enabled: bool = True  # NLP_PIPELINE_ENTAILMENT_CACHE_ENABLED
+    # NOTE: the TTL for cached verdicts (30 days) is a module constant
+    # (``DEFAULT_CACHE_TTL_S`` in claim_entailment.py / relation_entailment.py),
+    # not a Settings field — mirrors how rag-chat's CompletionCache/ChunkCache TTLs
+    # are hardcoded module constants rather than env-configurable knobs. See those
+    # constants' docstrings for the staleness-vector rationale.
+
     # ── Concurrency (Task #14 — ~50 articles in flight platform-wide) ──────────
     # Deep extraction on DeepInfra is I/O-bound (12-22s network wait per article),
     # NOT CPU-bound.  The base Kafka consumer loop is strictly serial (one article
