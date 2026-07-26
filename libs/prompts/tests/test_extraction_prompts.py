@@ -27,9 +27,10 @@ class TestDeepExtraction:
             DEEP_EXTRACTION.render(entities="AAPL")
 
     def test_version_is_semver(self) -> None:
-        # v1.7: type-annotated entity allow-list — entities carry [type] tags and
-        # the prompt has ENTITY TYPE RULES for precision + direction.
-        assert DEEP_EXTRACTION.version == "1.7"
+        # v1.8: token-trim (docs/audits/2026-07-26-extraction-prompt-v18-trim-ab.md) —
+        # compresses code-gate-redundant rules/negatives, keeps co-mention/direction
+        # negatives and ENTITY TYPE RULES verbatim (no code backstop for those).
+        assert DEEP_EXTRACTION.version == "1.8"
 
     def test_frozen(self) -> None:
         with pytest.raises(AttributeError):

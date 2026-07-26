@@ -198,10 +198,11 @@ def test_valid_predicates_match_deep_extraction_prompt() -> None:
 
     prompt_text = DEEP_EXTRACTION.template if hasattr(DEEP_EXTRACTION, "template") else str(DEEP_EXTRACTION)
 
-    # The vocabulary lives between the "predicate (relation type" header and the
-    # "RELATION ASSERTION TEST" section. Restrict parsing to that slice so unrelated
-    # snake_case tokens elsewhere in the prompt don't leak in.
-    start = prompt_text.index("predicate (relation type")
+    # The vocabulary lives between the "predicate — pick the closest" header (v1.8
+    # wording; v1.7 used "predicate (relation type") and the "RELATION ASSERTION TEST"
+    # section. Restrict parsing to that slice so unrelated snake_case tokens elsewhere
+    # in the prompt don't leak in.
+    start = prompt_text.index("predicate — pick the closest")
     end = prompt_text.index("RELATION ASSERTION TEST")
     vocab_slice = prompt_text[start:end]
 
