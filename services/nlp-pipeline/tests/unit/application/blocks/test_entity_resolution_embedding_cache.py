@@ -19,6 +19,8 @@ from nlp_pipeline.application.blocks.entity_resolution import _batch_embed_stage
 from nlp_pipeline.domain.enums import MentionClass
 from nlp_pipeline.domain.models import EntityMention
 
+pytestmark = pytest.mark.unit
+
 
 class _FakeValkey:
     """Same minimal in-memory Valkey stand-in used by the ml-clients unit tests."""
