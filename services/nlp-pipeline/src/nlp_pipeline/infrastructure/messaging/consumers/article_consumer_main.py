@@ -47,6 +47,7 @@ async def main() -> None:
         ArticleProcessingConsumer,
     )
     from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
+    from nlp_pipeline.infrastructure.valkey.extraction_cache import DeepExtractionCache
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
 
     settings = Settings()  # type: ignore[call-arg]
@@ -98,6 +99,17 @@ async def main() -> None:
     watchlist_cache = WatchlistCache(
         client=valkey._redis,  # type: ignore[attr-defined]
         key=settings.valkey_watchlist_key,
+    )
+
+    # 2026-07-26 cost audit: content-addressed deep-extraction result cache.
+    # Reuses the SAME `valkey` ValkeyClient instance as WatchlistCache/the
+    # retry-attempt dedup below — no new Valkey connection is opened. None
+    # when disabled via settings so an incident response can turn the cache
+    # off without a rebuild (a MISS behaves identically to the pre-cache path).
+    extraction_cache = (
+        DeepExtractionCache(client=valkey, ttl_seconds=settings.deep_extraction_cache_ttl_seconds)
+        if settings.deep_extraction_cache_enabled
+        else None
     )
 
     # ML clients
@@ -568,6 +580,8 @@ async def main() -> None:
         # + the primary's real serving slug for per-doc routing and provenance.
         extraction_client_high_recall=extraction_client_high_recall,
         extraction_model_id=primary_extraction_model_id,
+        # 2026-07-26 cost audit: None when NLP_PIPELINE_DEEP_EXTRACTION_CACHE_ENABLED=false.
+        extraction_cache=extraction_cache,
     )
     # Bind the probe so /healthz reflects this consumer's poll-loop progress.
     liveness_probe.bind(consumer)

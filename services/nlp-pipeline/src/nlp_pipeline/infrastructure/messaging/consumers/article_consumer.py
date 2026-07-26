@@ -148,6 +148,7 @@ if TYPE_CHECKING:
     from nlp_pipeline.domain.models import EntityMention, RoutingDecision
     from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
     from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import OutboxRepository as OutboxRepositoryT
+    from nlp_pipeline.infrastructure.valkey.extraction_cache import DeepExtractionCache
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -618,6 +619,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # provenance. Both default None → pre-hybrid behaviour (single primary model).
         extraction_client_high_recall: ExtractionClient | None = None,
         extraction_model_id: str | None = None,
+        # 2026-07-26 cost audit: optional content-addressed deep-extraction
+        # result cache (see DeepExtractionCache). None (default; every existing
+        # test that omits it) = pre-cache behaviour, every window calls the LLM.
+        extraction_cache: DeepExtractionCache | None = None,
     ) -> None:
         super().__init__(config)
         self._dedup_client = valkey_client
@@ -655,6 +660,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         self._bp = backpressure
         self._chunk_text_store = chunk_text_store
         self._usage_logger = usage_logger
+        # 2026-07-26 cost audit: None → run_ml_phase forwards None and
+        # run_deep_extraction_block calls the LLM unconditionally (unchanged
+        # pre-cache behaviour).
+        self._extraction_cache = extraction_cache
 
     async def get_unit_of_work(self) -> UnitOfWorkProtocol:
         return _NoOpUnitOfWork()  # type: ignore[return-value]
@@ -2210,6 +2219,9 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 # CrashLoopBackOff. A genuinely hung window still trips the probe
                 # (no window completes) — only slow-but-progressing docs survive.
                 on_window_done=self._record_progress,
+                # 2026-07-26 cost audit: content-addressed extraction cache.
+                # None unless wired at construction time (see article_consumer_main.py).
+                extraction_cache=self._extraction_cache,
                 _alias_repo=entity_alias_repo,
                 _profile_emb_repo=entity_profile_emb_repo,
                 _canonical_repo=canonical_entity_repo,
