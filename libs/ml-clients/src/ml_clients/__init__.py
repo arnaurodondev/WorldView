@@ -59,7 +59,6 @@ __all__ = [
     "FallbackNERClient",
     "FatalError",
     "GeminiDescriptionAdapter",
-    "MODEL_PRICING",
     "LlmCallUsage",
     "LlmUsageLogProtocol",
     "MLClientsSettings",
