@@ -138,6 +138,11 @@ async def run_ml_phase(
     # run_deep_extraction_block, which gates on claim_entailment_config.enabled.
     claim_entailment_client: ExtractionClient | None = None,
     claim_entailment_config: Any = None,
+    # Content-addressed result cache shared by BOTH entailment verifiers (see
+    # application/blocks/entailment_cache_key.py — "claim"/"relation" namespacing
+    # keeps the two checks' entries disjoint). None → no caching (unchanged
+    # pre-cache behaviour). Forwarded verbatim to run_deep_extraction_block.
+    entailment_cache: Any = None,
     # Injected callable for Block 10 — defaults to the real implementation.
     # article_consumer._run_pipeline passes ``run_deep_extraction_block`` from
     # the article_consumer namespace so unit tests can patch it there.
@@ -302,6 +307,7 @@ async def run_ml_phase(
             evidence_grounding_config=evidence_grounding_config,
             claim_entailment_client=claim_entailment_client,
             claim_entailment_config=claim_entailment_config,
+            entailment_cache=entailment_cache,
             metrics=_NLP_METRICS,
             max_words=_max_words,
             # P0-A: per-article window budget + per-window liveness heartbeat.

@@ -609,6 +609,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         evidence_grounding_config: Any = None,
         claim_entailment_client: ExtractionClient | None = None,
         claim_entailment_config: Any = None,
+        # Content-addressed result cache for the entailment verifiers (claim +
+        # relation checks share one instance — see application/blocks/
+        # entailment_cache_key.py for the namespacing that keeps their entries
+        # disjoint). None (default) → no caching (unchanged pre-cache behaviour).
+        entailment_cache: Any = None,
         # Hybrid extraction-model routing (2026-07-17). ``extraction_client`` is the
         # primary (DeepSeek) client; ``extraction_client_high_recall`` is the optional
         # Qwen3-235B client the ML phase selects for SEC/long-filing docs.
@@ -652,6 +657,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # no-ops (unchanged behaviour).
         self._claim_entailment_client = claim_entailment_client
         self._claim_entailment_config = claim_entailment_config
+        # Content-addressed result cache shared by both entailment verifiers. None
+        # (default) → run_ml_phase forwards None and both checks fall back to their
+        # pre-cache behaviour (every gated item pays for its own LLM call).
+        self._entailment_cache = entailment_cache
         self._bp = backpressure
         self._chunk_text_store = chunk_text_store
         self._usage_logger = usage_logger
@@ -2199,6 +2208,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 evidence_grounding_config=self._evidence_grounding_config,
                 claim_entailment_client=self._claim_entailment_client,
                 claim_entailment_config=self._claim_entailment_config,
+                entailment_cache=self._entailment_cache,
                 _deep_extraction_fn=run_deep_extraction_block,
                 # P0-A poison-pill fix (prod review 2026-07-15): thread the base
                 # consumer's liveness heartbeat down into the sequential window

@@ -305,3 +305,168 @@ def test_default_high_fab_claim_types_match_audit() -> None:
     assert DEFAULT_HIGH_FAB_CLAIM_TYPES == frozenset(
         {"DEBT_CHANGE", "REVENUE_GROWTH", "GUIDANCE_RAISE", "GUIDANCE_CUT", "HEADCOUNT_CHANGE", "EPS_BEAT"}
     )
+
+
+# ── Content-addressed result cache (cost dedup for the deterministic verifier) ──
+# The verifier runs at temperature=0.0 (see ml_clients.adapters.deepseek_extraction),
+# so the SAME (entity, claim_type, polarity, evidence) tuple always yields the SAME
+# verdict — caching it is safe. These prove: a HIT skips the LLM call entirely and
+# reuses the cached verdict; a MISS calls the LLM as before and writes the result
+# back; a cache error is fail-open (treated as a miss, never breaks the verdict).
+
+
+class _FakeCache:
+    """In-memory stand-in for EntailmentCachePort."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, dict[str, Any]] = {}
+        self.get_calls: list[str] = []
+        self.set_calls: list[tuple[str, dict[str, Any], int]] = []
+
+    async def get(self, key: str) -> dict[str, Any] | None:
+        self.get_calls.append(key)
+        return self.store.get(key)
+
+    async def set(self, key: str, value: dict[str, Any], ttl: int) -> None:
+        self.set_calls.append((key, value, ttl))
+        self.store[key] = value
+
+
+class _BoomCache:
+    """A cache whose get()/set() always raise — exercises the fail-open path."""
+
+    async def get(self, key: str) -> dict[str, Any] | None:
+        raise RuntimeError("valkey down")
+
+    async def set(self, key: str, value: dict[str, Any], ttl: int) -> None:
+        raise RuntimeError("valkey down")
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_skips_llm_call_and_uses_cached_verdict() -> None:
+    cache = _FakeCache()
+    claim = _claim("DEBT_CHANGE")
+    # Pre-seed the cache with a confident NOT_ENTAILED verdict for this exact pair.
+    out_first = await check_claim_entailment(
+        [claim],
+        entailment_client=AsyncMock(extract=AsyncMock(return_value=_make_output(entailed=False, confidence=0.95))),
+        model_id="test-model",
+        doc_id="doc-1",
+        min_drop_confidence=0.7,
+        cache=cache,
+    )
+    assert out_first == []  # dropped on the (cache-writing) miss path
+    assert len(cache.set_calls) == 1
+
+    # Second call with the SAME pair against a client that must NOT be awaited.
+    client = AsyncMock()
+    out_second = await check_claim_entailment(
+        [claim],
+        entailment_client=client,
+        model_id="test-model",
+        doc_id="doc-2",
+        min_drop_confidence=0.7,
+        cache=cache,
+    )
+    client.extract.assert_not_awaited()
+    assert out_second == []  # cached verdict reproduces the same drop
+
+
+@pytest.mark.asyncio
+async def test_cache_miss_calls_llm_and_writes_result() -> None:
+    client = AsyncMock()
+    client.extract.return_value = _make_output(entailed=True, confidence=0.9)
+    cache = _FakeCache()
+    claim = _claim("REVENUE_GROWTH")
+    out = await check_claim_entailment(
+        [claim],
+        entailment_client=client,
+        model_id="test-model",
+        doc_id="doc-1",
+        cache=cache,
+    )
+    assert out == [claim]
+    client.extract.assert_awaited_once()
+    assert len(cache.set_calls) == 1
+    key, value, ttl = cache.set_calls[0]
+    assert value == {"entailed": True, "confidence": 0.9}
+    assert ttl > 0
+    assert key in cache.store
+
+
+@pytest.mark.asyncio
+async def test_cache_hits_do_not_count_against_max_per_doc() -> None:
+    # 3 identical claims sharing one cache entry + 1 distinct claim, capped at
+    # max_per_doc=2 (enough for the 2 DISTINCT pairs' misses, but far fewer than
+    # the 4 total claims): the 2 cache-hitting duplicates must NOT consume any of
+    # that budget, so both distinct pairs still get their own real LLM call.
+    client = AsyncMock()
+    client.extract.side_effect = [
+        _make_output(entailed=True, confidence=0.9),  # first duplicate: miss
+        _make_output(entailed=False, confidence=0.95),  # distinct claim: miss
+    ]
+    cache = _FakeCache()
+    dup = _claim("DEBT_CHANGE", evidence="Acme refinanced $2B of debt.")
+    distinct = _claim("DEBT_CHANGE", evidence="Acme borrowed a fresh $500M term loan.")
+    claims = [dup, dup, dup, distinct]
+    out = await check_claim_entailment(
+        claims,
+        entailment_client=client,
+        model_id="test-model",
+        doc_id="doc-1",
+        max_per_doc=2,
+        min_drop_confidence=0.7,
+        cache=cache,
+    )
+    # 3 duplicates kept (entailed=True cached), distinct dropped (entailed=False).
+    assert len(out) == 3
+    assert client.extract.await_count == 2  # one per DISTINCT pair, not per claim
+
+
+@pytest.mark.asyncio
+async def test_cache_get_error_falls_back_to_llm_call() -> None:
+    client = AsyncMock()
+    client.extract.return_value = _make_output(entailed=True, confidence=0.9)
+    claim = _claim("EPS_BEAT")
+    out = await check_claim_entailment(
+        [claim],
+        entailment_client=client,
+        model_id="test-model",
+        doc_id="doc-1",
+        cache=_BoomCache(),
+    )
+    assert out == [claim]
+    client.extract.assert_awaited_once()  # fail-open: cache error treated as a miss
+
+
+@pytest.mark.asyncio
+async def test_cache_set_error_never_affects_returned_verdict() -> None:
+    client = AsyncMock()
+    client.extract.return_value = _make_output(entailed=False, confidence=0.95)
+    claim = _claim("HEADCOUNT_CHANGE")
+    out = await check_claim_entailment(
+        [claim],
+        entailment_client=client,
+        model_id="test-model",
+        doc_id="doc-1",
+        min_drop_confidence=0.7,
+        cache=_BoomCache(),
+    )
+    assert out == []  # the drop still happens despite the cache write failing
+
+
+@pytest.mark.asyncio
+async def test_no_cache_means_no_caching_behaviour_change() -> None:
+    # cache=None (the default) must reproduce EXACTLY the pre-cache behaviour:
+    # every gated claim pays for its own LLM call, no caching machinery invoked.
+    client = AsyncMock()
+    client.extract.return_value = _make_output(entailed=True, confidence=0.9)
+    claim = _claim("DEBT_CHANGE")
+    out = await check_claim_entailment(
+        [claim, claim],
+        entailment_client=client,
+        model_id="test-model",
+        doc_id="doc-1",
+    )
+    assert out == [claim, claim]
+    assert client.extract.await_count == 2

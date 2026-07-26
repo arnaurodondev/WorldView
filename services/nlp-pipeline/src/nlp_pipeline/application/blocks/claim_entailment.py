@@ -59,7 +59,23 @@ if TYPE_CHECKING:
     from ml_clients.protocols import ExtractionClient  # type: ignore[import-not-found]
     from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
 
+    from nlp_pipeline.application.ports.entailment_cache import EntailmentCachePort
+
 logger = structlog.get_logger(__name__)
+
+# Default cache TTL for verifier verdicts (30 days). The verifier call is
+# deterministic (temperature=0.0 on the DeepSeek/Qwen extraction adapters — see
+# ml_clients.adapters.deepseek_extraction), so a cached verdict for the SAME
+# (model, template, entity, claim_type, polarity, evidence) tuple never goes
+# stale on its own; the only staleness vector is a PROMPT change, which is
+# handled by bumping ``template_id`` (see entailment_cache_key.py), not by TTL
+# expiry. 30 days is a conservative cap so an abandoned/rolled-back cache entry
+# cannot live forever, while still spanning the redundant-verification window
+# this cache targets (duplicate/updated articles republished over
+# hours-to-weeks). rag-chat's completion/chunk caches use 24h/4h because THOSE
+# cache non-deterministic or time-sensitive answers; this cache memoises a
+# pure deterministic function, so a much longer TTL is safe.
+DEFAULT_CACHE_TTL_S: int = 30 * 24 * 3600
 
 # Default high-fabrication claim_type set (audit §1 "By kind" — claim-type mentions in
 # fabrication justifications: DEBT_CHANGE x26, REVENUE_GROWTH x16, GUIDANCE_RAISE x15,
@@ -184,6 +200,24 @@ def _parse_verdict(output: Any) -> tuple[bool, float] | None:
     return entailed, confidence
 
 
+def _parse_verdict_dict(payload: dict[str, Any]) -> tuple[bool, float] | None:
+    """Extract (entailed, confidence) from a cached verdict dict.
+
+    Same fail-open semantics as ``_parse_verdict``: a missing/non-boolean
+    ``entailed`` or a missing/non-numeric ``confidence`` never manufactures a
+    confident drop. A malformed cache entry is treated as an unusable payload
+    (caller falls through to the normal miss/LLM path) rather than raising.
+    """
+    if not isinstance(payload.get("entailed"), bool):
+        return None
+    entailed = bool(payload["entailed"])
+    try:
+        confidence = float(payload.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return entailed, confidence
+
+
 async def check_claim_entailment(
     claims: list[dict[str, Any]],
     *,
@@ -194,6 +228,8 @@ async def check_claim_entailment(
     max_per_doc: int = 20,
     doc_id: str | None = None,
     usage_logger: LlmUsageLogProtocol | None = None,
+    cache: EntailmentCachePort | None = None,
+    cache_ttl_s: int = DEFAULT_CACHE_TTL_S,
 ) -> list[dict[str, Any]]:
     """Drop high-fabrication-type claims whose evidence does not entail their label.
 
@@ -210,13 +246,21 @@ async def check_claim_entailment(
         high_fab_claim_types: only these claim_types are checked.
         min_drop_confidence: a NOT_ENTAILED verdict below this confidence is IGNORED
             (the claim is kept) — second guard against false positives.
-        max_per_doc: hard cap on LLM calls for this document.
+        max_per_doc: hard cap on LLM CALLS for this document. Cache HITS are free and
+            do not count against this cap (only a cache MISS spends an LLM call).
         doc_id: for logging only.
         usage_logger: optional cost-log repository. When provided, EVERY verifier
             call (success OR failure) appends one row to ``nlp_db.llm_usage_log``
             so this verifier spend is visible on the cost dashboards instead of
             only incrementing an unscraped in-process counter. Fail-open: a
             logging error never affects the returned claims.
+        cache: optional content-addressed result cache (see
+            ``entailment_cache_key.py``). The verifier call is deterministic
+            (temperature=0.0), so a HIT skips the LLM call entirely and reuses the
+            cached verdict; a MISS calls the LLM as before and then writes the
+            verdict back. None (default) = no caching (pre-existing behaviour).
+            A cache error is fail-open: it is treated as a miss.
+        cache_ttl_s: TTL (seconds) for newly-written cache entries. Ignored on a hit.
 
     Returns:
         A new list with confidently-mislabelled claims removed. FAIL-OPEN: on any error
@@ -224,12 +268,14 @@ async def check_claim_entailment(
     """
     from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-not-found]
 
+    from nlp_pipeline.application.blocks.entailment_cache_key import build_cache_key
     from nlp_pipeline.application.blocks.entailment_usage import log_entailment_usage
 
     gated = frozenset(high_fab_claim_types)
     kept: list[dict[str, Any]] = []
     checks_done = 0
     dropped = 0
+    cache_hits = 0
 
     for claim in claims:
         claim_type = str(claim.get("claim_type", ""))
@@ -237,58 +283,108 @@ async def check_claim_entailment(
         entity_ref = str(claim.get("entity_ref", ""))
         polarity = str(claim.get("polarity", "") or "").strip()
 
-        # Skip the LLM entirely unless: gated type, has evidence, has an entity, under cap.
-        if claim_type not in gated or not evidence or not entity_ref or checks_done >= max_per_doc:
+        # Skip the LLM (and the cache lookup) entirely unless: gated type, has
+        # evidence, has an entity. The per-doc LLM-call cap is checked separately,
+        # below the cache lookup, so a cache HIT never consumes it.
+        if claim_type not in gated or not evidence or not entity_ref:
             kept.append(claim)
             continue
 
-        checks_done += 1
-        prompt = _build_prompt(entity_ref, claim_type, polarity, evidence)
-        # Capture latency around the LLM call only (not the parse path) and record
-        # the call in llm_usage_log so the verifier spend is visible on the cost
-        # dashboards — mirrors deep_extraction._run_extraction_window.
-        t0 = time.perf_counter()
-        output = None
-        extract_succeeded = False
-        try:
-            output = await entailment_client.extract(
-                ExtractionInput(
-                    prompt=prompt,
-                    context="",
-                    output_schema=_ENTAILMENT_SCHEMA,
-                    model_id=model_id,
-                    template_id="claim_entailment_v1",
+        template_id = "claim_entailment_v1"
+        cache_key = (
+            build_cache_key("claim", model_id, template_id, entity_ref, claim_type, polarity, evidence)
+            if cache is not None
+            else None
+        )
+
+        verdict: tuple[bool, float] | None = None
+        served_from_cache = False
+        if cache is not None and cache_key is not None:
+            try:
+                cached_payload = await cache.get(cache_key)
+            except Exception:
+                # Fail-open: a cache error is treated as a miss, never a failure.
+                logger.warning("claim_entailment.cache_get_failed", doc_id=doc_id, exc_info=True)
+                cached_payload = None
+            if cached_payload is not None:
+                cached_verdict = _parse_verdict_dict(cached_payload)
+                if cached_verdict is not None:
+                    verdict = cached_verdict
+                    served_from_cache = True
+                    cache_hits += 1
+                    logger.info(
+                        "claim_entailment.cache_hit",
+                        doc_id=doc_id,
+                        claim_type=claim_type,
+                        entity_ref=entity_ref,
+                    )
+
+        if not served_from_cache:
+            if checks_done >= max_per_doc:
+                kept.append(claim)
+                continue
+
+            checks_done += 1
+            prompt = _build_prompt(entity_ref, claim_type, polarity, evidence)
+            # Capture latency around the LLM call only (not the parse path) and record
+            # the call in llm_usage_log so the verifier spend is visible on the cost
+            # dashboards — mirrors deep_extraction._run_extraction_window.
+            t0 = time.perf_counter()
+            output = None
+            extract_succeeded = False
+            try:
+                output = await entailment_client.extract(
+                    ExtractionInput(
+                        prompt=prompt,
+                        context="",
+                        output_schema=_ENTAILMENT_SCHEMA,
+                        model_id=model_id,
+                        template_id=template_id,
+                    )
                 )
-            )
-            extract_succeeded = True
-        except Exception:
-            # Fail-open: infrastructure noise must never destroy a claim.
-            logger.warning(
-                "claim_entailment.check_failed",
-                doc_id=doc_id,
-                claim_type=claim_type,
-                exc_info=True,
-            )
-        finally:
-            if usage_logger is not None:
-                await log_entailment_usage(
-                    usage_logger,
-                    entailment_client=entailment_client,
-                    model_id=model_id,
-                    prompt=prompt,
-                    output=output,
-                    latency_ms=int((time.perf_counter() - t0) * 1000),
-                    success=extract_succeeded,
+                extract_succeeded = True
+            except Exception:
+                # Fail-open: infrastructure noise must never destroy a claim.
+                logger.warning(
+                    "claim_entailment.check_failed",
                     doc_id=doc_id,
-                    event_name="claim_entailment.usage_log_failed",
+                    claim_type=claim_type,
+                    exc_info=True,
                 )
-        if not extract_succeeded:
-            kept.append(claim)
-            continue
+            finally:
+                if usage_logger is not None:
+                    await log_entailment_usage(
+                        usage_logger,
+                        entailment_client=entailment_client,
+                        model_id=model_id,
+                        prompt=prompt,
+                        output=output,
+                        latency_ms=int((time.perf_counter() - t0) * 1000),
+                        success=extract_succeeded,
+                        doc_id=doc_id,
+                        event_name="claim_entailment.usage_log_failed",
+                    )
+            if not extract_succeeded:
+                kept.append(claim)
+                continue
 
-        verdict = _parse_verdict(output)
+            verdict = _parse_verdict(output)
+            if verdict is None:
+                # Unparseable verdict => keep (fail-open).
+                kept.append(claim)
+                continue
+
+            if cache is not None and cache_key is not None:
+                try:
+                    await cache.set(cache_key, {"entailed": verdict[0], "confidence": verdict[1]}, cache_ttl_s)
+                except Exception:
+                    # Fail-open: a failed write only costs a future re-verification,
+                    # never affects the verdict just computed.
+                    logger.warning("claim_entailment.cache_set_failed", doc_id=doc_id, exc_info=True)
+
         if verdict is None:
-            # Unparseable verdict => keep (fail-open).
+            # Unreachable in practice (every path above either ``continue``s or sets
+            # ``verdict``) — kept as a defensive fail-open guard + mypy narrowing.
             kept.append(claim)
             continue
 
@@ -307,11 +403,12 @@ async def check_claim_entailment(
             continue
         kept.append(claim)
 
-    if checks_done:
+    if checks_done or cache_hits:
         logger.info(
             "claim_entailment.complete",
             doc_id=doc_id,
             checked=checks_done,
+            cache_hits=cache_hits,
             dropped=dropped,
             kept=len(kept),
             total=len(claims),
