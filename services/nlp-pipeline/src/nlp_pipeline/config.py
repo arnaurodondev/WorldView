@@ -456,6 +456,29 @@ class Settings(BaseSettings):
     # NLP_PIPELINE_DEEP_EXTRACTION_MAX_WORDS.
     deep_extraction_max_words: int = 0  # NLP_PIPELINE_DEEP_EXTRACTION_MAX_WORDS
 
+    # Content-addressed deep-extraction result cache (2026-07-26 cost audit).
+    # WHY: the only existing dedup was a 24h Kafka event_id replay guard, which
+    # misses wire-syndicated duplicate articles, post-TTL redeliveries, DLQ/
+    # backfill re-runs, and consumer-restart reprocessing of in-flight articles
+    # — every one of those re-pays the FULL extraction LLM cost for content
+    # already processed. This cache keys on sha256(model_id + rendered prompt)
+    # via DeepExtractionCache (infrastructure/valkey/extraction_cache.py) so a
+    # cache HIT skips the LLM call entirely. The rendered prompt already embeds
+    # the DEEP_EXTRACTION template's ``content_hash`` (not just its ``version``
+    # string) so an edit to the template body — even without a version bump —
+    # auto-invalidates stale entries; see PromptTemplate.content_hash in
+    # libs/prompts. Default True: a cache MISS behaves identically to the
+    # pre-cache code path (fail-open on Valkey errors — see DeepExtractionCache).
+    deep_extraction_cache_enabled: bool = True  # NLP_PIPELINE_DEEP_EXTRACTION_CACHE_ENABLED
+    # TTL for cached extraction results. 30 days: long enough that DLQ/backfill
+    # re-runs (which can trail the original processing by weeks) still hit, but
+    # bounded so an evolving quality bar for older content cannot poison the
+    # cache forever. Shorter than the 90-day entity-description refresh cadence
+    # (definitions evolve slower than extraction quality bars); longer than
+    # rag-chat's 24h completion_cache (chat answers go stale against live data;
+    # article body text never changes once published).
+    deep_extraction_cache_ttl_seconds: int = 2_592_000  # NLP_PIPELINE_DEEP_EXTRACTION_CACHE_TTL_SECONDS (30d)
+
     # P0-A poison-pill safety bound (prod review 2026-07-15): cap the number of
     # deep-extraction WINDOWS a single article may consume in one handler call.
     # A pathological many-mention / very-long article can otherwise run dozens of

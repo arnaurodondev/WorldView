@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -834,3 +835,187 @@ class TestLivenessHeartbeatAndWindowBudget:
         assert client.extract.await_count >= 2
         assert result["windows_capped"] is False
         assert result["skipped_windows"] == 0
+
+
+@pytest.mark.unit
+class TestDeepExtractionCacheIntegration:
+    """2026-07-26 cost audit: content-addressed extraction cache hit/miss paths.
+
+    Uses a real ``DeepExtractionCache`` backed by an in-memory fake Valkey
+    client (not a mock of the cache itself) so these tests exercise the real
+    key-construction + get/set contract between the block and the cache.
+    """
+
+    @staticmethod
+    def _make_cache() -> Any:
+        from nlp_pipeline.infrastructure.valkey.extraction_cache import DeepExtractionCache
+
+        class _FakeValkeyClient:
+            def __init__(self) -> None:
+                self.store: dict[str, str] = {}
+
+            async def get(self, key: str) -> str | None:
+                return self.store.get(key)
+
+            async def set(self, key: str, value: str, ttl: int | None = None) -> None:
+                self.store[key] = value
+
+        return DeepExtractionCache(client=_FakeValkeyClient())
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_skips_llm_call(self) -> None:
+        """A pre-populated cache entry for this exact (model_id, prompt) must
+        make the block skip the LLM call entirely — the whole point of the
+        cache is to stop paying for content already extracted (DLQ replay,
+        wire-syndicated duplicate, consumer-restart reprocessing, etc.)."""
+        doc_id = uuid.uuid4()
+        chunk = _make_chunk("Tesla reported record deliveries this quarter.", doc_id=doc_id)
+        cache = self._make_cache()
+
+        # Warm the cache via a first (real) call, then assert a SECOND call
+        # with byte-identical content is a pure cache hit.
+        result_data = {"events": [], "claims": [], "relations": []}
+        client = _make_extraction_client(result_data)
+
+        await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client,
+            model_id="deepseek-ai/DeepSeek-V4-Flash",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+            extraction_cache=cache,
+        )
+        assert client.extract.await_count == 1  # miss on first call — real LLM call made
+
+        # Second call: SAME doc content, SAME model — must be a cache hit.
+        client2 = _make_extraction_client(result_data)
+        result2, _signals2 = await run_deep_extraction_block(
+            doc_id=uuid.uuid4(),  # different doc_id — proves the cache is content-, not doc-, addressed
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client2,
+            model_id="deepseek-ai/DeepSeek-V4-Flash",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+            extraction_cache=cache,
+        )
+
+        client2.extract.assert_not_called()
+        assert result2["events"] == []
+        assert result2["claims"] == []
+        assert result2["relations"] == []
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_calls_llm_and_writes_cache(self) -> None:
+        """A fresh (never-seen) window must call the LLM (miss) and the
+        result must be written to the cache afterward so the NEXT identical
+        call is free."""
+        doc_id = uuid.uuid4()
+        chunk = _make_chunk("Nvidia announced a new AI chip partnership.", doc_id=doc_id)
+        cache = self._make_cache()
+        result_data = {"events": [], "claims": [], "relations": []}
+        client = _make_extraction_client(result_data)
+
+        await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client,
+            model_id="deepseek-ai/DeepSeek-V4-Flash",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+            extraction_cache=cache,
+        )
+
+        client.extract.assert_called_once()
+        # The write-through populated the underlying store — confirm the
+        # exact key that the SAME prompt would look up now resolves to a hit.
+        from nlp_pipeline.application.blocks.deep_extraction import _build_prompt
+        from nlp_pipeline.infrastructure.valkey.extraction_cache import build_cache_key
+
+        prompt = _build_prompt(chunk.text, [])
+        key = build_cache_key(model_id="deepseek-ai/DeepSeek-V4-Flash", prompt=prompt)
+        assert key in cache._client.store  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_different_content_is_a_miss_even_with_cache_warm(self) -> None:
+        """A DIFFERENT article body must NOT hit a cache warmed by a prior,
+        different article — content-addressing must not over-match."""
+        cache = self._make_cache()
+        result_data = {"events": [], "claims": [], "relations": []}
+
+        client1 = _make_extraction_client(result_data)
+        await run_deep_extraction_block(
+            doc_id=uuid.uuid4(),
+            chunks=[_make_chunk("Amazon expands its logistics network.")],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client1,
+            model_id="deepseek-ai/DeepSeek-V4-Flash",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+            extraction_cache=cache,
+        )
+
+        client2 = _make_extraction_client(result_data)
+        await run_deep_extraction_block(
+            doc_id=uuid.uuid4(),
+            chunks=[_make_chunk("Microsoft unveils a new cloud region.")],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client2,
+            model_id="deepseek-ai/DeepSeek-V4-Flash",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+            extraction_cache=cache,
+        )
+
+        # Different content -> both are misses -> the LLM is called both times.
+        client1.extract.assert_called_once()
+        client2.extract.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_cache_provided_preserves_pre_cache_behaviour(self) -> None:
+        """``extraction_cache=None`` (the default) must behave EXACTLY like
+        before this change — every call always reaches the LLM client."""
+        doc_id = uuid.uuid4()
+        chunk = _make_chunk("Repeated identical content, no cache wired.", doc_id=doc_id)
+        result_data = {"events": [], "claims": [], "relations": []}
+
+        client1 = _make_extraction_client(result_data)
+        await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client1,
+            model_id="deepseek-ai/DeepSeek-V4-Flash",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+        )
+        client2 = _make_extraction_client(result_data)
+        await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client2,
+            model_id="deepseek-ai/DeepSeek-V4-Flash",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+        )
+
+        client1.extract.assert_called_once()
+        client2.extract.assert_called_once()  # no cache wired -> no skip

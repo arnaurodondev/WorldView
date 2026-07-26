@@ -51,8 +51,35 @@ if TYPE_CHECKING:
 
     from nlp_pipeline.application.blocks.suppression import ProcessingPath
     from nlp_pipeline.domain.models import Chunk, EntityMention
+    from nlp_pipeline.infrastructure.valkey.extraction_cache import DeepExtractionCache
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+# ── llm_score investigation (2026-07-26 cost audit) ──────────────────────────
+# Before building DeepExtractionCache (infrastructure/valkey/extraction_cache.py)
+# we investigated reusing the existing ``LLMScoreRepository.exists()`` hook
+# (application/ports/llm_score_repository.py) — its docstring explicitly says
+# "Used by workers as a cheap pre-flight check to skip the LLM call entirely
+# when the result is already on disk", which sounds like exactly this need.
+# We rejected it for two independent reasons (not merely an oversight to fix):
+#   1. It is keyed on (doc_id, score_type, model_id, prompt_version, input_hash)
+#      — doc_id is part of the identity. It can only skip a re-run of the SAME
+#      doc_id, never catch a wire-syndicated duplicate article published under
+#      a DIFFERENT doc_id with identical body text, which is the dominant cost
+#      case this audit is targeting.
+#   2. It backs ``document_source_llm_scores`` (Postgres), a ledger built for
+#      the UNRELATED relevance-scoring worker (article_relevance_scoring_worker.py)
+#      that stores a float score_value/score_label — not an extraction payload
+#      (events/claims/relations). Repurposing it would mean widening an
+#      append-only audit ledger's schema for a different consumer's shape.
+# (For the record: `exists()` is also dead code today — grep confirms zero
+# call sites anywhere in the repo, including in its own intended worker, which
+# only ever calls `append()`. That worker was never wired to skip its LLM call
+# either; it always scores first, then appends for audit trail. So it was not
+# "deliberately disabled" for a hidden correctness reason — it was simply never
+# connected to a pre-call skip path in the one place it could have been used.)
+# DeepExtractionCache is content-addressed (model_id + rendered prompt) and
+# Valkey-backed instead, so it fixes both problems.
 
 
 @dataclass(frozen=True)
@@ -267,6 +294,7 @@ async def _run_extraction_window(
     *,
     doc_id: UUID | None = None,
     usage_logger: LlmUsageLogProtocol | None = None,
+    extraction_cache: DeepExtractionCache | None = None,
 ) -> ExtractionResult:
     """Run extraction on a single window, return parsed result dict.
 
@@ -274,6 +302,16 @@ async def _run_extraction_window(
     to ``extraction_client.extract()`` (success OR failure) appends one row
     to ``nlp_db.llm_usage_log``. Latency is captured around the LLM call
     only — not the JSON-parse path.
+
+    2026-07-26 cost audit: when ``extraction_cache`` is provided, a
+    content-addressed lookup (keyed on ``model_id`` + the fully rendered
+    prompt — see ``DeepExtractionCache``) runs BEFORE the LLM call. A HIT
+    returns the previously-computed result without spending a single token —
+    still recorded via ``usage_logger`` at zero cost (``cost_source="cache_hit"``)
+    so cost-audit queries see the call was made and skipped, not that it
+    vanished. A MISS proceeds exactly as before and writes the parsed result
+    to the cache afterward so the NEXT identical call (same content, same
+    model, same prompt) is free.
     """
     from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-not-found]
 
@@ -298,6 +336,54 @@ async def _run_extraction_window(
     # can tag each entity with its GLiNER ``mention_class``. ``_build_prompt`` performs
     # the order-preserving dedup itself (first-seen class per surface).
     prompt = _build_prompt(window_text, mentions)
+
+    # ── Content-addressed cache lookup (2026-07-26 cost audit) ────────────────
+    # Check BEFORE spending a token. Key = sha256(model_id + rendered prompt),
+    # which already encodes the prompt template's content_hash (via the
+    # rendered template body), the type-tagged entity list, AND the window
+    # text — so a HIT is only possible when ALL THREE are byte-identical to a
+    # prior successful call. See DeepExtractionCache for the fail-open Valkey
+    # semantics (a cache outage degrades to "always miss", never breaks
+    # extraction).
+    if extraction_cache is not None:
+        cached = await extraction_cache.get(model_id=model_id, prompt=prompt)
+        if cached is not None:
+            tokens_in = len(prompt.split()) + len(window_text.split())
+            tokens_out = len(json.dumps(cached).split())
+            if usage_logger is not None:
+                try:
+                    # Cost-audit visibility (task requirement): a cache HIT must
+                    # still show up as a call in llm_usage_log — at ZERO cost,
+                    # tagged cost_source="cache_hit" — rather than silently
+                    # vanishing from the audit trail as if no call happened.
+                    await usage_logger.log(
+                        model_id=model_id,
+                        provider="cache",
+                        capability="extraction",
+                        tokens_in=tokens_in,
+                        tokens_out=tokens_out,
+                        latency_ms=0,
+                        estimated_cost_usd=0.0,
+                        success=True,
+                        error_code=None,
+                        doc_id=doc_id,
+                        fallback_reason="none",
+                        cost_source="cache_hit",
+                    )
+                except Exception as exc:  # protocol forbids raising; belt-and-braces
+                    logger.warning(
+                        "deep_extraction.usage_log_failed",
+                        doc_id=str(doc_id) if doc_id is not None else None,
+                        error=str(exc),
+                        exc_info=True,
+                    )
+            logger.info(
+                "deep_extraction.cache_hit",
+                doc_id=str(doc_id) if doc_id is not None else None,
+                model_id=model_id,
+                tokens_in=tokens_in,
+            )
+            return cached
 
     inp = ExtractionInput(
         prompt=prompt,
@@ -379,12 +465,22 @@ async def _run_extraction_window(
     # Parse the structured result
     raw = output.result
     if isinstance(raw, dict):
+        # Write-through cache (2026-07-26 cost audit): only genuinely parsed
+        # results are cached — never the defensive/error fallbacks below. A
+        # malformed-JSON response is a real defect, not a stable "this content
+        # extracts to nothing" fact; caching it would permanently poison every
+        # future identical-content call with the same garbage instead of
+        # letting a retry have a chance to get a clean parse.
+        if extraction_cache is not None:
+            await extraction_cache.set(model_id=model_id, prompt=prompt, result=raw)
         return raw
 
     # Fallback: parse from raw_response
     try:
         parsed = json.loads(output.raw_response)
         if isinstance(parsed, dict):
+            if extraction_cache is not None:
+                await extraction_cache.set(model_id=model_id, prompt=prompt, result=parsed)
             return parsed
     except (json.JSONDecodeError, ValueError):
         logger.warning("deep_extraction.json_parse_failed", raw_response=output.raw_response[:200])
@@ -451,6 +547,10 @@ async def run_deep_extraction_block(
     max_words: int = 0,
     max_windows: int = 0,
     on_window_done: Callable[[], None] | None = None,
+    # 2026-07-26 cost audit: optional content-addressed cache (see
+    # DeepExtractionCache). None (default) = pre-cache behaviour, every window
+    # always calls the LLM — safe for existing callers/tests that omit it.
+    extraction_cache: DeepExtractionCache | None = None,
 ) -> tuple[ExtractionResult, list[SignalEvent]]:
     """Run Block 10: Deep LLM extraction for MEDIUM and DEEP tiers.
 
@@ -486,6 +586,11 @@ async def run_deep_extraction_block(
             genuinely hung single call (no window completing for >stale_after_s)
             still correctly goes stale and trips the probe. Pure ``Callable`` —
             no infrastructure import, preserving domain/application independence.
+        extraction_cache: Optional content-addressed result cache. When
+            provided, EVERY window checks the cache before calling the LLM;
+            on a hit the LLM call is skipped entirely and the cached result is
+            used (still recorded via ``usage_logger`` at zero cost for
+            cost-audit visibility). None = pre-cache behaviour.
 
     Returns:
         (extraction_result, signal_events)
@@ -578,6 +683,7 @@ async def run_deep_extraction_block(
                 model_id=model_id,
                 doc_id=doc_id,
                 usage_logger=usage_logger,
+                extraction_cache=extraction_cache,
             )
             window_results.append(result)
         except RetryableError as exc:

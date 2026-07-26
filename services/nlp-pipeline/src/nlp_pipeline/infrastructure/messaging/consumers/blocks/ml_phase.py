@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
     from nlp_pipeline.config import Settings
     from nlp_pipeline.domain.models import Chunk, EntityMention, RoutingDecision
+    from nlp_pipeline.infrastructure.valkey.extraction_cache import DeepExtractionCache
 
 
 # Concrete metrics adapter injected into the deep-extraction block (R25): the
@@ -149,6 +150,11 @@ async def run_ml_phase(
     # handler while a truly hung call still goes stale. None (default) = no
     # heartbeat (the pre-fix behaviour; safe for unit tests that omit it).
     on_window_done: Any = None,
+    # 2026-07-26 cost audit: optional content-addressed extraction result cache
+    # (see DeepExtractionCache). None (default, and every existing test that
+    # omits it) = pre-cache behaviour, forwarded verbatim to
+    # run_deep_extraction_block which treats None as "always call the LLM".
+    extraction_cache: DeepExtractionCache | None = None,
     # Injected repo instances — constructed in article_consumer._run_pipeline
     # so unit tests can patch them at the article_consumer module namespace.
     _alias_repo: Any = None,
@@ -307,6 +313,7 @@ async def run_ml_phase(
             # P0-A: per-article window budget + per-window liveness heartbeat.
             max_windows=getattr(settings, "extraction_max_windows_per_doc", 0),
             on_window_done=on_window_done,
+            extraction_cache=extraction_cache,
         )
         s6_claims_extracted_total.inc(len(list(extraction_result.get("claims", []))))
         await synthesize_provisional_refs(
