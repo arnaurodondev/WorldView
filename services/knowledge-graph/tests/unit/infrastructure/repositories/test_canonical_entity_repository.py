@@ -328,7 +328,7 @@ class TestRetypeAttemptTracking:
         # Same defensive numeric guard as the SELECT — a non-numeric value must
         # not raise and abort the batch UPDATE.
         assert "metadata->>'retype_attempts' ~ '^[0-9]+$'" in sql_text
-        assert "'retype_last_attempt_at', :now" in sql_text
+        assert "'retype_last_attempt_at', CAST(:now AS text)" in sql_text
         # Guarded on entity_type='unknown' so a concurrently-typed row is untouched.
         assert "AND entity_type = 'unknown'" in sql_text
         params = session.execute.call_args_list[0].args[1]
@@ -346,6 +346,31 @@ class TestRetypeAttemptTracking:
         await repo.record_retype_attempts([])
 
         session.execute.assert_not_awaited()
+
+    async def test_now_bind_is_cast_to_text_in_sql(self) -> None:
+        """Regression (2026-07-27 KG, worker 13K): ``:now`` (a Python ``str`` from
+        ``utc_now().isoformat()``) was bound bare inside ``jsonb_build_object(...,
+        'retype_last_attempt_at', :now)``. asyncpg cannot infer a bind's type from
+        a ``jsonb_build_object`` value position (same shape as BP-451, fixed
+        previously in this same file for a different column), so every call
+        raised ``asyncpg.exceptions.IndeterminateDatatypeError: could not
+        determine data type of parameter $1`` — the EntityRetypeWorker crashed
+        every ~30 min and NO retype attempt was ever recorded. Fix casts the bind
+        explicitly (``CAST(:now AS text)``); this test pins that the cast is
+        present so a future edit cannot silently drop it and reintroduce the
+        crash-loop.
+        """
+        session = AsyncMock()
+        session.execute = AsyncMock()
+
+        repo = CanonicalEntityRepository(session)
+        await repo.record_retype_attempts([_NEW_ENTITY_ID])
+
+        sql_text = str(session.execute.call_args_list[0].args[0])
+        assert "CAST(:now AS text)" in sql_text
+        # No bare ``:now`` left un-cast inside jsonb_build_object (would
+        # re-introduce the IndeterminateDatatypeError).
+        assert ", :now" not in sql_text
 
 
 class TestFindFinancialInstrumentForCompany:

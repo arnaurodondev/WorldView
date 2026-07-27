@@ -270,7 +270,7 @@ SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
             THEN (metadata->>'retype_attempts')::int
             ELSE 0
         END + 1,
-        'retype_last_attempt_at', :now
+        'retype_last_attempt_at', CAST(:now AS text)
     )
 WHERE entity_id = ANY(CAST(:ids AS uuid[]))
   AND entity_type = 'unknown'
