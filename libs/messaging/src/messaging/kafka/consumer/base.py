@@ -2309,6 +2309,59 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         os.environ.get("KAFKA_LAG_STALL_SELFHEAL_FENCE_GRACE_S", "180"),
     )
 
+    # ── Isolated-partition-freeze DISCRIMINATOR (2026-07-27, fix/kafka-selfheal-
+    #    isolated-freeze) ───────────────────────────────────────────────────────
+    # The ``wedged_fetch`` trigger (FIX(1) above: poll loop still cycling but the
+    # committed position frozen) was built for ONE failure mode — a broker-
+    # recreation that leaves a STALE/GHOST connection on which EVERY fetch
+    # silently fails while ``poll()`` looks healthy.  In that mode the ONLY cure
+    # is a restart (fresh DNS + group rejoin), and it works because the wedge is
+    # CONNECTION-WIDE: no partition on that connection can make progress.
+    #
+    # But ``poll_loop_active`` + a frozen partition ALSO describes a completely
+    # different, restart-PROOF failure: a single (or few) partition stuck behind
+    # a POISON MESSAGE that never processes/commits, while every OTHER partition
+    # on the exact same healthy connection drains fine.  Restarting does NOT skip
+    # the bad offset — the consumer rejoins, re-fetches the same poison record,
+    # and re-wedges → an infinite restart loop that never drains the partition
+    # (observed live 2026-07-27: ``nlp-pipeline-article-consumer-1`` restart-
+    # looped 22+ times on ``content.article.stored.v1:11`` lag ~16.7k while its
+    # 11 sibling partitions on the SAME connection were actively advancing).
+    #
+    # The DISCRIMINATOR that separates the two: is any OTHER assigned partition
+    # making FRESH forward progress THIS probe?  A connection-wide wedge freezes
+    # them all (zero advancing); an isolated poison-message freeze leaves the
+    # siblings advancing.  We therefore only allow a ``wedged_fetch`` force-exit
+    # when the wedge looks connection-wide — a LARGE-MAJORITY of the assignment
+    # is wedged with NO sibling advancing — and SUPPRESS it (emitting a distinct
+    # ``kafka_partition_isolated_freeze_needs_manual_intervention`` alert instead,
+    # since a restart cannot help and an operator must reset the stuck offset)
+    # when only a MINORITY is wedged while siblings actively drain.
+    #
+    # Two guards, BOTH required for the suppression (a restart is the strictly
+    # safer default — the original fully-wedged failure was worse and had no
+    # other alerting — so we suppress ONLY when confident the freeze is isolated):
+    #   1. ``advancing_keys`` — at least one OTHER partition whose committed
+    #      position STRICTLY advanced since the PREVIOUS probe.  This is FRESH
+    #      progress (snapshotted before ``_evaluate_lag_stall`` overwrites the
+    #      prev-position map), NOT a stale cached watermark — which closes the
+    #      future-broker-recreation edge where 11/12 partitions might still carry
+    #      last-probe positions before they too freeze: those show NO fresh
+    #      advance, so ``advancing_keys`` is empty and we correctly restart.
+    #   2. Wedged partitions are a MINORITY: ``wedged_count`` is strictly below
+    #      ``_lag_stall_isolated_freeze_max_ratio`` of the assignment.  0.5 means
+    #      "fewer than half the assigned partitions wedged"; at half-or-more
+    #      wedged we favour the restart even if a couple advance (conservative:
+    #      that shape is ambiguous and the original wedge mode was the costlier
+    #      one to miss).  Single-partition consumers (< 2 assigned) can never be
+    #      "isolated" — no sibling exists to prove the connection is healthy — so
+    #      they always take the restart path, preserving the original guarantee.
+    # Gated behind the SAME ``KAFKA_LAG_STALL_SELFHEAL`` kill switch.  Platform-
+    # wide class attr for the no-per-service-drift reason as the probe knobs.
+    _lag_stall_isolated_freeze_max_ratio: float = float(
+        os.environ.get("KAFKA_LAG_STALL_ISOLATED_FREEZE_MAX_RATIO", "0.5"),
+    )
+
     def _force_process_exit(self, code: int) -> None:
         """Terminate the WHOLE process immediately, from any asyncio/task context.
 
@@ -2415,6 +2468,12 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 # stays silent, while a single wedged partition still alerts.
                 samples = await loop.run_in_executor(None, self._compute_partition_lag_progress)
                 if samples is not None:
+                    # Snapshot the PREVIOUS-probe positions BEFORE ``_evaluate_lag_stall``
+                    # overwrites them, so the isolated-freeze discriminator below can
+                    # classify FRESH per-partition progress (position strictly advanced
+                    # THIS probe) rather than a stale cached watermark.  See the
+                    # ``_lag_stall_isolated_freeze_max_ratio`` doc block.
+                    prev_positions = dict(self._prev_partition_positions)
                     stalled = self._evaluate_lag_stall(samples)
                     if stalled:
                         # Advisory CRITICAL first — unchanged signal operators
@@ -2526,7 +2585,49 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                         poll_stale_past_max_poll = (
                             secs_since_poll is not None and secs_since_poll > max_poll_interval_seconds
                         )
-                        should_force_exit = poll_loop_active or consumer_fenced or poll_stale_past_max_poll
+                        # ── ISOLATED-FREEZE discriminator (fix/kafka-selfheal-isolated-
+                        #    freeze) ─────────────────────────────────────────────────
+                        # A ``wedged_fetch`` force-exit (poll still cycling, position
+                        # frozen) ONLY helps a CONNECTION-WIDE stale-fetch wedge, where
+                        # NO partition can make progress.  It cannot help — and instead
+                        # restart-loops forever on — an ISOLATED poison-message freeze
+                        # where a minority of partitions are stuck while their siblings
+                        # on the SAME connection actively drain.  Separate the two by
+                        # FRESH per-partition progress THIS probe: a partition whose
+                        # committed position strictly advanced vs the previous probe's
+                        # snapshot.  (Wedged and advancing sets are disjoint —
+                        # ``_evaluate_lag_stall`` resets a partition's counter to 0 on
+                        # ANY advance, so an advancing partition never fires as stalled.)
+                        wedged_keys = {k for k, _lag in wedged}
+                        advancing_keys = {
+                            k
+                            for k, (_lag, pos) in samples.items()
+                            if k not in wedged_keys and prev_positions.get(k, -1) >= 0 and pos > prev_positions[k]
+                        }
+                        total_assigned = len(samples)
+                        # Isolated freeze (SUPPRESS the restart) requires BOTH: (a) at
+                        # least one SIBLING advancing this probe — proof the connection
+                        # itself is healthy and fetches are flowing — and (b) the wedged
+                        # set is a strict MINORITY (< ratio of the assignment).  A single-
+                        # partition consumer (< 2 assigned) has no sibling to prove the
+                        # connection is healthy, so it can never be isolated → restarts,
+                        # preserving the original wedged_fetch guarantee.
+                        isolated_partition_freeze = (
+                            poll_loop_active
+                            and total_assigned >= 2
+                            and len(advancing_keys) >= 1
+                            and len(wedged) < total_assigned * self._lag_stall_isolated_freeze_max_ratio
+                        )
+                        # ``wedged_fetch`` now force-exits ONLY when the freeze is NOT
+                        # isolated (connection-wide).  ``consumer_fenced`` /
+                        # ``poll_stale_past_max_poll`` are group-membership failures with
+                        # the poll loop already stopped (no sibling could be advancing),
+                        # so the isolated gate does not apply to them — they still exit.
+                        should_force_exit = (
+                            (poll_loop_active and not isolated_partition_freeze)
+                            or consumer_fenced
+                            or poll_stale_past_max_poll
+                        )
                         if self._lag_stall_selfheal_enabled and wedged and should_force_exit:
                             logger.critical(
                                 "kafka_consumer_lag_stall_selfheal",
@@ -2570,7 +2671,34 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                             # after this returns.
                             self._force_process_exit(2)
                             return
-                        if wedged and not should_force_exit:
+                        if wedged and not should_force_exit and isolated_partition_freeze:
+                            # ISOLATED PARTITION FREEZE (fix/kafka-selfheal-isolated-
+                            # freeze): the poll loop IS actively cycling and SIBLING
+                            # partitions on the same connection are advancing, so the
+                            # broker/connection is healthy — this is a minority of
+                            # partitions stuck behind a poison message, NOT a
+                            # connection-wide wedge.  A restart re-fetches the same bad
+                            # offset and restart-loops forever, so we SUPPRESS the
+                            # force-exit and raise a DISTINCT, clearly-actionable alert:
+                            # an operator must manually skip/reset the stuck offset
+                            # (e.g. seek past the poison record or DLQ it).  Emitted at
+                            # CRITICAL because it needs human intervention and, unlike a
+                            # transient halt, will not self-resolve.
+                            logger.critical(
+                                "kafka_partition_isolated_freeze_needs_manual_intervention",
+                                group_id=self._config.group_id,
+                                frozen_partitions=[tp_key for tp_key, _lag in wedged],
+                                frozen_partition_lag=dict(wedged),
+                                advancing_partitions=sorted(advancing_keys),
+                                total_assigned_partitions=total_assigned,
+                                wedged_partition_count=len(wedged),
+                                isolated_freeze_max_ratio=self._lag_stall_isolated_freeze_max_ratio,
+                                poll_loop_active=poll_loop_active,
+                                seconds_since_poll=round(secs_since_poll, 2) if secs_since_poll is not None else None,
+                                reason="minority_partitions_frozen_while_siblings_advance_restart_would_loop",
+                                action="manual_offset_intervention_required_restart_will_not_drain_this_partition",
+                            )
+                        elif wedged and not should_force_exit:
                             # Frozen position, poll loop NOT cycling, heartbeat still
                             # fresh, AND ``seconds_since_poll`` still within
                             # ``max.poll.interval.ms`` → a DELIBERATE downstream-

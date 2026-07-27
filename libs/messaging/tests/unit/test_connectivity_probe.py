@@ -1194,3 +1194,191 @@ class TestResumeAllPausedPartitions:
             assert exit_mock.called, f"self-heal should have force-exited for cell ({cell}) but did not"
         else:
             assert not exit_mock.called, f"self-heal force-exited for cell ({cell}) but should have been suppressed"
+
+
+# ── Isolated-partition-freeze discriminator (fix/kafka-selfheal-isolated-freeze, ─
+#    2026-07-27) ──────────────────────────────────────────────────────────────
+
+
+def _make_multi_partition_progress(
+    frozen_keys: list[str],
+    advancing_keys: list[str],
+    *,
+    lag: int = 9_000,
+    start: int = 1_000,
+    step: int = 500,
+) -> Any:
+    """Build a stateful ``_compute_partition_lag_progress`` side-effect.
+
+    ``frozen_keys`` keep a fixed committed position every probe (high lag,
+    wedged); ``advancing_keys`` advance their position by ``step`` every probe
+    (high lag but draining → ``_evaluate_lag_stall`` resets their counter, and
+    they register as FRESH progress for the isolated-freeze discriminator).
+    """
+    state = dict.fromkeys((*frozen_keys, *advancing_keys), start)
+
+    def _step() -> dict[str, tuple[int, int]]:
+        samples: dict[str, tuple[int, int]] = {}
+        for k in frozen_keys:
+            samples[k] = (lag, state[k])  # frozen position, high lag → wedges
+        for k in advancing_keys:
+            state[k] += step  # sibling draining on the SAME healthy connection
+            samples[k] = (lag, state[k])
+        return samples
+
+    return _step
+
+
+class TestIsolatedPartitionFreezeDiscriminator:
+    """``wedged_fetch`` restarts only a CONNECTION-WIDE wedge, not a poison freeze.
+
+    The ``wedged_fetch`` self-heal (poll loop cycling + frozen position) restarts
+    the process to recover a broker-recreation stale connection.  But the SAME
+    signature also describes a single/few partitions stuck behind a poison
+    message while sibling partitions on the same healthy connection drain fine —
+    a restart re-fetches the bad offset and restart-loops forever (observed live
+    2026-07-27 on ``nlp-pipeline-article-consumer-1``).  The discriminator keys
+    on FRESH sibling progress this probe: siblings advancing + a wedged MINORITY
+    ⇒ isolated poison freeze ⇒ SUPPRESS + emit a manual-intervention alert; no
+    sibling advancing (whole connection frozen) ⇒ genuine wedge ⇒ still restart.
+    """
+
+    async def test_genuine_connectionwide_wedge_multi_partition_still_force_exits(self) -> None:
+        """REGRESSION guard: ALL partitions frozen (broker recreation) → force-exit(2).
+
+        The original failure mode this self-heal was built for, at multi-partition
+        scale: every partition on the stale connection is frozen, so NO sibling
+        advances → not isolated → the restart must still fire.
+        """
+        consumer = _build_selfheal_consumer()
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                # Four partitions, ALL frozen (connection-wide wedge). No sibling
+                # advances between probes → discriminator must NOT treat as isolated.
+                side_effect=_make_multi_partition_progress(
+                    frozen_keys=["t:0", "t:1", "t:2", "t:3"],
+                    advancing_keys=[],
+                ),
+            ),
+            patch.object(type(consumer), "seconds_since_fetch_poll", return_value=0.0),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert exit_mock.called, "a connection-wide multi-partition wedge must still force-exit"
+        for call in exit_mock.call_args_list:
+            assert call.args == (2,)
+
+    async def test_isolated_single_partition_freeze_suppresses_and_alerts(self) -> None:
+        """THE bug: 1 of 12 partitions frozen while 11 siblings advance → SUPPRESS.
+
+        A restart cannot skip the poison offset (it would restart-loop forever),
+        so the self-heal must NOT force-exit and instead emit the distinct
+        ``kafka_partition_isolated_freeze_needs_manual_intervention`` alert so an
+        operator resets the stuck offset.
+        """
+        consumer = _build_selfheal_consumer()
+        siblings = [f"t:{i}" for i in range(1, 12)]  # 11 advancing siblings
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                side_effect=_make_multi_partition_progress(
+                    frozen_keys=["t:0"],  # the single poison-wedged partition
+                    advancing_keys=siblings,
+                ),
+            ),
+            patch.object(type(consumer), "seconds_since_fetch_poll", return_value=0.0),
+            patch("messaging.kafka.consumer.base.logger") as logger_mock,
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, "an isolated poison-message freeze must NOT restart-loop the consumer"
+        events = [call.args[0] for call in logger_mock.critical.call_args_list]
+        assert (
+            "kafka_partition_isolated_freeze_needs_manual_intervention" in events
+        ), "isolated freeze must raise the distinct manual-intervention alert"
+        # The advisory lag-stalled log still fires; the wedged_fetch self-heal log must NOT.
+        assert "kafka_consumer_lag_stall_selfheal" not in events, "isolated freeze must not log a self-heal restart"
+        # The isolated alert names the frozen partition and the advancing siblings.
+        alert = next(
+            c
+            for c in logger_mock.critical.call_args_list
+            if c.args[0] == "kafka_partition_isolated_freeze_needs_manual_intervention"
+        )
+        assert alert.kwargs["frozen_partitions"] == ["t:0"]
+        assert len(alert.kwargs["advancing_partitions"]) == 11
+
+    async def test_half_wedged_at_threshold_boundary_force_exits(self) -> None:
+        """Edge case at the 0.5 ratio: 2 of 4 partitions frozen → NOT isolated → restart.
+
+        With ``_lag_stall_isolated_freeze_max_ratio=0.5`` the suppression requires
+        a STRICT minority (``wedged_count < 0.5 * total``).  Exactly half wedged is
+        ambiguous, so we favour the (safer) restart even though 2 siblings advance.
+        """
+        consumer = _build_selfheal_consumer()
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                side_effect=_make_multi_partition_progress(
+                    frozen_keys=["t:0", "t:1"],  # 2 frozen
+                    advancing_keys=["t:2", "t:3"],  # 2 advancing → 2/4 = 0.5, not < 0.5
+                ),
+            ),
+            patch.object(type(consumer), "seconds_since_fetch_poll", return_value=0.0),
+            patch("messaging.kafka.consumer.base.logger") as logger_mock,
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert exit_mock.called, "half-or-more wedged is not 'isolated' → must still force-exit"
+        events = [call.args[0] for call in logger_mock.critical.call_args_list]
+        assert (
+            "kafka_partition_isolated_freeze_needs_manual_intervention" not in events
+        ), "half-wedged must not be treated as an isolated freeze"
+
+    async def test_isolated_freeze_below_ratio_minority_suppresses(self) -> None:
+        """A clear minority (1 of 4) wedged with siblings advancing → SUPPRESS.
+
+        Just under the boundary of the previous test: 1/4 = 0.25 < 0.5 → isolated.
+        """
+        consumer = _build_selfheal_consumer()
+        with (
+            patch.object(
+                type(consumer),
+                "_compute_partition_lag_progress",
+                side_effect=_make_multi_partition_progress(
+                    frozen_keys=["t:0"],  # 1 frozen
+                    advancing_keys=["t:1", "t:2", "t:3"],  # 3 advancing → 1/4 = 0.25
+                ),
+            ),
+            patch.object(type(consumer), "seconds_since_fetch_poll", return_value=0.0),
+            patch.object(type(consumer), "_force_process_exit") as exit_mock,
+        ):
+            task = asyncio.create_task(consumer._connectivity_probe_loop())
+            await asyncio.sleep(0.2)
+            consumer._stop_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert not exit_mock.called, "a clear-minority isolated freeze must be suppressed, not restarted"
