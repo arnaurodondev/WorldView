@@ -21,6 +21,7 @@ Window strategy (PRD §6.7 Block 10):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -820,40 +821,6 @@ async def run_deep_extraction_block(
         )
     merged["relations"] = kept_relations
 
-    # ── ENHANCEMENT #6: optional co-mention entailment check (default OFF) ─────────
-    # Runs AFTER the deterministic gate, on the survivors, so we only pay one cheap LLM
-    # call per distinct risky relation. Drops relations whose evidence merely co-mentions
-    # subject and object (the dominant defect per the 2026-06-20 re-measurement, which the
-    # deterministic gate cannot catch). FAIL-OPEN and config-gated — a no-op when disabled
-    # (the default) or when no entailment_client is wired. See relation_entailment.py for
-    # the measured precision/recall/false-positive numbers (Qwen3-235B: 0% FP on high-risk).
-    if (
-        entailment_config is not None
-        and entailment_config.enabled
-        and entailment_client is not None
-        and merged.get("relations")
-    ):
-        from nlp_pipeline.application.blocks.relation_entailment import (
-            check_relation_entailment,
-        )
-
-        try:
-            filtered_relations = await check_relation_entailment(
-                list(merged["relations"]),
-                entailment_client=entailment_client,
-                model_id=entailment_config.model_id,
-                high_risk_predicates=entailment_config.predicates,
-                min_drop_confidence=entailment_config.min_drop_confidence,
-                max_per_doc=entailment_config.max_per_doc,
-                doc_id=str(doc_id),
-                usage_logger=usage_logger,
-                cache=entailment_cache,
-            )
-            merged = {**merged, "relations": filtered_relations}
-        except Exception:
-            # Fail-open at the block boundary too: never let the check break extraction.
-            logger.warning("deep_extraction.entailment_check_failed", doc_id=str(doc_id), exc_info=True)
-
     # ── Deterministic evidence-span grounding gate (2026-07-16 fabrication filter) ──
     # Drop any claim/relation whose ``evidence_text`` is NOT verbatim-traceable to the
     # source passage. The 2026-07-16 model bake-off measured fabrication (ungrounded
@@ -861,9 +828,19 @@ async def run_deep_extraction_block(
     # previously-unguarded slice is CLAIMS (relation_validation only touches relations).
     # A faithfully-quoted item is always a substring of the source, so this gate is
     # yield-neutral on faithful output — it only removes items the model could not
-    # ground. It complements (does not replace) the relation entailment gate, which
-    # handles the harder "real quote, wrong label" fabrications a substring check cannot.
+    # ground. It complements (does not replace) the two entailment gates below, which
+    # handle the harder "real quote, wrong label" fabrications a substring check cannot.
     # See application/blocks/evidence_grounding.py. Config-gated; default present_only.
+    #
+    # 2026-07-27 REORDER (idle-in-transaction fix, ProdSmokeTestFailed): this gate used
+    # to run BETWEEN relation entailment and claim entailment, forcing the two LLM
+    # entailment calls to run sequentially even though neither depends on the other's
+    # output — only on THIS gate's (fast, non-LLM) output. Running grounding first for
+    # BOTH claims and relations lets the two entailment calls below run CONCURRENTLY
+    # (asyncio.gather), roughly halving the LLM time this block adds inside the
+    # caller's long-lived D-004 nlp_s/intel_s transaction. Yield-identical to the old
+    # order: both gates are independent AND-ed filters, so the final surviving set does
+    # not depend on which runs first.
     _grounding_cfg = evidence_grounding_config or EvidenceGroundingConfig()
     if _grounding_cfg.enabled and (merged.get("claims") or merged.get("relations")):
         # Reconstruct the source text the items were extracted from. Windows are
@@ -892,26 +869,55 @@ async def run_deep_extraction_block(
         merged["claims"] = kept_claims
         merged["relations"] = kept_relations
 
-    # ── Claim entailment pass (2026-07-16 semantic-mislabel fabrication cure) ─────────
-    # Runs AFTER the deterministic evidence-span gate (so ungrounded quotes are already
-    # gone — the verifier only spends on real quotes) and BEFORE the KG write. Verifies
-    # CLAIMS of high-fabrication claim_types (the audit's dominant, previously-unguarded
-    # bucket) and drops those whose verbatim evidence does NOT entail the assigned label
-    # (a refinancing tagged DEBT_CHANGE, a segment mention tagged REVENUE_GROWTH, an
-    # inverted polarity). A substring check cannot catch a mislabel; only semantic
-    # entailment can. FAIL-OPEN and config-gated — a no-op when disabled (the default) or
-    # when no claim_entailment_client is wired. Gated to high-fab types → ~1-2 calls/doc.
-    # See claim_entailment.py for the measured precision/false-positive numbers.
-    if (
-        claim_entailment_config is not None
-        and claim_entailment_config.enabled
-        and claim_entailment_client is not None
-        and merged.get("claims")
-    ):
+    # ── ENHANCEMENT #6 + claim entailment: concurrent semantic entailment checks ────
+    # Relation entailment (co-mention filter, ENHANCEMENT #6, default OFF) and claim
+    # entailment (semantic-mislabel fabrication cure, 2026-07-16) each read only their
+    # OWN slice of ``merged`` (already evidence-grounded above) and write back only
+    # their own slice — no data dependency between them — so they run CONCURRENTLY via
+    # asyncio.gather rather than sequentially. Both are FAIL-OPEN and config-gated: a
+    # no-op when disabled or when no client is wired. See relation_entailment.py /
+    # claim_entailment.py for the measured precision/recall/false-positive numbers.
+    async def _run_relation_entailment() -> list[dict[str, Any]] | None:
+        if not (
+            entailment_config is not None
+            and entailment_config.enabled
+            and entailment_client is not None
+            and merged.get("relations")
+        ):
+            return None
+        from nlp_pipeline.application.blocks.relation_entailment import (
+            check_relation_entailment,
+        )
+
+        try:
+            return await check_relation_entailment(
+                list(merged["relations"]),
+                entailment_client=entailment_client,
+                model_id=entailment_config.model_id,
+                high_risk_predicates=entailment_config.predicates,
+                min_drop_confidence=entailment_config.min_drop_confidence,
+                max_per_doc=entailment_config.max_per_doc,
+                doc_id=str(doc_id),
+                usage_logger=usage_logger,
+                cache=entailment_cache,
+            )
+        except Exception:
+            # Fail-open at the block boundary too: never let the check break extraction.
+            logger.warning("deep_extraction.entailment_check_failed", doc_id=str(doc_id), exc_info=True)
+            return None
+
+    async def _run_claim_entailment() -> list[dict[str, Any]] | None:
+        if not (
+            claim_entailment_config is not None
+            and claim_entailment_config.enabled
+            and claim_entailment_client is not None
+            and merged.get("claims")
+        ):
+            return None
         from nlp_pipeline.application.blocks.claim_entailment import check_claim_entailment
 
         try:
-            filtered_claims = await check_claim_entailment(
+            return await check_claim_entailment(
                 list(merged["claims"]),
                 entailment_client=claim_entailment_client,
                 model_id=claim_entailment_config.model_id,
@@ -922,10 +928,16 @@ async def run_deep_extraction_block(
                 usage_logger=usage_logger,
                 cache=entailment_cache,
             )
-            merged = {**merged, "claims": filtered_claims}
         except Exception:
             # Fail-open at the block boundary too: never let the check break extraction.
             logger.warning("deep_extraction.claim_entailment_check_failed", doc_id=str(doc_id), exc_info=True)
+            return None
+
+    filtered_relations, filtered_claims = await asyncio.gather(_run_relation_entailment(), _run_claim_entailment())
+    if filtered_relations is not None:
+        merged = {**merged, "relations": filtered_relations}
+    if filtered_claims is not None:
+        merged = {**merged, "claims": filtered_claims}
 
     # Surface degradation on the merged result so the caller (and any persistence
     # path) can carry it forward. Kept as plain dict keys to avoid changing the
